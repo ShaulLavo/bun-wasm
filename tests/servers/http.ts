@@ -2,6 +2,7 @@
 // tests never touch the public internet). Prints its port on stdout.
 import { gzipSync } from "node:zlib";
 import { createServer, type Socket } from "node:net";
+import { handleTlsFixtureRequest } from "./tls-fixtures.ts";
 
 const slowPeers = new Set<Socket>();
 const slowTCP = createServer({ pauseOnConnect: true }, socket => {
@@ -31,6 +32,8 @@ const server = Bun.serve({
   async fetch(req, srv) {
     const url = new URL(req.url);
     if (url.pathname === "/websocket" && srv.upgrade(req)) return;
+    const tlsFixture = await handleTlsFixtureRequest(req);
+    if (tlsFixture) return tlsFixture;
     switch (url.pathname) {
       case "/tcp-sink":
       case "/tcp-sink/resume":

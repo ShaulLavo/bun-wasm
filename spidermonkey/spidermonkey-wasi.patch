@@ -1,0 +1,162 @@
+diff --git i/js/public/friend/ErrorNumbers.msg w/js/public/friend/ErrorNumbers.msg
+index aadf9370b..bf4e17206 100644
+--- i/js/public/friend/ErrorNumbers.msg
++++ w/js/public/friend/ErrorNumbers.msg
+@@ -204,7 +204,11 @@ MSG_DEF(JSMSG_BUFFER_TOO_SMALL,        0, JSEXN_INTERNALERR, "buffer too small")
+ MSG_DEF(JSMSG_BYTECODE_TOO_BIG,        2, JSEXN_INTERNALERR, "bytecode {0} too large (limit {1})")
+ MSG_DEF(JSMSG_NEED_DIET,               1, JSEXN_INTERNALERR, "{0} too large")
+ MSG_DEF(JSMSG_OUT_OF_MEMORY,           0, JSEXN_INTERNALERR, "out of memory")
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++MSG_DEF(JSMSG_OVER_RECURSED,           0, JSEXN_RANGEERR, "too much recursion")
++#else
+ MSG_DEF(JSMSG_OVER_RECURSED,           0, JSEXN_INTERNALERR, "too much recursion")
++#endif
+ MSG_DEF(JSMSG_TOO_DEEP,                1, JSEXN_INTERNALERR, "{0} nested too deeply")
+ MSG_DEF(JSMSG_UNCAUGHT_EXCEPTION,      1, JSEXN_INTERNALERR, "uncaught exception: {0}")
+ MSG_DEF(JSMSG_UNKNOWN_FORMAT,          1, JSEXN_INTERNALERR, "unknown bytecode format {0}")
+diff --git i/js/src/util/NativeStack.cpp w/js/src/util/NativeStack.cpp
+index ab0f9a1b9..c7501b8c4 100644
+--- i/js/src/util/NativeStack.cpp
++++ w/js/src/util/NativeStack.cpp
+@@ -114,6 +114,10 @@ void* js::GetNativeStackBaseImpl() {
+ #  endif
+ }
+
++#elif defined(__wasi__) && defined(BUNWASM_EMBED)
++extern "C" void* bunsm_stack_base();
++void* js::GetNativeStackBaseImpl() { return bunsm_stack_base(); }
++
+ #elif defined(__wasi__)
+
+ // Since we rearrange the layout for wasi via --stack-first flag for the linker
+diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
+index 6241cd45d..6b71917fa 100644
+--- i/js/src/vm/Interpreter.cpp
++++ w/js/src/vm/Interpreter.cpp
+@@ -75,6 +75,9 @@
+ #include "vm/PlainObject-inl.h"  // js::CopyInitializerObject, js::CreateThis
+ #include "vm/Probes-inl.h"
+ #include "vm/Stack-inl.h"
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
++#endif
+
+ using namespace js;
+
+@@ -1781,6 +1784,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+
+ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+                                                            RunState& state) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_poll_interrupt(cx, 0);
++  if (!CheckForInterrupt(cx)) return false;
++#endif
+ /*
+  * Define macros for an interpreter loop. Opcode dispatch is done by
+  * indirect goto (aka a threaded interpreter), which is technically
+@@ -1839,8 +1846,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+    * Prepare to call a user-supplied branch handler, and abort the script
+    * if it returns false.
+    */
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++#  define BUNWASM_POLL_INTERRUPT(cx) bunsm_poll_interrupt(cx, 0)
++#else
++#  define BUNWASM_POLL_INTERRUPT(cx) ((void)0)
++#endif
+ #define CHECK_BRANCH()                      \
+   JS_BEGIN_MACRO                            \
++    BUNWASM_POLL_INTERRUPT(cx);              \
+     if (!CheckForInterrupt(cx)) goto error; \
+   JS_END_MACRO
+
+diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
+index d38cebe3e..f51f56979 100644
+--- i/js/src/vm/PortableBaselineInterpret.cpp
++++ w/js/src/vm/PortableBaselineInterpret.cpp
+@@ -105,8 +105,13 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+ #  define ENABLE_COMPUTED_GOTO_DISPATCH
+ #endif
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
++extern "C" void bunsm_pbl_entry();
++#endif
++
+ // Whether to compile in interrupt checks in the main interpreter loop.
+-#ifndef __wasi__
++#if !defined(__wasi__) || defined(BUNWASM_EMBED)
+ // On WASI, with a single thread, there is no possibility for an
+ // interrupt to come asynchronously.
+ #  define ENABLE_INTERRUPT_CHECKS
+@@ -6034,7 +6039,13 @@ PBIResult PortableBaselineInterpret(
+     }
+   }
+   COUNT_COVERAGE_MAIN();
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_pbl_entry();
++#endif
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
++#endif
+ #ifdef ENABLE_INTERRUPT_CHECKS
+   if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
+     PUSH_EXIT_FRAME();
+@@ -7909,6 +7920,9 @@ PBIResult PortableBaselineInterpret(
+               }
+             }
+             // 11. Check for interrupts.
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
++#endif
+ #ifdef ENABLE_INTERRUPT_CHECKS
+             if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
+               PUSH_EXIT_FRAME();
+@@ -8231,6 +8245,9 @@ PBIResult PortableBaselineInterpret(
+       CASE(LoopHead) {
+         int32_t icIndex = GET_INT32(pc);
+         icEntry = icEntries + icIndex;
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
++#endif
+ #ifdef ENABLE_INTERRUPT_CHECKS
+         if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
+           PUSH_EXIT_FRAME();
+@@ -8499,6 +8516,9 @@ PBIResult PortableBaselineInterpret(
+       }
+
+       CASE(Finally) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
++#endif
+ #ifdef ENABLE_INTERRUPT_CHECKS
+         if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
+           PUSH_EXIT_FRAME();
+diff --git i/mfbt/Assertions.h w/mfbt/Assertions.h
+index b26a32f2e..691424f65 100644
+--- i/mfbt/Assertions.h
++++ w/mfbt/Assertions.h
+@@ -342,7 +342,12 @@ static inline void MOZ_CrashSequence(void* aAddress, intptr_t aLine) {
+  * in release builds, and it's hard to print to stderr safely when memory might
+  * have been corrupted.
+  */
+-#if !(defined(DEBUG) || defined(MOZ_ASAN) || defined(FUZZING))
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++MOZ_BEGIN_EXTERN_C
++__attribute__((noreturn)) void bunsm_vm_fatal(const char*);
++MOZ_END_EXTERN_C
++#  define MOZ_CRASH(...) bunsm_vm_fatal("" __VA_ARGS__)
++#elif !(defined(DEBUG) || defined(MOZ_ASAN) || defined(FUZZING))
+ #  define MOZ_CRASH(...)                                                       \
+     do {                                                                       \
+       MOZ_FUZZING_HANDLE_CRASH_EVENT4(                                         \
+@@ -393,6 +398,9 @@ _Noreturn
+ #endif
+ static MOZ_ALWAYS_INLINE_EVEN_DEBUG MOZ_COLD void MOZ_Crash(
+     const char* aFilename, int aLine, const char* aReason) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bunsm_vm_fatal(aReason);
++#endif
+   aFilename = MOZ_StripRelativeComponents(aFilename);
+   MOZ_FUZZING_HANDLE_CRASH_EVENT4("MOZ_CRASH", aFilename, aLine, aReason);
+ #if defined(DEBUG) || defined(MOZ_ASAN) || defined(FUZZING)

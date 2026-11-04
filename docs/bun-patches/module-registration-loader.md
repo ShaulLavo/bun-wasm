@@ -20,3 +20,24 @@ Known differences from native modules remain. Namespace properties are accessors
 | `scripts/esm-loader-*.ts`, `tests/fixtures/esm-loader/`, and the `transpile --register` example | Host feature | Original test harness and record regeneration tools restored from the coherent J1 handoff `2a12f721f58b7a4f461dd039c4ee50a5696ce9ad`; CI discovers the loader tests through `checks/quality-esm-loader.json`. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Re-exported default imports
+
+Bun's parser at `9510e74152073d850a18758ca41114d8f214ffa6`, in
+`src/js_parser/scan/scan_imports.rs`, omits default imports from `named_imports`
+when it does not bundle. The original registration adapter records these bindings
+from import statements before it removes them, just as it records namespace
+imports. An export clause referring to a default import becomes an indirect
+export of the dependency's `default`, not a getter for an undeclared local.
+The prepass also covers export clauses that appear before their imports.
+
+This fixes wrappers such as eventemitter3's `import EventEmitter` followed by
+`export { EventEmitter }`. It does not change CommonJS export snapshots or add
+globals. The compiler regressions cover both export aliases and import order.
+The discovered native fixture `tests/fixtures/default-import-reexport` checks
+CommonJS constructor identity and live ES module default re-exports. An
+`export default value` expression must still retain its evaluated snapshot.
+
+The fixture's `.mjs` and `.cjs` files are deliberate JavaScript module-format
+inputs, classified in `scripts/typescript-source-runtime-inputs.txt`, not host
+helpers or new legacy-source exceptions.

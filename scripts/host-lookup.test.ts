@@ -56,6 +56,7 @@ function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider
     utf8Decode: (bytes: Uint8Array, fatal: boolean) => new TextDecoder("utf-8", { fatal, ignoreBOM: true }).decode(bytes),
     getAsyncContext: () => undefined,
     setAsyncContext() {},
+    tlsDispose() {},
     closeAllDirs() {},
     streams: {},
     loadPolyfill(name: string): unknown {

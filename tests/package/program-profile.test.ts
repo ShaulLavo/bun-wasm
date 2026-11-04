@@ -166,7 +166,7 @@ for (const [kind, path] of [["core", "scripts/src/engine-explicit-init.ts"], ["c
 
 test("only the QuickJS engine is qualified for the shared-group profile", () => {
   expect(engineEnvironment("quickjs", "/sysroot", "shared-group").BUN_WASM_PROGRAM_PROFILE).toBe("shared-group");
-  for (const engine of ["jsc", "hermes"] as const) {
+  for (const engine of ["jsc"] as const) {
     expect(() => engineEnvironment(engine, "/sysroot", "shared-group")).toThrow(/not qualified/);
     expect(engineEnvironment(engine, "/sysroot").BUN_WASM_PROGRAM_PROFILE).toBeUndefined();
   }

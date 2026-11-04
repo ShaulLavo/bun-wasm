@@ -54,6 +54,7 @@ test("guest receipt binds committed repository, selected engine, consumed inputs
     expect(receipt.sourceManifest.build).toBe("browser");
     expect(receipt.sourceManifest.groups.map(group => group.name)).toEqual(["repository", "bun", "boringssl", "waffle-libc", "sysroot", "sdk", "rust-target"]);
     expect(receipt.sourceManifest.groups.find(group => group.name === "bun")?.files.map(file => file.path)).toContain("build/debug/codegen/build_options.rs");
+    expect(receipt.sourceManifest.groups.find(group => group.name === "boringssl")?.files).toContainEqual({ path: "ssl/handshake.cc", sha256: hash("fixture\n"), bytes: 8 });
     expect(receipt.sourceManifest.tools.find(tool => tool.name === "clang")?.version).toBe("fixture tool 1");
     expect(JSON.stringify(receipt)).not.toContain("secret.txt");
     expect(receipt.sourceManifest.omissions.length).toBeGreaterThan(0);
@@ -113,7 +114,7 @@ for (const path of ["crates/fixture/src/lib.rs", "patches/bun/fixture.config", "
   });
 });
 
-for (const path of ["vendor/bun/src/input.rs", "vendor/bun/build/debug/codegen/build_options.rs", "vendor/bun/vendor/lolhtml/src/lib.rs", "vendor/boringssl/crypto/input.c", "waffle/patches/wasi-libc/preopen-scan.patch", "sysroot/bun-wasm-sysroot.json", "sysroot/include/stdio.h", "sdk/VERSION", "rustlib/libstd.rlib", "fake-tool", "crates/fixture/src/lib.rs"]) test(`input drift refuses a new receipt at ${path}`, async () => {
+for (const path of ["vendor/bun/src/input.rs", "vendor/bun/build/debug/codegen/build_options.rs", "vendor/bun/vendor/lolhtml/src/lib.rs", "vendor/boringssl/crypto/input.c", "vendor/boringssl/ssl/handshake.cc", "waffle/patches/wasi-libc/preopen-scan.patch", "sysroot/bun-wasm-sysroot.json", "sysroot/include/stdio.h", "sdk/VERSION", "rustlib/libstd.rlib", "fake-tool", "crates/fixture/src/lib.rs"]) test(`input drift refuses a new receipt at ${path}`, async () => {
   await withReceiptFixture(async (options, artifact) => {
     const inputs = await prepareGuestBuildInputs(options);
     await writeFile(join(options.repository, path), "changed during build\n");
@@ -208,7 +209,7 @@ test("build start refuses a sysroot receipt that names a different installed lib
   });
 });
 
-for (const path of ["vendor/boringssl/crypto/input.c", "jsc-build/webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "jsc-build/webkit/Source/JavaScriptCore/runtime/OptionsList.h", "jsc-build/build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) test(`tools receipt binds directly consumed native source at ${path}`, async () => {
+for (const path of ["vendor/boringssl/crypto/input.c", "vendor/boringssl/ssl/handshake.cc", "jsc-build/webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "jsc-build/webkit/Source/JavaScriptCore/runtime/OptionsList.h", "jsc-build/build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) test(`tools receipt binds directly consumed native source at ${path}`, async () => {
   await withReceiptFixture(async options => {
     const selected = { ...options, build: "tools" } as const;
     const artifact = join(options.repository, "dist", guestBuilds.tools.artifact);
@@ -243,5 +244,24 @@ for (const build of ["quickjs", "quickjs-minimal", "jsc"] as const) test(`${buil
     await rm(sidePath);
     await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow(programProfile(kind).side);
     await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow(programProfile(kind).side);
+  });
+});
+
+for (const retired of ["build", "program", "prebuild"]) test(`withdrawn Hermes ${retired} cannot enter a new guest receipt`, () => {
+  const receipt = fixtureReceipt(wasm, "browser");
+  if (retired === "build") Reflect.set(receipt.sourceManifest, "build", "hermes");
+  if (retired === "program") Reflect.set(receipt.program, "kind", "hermes");
+  if (retired === "prebuild") Reflect.set(receipt.sourceManifest, "groups", receipt.sourceManifest.groups.concat([
+    { name: "hermes-prebuild", files: [{ path: "wasi/lib/libhermesvm_bunwasm.a", sha256: "0".repeat(64), bytes: 1 }] },
+  ]));
+  Reflect.set(receipt, "sourceManifestSha256", hash(JSON.stringify(receipt.sourceManifest)));
+  expect(() => verifyGuestBuildReceipt(wasm, receipt)).toThrow();
+});
+
+
+test("linked TLS inputs cannot be omitted when their source directory is absent", async () => {
+  await withReceiptFixture(async options => {
+    await rm(join(options.boringssl, "ssl"), { recursive: true });
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("ssl");
   });
 });

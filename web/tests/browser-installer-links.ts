@@ -25,7 +25,7 @@ async function check(browserName: string, engine: string, url: string) {
     return result.output;
   }
   try {
-    await page.goto(`${url}?engine=${engine}`);
+    await page.goto(`${url}?engine=${engine}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"', explicit: "./fixture-tool.ts", runtime: "bun fixture-tool" } }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry!.base)}\n`);

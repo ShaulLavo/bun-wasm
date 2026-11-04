@@ -264,8 +264,8 @@ try {
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);
           ` }));
-          if (app === "web") build.onLoad({ filter: /\/web\/src\/shell\.ts$/ }, () => ({ loader: "ts", contents: `
-            export { EditorOnlyShell as Shell } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};
+          if (app === "web") build.onLoad({ filter: /\/bash-web\/src\/session\.ts$/ }, () => ({ loader: "ts", contents: `
+            export { EditorOnlyShell as BrowserSession } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};
           ` }));
           build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
             export function startRun() { throw new Error("This test must not start a guest"); }

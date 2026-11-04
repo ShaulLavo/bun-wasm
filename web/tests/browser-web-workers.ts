@@ -7,7 +7,7 @@ const s = session("bun-wasm-global-web-workers-");
 const failures: string[] = [];
 async function checkEngine(browser: Browser, url: string, engine: string, label: string) {
   const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
-  const visit = await firstVisit(context, `${url}?engine=${engine}`);
+  const visit = await firstVisit(context, `${url}?engine=${engine}&prompt=off`);
   try {
     const page = await context.newPage();
     await page.goto(visit.url);

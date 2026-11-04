@@ -68,6 +68,7 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} Node retains disti
   await writeFile(join(root, `opt/bun/${kind}/bin/bun`), new Uint8Array());
   const registry = createNodeExecutableRegistry(first.module, { "/": root }, { [kind]: second.module });
   const child = await registry.resolve(`/opt/bun/${kind}/bin/bun`);
+  if (child.kind !== "module") throw new Error("Selected paired engine must resolve to a Wasm module");
   expect(child.module).toBe(second.module);
   expect(programs.get(child.module)?.libraries[0]?.source).toEqual(sideB);
   const ordinaryBytes = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]);

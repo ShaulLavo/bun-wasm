@@ -17,11 +17,11 @@ test("native quality has a bounded checkpoint before the unchanged final native 
 
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readlinkSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
-import { isNativeTargetPathAllowed, nativeTargetRoots } from "./ci-native-handoff-paths";
+import { nativeTargetRoots } from "./ci-native-handoff-paths";
 
 function steps(id: string): Record<string, unknown>[] {
   const value = record(jobs[id]).steps;
@@ -69,8 +69,8 @@ test("producer attempt and manifest admission come from that producer, not the c
   expect(record(producer.outputs)["producer-attempt"]).toBe("${{ steps.native-artifact.outputs.producer-attempt }}");
   expect(record(step("native-quality", packName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ github.run_attempt }}");
   expect(record(step("rust", unpackName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ needs.native-quality.outputs.producer-attempt }}");
-  const download = steps("rust").filter(step => step.uses === "actions/download-artifact@v8").map(step => record(step.with).name);
-  expect(download).toContain("native-quality-${{ needs.native-quality.outputs.producer-attempt }}.tar");
+  const download = steps("rust").filter(step => step.uses === "actions/download-artifact@v4").map(step => record(step.with).name);
+  expect(download).toContain("native-quality-${{ needs.native-quality.outputs.producer-attempt }}");
   for (const [job, name] of [["native-quality", packName], ["rust", unpackName]]) expect(step(job!, name!).shell).toBe("bash");
   expect(script("rust", unpackName)).not.toContain("github.run_attempt");
 });
@@ -139,18 +139,32 @@ function fixture(run: (root: string, env: Record<string, string>, invoke: (job: 
   try { runFixture(root, run); }
   finally { rmSync(root, { recursive: true, force: true }); }
 }
+// What a cold native-quality producer leaves in target: no cache restore, so no guest outputs.
+const coldProducerFiles = [".ci-input-times.json", "debug/build/quality-host", "release/deps/native", "wasm32-wasip1/debug/deps/quality-output", "tls-probe/handoff.json", "tls-probe/output/tls-probe.wasm"];
+function coldProducerTarget(target: string): void {
+  for (const path of coldProducerFiles) {
+    mkdirSync(join(target, path, ".."), { recursive: true });
+    writeFileSync(join(target, path), `producer ${path}\n`);
+  }
+  writeFileSync(join(target, "release/deps/native"), "compiled fixture bytes\n");
+  chmodSync(join(target, "release/deps/native"), 0o751);
+  utimesSync(join(target, "release/deps/native"), 1234567890.125, 1234567890.125);
+  symlinkSync("native", join(target, "release/deps/link"));
+  chmodSync(join(target, "release/deps"), 0o750);
+  utimesSync(join(target, "release/deps"), 1234567890.125, 1234567890.125);
+  mkdirSync(join(target, "split-common"));
+  writeFileSync(join(target, "split-common/unlisted"), "must not be handed off\n");
+}
+function targetArchive(bundle: string): string[] {
+  const listing = execFileSync("tar", ["--posix", "-tf", "-"], { input: execFileSync("zstd", ["-dc", join(bundle, "target.tar.zst")]), encoding: "utf8" });
+  return listing.trim().split("\n");
+}
 function runFixture(root: string, run: Parameters<typeof fixture>[0]): void {
   const workspace = join(root, "repo"), temp = join(root, "temp"), cargo = join(temp, "cargo");
   repository(workspace);
   repository(join(workspace, "vendor/bun"));
-  for (const path of ["target/release/deps", "target/wasm32-wasip1/release", "vendor/boringssl", "scripts"]) mkdirSync(join(workspace, path), { recursive: true });
-  writeFileSync(join(workspace, "target/.ci-input-times.json"), "[]\n");
-  mkdirSync(join(workspace, "target/debug"), { recursive: true });
-  writeFileSync(join(workspace, "target/debug/quality-host"), "host quality output\n");
-  mkdirSync(join(workspace, "target/unlisted"), { recursive: true });
-  writeFileSync(join(workspace, "target/unlisted/foreign"), "must not be handed off\n");
-  mkdirSync(join(workspace, "target/wasm32-wasip1/debug"), { recursive: true });
-  writeFileSync(join(workspace, "target/wasm32-wasip1/debug/quality-output"), "WASI debug quality output\n");
+  for (const path of ["vendor/boringssl", "scripts"]) mkdirSync(join(workspace, path), { recursive: true });
+  coldProducerTarget(join(workspace, "target"));
   for (const path of ["registry/cache", "git/db/public/objects", "bin"]) mkdirSync(join(cargo, path), { recursive: true });
   git(join(cargo, "git/db/public"), "init", "--bare", "-q");
   repository(join(cargo, "git/checkouts/public/abc"));
@@ -158,19 +172,12 @@ function runFixture(root: string, run: Parameters<typeof fixture>[0]): void {
   writeFileSync(join(temp, "sysroot/bun-wasm-sysroot.json"), "verified public sysroot\n");
   copyFileSync(new URL("./ci-native-handoff.ts", import.meta.url), join(workspace, "scripts/ci-native-handoff.ts"));
   copyFileSync(new URL("./ci-native-handoff-paths.ts", import.meta.url), join(workspace, "scripts/ci-native-handoff-paths.ts"));
-  copyFileSync(new URL("./ci-storage.ts", import.meta.url), join(workspace, "scripts/ci-storage.ts"));
   writeFileSync(join(workspace, "env.sh"), 'export BUN_WASM_SYSROOT="$RUNNER_TEMP/sysroot"\n');
   const bunHead = git(join(workspace, "vendor/bun"), "rev-parse", "HEAD");
   const verifier = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8")
     .replace(/^BUN_COMMIT=[a-f0-9]{40}$/m, `BUN_COMMIT=${bunHead}`)
     .replace('  echo "vendor/bun source verified at', '  printf verified > "$RUNNER_TEMP/source-verified"\n  echo "vendor/bun source verified at');
   writeFileSync(join(workspace, "scripts/sync-bun.sh"), verifier);
-  writeFileSync(join(workspace, "target/release/deps/native"), "compiled fixture bytes\n", { mode: 0o751 });
-  utimesSync(join(workspace, "target/release/deps/native"), 1234567890.125, 1234567890.125);
-  symlinkSync("native", join(workspace, "target/release/deps/link"));
-  chmodSync(join(workspace, "target/release/deps"), 0o750);
-  utimesSync(join(workspace, "target/release/deps"), 1234567890.125, 1234567890.125);
-  writeFileSync(join(workspace, "target/wasm32-wasip1/release/quality-output"), "WASI quality output\n");
   writeFileSync(join(workspace, "vendor/boringssl/header.h"), "public fixture\n");
   writeFileSync(join(cargo, "registry/cache/public"), "public crate\n");
   writeFileSync(join(cargo, "bin/cargo-machete"), "fixture binary\n", { mode: 0o755 });
@@ -187,9 +194,6 @@ function prepareImport(root: string, env: Record<string, string>, invoke: Parame
   expect(packed.status, packed.stderr.slice(0, 8000)).toBe(0);
   const values = Object.fromEntries(readFileSync(env.GITHUB_OUTPUT!, "utf8").trim().split("\n").map(row => row.split("=")));
   for (const path of ["repo/target", "repo/vendor/bun", "repo/vendor/boringssl", "temp/cargo/registry", "temp/cargo/git", "temp/cargo/bin/cargo-machete"]) rmSync(join(root, path), { recursive: true, force: true });
-  const transferDirectory = join(root, "temp/native-quality-transfer");
-  mkdirSync(transferDirectory);
-  renameSync(join(root, "temp/native-quality-7.tar"), join(transferDirectory, "native-quality-7.tar"));
   writeFileSync(env.GITHUB_OUTPUT!, "");
   return { NATIVE_QUALITY_MANIFEST_SHA256: String(values["manifest-sha256"]) };
 }
@@ -198,14 +202,14 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
   fixture((root, env, invoke) => {
     const expectedHead = git(join(root, "repo/vendor/bun"), "rev-parse", "HEAD");
     const changes = prepareImport(root, env, invoke);
-    const transfer = join(root, "temp/native-quality-transfer/native-quality-7.tar");
+    const bundle = join(root, "temp/native-quality-artifact");
     for (const archive of ["target", "cargo", "sources"]) {
-      const bytes = execFileSync("tar", ["--posix", "-xOf", transfer, `${archive}.tar.zst`]);
-      const expanded = execFileSync("zstd", ["-dc"], { input: bytes });
-      expect(expanded.includes(Buffer.from("fixture-auth-do-not-package"))).toBe(false);
+      const bytes = execFileSync("zstd", ["-dc", join(bundle, `${archive}.tar.zst`)]);
+      expect(bytes.includes(Buffer.from("fixture-auth-do-not-package"))).toBe(false);
     }
+    const archived = targetArchive(bundle);
     const nativeSysrootSha = createHash("sha256").update(readFileSync(join(root, "temp/sysroot/bun-wasm-sysroot.json"))).digest("hex");
-    const imported = spawnSync(process.execPath, [join(root, "repo/scripts/ci-native-handoff.ts"), "unpack", join(root, "temp/native-quality-transfer/native-quality-7.tar")], {
+    const imported = spawnSync(process.execPath, [join(root, "repo/scripts/ci-native-handoff.ts"), "unpack", join(root, "temp/native-quality-artifact")], {
       cwd: join(root, "repo"),
       env: { ...env, ...changes, GITHUB_RUN_ATTEMPT: "8", NATIVE_SYSROOT_SHA256: nativeSysrootSha, NATIVE_QUALITY_PRODUCER_ATTEMPT: "7" },
       encoding: "utf8",
@@ -220,34 +224,52 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
     expect(statSync(join(root, "repo/target/release/deps")).mtimeMs).toBe(1234567890125);
     expect(lstatSync(join(root, "repo/target/release/deps/link")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(root, "repo/target/release/deps/link"))).toBe("native");
-    expect(readFileSync(join(root, "repo/target/wasm32-wasip1/release/quality-output"), "utf8")).toBe("WASI quality output\n");
-    expect(readFileSync(join(root, "repo/target/debug/quality-host"), "utf8")).toBe("host quality output\n");
-    expect(readFileSync(join(root, "repo/target/wasm32-wasip1/debug/quality-output"), "utf8")).toBe("WASI debug quality output\n");
-    expect(readFileSync(join(root, "repo/target/.ci-input-times.json"), "utf8")).toBe("[]\n");
-    const targetArchive = execFileSync("tar", ["--posix", "-tf", "-"], { input: execFileSync("zstd", ["-dc"], { input: execFileSync("tar", ["--posix", "-xOf", transfer, "target.tar.zst"]) }) });
-    expect(targetArchive.toString("utf8")).toContain("release/deps/native\n");
-    expect(targetArchive.toString("utf8")).toContain("wasm32-wasip1/release/quality-output\n");
-    expect(targetArchive.toString("utf8")).toContain(".ci-input-times.json\n");
-    expect(targetArchive.toString("utf8")).not.toContain("unlisted/foreign\n");
+    for (const file of coldProducerFiles.filter(file => file !== "release/deps/native")) {
+      expect(readFileSync(join(root, "repo/target", file), "utf8")).toBe(`producer ${file}\n`);
+    }
+    expect(archived).toEqual(expect.arrayContaining(coldProducerFiles));
+    expect(archived.filter(path => path.startsWith("split-common") || path.startsWith("wasm32-wasip1/release"))).toEqual([]);
+    expect(existsSync(join(root, "repo/target/split-common"))).toBe(false);
     expect(git(join(root, "repo/vendor/bun"), "rev-parse", "HEAD")).toBe(expectedHead);
     expect(git(join(root, "repo/vendor/bun"), "config", "--local", "--list")).not.toContain("extraheader");
     expect(git(join(root, "temp/cargo/git/db/public"), "rev-parse", "--is-bare-repository")).toBe("true");
     expect(git(join(root, "temp/cargo/git/checkouts/public/abc"), "status", "--porcelain")).toBe("");
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
     expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
-    expect(existsSync(join(root, "temp/native-quality-transfer/native-quality-7.tar"))).toBe(true);
-    expect(execFileSync("tar", ["--posix", "-tf", join(root, "temp/native-quality-transfer/native-quality-7.tar")], { encoding: "utf8" })).toBe("target.tar.zst\ncargo.tar.zst\nsources.tar.zst\nmanifest.json\n");
+    expect(existsSync(join(root, "temp/native-quality-artifact/manifest.json"))).toBe(true);
+    for (const archive of ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"]) {
+      expect(existsSync(join(root, "temp/native-quality-artifact", archive))).toBe(false);
+    }
   });
 });
 
-test("typed target topology accepts required consumer roots and rejects unlisted paths", () => {
-  expect(nativeTargetRoots.map(root => root.path)).toEqual([".ci-input-times.json", "debug", "release", "wasm32-wasip1/debug", "wasm32-wasip1/release"]);
-  for (const path of [".ci-input-times.json", "debug/quality-host", "release/deps/native", "wasm32-wasip1/debug/quality-output", "wasm32-wasip1/release/quality-output"]) {
-    expect(isNativeTargetPathAllowed(path)).toBe(true);
-  }
-  for (const path of ["unlisted/foreign", "target/debug/unlisted", "../release/native", "/release/native"]) {
-    expect(isNativeTargetPathAllowed(path)).toBe(false);
-  }
+test("typed target topology separates producer-written roots from cache-restored roots", () => {
+  const roots = (presence: string) => nativeTargetRoots.filter(root => root.presence === presence).map(root => root.path);
+  expect(roots("required")).toEqual([".ci-input-times.json", "debug", "release", "wasm32-wasip1/debug", "tls-probe"]);
+  expect(roots("optional")).toEqual(["wasm32-wasip1/release"]);
+  expect(nativeTargetRoots.map(root => root.path)).not.toContain(".");
+});
+
+test("a warm producer hands off cache-restored guest outputs", () => {
+  fixture((root, env, invoke) => {
+    mkdirSync(join(root, "repo/target/wasm32-wasip1/release"));
+    writeFileSync(join(root, "repo/target/wasm32-wasip1/release/bun.wasm"), "restored guest\n");
+    const changes = prepareImport(root, env, invoke);
+    expect(targetArchive(join(root, "temp/native-quality-artifact"))).toContain("wasm32-wasip1/release/bun.wasm");
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(readFileSync(join(root, "repo/target/wasm32-wasip1/release/bun.wasm"), "utf8")).toBe("restored guest\n");
+  });
+});
+
+for (const missing of nativeTargetRoots.filter(root => root.presence === "required")) test(`real package rejects a producer without required target root ${missing.path}`, () => {
+  fixture((root, env, invoke) => {
+    rmSync(join(root, "repo/target", missing.path), { recursive: true });
+    const result = invoke("native-quality", packName);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Missing required native handoff root: ${missing.path}`);
+    expect(existsSync(env.GITHUB_OUTPUT!)).toBe(false);
+  });
 });
 
 test("tracked dependency fixtures survive while installed packages stay private", () => {
@@ -321,76 +343,37 @@ for (const [name, value] of foreignInputs) test(`real import rejects foreign ${n
 for (const mode of ["corrupt", "missing", "extra", "overlay", "sysroot", "manifest", "tree", "bun-head", "source-check"] as const) test(`real import rejects ${mode} state without readiness`, () => {
   fixture((root, env, invoke) => {
     const changes = prepareImport(root, env, invoke);
-    const transfer = join(root, "temp/native-quality-transfer/native-quality-7.tar");
-    mutateFixture(mode, root, transfer, changes);
+    const bundle = join(root, "temp/native-quality-artifact");
+    mutateFixture(mode, root, bundle, changes);
     const imported = invoke("rust", unpackName, changes);
     expect(imported.status, imported.stdout).not.toBe(0);
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("");
     if (mode !== "source-check") expect(existsSync(join(root, "temp/source-verified"))).toBe(false);
   });
 });
-function rewriteTransfer(transfer: string, root: string, mutate: (directory: string) => void): void {
-  const directory = mkdtempSync(join(root, "native-transfer-rewrite-"));
-  try {
-    execFileSync("tar", ["--posix", "-xf", transfer, "-C", directory]);
-    mutate(directory);
-    const names = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst", "manifest.json"].concat(readdirSync(directory).filter(name => !["target.tar.zst", "cargo.tar.zst", "sources.tar.zst", "manifest.json"].includes(name)).toSorted());
-    execFileSync("tar", ["--posix", "-C", directory, "-cf", transfer].concat(names.filter(name => existsSync(join(directory, name)))));
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-}
-function corruptNativeArchive(path: string, root: string): void {
-  const archive = mkdtempSync(join(root, "native-inner-rewrite-"));
-  try {
+function mutateFixture(mode: string, root: string, bundle: string, changes: Record<string, string>): void {
+  if (mode === "corrupt") {
+    const path = join(bundle, "target.tar.zst");
     const tar = execFileSync("zstd", ["-dc", path]);
-    execFileSync("tar", ["--posix", "-xf", "-", "-C", archive], { input: tar });
-    writeFileSync(join(archive, "release/deps/native"), "modified fixture bytes\n");
-    const updated = execFileSync("tar", ["--posix", "-C", archive, "-cf", "-", "."]);
-    execFileSync("zstd", ["-f", "-o", path], { input: updated, stdio: ["pipe", "ignore", "ignore"] });
-  } finally {
-    rmSync(archive, { recursive: true, force: true });
+    const original = Buffer.from("compiled fixture bytes\n");
+    const offset = tar.indexOf(original);
+    expect(offset).toBeGreaterThan(-1);
+    tar.set(Buffer.from("modified fixture bytes\n"), offset);
+    execFileSync("zstd", ["-f", "-o", path], { input: tar, stdio: ["pipe", "ignore", "ignore"] });
   }
-}
-
-function checkManifestBytes(mode: "leading-space" | "trailing-newline"): void {
-  fixture((root, env, invoke) => {
-    const changes = prepareImport(root, env, invoke);
-    const transfer = join(root, "temp/native-quality-transfer/native-quality-7.tar");
-    rewriteTransfer(transfer, root, directory => {
-      const path = join(directory, "manifest.json");
-      const bytes = readFileSync(path);
-      writeFileSync(path, mode === "leading-space" ? Buffer.concat([Buffer.from(" "), bytes]) : Buffer.concat([bytes, Buffer.from("\n")]));
-    });
-    const imported = invoke("rust", unpackName, changes);
-    expect(imported.status).not.toBe(0);
-    expect(imported.stderr).toContain("Native manifest digest mismatch");
-    expect(existsSync(join(root, "repo/target"))).toBe(false);
-    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("");
-  });
-}
-
-for (const mode of ["leading-space", "trailing-newline"] as const) {
-  test(`real import rejects manifest ${mode} with unchanged producer digest before destinations`, () => checkManifestBytes(mode));
-}
-
-function mutateFixture(mode: string, root: string, transfer: string, changes: Record<string, string>): void {
-  rewriteTransfer(transfer, root, directory => {
-    if (mode === "corrupt") corruptNativeArchive(join(directory, "target.tar.zst"), root);
-    if (mode === "missing") rmSync(join(directory, "sources.tar.zst"));
-    if (mode === "extra") writeFileSync(join(directory, "foreign"), "unexpected");
-    if (mode === "overlay") mkdirSync(join(root, "repo/target"));
-    if (mode === "sysroot") writeFileSync(join(root, "temp/sysroot/bun-wasm-sysroot.json"), "different sysroot");
-    if (mode === "source-check") writeFileSync(join(root, "repo/scripts/sync-bun.sh"), "exit 42\n");
-    if (!["manifest", "tree", "bun-head"].includes(mode)) return;
-    const path = join(directory, "manifest.json");
-    const data = record(JSON.parse(readFileSync(path, "utf8")));
-    if (mode === "manifest") data.archives = { ...record(data.archives), "foreign.tar.zst": "a".repeat(64) };
-    if (mode === "tree") data.identity = { ...record(data.identity), tree: "0".repeat(40) };
-    if (mode === "bun-head") data.bun = { ...record(data.bun), head: "0".repeat(40) };
-    writeFileSync(path, JSON.stringify(data));
-    changes.NATIVE_QUALITY_MANIFEST_SHA256 = createHash("sha256").update(readFileSync(path)).digest("hex");
-  });
+  if (mode === "missing") rmSync(join(bundle, "sources.tar.zst"));
+  if (mode === "extra") writeFileSync(join(bundle, "foreign"), "unexpected");
+  if (mode === "overlay") mkdirSync(join(root, "repo/target"));
+  if (mode === "sysroot") writeFileSync(join(root, "temp/sysroot/bun-wasm-sysroot.json"), "different sysroot");
+  if (mode === "source-check") writeFileSync(join(root, "repo/scripts/sync-bun.sh"), "exit 42\n");
+  if (!["manifest", "tree", "bun-head"].includes(mode)) return;
+  const path = join(bundle, "manifest.json");
+  const data = record(JSON.parse(readFileSync(path, "utf8")));
+  if (mode === "manifest") data.archives = { ...record(data.archives), "foreign.tar.zst": "a".repeat(64) };
+  if (mode === "tree") data.identity = { ...record(data.identity), tree: "0".repeat(40) };
+  if (mode === "bun-head") data.bun = { ...record(data.bun), head: "0".repeat(40) };
+  writeFileSync(path, JSON.stringify(data));
+  changes.NATIVE_QUALITY_MANIFEST_SHA256 = createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 for (const tool of ["tar", "zstd"]) test(`real package cannot advertise a checkpoint after ${tool} fails`, () => {

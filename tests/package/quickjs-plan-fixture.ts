@@ -12,7 +12,8 @@ const module = (parts: number[][]) => Uint8Array.from([0, 97, 115, 109, 1, 0, 0,
 
 export function quickjsPair(kind: PairedEngine = "quickjs"): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
   const exports = [entry("memory", 2, 0), entry("__indirect_function_table", 1, 0), entry("__stack_pointer", 3, 0),
-    entry("_start", 0, 1), entry("bun_core_alloc", 0, 2), entry("__wasm_call_ctors", 0, 3),
+    entry("bun_core_idle", 0, 1), entry("bun_core_poll", 0, 1), entry("_start", 0, 1),
+    entry("bun_core_alloc", 0, 2), entry("__wasm_call_ctors", 0, 3),
     entry("bun_core_bind_engine", 0, 4), entry("core_checkpoint", 0, 5), entry("value", 0, 6), entry("ctors", 3, 1)];
   const core = module([
     section(1, [4, 0x60, 0, 0, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7f]),
@@ -23,14 +24,16 @@ export function quickjsPair(kind: PairedEngine = "quickjs"): { core: Uint8Array<
     section(10, [6].concat(body([]), body([0x41, 0x80, 0x08]), body([0x23, 1, 0x41, 1, 0x6a, 0x24, 1]),
       body([0x20, 0]), body([]), body([0x41, 0, 0x28, 2, 0]))),
   ]);
-  const imports = [name("env").concat(name("core_checkpoint"), [0, 0]), name("env").concat(name("memory"), [2, 0, 1]),
+  const imports = [name("env").concat(name("core_checkpoint"), [0, 0]),
+    name("env").concat(name("bun_core_idle"), [0, 0]), name("env").concat(name("bun_core_poll"), [0, 0]),
+    name("env").concat(name("memory"), [2, 0, 1]),
     name("env").concat(name("__indirect_function_table"), [1, 0x70, 0, 1]),
     name("env").concat(name("__stack_pointer"), [3, 0x7f, 1])];
   const initializers = [`${kind}_initialize_memory`, `${kind}_apply_data_relocs`, `${kind}_call_ctors`, `${kind}_register`, `${kind}_run`];
   const side = module([
     section(0, name("dylink.0").concat([1, 4, 4, 2, 0, 0])), section(1, [1, 0x60, 0, 0]),
     section(2, [imports.length].concat(...imports)), section(3, [5, 0, 0, 0, 0, 0]),
-    section(7, [initializers.length].concat(...initializers.map((label, index) => entry(label, 0, index + 1)))),
+    section(7, [initializers.length].concat(...initializers.map((label, index) => entry(label, 0, index + 3)))),
     section(10, [5].concat(body([]), body([]), body([]), body([0x41, 0, 0x41, 42, 0x36, 2, 0]), body([]))),
   ]);
   return { core: tagProgramCore(core, kind), side };

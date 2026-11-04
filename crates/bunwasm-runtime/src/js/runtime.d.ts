@@ -90,6 +90,7 @@ declare namespace BunWasm {
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
       isIPv6(value: string): boolean;
+      isTcpListenOptions(value: { path?: unknown; port?: unknown }): boolean;
       port(value?: unknown): number;
       error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
     };

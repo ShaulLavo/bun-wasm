@@ -50,7 +50,7 @@ try {
     }
     observeModules(context);
     const page = await context.newPage();
-    await page.goto(`${url}?engine=browser`);
+    await page.goto(`${url}?engine=browser&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/worker-atomic.ts", atomic.code);
     for (let iteration = 1; iteration <= 20; iteration++) {
@@ -64,7 +64,7 @@ try {
     observeModules(uncontrolled);
     await uncontrolled.addInitScript(uncontrolledChildren);
     const uncontrolledPage = await uncontrolled.newPage();
-    await uncontrolledPage.goto(`${url}?engine=browser`);
+    await uncontrolledPage.goto(`${url}?engine=browser&prompt=off`);
     assert.match(await ready(uncontrolledPage), /ready/);
     await writeFile(uncontrolledPage, "/home/user/worker-atomic.ts", atomic.code);
     const checked = await run(uncontrolledPage, "bun run worker-atomic.ts", 120000);

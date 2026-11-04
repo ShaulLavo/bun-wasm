@@ -12,7 +12,7 @@ import type { BunNetworkOptions } from "../net/helper";
 import { Previews } from "../preview";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
-import type { Shell } from "../shell";
+import type { BrowserSession, SessionState } from "bash-web/session";
 import { errorText } from "../startup";
 import { commandChunks } from "../startup-cache";
 import { openTerminal } from "../terminal-mount";
@@ -20,7 +20,6 @@ import { linkLocalUrls } from "../terminal-links";
 import { Editor } from "./editor";
 
 type Filesystem = Runtime["filesystem"];
-type ShellState = Parameters<Parameters<typeof Shell.create>[0]["onState"]>[0];
 export type Status = { text: string; kind: "" | "ok" | "error" };
 /** Why Run became Reload. Startup and ownership failures also lock the workspace controls. */
 export type Failure = "startup" | "ownership" | "shell";
@@ -28,6 +27,8 @@ export type Failure = "startup" | "ownership" | "shell";
 // The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
 // the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
 const DEFAULT_ENGINE: Engine = "browser";
+// The guest does not expose an admitted Bun version to this page, so the prompt must not guess one.
+const HOST_VERSIONS = {};
 
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
@@ -42,8 +43,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private terminalOpened!: () => void;
   private readonly terminalOpen = new Promise<void>((resolve) => { this.terminalOpened = resolve; });
   private fs?: Filesystem;
-  private shell?: Shell;
-  private shellState: ShellState = "starting";
+  private shell?: BrowserSession;
+  private shellState: SessionState = "starting";
   private runPending = false;
   private message: Status = { text: "", kind: "" };
 
@@ -51,7 +52,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     super();
     this.params = new URLSearchParams(search);
     const requested = this.params.get("engine");
-    this.engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
+    if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
+    this.engine = requested ?? DEFAULT_ENGINE;
   }
 
   get status(): Status {
@@ -159,6 +161,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
 
     const wasmReady = this.loadEngine();
+    const promptModule = this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt");
     // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
     const moduleScope: Promise<boolean> = registerModuleScope();
     // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
@@ -206,14 +209,21 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       await fs.writeFile(path, "bun-wasm registered executable\n");
     }
     await fs.flush();
-    const { Shell } = await import("../shell");
-    const shell = this.shell = await Shell.create({
+    const { BrowserSession } = await import("bash-web/session");
+    const prompt = (await promptModule)?.createPrompt({
+      filesystem: runtime.filesystem,
+      versions: HOST_VERSIONS,
+      file: true,
+      logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
+    });
+    const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
-      env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\x1b[32muser@bun\x1b[0m:\x1b[34m~\x1b[0m$ " },
+      env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),
       lineEditor: { mode: "zsh" },
+      prompt,
       onOutput: bytes => term.write(bytes),
       onState: (state, detail) => this.shellChanged(state, detail),
     });
@@ -245,7 +255,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     }
   }
 
-  private shellChanged(state: ShellState, detail?: string): void {
+  private shellChanged(state: SessionState, detail?: string): void {
     this.shellState = state;
     if (state === "ready") void this.editor?.syncFromFs().catch(this.report);
     if (state === "failed" || state === "exited") {

@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { packageFixture } from "./registry.mjs";
-import { packageRedirect } from "../../web/src/net/package-fetch";
+import { packageFetch } from "../../web/src/net/package-fetch";
 
 type CapturedRequest = { url: string; authorization: string | null };
 type Result = { code: number | null; stdout: string; stderr: string };
@@ -302,9 +302,17 @@ async function schemeRedirect() {
   assert.equal(requests[1]?.authorization, null, "native Bun leaked credentials on downgrade");
   const nativeRequests = requests; requests = [];
   const headers = new Headers({ authorization: `Bearer ${configuredSecret}` });
-  packageRedirect(new URL("https://registry.invalid:443/"), "http://registry.invalid:443/archive", headers);
-  assert.equal(headers.has("authorization"), false, "same-port scheme change retained credentials");
-  record("scheme-redirect", native, { code: 0, stdout: "full-origin helper removed authorization", stderr: "" }, nativeRequests);
+  const adapterRequests: CapturedRequest[] = [];
+  const adapterFetcher = Object.assign(async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+    adapterRequests.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+    if (adapterRequests.length === 1) return new Response("redirect body", { status: 302, headers: { location: "http://registry.invalid:443/archive" } });
+    return new Response("adapter response");
+  }, { preconnect: fetch.preconnect });
+  const adapter = await packageFetch("https://registry.invalid:443/", { headers }, adapterFetcher);
+  assert.equal(adapterRequests.length, 2);
+  assert.equal(adapterRequests[1]?.authorization, null, "packageFetch retained credentials across a scheme change");
+  assert.equal(await adapter.text(), "adapter response");
+  record("scheme-redirect", native, { code: 0, stdout: "TypeScript packageFetch adapter control removed authorization", stderr: "" }, nativeRequests, { adapterRequests: adapterRequests.map(request => ({ url: request.url, authorization: request.authorization ? "configured" : null })) });
   await tlsServer.stop(true); tlsServers.delete(tlsServer);
 }
 

@@ -19,17 +19,24 @@ Repeat with `--engine jsc` and `--engine browser`, each with its own report dire
 
 The runner uses the existing playground session, filesystem, shell, root-origin preview, registry and HMR helpers. It opens no visible browser window. The guest port is explicit; the local playground and preview servers request free ports.
 
-For offline replay, use the existing registry helper to stage missing locked tarballs without changing its shared recording:
+For offline replay, select the ORIGINAL complete registry indexes and retain their raw bytes before staging. Supply their previously recorded combined identity:
 
 ```sh
-bun web/tests/next-framework-registry.ts /work/tmp/bun-wasm-next-registry examples/next-acceptance/bun.lock
-# Add to the acceptance command:
-# --registry-extra /work/tmp/bun-wasm-next-registry
+# Add to the acceptance command for an existing, complete recording:
+# --registry-extra /absolute/original-supplement \
+# --registry-overlay /absolute/original-advisory-overlay \
+# --registry-identity ORIGINAL_COMBINED_SHA256
 ```
 
-Add `--registry-overlay /absolute/recorded-advisory-overlay` with `--registry-extra` to replay the exact recorded advisory POST through the shared Next registry helper. The overlay option requires the supplement option. Unknown POST bodies and paths still fail replay. `network.mirror.inputs` records the absolute path, SHA-256 and entry count of the borrowed, supplemental and overlay indexes. The combined registry hash includes all supplied index bytes, and its entry count counts unique keys across those indexes. No registry cache is changed. See [recorded advisory replay](next-advisory-replay.md) for the authentic fixture and recording rules.
+The identity is SHA-256 of the original shared, supplement, and optional overlay index texts, in that order, joined with one LF. For `--registry DIRECTORY`, it is SHA-256 of that recording's original raw `index.json`. Never compute a replacement identity from a trimmed or recovered selection.
 
-`--registry DIRECTORY` instead replays a complete app-matrix registry recording. These two options are mutually exclusive. Replay fails on a missing object or blocked external request. Remove the supplemental directory after its consumer runs finish. A run without replay is labeled a live npm diagnostic.
+Admission checks every original key and object, including metadata, status, content type, digest, and byte count, before creating report or session resources. The supplement listener rechecks the original index pins and full inventory. Locked tarballs alone are insufficient. Missing or changed original bytes stop admission. The runner does not recover objects, upload a replacement, substitute a cache, or retry through live npm. A scanner refusal remains a refusal, not permission to repackage or bypass it.
+
+The overlay option requires the supplement option. Unknown POST bodies and paths still fail replay. `network.mirror.inputs` records the original index paths, SHA-256 digests, and entry counts. The combined entry count counts unique keys across the indexes. No registry cache is changed. See [recorded advisory replay](next-advisory-replay.md) for the authentic fixture and recording rules.
+
+`--registry DIRECTORY` and `--registry-extra` are mutually exclusive. Remove task-owned supplemental copies only after their consumers stop. Preserve borrowed originals. A normal run without replay is labeled a live npm diagnostic. The separate Browser phase diagnostic requires pinned replay and never falls back to live npm.
+
+For the bounded observer mode and its separate execution prerequisites, see [Browser error-phase diagnostics](browser-error-phase-observer.md).
 
 ## Use the shared config
 

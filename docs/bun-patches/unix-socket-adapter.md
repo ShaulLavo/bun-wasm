@@ -30,6 +30,24 @@ servers expose the requested path in `address()`. Pipe sockets expose no IP
 address, family or port. HTTP `socketPath` selects the connection independently
 of the request URL path and the agent pool separates socket names.
 
+Listener overload selection is an original correction in `net_address.ts`,
+with minimal wiring in the existing `node_net.js` and `net.js` factories.
+A number or string `port` selects TCP before an optional `path` is read. An
+explicitly undefined or null `port` also selects TCP on an unused port. An
+omitted port leaves a real Unix path selected. This accepts adapter-node 5.3.2's
+`{ path: false, host, port }` without treating `false` as a socket name.
+The connection overload is unchanged. Selected TCP ports still use the existing
+validators, and selected Unix paths still use `net_path.ts`, including its
+asynchronous type and host errors. No host slot or signature changes.
+
+The behavioral reference is Node v26.12.1's `lib/net.js`,
+`Server.prototype.listen`. No Node implementation is copied.
+`scripts/package-port-http.test.ts` runs the actual TCP and HTTP factories with
+a recording host boundary and runs native Node TCP controls. It checks port
+precedence, omitted versus explicit undefined fields, an unread unused path
+getter, invalid ports, and selected Unix path errors. These source checks do not
+establish rebuilt guest or SvelteKit production acceptance.
+
 The Node adapter tests supply the specified path API over existing Waffle stream
 bytes. That fixture does not prove filesystem binding, unlink leases, or Nuxt.
 The manual `net-unix-path` guest fixture checks echo, half-close and filesystem

@@ -1,11 +1,26 @@
-# Hermes engine program
+# Dormant Hermes source
 
-Hermes is an opt-in third engine program: the common core (`bun-hermes.wasm`, tagged `hermes`)
+Hermes was withdrawn from normal publication on November 1, 2026. Current package,
+app, Node, and native launchers reject it. Normal CI no longer builds its VM or
+side, and no old binary can accompany newly published engines. Withdrawal is not
+a test pass. Original artifacts and receipts remain historical evidence.
+
+The VM, shim, adapters, patches, and native build recipes below remain for a
+possible owner-authorized restart. Their old composition and host commands are
+historical and do not run against the current supported-engine contracts. To
+resume, first design and review one change restoring engine metadata, tags, input
+and receipt scopes, native and web loaders, selectors, telemetry, staging, and
+all corresponding gates. Then qualify a fresh exact source and native generation.
+Do not edit old receipts or reinterpret a held release as permission to restart.
+
+## Historical implementation and commands
+
+The withdrawn implementation was a third paired engine program: the common core (`bun-hermes.wasm`, tagged `hermes`)
 plus `hermes-engine.wasm`, a `wasm-ld --shared` side that compiles the shared engine driver with
 `crates/bunwasm-engine-hermes/src/vm.rs` over the Hermes VM and its C shim (`crates/bunwasm-hermes`).
-No default build, menu entry or CI job includes it.
+These are dormant sources, not a currently selectable engine.
 
-Build and run (native launcher):
+Historical build and run commands, for restoration reference only:
 
 ```sh
 source env.sh
@@ -20,7 +35,7 @@ Settings: `BUN_WASM_HERMES_OPT` (`none` default, `user`, `all`) and
 `BUN_WASM_HERMES_MAX_HEAP_MIB` (default 384). Heap exhaustion is fatal (exit 134).
 
 Provenance: [engine program](bun-patches/hermes-engine-program.md).
-## Hosts
+## Historical hosts
 
 The browser loader accepts `?engine=hermes` when the web build contains both files.
 `HERMES_WASM` selects the core for `web/build.ts`; its companion must be in the same directory.

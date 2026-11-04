@@ -51,8 +51,17 @@ Its descriptor table bridges pipe/terminal fd calls alongside Node WASI's filesy
 `node-host.ts` runs the root guest in a worker as well as its children, keeping that
 supervisor responsive while guest code makes synchronous process calls. The existing
 `node-host.mjs` is only a TypeScript-entry shim. CLI fetch uses the networking import
-dispatcher; signal handling uses `runtime_proc.signal`, sharing the process wake signal. The slot installer
-loads Waffle's exported memory helper, whose source and generated Node modules are
+dispatcher. `node-install-net.ts` keeps the existing guest slots and publishes response
+heads before body completion. Each handle waits for full consumption of one compact
+body packet, at most 64 KiB, before sending another. The cumulative 256 MiB guard
+remains; the packet ceiling does not bound the current source chunk or process memory.
+Close aborts the request and releases its acknowledgment wait. A typed worker
+bootstrap publishes startup, uncaught-callback and exit failures through the same
+synchronously read port and shared wake before loading the fetch module. The
+consumer does not depend on its blocked event-loop callbacks for those failures.
+Signal handling uses
+`runtime_proc.signal`, sharing the process wake signal. The slot installer loads
+Waffle's exported memory helper, whose source and generated Node modules are
 fingerprinted with every local host module by the upstream-suite resume gate.
 
 The original atomic-transfer native checks the complete buffer list before

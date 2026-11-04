@@ -73,7 +73,7 @@ test("server rows record elapsed ready and page-load times", async () => {
   const now = spyOn(performance, "now").mockImplementation(() => clock += 100);
   try {
     const result = await serverCommand({
-      page, context: { newPage: async () => pages.shift() }, app: { id: "timing-fixture" }, engine: "hermes",
+      page, context: { newPage: async () => pages.shift() }, app: { id: "timing-fixture" }, engine: "jsc",
       command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } },
       options: { timeout: 1000, output: tmpdir() }, terminalText: async () => "",
     });

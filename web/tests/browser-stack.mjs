@@ -70,7 +70,7 @@ async function depth(attempt, label) {
 
 async function openPage(browser, name, url, engine) {
   const context = await browser.newContext(name === 'webkit' ? playwright.devices['iPhone 13'] : {});
-  const visit = await firstVisit(context, `${url}?engine=${engine}`);
+  const visit = await firstVisit(context, `${url}?engine=${engine}&prompt=off`);
   const page = await context.newPage();
   await page.goto(visit.url);
   await ready(page);

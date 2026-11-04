@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { parseCheck } from "./test-checks";
 
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
+  if (check.owner === "native-probe") return [check.path].concat(check.inputs);
   if (check.owner === "native") return [`${check.path}/`];
   return check.owner === "runtime" ? [check.path] : [];
 }

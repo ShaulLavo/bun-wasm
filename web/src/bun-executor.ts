@@ -16,7 +16,8 @@ import { exportSharedObjects, type SharedObjectService } from "./shared-objects/
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 import type { BunTerminal } from "./bun-terminal.js";
 
-export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
+import type { Engine } from "../../src/engine-kind.js";
+export type { Engine } from "../../src/engine-kind.js";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
@@ -229,13 +230,8 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
-      const originalImports = context.wasi.imports;
-      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
-      let linked: LinkedGroup;
-      try {
-        linked = instantiateLinkPlan(plan, { wasi: context.wasi,
-          coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
-      } finally { context.wasi.imports = originalImports; }
+      const linked = instantiateLinkPlan(plan, { wasi: context.wasi,
+        coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
       group = linked;
       reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
@@ -245,7 +241,11 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
     initialize(context) {
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
-      group.initialize();
+      const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
+      const originalImports = context.wasi.imports;
+      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
+      try { group.initialize(); }
+      finally { context.wasi.imports = originalImports; }
       reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },

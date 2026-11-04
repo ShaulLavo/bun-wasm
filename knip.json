@@ -13,6 +13,7 @@
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/next-acceptance.ts",
         "scripts/app-matrix/next-acceptance-reference.ts",
+        "scripts/app-matrix/fixtures/browser-error-phase-observer/instrumentation.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
         "tests/memory-telemetry.test.ts",
@@ -23,6 +24,8 @@
         "tests/package/fixtures/paired-asset-brand.ts",
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/fixtures/tls-identity/verify-upstream.ts",
+        "scripts/tls-qualification.ts",
         "scripts/fixtures/ci-jsc-worker-scenario.ts",
         "scripts/fixtures/event-rejections-control.ts",
         "scripts/fixtures/quickjs-async-context.ts",
@@ -41,8 +44,6 @@
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
-        "scripts/hermes-import-delta.ts",
-        "scripts/hermes-hosts.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
@@ -95,7 +96,6 @@
         "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,site-assets-host,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/wasm-transfer-page.ts",
-        "tests/hermes-host-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts"
@@ -108,7 +108,8 @@
       ],
       "ignoreDependencies": [
         "benchmark",
-        "miniflare"
+        "miniflare",
+        "pg"
       ],
       "ignoreUnresolved": [
         "../src/subprocess.js"
@@ -136,12 +137,14 @@
   },
   "ignoreBinaries": [
     "ninja",
-    "du",
     "unshare",
     "rustc",
     "ss",
     "build.mjs",
-    "^c\\+\\+$"
+    "^c\\+\\+$",
+    "findmnt",
+    "mesh",
+    "postgres"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"

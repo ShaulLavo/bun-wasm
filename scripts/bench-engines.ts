@@ -1,4 +1,4 @@
-import { programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { programKind, programProfile, verifyProgramSide, type ProgramFiles, type Engine } from "../src/engine-kind.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const root = resolve(import.meta.dirname, "..");
+const defaultEngine: Engine = "quickjs";
 const microNames = ["loop", "regexp", "json", "alloc", "strings"] as const;
 const microChecksums = ["1534387362", "1431980", "4924030", "1400000", "98799"] as const;
 type MicroName = typeof microNames[number];
@@ -331,7 +332,7 @@ async function main(): Promise<void> {
   assert.ok(Number.isInteger(runs) && runs > 0 && runs <= 36, "--runs must be an integer from 1 to 36");
   assert.ok(!values["native-control"] || !values.engine?.length, "native controls cannot carry engine labels");
   const launcher = values["native-control"] ? process.execPath : resolve(values.launcher!);
-  const engines = values["native-control"] ? [{ name: "native-bun-control", path: launcher }] : parseEngineSpecs(values.engine?.length ? values.engine : [`quickjs=${join(root, "dist/bun.wasm")}`]);
+  const engines = values["native-control"] ? [{ name: "native-bun-control", path: launcher }] : parseEngineSpecs(values.engine?.length ? values.engine : [`${defaultEngine}=${join(root, "dist/bun.wasm")}`]);
   assert.ok(engines.length <= 3, "bounded comparison supports at most three engines");
   assert.ok(engines.length !== 3 || runs % 6 === 0, "three-engine comparisons need complete six-round blocks");
   const output = values.output ? resolve(values.output) : undefined;

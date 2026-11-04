@@ -1,0 +1,560 @@
+[
+  {
+    "name": "upstream-0",
+    "hostname": false,
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      }
+    },
+    "reason": "Host: false. is not cert's CN: a.com"
+  },
+  {
+    "name": "upstream-1",
+    "hostname": null,
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      }
+    },
+    "reason": "Host: null. is not cert's CN: a.com"
+  },
+  {
+    "name": "upstream-2",
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      }
+    },
+    "reason": "Host: undefined. is not cert's CN: a.com"
+  },
+  {
+    "name": "upstream-3",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-4",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "A.COM"
+      }
+    }
+  },
+  {
+    "name": "upstream-5",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "b.com"
+      }
+    },
+    "reason": "Host: a.com. is not cert's CN: b.com"
+  },
+  {
+    "name": "upstream-6",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com."
+      }
+    }
+  },
+  {
+    "name": "upstream-7",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": ".a.com"
+      }
+    },
+    "reason": "Host: a.com. is not cert's CN: .a.com"
+  },
+  {
+    "name": "upstream-8",
+    "hostname": "bad.x.example.com",
+    "cert": {
+      "subject": {
+        "CN": "bad..example.com"
+      }
+    },
+    "reason": "Host: bad.x.example.com. is not cert's CN: bad..example.com"
+  },
+  {
+    "name": "upstream-9",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      }
+    },
+    "reason": "IP: 8.8.8.8 is not in the cert's list: "
+  },
+  {
+    "name": "upstream-10",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      },
+      "subjectaltname": "DNS:8.8.8.8"
+    },
+    "reason": "IP: 8.8.8.8 is not in the cert's list: "
+  },
+  {
+    "name": "upstream-11",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      },
+      "subjectaltname": "URI:http://8.8.8.8/"
+    },
+    "reason": "IP: 8.8.8.8 is not in the cert's list: "
+  },
+  {
+    "name": "upstream-12",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      },
+      "subjectaltname": "IP Address:8.8.8.8"
+    }
+  },
+  {
+    "name": "upstream-13",
+    "hostname": "::1",
+    "cert": {
+      "subject": {},
+      "subjectaltname": "IP Address:::1"
+    }
+  },
+  {
+    "name": "upstream-14",
+    "hostname": "2001:db8::1",
+    "cert": {
+      "subject": {},
+      "subjectaltname": "IP Address:2001:DB8:0:0:0:0:0:1"
+    }
+  },
+  {
+    "name": "upstream-15",
+    "hostname": "::1",
+    "cert": {
+      "subject": {},
+      "subjectaltname": "IP Address:::2"
+    },
+    "reason": "IP: ::1 is not in the cert's list: ::2"
+  },
+  {
+    "name": "upstream-16",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      },
+      "subjectaltname": "IP Address:8.8.8.0/24"
+    },
+    "reason": "IP: 8.8.8.8 is not in the cert's list: "
+  },
+  {
+    "name": "upstream-17",
+    "hostname": "b.a.com",
+    "cert": {
+      "subject": {
+        "CN": "*.a.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-18",
+    "hostname": "ba.com",
+    "cert": {
+      "subject": {
+        "CN": "*.a.com"
+      }
+    },
+    "reason": "Host: ba.com. is not cert's CN: *.a.com"
+  },
+  {
+    "name": "upstream-19",
+    "hostname": "\n.b.com",
+    "cert": {
+      "subject": {
+        "CN": "*n.b.com"
+      }
+    },
+    "reason": "Host: \n.b.com. is not cert's CN: *n.b.com"
+  },
+  {
+    "name": "upstream-20",
+    "hostname": "b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:omg.com",
+      "subject": {
+        "CN": "*.a.com"
+      }
+    },
+    "reason": "Host: b.a.com. is not in the cert's altnames: DNS:omg.com"
+  },
+  {
+    "name": "upstream-21",
+    "hostname": "b.a.com",
+    "cert": {
+      "subject": {
+        "CN": "b*b.a.com"
+      }
+    },
+    "reason": "Host: b.a.com. is not cert's CN: b*b.a.com"
+  },
+  {
+    "name": "upstream-22",
+    "hostname": "bxa.a.com",
+    "cert": {
+      "subject": {
+        "CN": "b**.a.com"
+      }
+    },
+    "reason": "Host: bxa.a.com. is not cert's CN: b**.a.com"
+  },
+  {
+    "name": "upstream-23",
+    "hostname": "xbcd.a.com",
+    "cert": {
+      "subject": {
+        "CN": "ab*cd.a.com"
+      }
+    },
+    "reason": "Host: xbcd.a.com. is not cert's CN: ab*cd.a.com"
+  },
+  {
+    "name": "upstream-24",
+    "hostname": "a.com",
+    "cert": {},
+    "reason": "Cert does not contain a DNS name"
+  },
+  {
+    "name": "upstream-25",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:a.com"
+    }
+  },
+  {
+    "name": "upstream-26",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "URI:http://a.b.a.com/"
+    },
+    "reason": "Cert does not contain a DNS name"
+  },
+  {
+    "name": "upstream-27",
+    "hostname": "foo.com",
+    "cert": {
+      "subject": {
+        "CN": [
+          "foo.com",
+          "bar.com"
+        ]
+      }
+    }
+  },
+  {
+    "name": "upstream-28",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": [
+          ""
+        ]
+      }
+    },
+    "reason": "Host: a.com. is not cert's CN: "
+  },
+  {
+    "name": "upstream-29",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:*",
+      "subject": {
+        "CN": "b.com"
+      }
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:*"
+  },
+  {
+    "name": "upstream-30",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.com",
+      "subject": {
+        "CN": "b.com"
+      }
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:*.com"
+  },
+  {
+    "name": "upstream-31",
+    "hostname": "a.co.uk",
+    "cert": {
+      "subjectaltname": "DNS:*.co.uk",
+      "subject": {
+        "CN": "b.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-32",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.a.com",
+      "subject": {
+        "CN": "a.com"
+      }
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:*.a.com"
+  },
+  {
+    "name": "upstream-33",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.a.com",
+      "subject": {
+        "CN": "b.com"
+      }
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:*.a.com"
+  },
+  {
+    "name": "upstream-34",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:a.com",
+      "subject": {
+        "CN": "b.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-35",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:A.COM",
+      "subject": {
+        "CN": "b.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-36",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:",
+      "subject": {}
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:"
+  },
+  {
+    "name": "upstream-37",
+    "hostname": "bad.x.example.com",
+    "cert": {
+      "subjectaltname": "DNS:bad..example.com",
+      "subject": {}
+    },
+    "reason": "Host: bad.x.example.com. is not in the cert's altnames: DNS:bad..example.com"
+  },
+  {
+    "name": "upstream-38",
+    "hostname": "x.example.com",
+    "cert": {
+      "subjectaltname": "DNS:café.example.com",
+      "subject": {}
+    },
+    "reason": "Host: x.example.com. is not in the cert's altnames: DNS:café.example.com"
+  },
+  {
+    "name": "upstream-39",
+    "hostname": "xbcd.a.com",
+    "cert": {
+      "subjectaltname": "DNS:ab*cd.a.com",
+      "subject": {}
+    },
+    "reason": "Host: xbcd.a.com. is not in the cert's altnames: DNS:ab*cd.a.com"
+  },
+  {
+    "name": "upstream-40",
+    "hostname": "x.example.com",
+    "cert": {
+      "subjectaltname": "DNS:bad label.com",
+      "subject": {}
+    },
+    "reason": "Host: x.example.com. is not in the cert's altnames: DNS:bad label.com"
+  },
+  {
+    "name": "upstream-41",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.a.com",
+      "subject": {}
+    },
+    "reason": "Host: a.com. is not in the cert's altnames: DNS:*.a.com"
+  },
+  {
+    "name": "upstream-42",
+    "hostname": "b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.a.com",
+      "subject": {}
+    }
+  },
+  {
+    "name": "upstream-43",
+    "hostname": "c.b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*.a.com",
+      "subject": {}
+    },
+    "reason": "Host: c.b.a.com. is not in the cert's altnames: DNS:*.a.com"
+  },
+  {
+    "name": "upstream-44",
+    "hostname": "b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*b.a.com",
+      "subject": {}
+    }
+  },
+  {
+    "name": "upstream-45",
+    "hostname": "a-cb.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*b.a.com",
+      "subject": {}
+    }
+  },
+  {
+    "name": "upstream-46",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*b.a.com",
+      "subject": {}
+    },
+    "reason": "Host: a.b.a.com. is not in the cert's altnames: DNS:*b.a.com"
+  },
+  {
+    "name": "upstream-47",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "DNS:*b.a.com, DNS:a.b.a.com",
+      "subject": {}
+    }
+  },
+  {
+    "name": "upstream-48",
+    "hostname": "bxa.a.com",
+    "cert": {
+      "subjectaltname": "DNS:b**.a.com",
+      "subject": {}
+    },
+    "reason": "Host: bxa.a.com. is not in the cert's altnames: DNS:b**.a.com"
+  },
+  {
+    "name": "upstream-49",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "URI:http://a.b.a.com/",
+      "subject": {}
+    },
+    "reason": "Cert does not contain a DNS name"
+  },
+  {
+    "name": "upstream-50",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "URI:http://*.b.a.com/",
+      "subject": {}
+    },
+    "reason": "Cert does not contain a DNS name"
+  },
+  {
+    "name": "upstream-51",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subjectaltname": "IP Address:127.0.0.1",
+      "subject": {}
+    },
+    "reason": "Cert does not contain a DNS name"
+  },
+  {
+    "name": "upstream-52",
+    "hostname": "127.0.0.1",
+    "cert": {
+      "subjectaltname": "IP Address:127.0.0.1",
+      "subject": {}
+    }
+  },
+  {
+    "name": "upstream-53",
+    "hostname": "127.0.0.2",
+    "cert": {
+      "subjectaltname": "IP Address:127.0.0.1",
+      "subject": {}
+    },
+    "reason": "IP: 127.0.0.2 is not in the cert's list: 127.0.0.1"
+  },
+  {
+    "name": "upstream-54",
+    "hostname": "127.0.0.1",
+    "cert": {
+      "subjectaltname": "DNS:a.com",
+      "subject": {}
+    },
+    "reason": "IP: 127.0.0.1 is not in the cert's list: "
+  },
+  {
+    "name": "upstream-55",
+    "hostname": "localhost",
+    "cert": {
+      "subjectaltname": "DNS:a.com",
+      "subject": {
+        "CN": "localhost"
+      }
+    },
+    "reason": "Host: localhost. is not in the cert's altnames: DNS:a.com"
+  },
+  {
+    "name": "upstream-56",
+    "hostname": "foo。bar.example.com",
+    "cert": {
+      "subjectaltname": "DNS:*.example.com",
+      "subject": {}
+    },
+    "reason": "Host: foo。bar.example.com. is not in the cert's altnames: DNS:*.example.com"
+  },
+  {
+    "name": "upstream-57",
+    "hostname": "xn--bcher-kva.example.com",
+    "cert": {
+      "subject": {
+        "CN": "*.example.com"
+      }
+    }
+  },
+  {
+    "name": "upstream-58",
+    "hostname": "xn--bcher-kva.example.com",
+    "cert": {
+      "subject": {
+        "CN": "xn--*.example.com"
+      }
+    },
+    "reason": "Host: xn--bcher-kva.example.com. is not cert's CN: xn--*.example.com"
+  }
+]

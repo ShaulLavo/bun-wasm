@@ -31,9 +31,8 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|hermes|browser] [--context native|hooks] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|browser] [--context native|hooks] [name...]
 #     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
-#     --engine hermes   run dist/bun-hermes.wasm (Hermes, opt-in; scripts/build-bun-hermes.sh)
 #     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
 #                       (web/scripts/node-host.mjs; docs/engine-browser.md)
 #     --context hooks   with --engine browser: carry AsyncLocalStorage with the printed
@@ -67,9 +66,8 @@ done
 case "$engine" in
   quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
-  hermes) wasm="$root/dist/bun-hermes.wasm"; build_script="$root/scripts/build-bun-hermes.sh" ;;
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
-  *) echo "unknown engine $engine (quickjs, jsc, hermes or browser)"; exit 2 ;;
+  *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
 esac
 case "$context" in
   native) ;;
@@ -93,7 +91,7 @@ fi
 launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
 start_test_server() {
   [[ -n "$server_pid" ]] && return 0
-  bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
+  TMPDIR="$scratch" bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
   server_pid=$!
   for _ in $(seq 50); do
     [[ -s "$scratch/server.port" ]] && break

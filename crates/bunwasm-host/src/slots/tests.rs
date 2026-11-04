@@ -5,28 +5,57 @@ use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
 #[test]
-fn bash_0bf_terminal_geometry_and_phase_status_contract() {
+fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
     use wasm_encoder::{
         CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
         ImportSection, Instruction, TypeSection, ValType,
     };
 
-    // WAT: imports columns/rows () -> i32 and phase (i32, i32) -> ().
-    // observe(phase, status) calls phase, then returns columns and rows.
+    // WAT: imports the terminal geometry, phase, and the no-provider prompt ABI.
+    // observe(phase, status) calls phase, then returns columns and rows. The other
+    // exports call each prompt import through compiled Wasm so linker arity is covered.
     let mut types = TypeSection::new();
     types.ty().function([], [ValType::I32]);
     types.ty().function([ValType::I32, ValType::I32], []);
     types
         .ty()
         .function([ValType::I32, ValType::I32], [ValType::I32, ValType::I32]);
+    types
+        .ty()
+        .function([ValType::I32, ValType::I32], [ValType::I32]);
+    types.ty().function(
+        [
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+        ],
+        [ValType::I32],
+    );
+    types
+        .ty()
+        .function([ValType::I32, ValType::I32, ValType::I32], [ValType::I32]);
     let mut imports = ImportSection::new();
     imports.import("shell_terminal", "columns", EntityType::Function(0));
     imports.import("shell_terminal", "rows", EntityType::Function(0));
     imports.import("shell_terminal", "phase", EntityType::Function(1));
+    imports.import("shell_terminal", "prompt_names", EntityType::Function(3));
+    imports.import("shell_terminal", "prompt", EntityType::Function(4));
+    imports.import("shell_terminal", "prompt_update", EntityType::Function(5));
+    imports.import("shell_terminal", "output_position", EntityType::Function(0));
     let mut functions = FunctionSection::new();
     functions.function(2);
+    functions.function(0);
+    functions.function(0);
+    functions.function(0);
+    functions.function(0);
     let mut exports = ExportSection::new();
-    exports.export("observe", ExportKind::Func, 3);
+    exports.export("observe", ExportKind::Func, 7);
+    exports.export("prompt_names", ExportKind::Func, 8);
+    exports.export("prompt", ExportKind::Func, 9);
+    exports.export("prompt_update", ExportKind::Func, 10);
+    exports.export("output_position", ExportKind::Func, 11);
     let mut observe = Function::new([]);
     for instruction in [
         Instruction::LocalGet(0),
@@ -40,6 +69,21 @@ fn bash_0bf_terminal_geometry_and_phase_status_contract() {
     }
     let mut code = CodeSection::new();
     code.function(&observe);
+    for (import, arguments) in [(3, 2), (4, 5), (5, 3)] {
+        let mut function = Function::new([]);
+        for _ in 0..arguments {
+            function.instruction(&Instruction::I32Const(0));
+        }
+        function
+            .instruction(&Instruction::Call(import))
+            .instruction(&Instruction::End);
+        code.function(&function);
+    }
+    let mut output_position = Function::new([]);
+    output_position
+        .instruction(&Instruction::Call(6))
+        .instruction(&Instruction::End);
+    code.function(&output_position);
     let mut binary = wasm_encoder::Module::new();
     binary
         .section(&types)
@@ -55,8 +99,24 @@ fn bash_0bf_terminal_geometry_and_phase_status_contract() {
     let observe = instance
         .get_typed_func::<(i32, i32), (i32, i32)>(&mut f.store, "observe")
         .unwrap();
+    let prompt_names = instance
+        .get_typed_func::<(), i32>(&mut f.store, "prompt_names")
+        .unwrap();
+    let prompt = instance
+        .get_typed_func::<(), i32>(&mut f.store, "prompt")
+        .unwrap();
+    let prompt_update = instance
+        .get_typed_func::<(), i32>(&mut f.store, "prompt_update")
+        .unwrap();
+    let output_position = instance
+        .get_typed_func::<(), i32>(&mut f.store, "output_position")
+        .unwrap();
     for notification in [(1, 7), (2, 130), (1, 0)] {
         assert_eq!(observe.call(&mut f.store, notification).unwrap(), (80, 24));
+        assert_eq!(prompt_names.call(&mut f.store, ()).unwrap(), -1);
+        assert_eq!(prompt.call(&mut f.store, ()).unwrap(), -1);
+        assert_eq!(prompt_update.call(&mut f.store, ()).unwrap(), -1);
+        assert_eq!(output_position.call(&mut f.store, ()).unwrap(), 0);
         assert!(
             f.store.data().cancel.check().is_ok(),
             "A terminal phase/status notification must not cancel the native process"

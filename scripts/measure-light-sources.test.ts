@@ -32,3 +32,18 @@ test("page components and models count as UI", async () => {
     expect(report.runtime.bytes).toBe(4);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
+
+
+test("command error bytes remain measured without labeling them process execution", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-light-map-"));
+  const file = join(scratch, "main.js");
+  try {
+    await Bun.write(`${file}.map`, JSON.stringify({
+      sources: ["../node_modules/waffle/proc/command.ts", "../node_modules/waffle/proc/command-runner.ts", "../node_modules/waffle/proc/command-stdio.ts"],
+      mappings: "AAAA,ICAA,ICAA",
+    }));
+    const report = await sourceAttribution(file, "aaaaBBBBcccc");
+    expect(report.runtime.bytes).toBe(12);
+    expect(report.processService).toEqual(["../node_modules/waffle/proc/command-runner.ts", "../node_modules/waffle/proc/command-stdio.ts"]);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});

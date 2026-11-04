@@ -142,6 +142,11 @@ function isIP(s: string): 0 | Family {
   const normalized = Symbol("normalizedArgs");
   type NormalizeCallback = ((...args: never[]) => unknown) & { [normalized]?: boolean };
   type NormalizeOptions = { host?: unknown; path?: unknown; port?: unknown; [normalized]?: boolean };
+  function isTcpListenOptions(options: NormalizeOptions): boolean {
+    const value = options.port;
+    if (typeof value === "number" || typeof value === "string" || value === null || (value === undefined && "port" in options)) return true;
+    return options.path === undefined;
+  }
   type NormalizedArgs = [NormalizeOptions, NormalizeValue] & { host?: unknown; [normalized]?: boolean };
   type NormalizePrimitive = ((string | number | boolean | bigint | symbol) & { [normalized]?: boolean }) | null | undefined;
   type NormalizeValue = NormalizeOptions | NormalizeCallback | NormalizedArgs | NormalizePrimitive;
@@ -169,7 +174,7 @@ function isIP(s: string): 0 | Family {
     if (!Number.isInteger(value) || value < 1 || value > 2147483647) throw error(RangeError, "ERR_OUT_OF_RANGE", "Invalid timeout");
     autoSelectFamilyAttemptTimeout = Math.max(10, value);
   }
-  return { isIP, isIPv4, isIPv6, BlockList, SocketAddress, _normalizeArgs, port, error,
+  return { isIP, isIPv4, isIPv6, BlockList, SocketAddress, _normalizeArgs, isTcpListenOptions, port, error,
     getDefaultAutoSelectFamily: () => autoSelectFamily, setDefaultAutoSelectFamily,
     getDefaultAutoSelectFamilyAttemptTimeout: () => autoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout };
 })

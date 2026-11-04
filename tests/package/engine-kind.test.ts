@@ -12,7 +12,7 @@ const declared = (core: Uint8Array, payload: Uint8Array) => appendCustomSection(
 test("generic bind and exact engine section agree before instantiation", () => {
   expect(programKind(new WebAssembly.Module(single))).toBe("single");
   expect(() => programKind(new WebAssembly.Module(rawCore()))).toThrow("exactly one");
-  const kinds = ["quickjs", "jsc", "hermes"] as const;
+  const kinds = ["quickjs", "jsc"] as const;
   for (const kind of kinds) {
     const { core, side } = quickjsPair(kind);
     expect(programKind(new WebAssembly.Module(core))).toBe(kind);
@@ -25,7 +25,7 @@ test("generic bind and exact engine section agree before instantiation", () => {
 });
 
 test("missing, duplicate, malformed and contradictory declarations reject", () => {
-  for (const payload of [new Uint8Array(), Uint8Array.from([0xc0, 0xaf]), ...["quickjs\0", " jsc", "jsc\n", "hermes\0", "Hermes", "other"].map(value => new TextEncoder().encode(value))]) {
+  for (const payload of [new Uint8Array(), Uint8Array.from([0xc0, 0xaf]), ...["quickjs\0", " jsc", "jsc\n", "hermes", "hermes\0", "Hermes", "spidermonkey", "other"].map(value => new TextEncoder().encode(value))]) {
     expect(() => programKind(new WebAssembly.Module(declared(rawCore(), payload)))).toThrow("Invalid bun-wasm-engine");
   }
   const { core } = quickjsPair();
@@ -41,13 +41,13 @@ test("unknown JSON cannot create contradictory or legacy program files", () => {
   const parse = (value: unknown) => { if (typeof value !== "number") throw new TypeError("number required"); return value; };
   expect(parseProgramFiles({ kind: "single", core: 1 }, parse)).toEqual({ kind: "single", core: 1 });
   expect(parseProgramFiles({ kind: "jsc", core: 1, side: 2 }, parse)).toEqual({ kind: "jsc", core: 1, side: 2 });
-  expect(parseProgramFiles({ kind: "hermes", core: 1, side: 2 }, parse)).toEqual({ kind: "hermes", core: 1, side: 2 });
+  expect(() => parseProgramFiles({ kind: "hermes", core: 1, side: 2 }, parse)).toThrow();
   for (const value of [null, { core: 1, quickjs: 2 }, { kind: "jsc", core: 1 }, { kind: "single", core: 1, side: 2 }, { kind: "quickjs", core: 1, side: 2, jsc: 3 }, { kind: "unknown", core: 1, side: 2 }]) {
     expect(() => parseProgramFiles(value, parse)).toThrow();
   }
   expect(programKindForBuild("quickjs-minimal")).toBe("quickjs");
   expect(programKindForBuild("jsc")).toBe("jsc");
-  expect(programKindForBuild("hermes")).toBe("hermes");
+  expect(() => programKindForBuild("hermes")).toThrow("Unknown guest build");
   expect(programKindForBuild("tools")).toBe("single");
   expect(() => programKindForBuild("unknown")).toThrow("Unknown guest build");
 });

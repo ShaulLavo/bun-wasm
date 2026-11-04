@@ -3,7 +3,7 @@ import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, symlink, writeFi
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
-import { parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
+import { captureProgramInputs, parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
 import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } from "./guest-receipt-fixture.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
@@ -120,7 +120,7 @@ async function snapshot(fixture: Parameters<typeof receiptCli>[0]) {
   return path;
 }
 
-for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
+for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h", "ssl/handshake.cc"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
   await withCliReceiptFixture(async fixture => {
     await writeFile(join(fixture.root, "vendor/boringssl", path), "original compiled input\n");
     const inputs = await snapshot(fixture);
@@ -613,5 +613,20 @@ test.each(["wasmtime", "node"])("transpiler example rejects missing %s before sy
     expect(result.stderr.toString()).toContain(`transpiler example requires '${missing}' on PATH`);
     expect(await Bun.file(setupTrace).exists()).toBe(false);
     expect(await Bun.file(compileTrace).exists()).toBe(false);
+  });
+});
+
+
+test("TLS source drift changes the core inputs without invalidating separate engine inputs", async () => {
+  await withReceiptFixture(async options => {
+    const core = () => captureProgramInputs(options, "core", { features: ["engine-split"] });
+    const quickjs = () => captureProgramInputs({ ...options, build: "quickjs" }, "quickjs");
+    const jsc = () => captureProgramInputs({ ...options, build: "jsc" }, "jsc");
+    const before = await Promise.all([core(), quickjs(), jsc()]);
+    await writeFile(join(options.boringssl, "ssl/handshake.cc"), "changed TLS implementation\n");
+    const after = await Promise.all([core(), quickjs(), jsc()]);
+    expect(after[0]?.contentSha256).not.toBe(before[0]?.contentSha256);
+    expect(after[1]).toEqual(before[1]);
+    expect(after[2]).toEqual(before[2]);
   });
 });

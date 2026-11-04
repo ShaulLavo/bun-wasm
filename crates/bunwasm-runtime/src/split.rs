@@ -254,6 +254,7 @@ pub(crate) fn run(options: Options) -> i32 {
     });
     SESSION_STATE.with(|current| assert!(current.replace(Some(state.clone())).is_none()));
     let code = run(1);
+    state.dispose_tls();
     SESSION.with(|session| session.take());
     SESSION_STATE.with(|current| current.take());
     state.directories.borrow_mut().close_all();

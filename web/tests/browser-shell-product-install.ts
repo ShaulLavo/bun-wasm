@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdir, readFile, realpath, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
-import { readWaffleSelection, waffleCommits } from "../../tests/shell-product/waffle-stage";
+import { assertWafflePeer, readWaffleSelection, waffleCommits } from "../../tests/shell-product/waffle-stage";
 
 export async function bundleProduct(root: string, installation: string, output: string) {
   const shell = join(installation, "node_modules/bash-web");
@@ -22,9 +22,10 @@ export async function bundleProduct(root: string, installation: string, output: 
   };
   const [shellMetadata, bunMetadata] = packages;
   assert.ok(shellMetadata && bunMetadata);
-  assert.equal(peer(shellMetadata), peer(bunMetadata), "Shell and Bun must declare the same exact Waffle peer. Do not patch installed manifests.");
   const commits = waffleCommits(process.env, peer(bunMetadata));
   const { shellCommit, wafflePeer } = commits;
+  assertWafflePeer(peer(shellMetadata), wafflePeer, "Shell package");
+  assertWafflePeer(peer(bunMetadata), wafflePeer, "Bun package");
   const lock = await readFile(join(installation, "bun.lock"), "utf8");
   assert.ok(lock.includes(shellCommit) && lock.includes(wafflePeer), "Prepared installation must retain the exact Shell pin and Waffle peer");
   const waffleSelection = await readWaffleSelection(installation, commits);

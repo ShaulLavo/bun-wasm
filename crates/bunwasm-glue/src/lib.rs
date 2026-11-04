@@ -3,12 +3,12 @@
 //! Most come from Bun itself: `bun_native.rs` is a copy of Bun's
 //! `src/sema/standalone/native.rs`, its pure-Rust stand-in for the parser's
 //! native dependencies (mimalloc, highway, simdutf, WTF dtoa/parseDouble),
-//! written for its parser-only binary, with real base64 and zlib added. The rest (JSC helpers, link-time dispatch slots, BoringSSL entry
-//! points the toolchain can reach but never calls) live in `extra`.
+//! written for its parser-only binary, with real base64 and zlib added. The rest
+//! (JSC helpers and link-time dispatch slots) live in `extra`. BoringSSL symbols
+//! come from the shared crypto archive owner on every target.
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 #![feature(linkage)]
 
-#[cfg(target_os = "wasi")]
 extern crate bunwasm_crypto_sys;
 
 mod bun_native;

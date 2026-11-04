@@ -11,7 +11,7 @@ const start = runner.indexOf("  artifacts = Object.fromEntries(options.engines.m
 const end = runner.indexOf("  if (options.guestReceipt) {", start);
 if (start < 0 || end < 0) throw new Error("Missing matrix staging source boundary");
 const stage = new Function("root", "scratch", "options", "wasmName", "readFileSync", "writeFileSync", "join", "sha256", "programKind", "programProfile", "verifyProgramSide", `let artifacts;\n${runner.slice(start, end)}\nreturn artifacts;`);
-const names = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
+const names = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 function fixture(run: (root: string, scratch: string) => void) {
@@ -20,7 +20,7 @@ function fixture(run: (root: string, scratch: string) => void) {
     mkdirSync(join(root, "dist"));
     const scratch = join(root, "scratch");
     mkdirSync(scratch);
-    for (const kind of ["quickjs", "jsc", "hermes"] as const) {
+    for (const kind of ["quickjs", "jsc"] as const) {
       const pair = quickjsPair(kind);
       writeFileSync(join(root, "dist", names[kind]), pair.core);
       writeFileSync(join(root, "dist", programProfile(kind).side), pair.side);
@@ -37,7 +37,7 @@ function identity(scratch: string, name: string, bytes: Uint8Array) {
   return { path: join(scratch, name), bytes: bytes.byteLength, sha256: sha256(bytes) };
 }
 
-for (const kind of ["quickjs", "jsc", "hermes"] as const) test(`matrix source stages only selected ${kind} pair with both byte identities`, () => {
+for (const kind of ["quickjs", "jsc"] as const) test(`matrix source stages only selected ${kind} pair with both byte identities`, () => {
   fixture((root, scratch) => {
     const pair = quickjsPair(kind);
     const side = programProfile(kind).side;
@@ -74,16 +74,16 @@ for (const name of ["bun-jsc.wasm", "jsc-engine.wasm"]) test(`matrix source reje
 
 test("matrix source playground union and provenance include every selected fixed side", () => {
   fixture((root, scratch) => {
-    const artifacts = staged(root, scratch, ["quickjs", "jsc", "hermes"]);
+    const artifacts = staged(root, scratch, ["quickjs", "jsc"]);
     const line = runner.split("\n").find(line => line.includes("verifyPlaygroundBuilds(playgroundBuilds,"));
     const companions = runner.split("\n").find(line => line.trimStart().startsWith("companions: "));
     if (!line || !companions) throw new Error("Missing matrix fingerprint/provenance source");
     const observed: unknown[] = [];
     new Function("options", "artifacts", "wasmName", "playgroundBuilds", "verifyPlaygroundBuilds", line)(
-      { product: true, hosts: ["playground"], engines: ["quickjs", "jsc", "hermes"] }, artifacts, names, {}, (_build: unknown, expected: unknown) => observed.push(expected));
+      { product: true, hosts: ["playground"], engines: ["quickjs", "jsc"] }, artifacts, names, {}, (_build: unknown, expected: unknown) => observed.push(expected));
     const expected: Record<string, string> = {};
     const provenance: Record<string, unknown> = {};
-    for (const kind of ["quickjs", "jsc", "hermes"] as const) {
+    for (const kind of ["quickjs", "jsc"] as const) {
       const { core, side } = quickjsPair(kind);
       expected[names[kind]] = sha256(core);
       expected[programProfile(kind).side] = sha256(side);

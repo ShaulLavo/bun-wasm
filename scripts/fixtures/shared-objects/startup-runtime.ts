@@ -54,7 +54,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
     transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
-    closeAllDirs() {}, mapPosition() { return null; },
+    tlsDispose() {}, closeAllDirs() {}, mapPosition() { return null; },
     writeStderr(text: string) { failures.push(text); },
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];

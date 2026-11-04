@@ -21,7 +21,6 @@ jobs:
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
       jsc: ${{ steps.changes.outputs.jsc }}
-      hermes: ${{ steps.changes.outputs.hermes }}
       shared: ${{ steps.changes.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
@@ -284,12 +283,9 @@ jobs:
             (cd "$bundle" && sha256sum prebuild.tar.zst sysroot.tar.zst)
           } > "$bundle/manifest"
           transfer="$RUNNER_TEMP/jsc-prebuild.tar"
-          bun scripts/ci-storage.ts jsc-package-before "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
           tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
-          bun scripts/ci-storage.ts jsc-package-after "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
+          ls -l "$bundle" "$transfer"
           echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          rm -r -- "$bundle"
-          bun scripts/ci-storage.ts jsc-package-cleanup "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
       - uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.temp }}/jsc-prebuild.tar
@@ -317,6 +313,7 @@ jobs:
     outputs:
       manifest-sha256: ${{ steps.native-artifact.outputs.manifest-sha256 }}
       producer-attempt: ${{ steps.native-artifact.outputs.producer-attempt }}
+      tls-sha256: ${{ steps.tls-artifact.outputs.tls-sha256 }}
       cargo-hit: ${{ steps.native-cargo-cache.outputs.cache-hit }}
       cargo-matched: ${{ steps.native-cargo-cache.outputs.cache-matched-key }}
       legacy-hit: ${{ steps.native-cache.outputs.cache-hit }}
@@ -523,14 +520,18 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
-      - name: Measure JSC prebuild transfer before download
-        run: bun scripts/ci-storage.ts jsc-download-before "$RUNNER_TEMP/jsc-prebuild-transfer"
       - uses: actions/download-artifact@v8
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Measure JSC prebuild transfer after download
-        run: bun scripts/ci-storage.ts jsc-download-after "$RUNNER_TEMP/jsc-prebuild-transfer"
+      - name: Unpack the verified JSC prebuild transfer
+        run: |
+          set -euo pipefail
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          [[ ! -e "$bundle" ]]
+          mkdir "$bundle"
+          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -539,31 +540,21 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
-          bun scripts/ci-storage.ts jsc-import-before "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
-          tar --posix -xOf "$transfer" manifest > "$manifest"
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
-          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
-          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
-          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
+          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          bun scripts/ci-storage.ts jsc-import-after-prebuild "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
-          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          bun scripts/ci-storage.ts jsc-import-after-sysroot "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
-          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
-          bun scripts/ci-storage.ts jsc-import-after-cleanup "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -602,7 +593,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
           restore-keys: |
             native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
       - uses: actions/cache/restore@v4
@@ -614,7 +605,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
           restore-keys: |
             native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
       - name: Prepare pinned Rust standard-library dependencies
@@ -642,12 +633,25 @@ jobs:
           copy_jsc_config_inputs
           inputs=$(jsc_inputs_hash)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - name: Prepare exact TLS Cargo output recording
+        env:
+          TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
+          NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
+          NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
+        run: |
+          source env.sh
+          bun scripts/tls-probe-ci.ts prepare
       - name: Blocking native quality checks
         id: native-producers
+        env:
+          TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
+          NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
+          NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
         shell: bash
         run: |
           run_native_checks() {
             source env.sh
+            export BUNWASM_TLS_CARGO_RECORD_DIR="$CARGO_TARGET_DIR/tls-probe/cargo"
             bun scripts/quality-rust.ts --checks-only
             bun run quality:wasi
             bun test tests/memory-telemetry.test.ts
@@ -658,8 +662,33 @@ jobs:
           }
           run_native_checks
           echo "native-ready=true" >> "$GITHUB_OUTPUT"
+      - name: Link and authenticate the TLS probe from recorded Cargo archives
+        id: tls-artifact
+        env:
+          TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
+          NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
+          NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
+        run: |
+          source env.sh
+          bun scripts/tls-probe-ci.ts link
+      - name: Preserve TLS link failure diagnostics
+        if: ${{ failure() && steps.tls-artifact.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-link-failure-${{ github.run_attempt }}
+          path: |
+            target/tls-probe/prepared.json
+            target/tls-probe/cargo/*.json
+            target/tls-probe/output/*.json
+            target/tls-probe/output/*.jsonl
+            target/tls-probe/output/*.map
+            target/tls-probe/output/*.wasm
+            target/tls-probe/output/tls-probe-native
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
       - name: Save the native quality checkpoint
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -667,7 +696,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
       - name: Package the verified native quality checkpoint
         id: native-artifact
         shell: bash
@@ -680,16 +709,14 @@ jobs:
           source env.sh
           native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
           export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          transfer="$RUNNER_TEMP/native-quality-$NATIVE_QUALITY_PRODUCER_ATTEMPT.tar"
-          bun scripts/ci-storage.ts native-package-before "$CARGO_TARGET_DIR" "$CARGO_HOME" "$transfer"
-          bun scripts/ci-native-handoff.ts pack "$transfer"
-          bun scripts/ci-storage.ts native-package-after "$CARGO_TARGET_DIR" "$CARGO_HOME" "$transfer"
-      - uses: actions/upload-artifact@v7
+          bun scripts/ci-native-handoff.ts pack "$RUNNER_TEMP/native-quality-artifact"
+      - uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/native-quality-${{ steps.native-artifact.outputs.producer-attempt }}.tar
+          name: native-quality-${{ steps.native-artifact.outputs.producer-attempt }}
+          path: ${{ runner.temp }}/native-quality-artifact/
           if-no-files-found: error
           retention-days: 1
-          archive: false
+          compression-level: 0
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -884,14 +911,18 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
-      - name: Measure JSC prebuild transfer before download
-        run: bun scripts/ci-storage.ts jsc-download-before "$RUNNER_TEMP/jsc-prebuild-transfer"
       - uses: actions/download-artifact@v8
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Measure JSC prebuild transfer after download
-        run: bun scripts/ci-storage.ts jsc-download-after "$RUNNER_TEMP/jsc-prebuild-transfer"
+      - name: Unpack the verified JSC prebuild transfer
+        run: |
+          set -euo pipefail
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          [[ ! -e "$bundle" ]]
+          mkdir "$bundle"
+          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -900,31 +931,21 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
-          bun scripts/ci-storage.ts jsc-import-before "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
-          tar --posix -xOf "$transfer" manifest > "$manifest"
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
-          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
-          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
-          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
+          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          bun scripts/ci-storage.ts jsc-import-after-prebuild "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
-          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          bun scripts/ci-storage.ts jsc-import-after-sysroot "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
-          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
-          bun scripts/ci-storage.ts jsc-import-after-cleanup "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -955,14 +976,10 @@ jobs:
       # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
-      - name: Measure native quality transfer before download
-        run: bun scripts/ci-storage.ts native-download-before "$RUNNER_TEMP/native-quality-transfer"
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v4
         with:
-          name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}.tar
-          path: ${{ runner.temp }}/native-quality-transfer
-      - name: Measure native quality transfer after download
-        run: bun scripts/ci-storage.ts native-download-after "$RUNNER_TEMP/native-quality-transfer"
+          name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
+          path: ${{ runner.temp }}/native-quality-artifact
       - name: Import the verified native quality checkpoint
         id: native-import
         shell: bash
@@ -973,16 +990,21 @@ jobs:
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
           JSC_PREBUILD_MANIFEST_SHA256: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
         run: |
-          set -euo pipefail
           source env.sh
-          transfer="$RUNNER_TEMP/native-quality-transfer/native-quality-$NATIVE_QUALITY_PRODUCER_ATTEMPT.tar"
           native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
           export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          bun scripts/ci-storage.ts native-import-before "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
-          bun scripts/ci-native-handoff.ts unpack "$transfer"
-          bun scripts/ci-storage.ts native-import-after "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
-          rm -r -- "$RUNNER_TEMP/native-quality-transfer"
-          bun scripts/ci-storage.ts native-import-cleanup "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
+          bun scripts/ci-native-handoff.ts unpack "$RUNNER_TEMP/native-quality-artifact"
+          rm -r -- "$RUNNER_TEMP/native-quality-artifact"
+      - name: Run the blocking TLS native probe from the authenticated checkpoint
+        env:
+          TLS_PRODUCER_ATTEMPT: ${{ needs.native-quality.outputs.producer-attempt }}
+          BUNWASM_TLS_PROBE_SHA256: ${{ needs.native-quality.outputs.tls-sha256 }}
+          NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
+          NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
+        run: |
+          source env.sh
+          export BUNWASM_TLS_PROBE_OUTPUT="$CARGO_TARGET_DIR/tls-probe/output"
+          bun scripts/test-checks.ts native-probe
       - name: Carry the original native cache restore result
         id: native-cargo-cache
         env:
@@ -1049,25 +1071,6 @@ jobs:
           trap 'exit 143' TERM
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
-      - name: Share the completed core, sysroot and launcher with Hermes
-        if: needs.quality.outputs.hermes == 'true'
-        run: |
-          source env.sh
-          mkdir -p "$RUNNER_TEMP/hermes-inputs"
-          cp "$CARGO_TARGET_DIR/split-common/bun-core.wasm" "$CARGO_TARGET_DIR/split-common/bun-core.wasm.core.json" "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/hermes-inputs/"
-          test -s vendor/bun/build/debug/codegen/build_options.rs
-          tar -C vendor/bun -czf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz" build/debug/codegen
-          tar -C "$WASM_TOOLS" -czf "$RUNNER_TEMP/hermes-inputs/sysroot.tar.gz" bun-wasm-sysroot-patched
-          mkdir -p "$CARGO_HOME/registry" "$CARGO_HOME/git"
-          tar -C "$CARGO_HOME" -czf "$RUNNER_TEMP/hermes-inputs/cargo-sources.tar.gz" registry git
-      - uses: actions/upload-artifact@v4
-        if: needs.quality.outputs.hermes == 'true'
-        with:
-          name: hermes-common-inputs
-          path: ${{ runner.temp }}/hermes-inputs/
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Build one host-engine guest for real-browser source cache acceptance
         run: |
           source env.sh
@@ -1154,7 +1157,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
 
       - name: Blocking Web guest cases (QuickJS and host engine)
         shell: bash
@@ -1518,234 +1521,3 @@ jobs:
         run: |
           bun install --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}
-
-  hermes:
-    name: Opt-in Hermes paired program
-    needs: [quality, rust]
-    if: needs.quality.outputs.hermes == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      CARGO_INCREMENTAL: "0"
-      JOBS: "2"
-      CAGE: ""
-      GIT_AUTHOR_NAME: bun-wasm CI
-      GIT_AUTHOR_EMAIL: ci@localhost
-      GIT_COMMITTER_NAME: bun-wasm CI
-      GIT_COMMITTER_EMAIL: ci@localhost
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure portable quality toolchain homes
-        run: |
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-      - name: Configure private Hermes build paths
-        run: |
-          echo "HERMES_BUILD_DIR=$RUNNER_TEMP/hermes-vm" >> "$GITHUB_ENV"
-          echo "HERMES_ENGINE_BUILD_DIR=$RUNNER_TEMP/hermes-engine" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '26'
-      - uses: actions/cache/restore@v4
-        id: rustup-cache
-        with:
-          path: ${{ env.RUSTUP_HOME }}
-          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
-      # Install everything rust-toolchain.toml lists, so the saved toolchain is complete.
-      # Otherwise rustup re-downloads rust-src on first use, and its new timestamps
-      # rebuild std for the QuickJS engine's -Zbuild-std target every run.
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-09-15
-          components: rust-src, rustfmt, clippy
-          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
-      - name: Install native build tools
-        run: |
-          if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
-             command -v ruby && command -v gperf && command -v bison &&
-             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
-      # Image updates change many unrelated packages. Build caches follow the host
-      # tools these builds run; each layer's own input hash covers its toolchain.
-      - name: Identify host build tools
-        id: host-tools
-        run: |
-          report="$RUNNER_TEMP/host-tools.txt"
-          {
-            for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
-              command -v "$tool"
-              "$tool" --version | head -n 2
-            done
-            ldd --version | head -n 1
-            ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
-          } > "$report"
-          cat "$report"
-          echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: sdk
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
-      - name: Install pinned WASI SDK
-        if: steps.sdk.outputs.cache-hit != 'true'
-        run: |
-          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
-          trap 'rm -f "$archive"' EXIT
-          curl --fail --location --silent --show-error \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            -o "$archive"
-          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
-          mkdir -p "$WASM_TOOLS/wasi-sdk"
-          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - uses: actions/cache/restore@v4
-        id: binaryen-cache
-        with:
-          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
-          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
-      - name: Install pinned Binaryen
-        run: bun scripts/ci-binaryen.ts
-      - uses: actions/cache@v4
-        id: wasm-tools-cache
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
-          key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
-      - name: Install pinned wasm-tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$WASM_TOOLS"
-          archive="$WASM_TOOLS/wasm-tools-1.262.0-x86_64-linux.tar.gz"
-          stage=$(mktemp -d "$WASM_TOOLS/.wasm-tools-XXXXXX")
-          trap 'rm -rf -- "$stage"' EXIT
-          input="$archive"
-          if [[ ! -f "$input" ]]; then
-            input="$stage/archive.tar.gz"
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz \
-              -o "$input"
-          fi
-          echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $input" | sha256sum --check
-          if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
-          tar -xzf "$archive" --strip-components=1 -C "$stage"
-          test "$("$stage/wasm-tools" --version)" = "wasm-tools 1.262.0 (e22db44da 2026-10-13)"
-          mkdir -p "$WASM_TOOLS/wasm-tools-bin"
-          mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
-          echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
-      - uses: actions/cache/restore@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install matching host dependencies
-        run: |
-          bun install --frozen-lockfile --ignore-scripts
-          bun install --cwd web --frozen-lockfile --ignore-scripts
-      - uses: actions/cache/restore@v4
-        id: sources-cache
-        with:
-          path: |
-            vendor/bun
-            vendor/boringssl
-          key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
-      - name: Prepare pinned upstream sources
-        run: |
-          source env.sh
-          bash scripts/sync-bun.sh
-          bash scripts/sync-crypto.sh
-      - uses: actions/download-artifact@v4
-        with:
-          name: hermes-common-inputs
-          path: ${{ runner.temp }}/hermes-inputs
-      - name: Restore the already produced common inputs
-        run: |
-          mkdir -p "$WASM_TOOLS"
-          tar -xzf "$RUNNER_TEMP/hermes-inputs/sysroot.tar.gz" -C "$WASM_TOOLS"
-          tar -xzf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz" -C vendor/bun
-          mkdir -p "$CARGO_HOME"
-          tar -xzf "$RUNNER_TEMP/hermes-inputs/cargo-sources.tar.gz" -C "$CARGO_HOME"
-          chmod +x "$RUNNER_TEMP/hermes-inputs/bun-wasm"
-          sha256sum "$RUNNER_TEMP/hermes-inputs/bun-core.wasm" "$RUNNER_TEMP/hermes-inputs/bun-wasm"
-      - name: Identify the exact restored Hermes sysroot inputs
-        id: hermes-sysroot-inputs
-        run: |
-          source env.sh
-          inputs=$(bun scripts/build-wasi-sysroot.ts --inputs)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: hermes-vm-cache
-        with:
-          path: ${{ env.HERMES_BUILD_DIR }}
-          key: hermes-vm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('hermes/**', 'crates/bunwasm-hermes/**', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
-      - name: Admit the completed common core before Hermes VM work
-        run: |
-          source env.sh
-          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
-          eval "$guest_environment"
-          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
-          mkdir -p dist
-          bun scripts/guest-core-receipt.ts tag "$RUNNER_TEMP/hermes-inputs/bun-core.wasm" hermes dist/bun-hermes.wasm
-      - name: Build or verify the pinned Hermes VM
-        run: |
-          source env.sh
-          if [[ "${{ steps.hermes-vm-cache.outputs.cache-hit }}" != 'true' ]]; then
-            bash hermes/build.sh
-          else
-            node hermes/check-build.ts "$HERMES_BUILD_DIR"
-          fi
-      - name: Save Hermes VM cache
-        uses: actions/cache/save@v4
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.hermes-vm-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: ${{ env.HERMES_BUILD_DIR }}
-          key: ${{ steps.hermes-vm-cache.outputs.cache-primary-key }}
-      - name: Restore Hermes side cache
-        uses: actions/cache/restore@v4
-        id: hermes-side-cache
-        with:
-          path: ${{ env.HERMES_ENGINE_BUILD_DIR }}/target
-          key: hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'hermes/**', 'crates/**', 'scripts/src/engine-*', 'scripts/build-engine-hermes.sh', 'scripts/guest-*.ts', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
-          restore-keys: |
-            hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-
-      - name: Build only the Hermes side
-        run: |
-          source env.sh
-          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
-          eval "$guest_environment"
-          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
-          inputs=$(mktemp "$RUNNER_TEMP/hermes-guest-inputs-XXXXXX")
-          trap 'rm -f -- "$inputs"' EXIT
-          bun scripts/guest-build-receipt.ts inputs hermes > "$inputs"
-          bash scripts/build-engine-hermes.sh
-          cp "$HERMES_ENGINE_BUILD_DIR/engine.wasm" dist/hermes-engine.wasm
-          cp "$HERMES_ENGINE_BUILD_DIR/engine.wasm.engine.json" dist/hermes-engine.wasm.engine.json
-          bun scripts/guest-build-receipt.ts write dist/bun-hermes.wasm "$inputs"
-      - name: Blocking Hermes native eval, hello and serve proofs
-        run: |
-          source env.sh
-          bash tests/hermes/run.sh "$RUNNER_TEMP/hermes-inputs/bun-wasm" dist/bun-hermes.wasm
-      - name: Blocking Hermes native imported-module smoke
-        run: |
-          source env.sh
-          errors=$(mktemp "$RUNNER_TEMP/hermes-module-stderr-XXXXXX")
-          trap 'rm -f -- "$errors"' EXIT
-          output=$("$RUNNER_TEMP/hermes-inputs/bun-wasm" --wasm dist/bun-hermes.wasm -- run tests/hermes/hosts/module.mts 2>"$errors")
-          test "$output" = 'Hermes module 42'
-          test ! -s "$errors"
-      - name: Blocking Hermes actual Node and Bun package imported-module smoke
-        run: |
-          source env.sh
-          bun scripts/hermes-hosts.ts dist/bun-hermes.wasm "$RUNNER_TEMP/hermes-hosts.json" --node-only
-      - name: Save Hermes side cache
-        uses: actions/cache/save@v4
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.hermes-side-cache.outputs.cache-hit != 'true' }}
-        with:
-          path: ${{ env.HERMES_ENGINE_BUILD_DIR }}/target
-          key: ${{ steps.hermes-side-cache.outputs.cache-primary-key }}

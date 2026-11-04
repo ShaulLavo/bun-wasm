@@ -2,12 +2,24 @@ import { expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { build } from "vite";
 import { quickjsPair } from "./quickjs-plan-fixture";
 
 const execute = promisify(execFile);
+
+async function linkDeclaredPeers(root: string, scratch: string): Promise<void> {
+  const metadata: unknown = JSON.parse(await readFile(join(scratch, "package/package.json"), "utf8"));
+  if (!metadata || typeof metadata !== "object" || !("peerDependencies" in metadata)) throw new Error("Packed peer contract is missing");
+  const peers = metadata.peerDependencies;
+  if (!peers || typeof peers !== "object" || Array.isArray(peers)) throw new Error("Invalid packed peer contract");
+  for (const peer of Object.keys(peers)) {
+    const target = join(scratch, "node_modules", peer);
+    await mkdir(dirname(target), { recursive: true });
+    await symlink(join(root, "node_modules", peer), target);
+  }
+}
 
 test("packed package includes a working public worker, no demo or guest binaries", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-package-payload-"));
@@ -28,7 +40,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     await execute("tar", ["-xzf", join(scratch, archive), "-C", scratch], { timeout: 10_000 });
     await mkdir(join(scratch, "node_modules"));
     await symlink(join(scratch, "package"), join(scratch, "node_modules/bun-wasm"));
-    await symlink(join(root, "node_modules/waffle"), join(scratch, "node_modules/waffle"));
+    await linkDeclaredPeers(root, scratch);
     await symlink(join(root, "node_modules/@types"), join(scratch, "node_modules/@types"));
     await writeFile(join(scratch, "consumer.ts"), `
       import { installBunAdapters, BunWasmExecutableConflictError } from "bun-wasm";

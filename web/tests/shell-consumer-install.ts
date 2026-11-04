@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, readdir, readFile, realpath, symlink } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
+import { buildBrowserEntries, buildClassicWorker } from "../../scripts/browser-build";
+import { assertInstalledWaffle, assertWafflePeer } from "../../tests/shell-product/waffle-stage";
+import release from "../../scripts/waffle-release-inputs.json";
+import { assertExactHostInterface, packageHostInterface, parseHostInterface } from "../../scripts/waffle-release-inputs";
 
 const shellCommit = "c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5";
 const waffleCommit = "c1cb67c300439af24335d0b2ec481bfb52f79a01";
@@ -12,12 +15,13 @@ async function manifest(directory: string) {
   assert.ok(value && typeof value === "object" && "version" in value && typeof value.version === "string", "package version");
   const peers: unknown = Reflect.get(value, "peerDependencies");
   assert.ok(peers && typeof peers === "object" && "waffle" in peers && typeof peers.waffle === "string", "package Waffle peer");
+  assertExactHostInterface(packageHostInterface(value, directory), parseHostInterface(release.hostInterface, "Waffle release inputs"), directory);
   return { version: value.version, peer: peers.waffle };
 }
 export async function installConsumer(root: string, directory: string, execute: Execute) {
   await mkdir(directory, { recursive: true });
   const metadata = await manifest(root);
-  assert.equal(metadata.peer, waffle, "Bun must declare the accepted shared Waffle peer");
+  assertWafflePeer(metadata.peer, waffle, "Bun package");
   await execute([process.execPath, "pm", "pack", "--destination", directory, "--quiet"], root);
   const archives = (await readdir(directory)).filter(file => /^bun-wasm-.*\.tgz$/.test(file));
   assert.equal(archives.length, 1, "one newly packed public Bun package");
@@ -25,7 +29,8 @@ export async function installConsumer(root: string, directory: string, execute: 
     "bun-wasm": `file:./${archives[0]}`, "bash-web": `git+https://github.com/ShaulLavo/bash-web.git#${shellCommit}`, waffle,
     esbuild: "0.28.2", playwright: "1.64.1", typescript: "7.0.2", "@types/bun": "1.4.3",
   }, trustedDependencies: ["bun-wasm", "bash-web", "waffle", "esbuild"] }, null, 2));
-  await execute([process.execPath, "install"], directory);
+  await execute([process.execPath, "install", "--ignore-scripts"], directory);
+  await assertInstalledWaffle(directory, waffle);
   const shell = join(directory, "node_modules/bash-web");
   // Shell's builder uses a checkout-local peer path. Preserve the single hoisted
   // Waffle installation while supplying that build-time directory layout.
@@ -43,17 +48,17 @@ export async function bundleConsumer(root: string, directory: string, output: st
   const shell = join(directory, "node_modules/bash-web");
   const bun = join(directory, "node_modules/bun-wasm");
   const runtime = join(directory, "node_modules/waffle");
+  await assertInstalledWaffle(directory, waffle);
   const [shellMetadata, bunMetadata] = await Promise.all([shell, bun].map(manifest));
   assert.ok(shellMetadata && bunMetadata, "both installed consumer manifests");
   const runtimeMetadata: unknown = await Bun.file(join(runtime, "package.json")).json();
   assert.ok(runtimeMetadata && typeof runtimeMetadata === "object" && "version" in runtimeMetadata, "runtime manifest");
   assert.equal(shellMetadata.version, "0.0.91", "selected shell release");
   assert.equal(runtimeMetadata.version, "0.0.90", "selected shared runtime release");
-  assert.equal(shellMetadata.peer, waffle);
-  assert.equal(bunMetadata.peer, waffle);
+  assertWafflePeer(shellMetadata.peer, waffle, "Bash package");
+  assertWafflePeer(bunMetadata.peer, waffle, "Bun package");
   const lock = await readFile(join(directory, "bun.lock"), "utf8");
   assert.ok(lock.includes(shellCommit) && lock.includes(waffleCommit), "full Git commit pins in installed lockfile");
-  for (const consumer of [shell, bun]) assert.equal(await realpath(join(resolveRuntimePackage(join(consumer, "src/index.ts")).path, "package.json")), await realpath(join(runtime, "package.json")), "one physical peer installation");
   const app = join(directory, "app");
   await cp(join(root, "tests/shell-consumer"), app, { recursive: true });
   await execute(["node", join(directory, "node_modules/typescript/bin/tsc"), "-p", app], directory);

@@ -136,3 +136,16 @@ test("Web subprocess boundaries and fail-fast order are preserved by manifest ba
   expect(checkBatches("local-runtime")).toEqual([selectChecks("local-runtime")]);
   expect(proof.webBatches.map(paths => paths.length)).toEqual([10, 2, 3]);
 });
+
+test("native-probe inputs are typed and the source utility retains its lightweight owner", () => {
+  const checks = discoverChecks();
+  expect(selectChecks("cmake", checks)).toContain("scripts/tls-probe.test.ts");
+  expect(selectChecks("native-probe", checks)).toEqual(["scripts/tls-probe-live.test.ts"]);
+  const directory = fixture();
+  writeFileSync(join(directory, "scripts/probe.test.ts"), "");
+  const invalid = [undefined, [], ["../secret"], ["source.ts", "source.ts"], "source.ts"];
+  for (const inputs of invalid) {
+    manifest(directory, { owner: "native-probe", path: "scripts/probe.test.ts", inputs }, "native-probe-fixture.json");
+    expect(() => discoverChecks(directory)).toThrow("native-probe");
+  }
+});

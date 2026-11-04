@@ -5,31 +5,35 @@ import { join } from "node:path";
 
 const workflow = ".github/workflows/ci.yml";
 const controller = "scripts/ci-native-handoff.ts";
-const originals = new Map([workflow, controller].map(path => [path, readFileSync(path, "utf8")]));
+const targetRoots = "scripts/ci-native-handoff-paths.ts";
+const originals = new Map([workflow, controller, targetRoots].map(path => [path, readFileSync(path, "utf8")]));
 const mutations: [string, string, string, string][] = [
   ["needs-induced skip", workflow, "if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}", "if: needs.quality.outputs.rust == 'true'"],
   ["failed quality accepted", workflow, ' || "$NATIVE_QUALITY_RESULT" != success', ""],
   ["prebuild selected by JSC only", workflow, "    needs: quality\n    if: needs.quality.outputs.rust == 'true'\n    runs-on: ubuntu-latest\n    # A cold", "    needs: quality\n    if: needs.quality.outputs.jsc == 'true'\n    runs-on: ubuntu-latest\n    # A cold"],
   ["native cap raised", workflow, "    timeout-minutes: 60\n", "    timeout-minutes: 90\n"],
   ["quality cap raised", workflow, "    timeout-minutes: 45\n    env:", "    timeout-minutes: 60\n    env:"],
-  ["prebuild digest unchecked", workflow, '          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict\n', ""],
-  ["prebuild identity unchecked", workflow, '          [[ "$(head -n 4 "$manifest")" == "$expected" ]]\n', ""],
-  ["prebuild archive unchecked", workflow, `          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]\n          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]\n`, ""],
+  ["prebuild digest unchecked", workflow, '          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict\n', ""],
+  ["prebuild identity unchecked", workflow, '          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]\n', ""],
+  ["prebuild archive unchecked", workflow, '          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)\n', ""],
   ["prebuild overlay", workflow, '          [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]\n', ""],
   ["prebuild stamp unchecked", workflow, "          source jsc/common.sh\n          check_jsc_inputs_stamp\n", ""],
   ["prebuild group unowned", workflow, "          set -m\n          (\n            set +m\n", "          (\n"],
   ["unbounded tracked source listing", controller, '"ls-files", "-z", "--", ":(glob)**/node_modules", ":(glob)**/node_modules/**"', '"ls-files", "-z"'],
   ["tracked dependency fixtures omitted", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', 'path.split("/").includes("node_modules")'],
   ["untracked installs included", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', "false"],
-  ["native manifest unchecked", controller, 'createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
+  ["native manifest unchecked", controller, 'await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
   ["native source/tool identity unchecked", controller, 'manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)', "false"],
-  ["native transfer whitelist unchecked", controller, 'JSON.stringify(entries) !== JSON.stringify(transferNames)', "false"],
-  ["native archive unchecked", controller, 'archives[name] !== await hashTransferMember(transfer, name)', "false"],
+  ["native archive whitelist unchecked", controller, 'JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)', "false"],
+  ["native archive unchecked", controller, 'archives[name] !== await hash(join(bundle, name))', "false"],
   ["native overlay", controller, "  preflightDestinations(state);", ""],
   ["consumer attempt substituted", controller, 'const attempt = required("NATIVE_QUALITY_PRODUCER_ATTEMPT");', 'const attempt = required("GITHUB_RUN_ATTEMPT");'],
   ["source verifier removed", controller, '  execFileSync("bash", [join(state.workspace, "scripts/sync-bun.sh"), "--check"], { stdio: "inherit" });', ""],
   ["Git identity unchecked", controller, 'git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree', "false"],
   ["credential config included", controller, '/^(?:HEAD|index|shallow|packed-refs)$/.test(metadata.rest)', '/^(?:HEAD|index|shallow|packed-refs|config)$/.test(metadata.rest)'],
+  ["missing required target root accepted", controller, '    else if (root.presence === "required") throw new Error(`Missing required native handoff root: ${root.path}`);\n', ""],
+  ["arbitrary target handed off", controller, "roots: nativeTargetRoots }", 'roots: requiredRoots(["."]) }'],
+  ["TLS probe root dropped", targetRoots, '  { path: "tls-probe", presence: "required",', '  { path: "tls-probe", presence: "optional",'],
   ["mtimes discarded", controller, "tar --posix --no-recursion", "tar --posix --mtime=@0 --no-recursion"],
   ["symlinks dereferenced", controller, "tar --posix --no-recursion", "tar --posix --dereference --no-recursion"],
   ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh"],

@@ -263,7 +263,7 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
   }, dispose: () => descriptors.dispose() };
 }
 
-const engines: Engine[] = ["quickjs", "jsc", "browser", "hermes"];
+const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
   test(`${engine} roots find bun/node/nodejs through PATH with their selected engine and existing module`, async () => {
@@ -286,7 +286,7 @@ for (const engine of engines) {
         expect((await supervisor.waitForExit(root.client.pid, pid)).status).toBe(0);
       }
       expect(fetch).not.toHaveBeenCalled();
-      for (const name of engine === "hermes" ? [] : ["bun", "node", "nodejs"]) await expect(root.which(`/opt/bun/hermes/bin/${name}`)).rejects.toThrow("No executable");
+      for (const name of ["bun", "node", "nodejs"]) await expect(root.which(`/opt/bun/hermes/bin/${name}`)).rejects.toThrow("No executable");
     } finally {
       try { root?.dispose(); await state.dispose(); }
       finally { fetch.mockRestore(); }
@@ -315,7 +315,7 @@ for (const engine of engines) {
     try {
       await state.ready;
       const entries = new Map(register.mock.calls);
-      const available = engines.filter(selected => selected !== "hermes" || engine === "hermes");
+      const available = engines;
       const loaded = new Set<WebAssembly.Module>();
       for (const selected of available) {
         const entry = entries.get(`${ENGINE_BIN[selected]}/bun`);
@@ -482,7 +482,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
       worker.exit();
       expect(await run.done).toEqual({ code: 0 });
     }
-    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs", "/opt/bun/hermes/bin/bun", "/opt/bun/hermes/bin/node", "/opt/bun/hermes/bin/nodejs"]);
+    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs"]);
     for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
     // Page-launched modules never become executable files or retain a per-launch registry key.
     expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();

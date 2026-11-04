@@ -1562,6 +1562,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-spidermonkey"
+version = "0.0.53"
+dependencies = [
+ "cc",
+ "encoding_c",
+ "encoding_c_mem",
+ "icu_normalizer",
+ "smallvec",
+ "write16",
+]
+
+[[package]]
 name = "bunwasm-tools"
 version = "0.0.53"
 dependencies = [
@@ -2294,6 +2306,24 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "encoding_c"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9af727805f3b0d79956bde5b35732669fb5c5d45a94893798e7b7e70cfbf9cc1"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
+name = "encoding_c_mem"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a80a16821fe8c7cab96e0c67b57cd7090e021e9615e6ce6ab0cf866c44ed1f0"
+dependencies = [
+ "encoding_rs",
+]
 
 [[package]]
 name = "encoding_rs"
@@ -5529,6 +5559,9 @@ name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936"
+dependencies = [
+ "smallvec",
+]
 
 [[package]]
 name = "writeable"

@@ -9,7 +9,8 @@ RustCrypto PKCS#8 and SPKI parsers handle the outer key-format envelopes.
 `scripts/sync-crypto.sh` downloads the unmodified source. `third_party/licenses/boringssl-LICENSE`
 is the unmodified LICENSE from that pin. The crypto placeholders in `crates/bunwasm-glue/src/extra.rs` are removed so Bun and this
 adapter use BoringSSL's real allocator, stack and X.509 interfaces with their correct ABI.
-The three SSL session placeholders remain because TLS sessions are outside this adapter. The build disables assembly,
+The later TLS driver removes the three SSL session placeholders too, so libssl
+owns those symbols. The build disables assembly,
 threads and socket BIOs on WASI, as in the earlier successful runtime spike.
 
 The original request adapter

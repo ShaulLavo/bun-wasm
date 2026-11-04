@@ -125,6 +125,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     node_net_server: load("node_net_server.ts")(internal),
     node_net: load("node_net.js")(internal),
   });
+  Object.assign(modules, { tls_transport: load("tls_transport.ts")(internal) });
   const transport = load("net.js")(internal);
   const { createServer } = protocol === "tcp" ? transport.nodeNet() : transport.nodeHttp("http:");
   const server = createServer();

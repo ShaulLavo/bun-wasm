@@ -287,7 +287,7 @@ function parseFailure(value: unknown): Snapshot["engineFailure"] | undefined {
 function parseSnapshot(value: unknown): Snapshot | null {
   if (!isObject(value)) return null;
   const { id, engine, engineCounters } = value;
-  if (typeof id !== "string" || id.length === 0 || typeof engine !== "string" || !["jsc", "quickjs", "hermes", "browser"].includes(engine)
+  if (typeof id !== "string" || id.length === 0 || typeof engine !== "string" || !["jsc", "quickjs", "browser"].includes(engine)
     || !isObject(engineCounters)) return null;
   const counters: Record<string, number | null> = {};
   for (const [key, counter] of Object.entries(engineCounters)) {

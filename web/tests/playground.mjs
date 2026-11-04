@@ -135,6 +135,8 @@ export async function writeFile(page, path, text) {
  * (the test then requests forceful foreground cleanup and waits for the shell to become idle).
  */
 export async function run(page, command, ms = 60000) {
+  const prompt = new URL(page.url()).searchParams.get("prompt");
+  if (prompt !== "off") throw new Error(`playground.mjs run() requires the explicit ?prompt=off transcript arm; got ${page.url()}`);
   const before = (await terminalText(page)).split("\n").length;
   const result = await runForeground(page, command, ms);
   const lines = (await terminalText(page)).split("\n");

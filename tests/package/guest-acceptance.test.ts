@@ -196,7 +196,7 @@ test("real CLI resolves its default dist inside a checkout path containing space
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
     await mkdir(join(root, "scripts/src"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts"].concat(receiptCliSources)) {
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "producer-closure.ts"].concat(receiptCliSources)) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
     await mkdir(join(root, "src"));

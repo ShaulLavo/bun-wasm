@@ -88,7 +88,7 @@ export function verifyMeasurementClosure(directory: string) {
   if (!value || typeof value !== "object" || !("schema" in value) || value.schema !== 1
     || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Invalid reusable producer closure");
   if (!("profile" in value) || value.profile !== "split" || !("engines" in value)
-    || !isDeepStrictEqual(value.engines, producerEngines("split"))) throw new Error("Measurement requires the canonical three-engine split closure");
+    || !isDeepStrictEqual(value.engines, producerEngines("split"))) throw new Error("Measurement requires the canonical supported paired-engine split closure");
   const files = value.files.map(artifactRecord);
   requireClosureFiles("split", files);
   const artifacts = files.map(file => {

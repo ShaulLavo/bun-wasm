@@ -223,6 +223,7 @@ export async function browserHost({ root, options, launch, stop }) {
       const diagnostics = browserDiagnostics(page);
       const playgroundURL = new URL(base);
       playgroundURL.searchParams.set("engine", engine);
+      playgroundURL.searchParams.set("prompt", "off");
       await page.goto(playgroundURL.href);
       const status = await ready(page);
       if (!status.includes("ready")) throw await engineLoadFailure(page, engine, status, diagnostics, run);

@@ -32,7 +32,7 @@ test("engine order alternates without mutating the input", () => {
 });
 
 test("six rounds counterbalance all three positions and directed adjacent pairs", () => {
-  const engines = parseEngineSpecs(["quickjs=q.wasm", "jsc=j.wasm", "hermes=h.wasm"]);
+  const engines = parseEngineSpecs(["quickjs=q.wasm", "jsc=j.wasm", "third=t.wasm"]);
   const orders = Array.from({ length: 6 }, (_, round) => engineOrder(engines, round).map(engine => engine.name));
   expect(new Set(orders.map(order => order.join(","))).size).toBe(6);
   for (const engine of engines) for (let position = 0; position < 3; position++) expect(orders.filter(order => order[position] === engine.name)).toHaveLength(2);

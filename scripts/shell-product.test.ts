@@ -14,7 +14,9 @@ import { guestProvenance } from "./app-matrix/product-provenance";
 import { createProductCleanup, exitAfterDeadline, foregroundCycle, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import * as preparation from "../tests/shell-product/prepare-flow";
-import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
+import { assertInstalledWaffle, assertWafflePeer, networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
+import { parseHostInterface } from "./waffle-release-inputs";
+import { writeInstalledWaffleFixture } from "./fixtures/waffle-host-interface";
 import { WorkerJobs } from "../tests/shell-product/worker-jobs";
 import { confirmWorkerProcessJob, createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { SpawnRequest } from "waffle/proc";
@@ -718,7 +720,7 @@ test("actual preparation caller restores Bun from the packed archive without edi
     const cached = join(directory, "borrowed-cache");
     await Promise.all([temporary, source, installed, cached].map(path => mkdir(path, { recursive: true })));
     const waffle = "git+https://github.com/ShaulLavo/waffle.git#" + "a".repeat(40);
-    const metadata = JSON.stringify({ name: "bun-wasm", peerDependencies: { waffle } });
+    const metadata = JSON.stringify({ name: "bun-wasm", waffleHostInterface: 1, peerDependencies: { waffle } });
     await writeFile(join(source, "package.json"), metadata);
     await writeFile(join(source, "launcher.ts"), 'export const clean = "packed archive";\n');
     const archive = "bun-wasm-test.tgz";
@@ -728,15 +730,15 @@ test("actual preparation caller restores Bun from the packed archive without edi
     await link(join(cached, "launcher.ts"), join(installed, "launcher.ts"));
     await writeFile(join(installed, "package.json"), metadata);
     await writeFile(join(installed, "stale-only.ts"), "not in the archive");
+    await writeInstalledWaffleFixture(destination, waffle);
     const shell = join(destination, "node_modules/bash-web");
-    await mkdir(shell);
-    await writeFile(join(shell, "package.json"), JSON.stringify({ peerDependencies: { waffle } }));
+    await writeFile(join(shell, "package.json"), JSON.stringify({ name: "bash-web", waffleHostInterface: 1, peerDependencies: { waffle } }));
     const driver = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product-prepare.ts"), "utf8");
     const peer = driver.match(/^async function peer\([\s\S]*?^}/m)?.[0];
     if (!peer) throw new Error("Missing preparation peer check");
     const caller = driver.slice(driver.indexOf("  const installedWaffle ="), driver.indexOf("  await detachPackage(shell);"));
     const script = new Bun.Transpiler({ loader: "ts" }).transformSync(`${peer}\n(async () => { ${caller} })()`);
-    await runInNewContext(script, { ...preparation, assert, Bun, join, destination, temporary, archive, waffle, flow });
+    await runInNewContext(script, { ...preparation, assert, assertInstalledWaffle, assertWafflePeer, Bun, join, destination, temporary, archive, waffle, flow });
     expect(await readFile(join(installed, "launcher.ts"), "utf8")).toBe(await readFile(join(source, "launcher.ts"), "utf8"));
     expect(await readFile(join(installed, "package.json"), "utf8")).toBe(metadata);
     expect(existsSync(join(installed, "stale-only.ts"))).toBe(false);
@@ -744,7 +746,7 @@ test("actual preparation caller restores Bun from the packed archive without edi
     await writeFile(join(installed, "launcher.ts"), "private caller edit");
     expect(await readFile(join(cached, "launcher.ts"), "utf8")).toBe('import "./missing-diagnostic.js";\n');
     await writeFile(join(shell, "package.json"), JSON.stringify({ peerDependencies: { waffle: waffle + "different" } }));
-    await expect(runInNewContext(script, { ...preparation, assert, Bun, join, destination, temporary, archive, waffle, flow })).rejects.toThrow("Reject mismatched public Shell before any fixture build");
+    await expect(runInNewContext(script, { ...preparation, assert, assertInstalledWaffle, assertWafflePeer, Bun, join, destination, temporary, archive, waffle, flow })).rejects.toThrow("Reject mismatched public Shell before any fixture build");
   } finally { await rm(directory, { recursive: true, force: true }); }
   expect(existsSync(directory)).toBe(false);
 });
@@ -1024,11 +1026,12 @@ test("Retained Waffle selection checks Shell, peer, host, and network provenance
   const networkPath = join(directory, "node_modules/waffle/browser/net/network.input-hash");
   const selectionPath = join(directory, waffleSelectionFile);
   try {
+    await writeInstalledWaffleFixture(directory, commits.wafflePeer);
     await mkdir(join(directory, "node_modules/waffle/browser/net"), { recursive: true });
     await Bun.write(networkPath, networkInputHash);
     await expect(readWaffleSelection(directory, commits)).rejects.toThrow();
     const expected = await writeWaffleSelection(directory, commits);
-    expect(expected).toEqual({ ...commits, networkInputHash });
+    expect(expected).toEqual({ ...commits, hostInterface: parseHostInterface(1, "fixture"), networkInputHash });
     expect(await readWaffleSelection(directory, commits)).toEqual(expected);
     expect(await Bun.file(selectionPath).json()).toEqual(expected);
     await expect(readWaffleSelection(directory, { ...commits, shellCommit: "c".repeat(40) })).rejects.toThrow("Retained Waffle selection");

@@ -10,6 +10,8 @@ import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
 import { BrowserPrograms } from "../src/browser-programs";
 import release from "../../scripts/waffle-release-inputs.json";
+import { assertExactHostInterface, packageHostInterface } from "../../scripts/waffle-release-inputs";
+import { assertWafflePeer } from "../../tests/shell-product/waffle-stage";
 
 const urls = {
   worker: new URL(import.meta.resolve("waffle/browser/preview1-worker")),
@@ -186,7 +188,9 @@ async function assertPackageRuntime(name: string, scope: string, physical: strin
   const root = await packageRoot(Bun.resolveSync(name, scope));
   const metadata: unknown = await Bun.file(join(root, "package.json")).json();
   expect(await physicalRuntime(name, scope)).toBe(physical);
-  expect(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined).toBe(expectedPeer);
+  const runtime = packageHostInterface(await Bun.file(physical).json(), physical);
+  assertExactHostInterface(packageHostInterface(metadata, name), runtime, name);
+  assertWafflePeer(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined, expectedPeer, name);
 }
 
 

@@ -160,8 +160,8 @@ export async function prepareProgramOutputs(requests: readonly ProgramOutputRequ
   }
 }
 
-type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc" | "hermes";
-const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", "jsc", "hermes"];
+type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc";
+const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", "jsc"];
 
 async function prepareComposedOutputs(repository: string, sysroot: string, build: ComposedBuild, core: string, side: string): Promise<void> {
   const kind = programKindForBuild(build);
@@ -181,7 +181,7 @@ export function engineEnvironment(kind: PairedEngine, sysroot: string, profile: 
     CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: "-C relocation-model=pic -C panic=abort -C link-self-contained=no",
     CFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC`,
   };
-  if (kind === "jsc" || kind === "hermes") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
+  if (kind === "jsc") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
   else flags.RQUICKJS_SYS_NO_WASI_SDK = "1";
   return flags;
 }
@@ -270,5 +270,5 @@ if (import.meta.main) {
     const bytes = await Bun.file(path).bytes();
     verifyProgramReceipt(bytes, receipt, expected);
     await Bun.write(output, tagProgramCore(bytes, argument));
-  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc|hermes OUTPUT");
+  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc OUTPUT");
 }

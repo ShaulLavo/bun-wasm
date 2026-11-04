@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import type { Page } from "playwright";
 
 async function prompt(page: Page, command: string): Promise<void> {
-  const generation = await page.evaluate(() => String(Reflect.get(globalThis, "playground").shell.bridge.readPrompt().generation));
+  const generation = await page.evaluate(() => String(Reflect.get(globalThis, "playground").shell.lastPrompt.generation));
   await page.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
   await page.waitForFunction(previous => {
     const { shell } = Reflect.get(globalThis, "playground");
-    return String(shell.bridge.readPrompt()?.generation) !== previous && !shell.running;
+    return String(shell.lastPrompt?.generation) !== previous && !shell.running;
   }, generation);
 }
 
@@ -56,13 +56,15 @@ export async function checkRunReplacesMultilineDraft(page: Page): Promise<void> 
     const buffer = term.buffer.active;
     return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true).endsWith("printf first");
   });
+  const generation = await page.evaluate(() => String(Reflect.get(globalThis, "playground").shell.lastPrompt.generation));
+  await page.locator("#run").click();
+  await page.waitForFunction(previous => {
+    const { shell } = Reflect.get(globalThis, "playground");
+    return String(shell.lastPrompt?.generation) !== previous && !shell.running;
+  }, generation);
   const result = await page.evaluate(async () => {
     const { shell, fs } = Reflect.get(globalThis, "playground");
-    await shell.submit("printf RUN_REPLACED > /tmp/run-requested-command");
-    return {
-      requested: new TextDecoder().decode(await fs.readFile("/tmp/run-requested-command")),
-      stale: Boolean(await fs.readFile("/tmp/run-stale-draft")),
-    };
+    return { status: shell.lastExit, stale: Boolean(await fs.readFile("/tmp/run-stale-draft")) };
   });
-  assert.deepEqual(result, { requested: "RUN_REPLACED", stale: false }, "Run replaces every line of the zsh draft");
+  assert.deepEqual(result, { status: 0, stale: false }, "Run replaces every line of the zsh draft");
 }

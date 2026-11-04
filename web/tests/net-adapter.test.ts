@@ -12,6 +12,11 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const decode = (value: Uint8Array) => new TextDecoder().decode(value);
+function deferred<T>() {
+  let resolvePromise: (value: T) => void = () => {};
+  const promise = new Promise<T>(resolve => { resolvePromise = resolve; });
+  return { promise, resolve: resolvePromise };
+}
 async function until(ready: () => boolean, attempts = 100): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (ready()) return;
@@ -215,6 +220,70 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
   } finally {
     try { helper.dispose(); }
     finally { namespace.dispose(); }
+    globalThis.fetch = originalFetch;
+    if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
+    else Reflect.deleteProperty(globalThis, "caches");
+  }
+});
+
+test("Bun helper publishes head and first body chunk before a cold cache reaches EOF", async () => {
+  const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+  const originalFetch = globalThis.fetch;
+  const eof = deferred<void>();
+  let cachePutStarted = false;
+  let cachePutFinished = false;
+  let upstreamCancelled = false;
+  let sourceClosed = false;
+  const cache = {
+    async match() { return undefined; },
+    async put(_url: string, response: Response) {
+      cachePutStarted = true;
+      await response.arrayBuffer();
+      cachePutFinished = true;
+    },
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encode("first adapter chunk"));
+      eof.promise.then(() => {
+        if (sourceClosed) return;
+        sourceClosed = true;
+        try { controller.close(); } catch { /* close raced with cancellation */ }
+      });
+    },
+    cancel() {
+      upstreamCancelled = true;
+      sourceClosed = true;
+      eof.resolve();
+    },
+  });
+  const namespace = await NetNamespace.create();
+  const ring = createRing();
+  const helper = new NetHelper(ring, namespace);
+  const host = new RuntimeNetHost(ring, request => helper.handle(request));
+  let handle = 0;
+  try {
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: { async open() { return cache; } } });
+    globalThis.fetch = Object.assign(async () => new Response(body, { status: 200, headers: { "x-stream": "held" } }), { preconnect: originalFetch.preconnect });
+    handle = host.fetch(JSON.stringify({ url: "https://network.invalid/pkg.tgz", method: "GET", headers: [["accept", "application/vnd.bun.install-tarball"]] }));
+    await until(() => typeof host.fetchHead(handle) !== "number", 1000);
+    const head = host.fetchHead(handle);
+    if (typeof head === "number") throw new Error("Expected response head");
+    expect(JSON.parse(decode(head))).toMatchObject({ status: 200, headers: [["x-stream", "held"]] });
+    let first: Uint8Array | number = AGAIN;
+    await until(() => { first = host.read(handle, 65536); return first instanceof Uint8Array; }, 1000);
+    if (typeof first === "number") throw new Error("Expected response body");
+    expect(decode(first)).toBe("first adapter chunk");
+    expect(cachePutStarted).toBe(false);
+    expect(cachePutFinished).toBe(false);
+    expect(upstreamCancelled).toBe(false);
+    host.close(handle);
+    await until(() => upstreamCancelled, 1000);
+    expect(cachePutStarted).toBe(false);
+  } finally {
+    if (handle) host.close(handle);
+    helper.dispose();
+    namespace.dispose();
     globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");

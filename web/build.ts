@@ -1,6 +1,6 @@
 // Builds the playground into web/dist as plain static files.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
-// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; HERMES_WASM overrides the opt-in ../dist/bun-hermes.wasm.
+// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm.
 // bash-web guests come from scripts/build-bash-web-shell.sh (BASH_WEB_GUESTS_DIR overrides ../dist).
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
@@ -85,13 +85,6 @@ if (existsSync(jscSource) && !(await copyWasm(jscEngineSource, "jsc-engine.wasm"
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
-}
-
-const hermesSource = resolve(here, process.env.HERMES_WASM ?? "../dist/bun-hermes.wasm");
-await copyWasm(hermesSource, "bun-hermes.wasm");
-const hermesEngineSource = join(dirname(hermesSource), "hermes-engine.wasm");
-if (existsSync(hermesSource) && !(await copyWasm(hermesEngineSource, "hermes-engine.wasm"))) {
-  throw new Error(`Hermes core requires its matching side module: ${hermesEngineSource}`);
 }
 
 const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");

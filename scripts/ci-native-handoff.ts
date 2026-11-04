@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { nativeTargetRoots } from "./ci-native-handoff-paths";
+import { nativeTargetRoots, type NativeHandoffRoot } from "./ci-native-handoff-paths";
 
 const archiveNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"] as const;
-const transferNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst", "manifest.json"] as const;
 type ArchiveName = typeof archiveNames[number];
 type GitDirectory = { archive: ArchiveName; path: string; bare: boolean };
 type Context = ReturnType<typeof context>;
@@ -42,12 +41,20 @@ function context() {
     },
   };
 }
-function layout(state: Context) {
+type Root = Pick<NativeHandoffRoot, "path" | "presence">;
+function requiredRoots(paths: readonly string[]): Root[] {
+  return paths.map(path => ({ path, presence: "required" }));
+}
+function layout(state: Context): { name: ArchiveName; directory: string; roots: readonly Root[] }[] {
   return [
-    { name: archiveNames[0], directory: state.target, roots: nativeTargetRoots.map(root => root.path) },
-    { name: archiveNames[1], directory: state.cargo, roots: ["registry", "git", "bin/cargo-machete"] },
-    { name: archiveNames[2], directory: state.workspace, roots: ["vendor/bun", "vendor/boringssl"] },
+    { name: archiveNames[0], directory: state.target, roots: nativeTargetRoots },
+    { name: archiveNames[1], directory: state.cargo, roots: requiredRoots(["registry", "git", "bin/cargo-machete"]) },
+    { name: archiveNames[2], directory: state.workspace, roots: requiredRoots(["vendor/bun", "vendor/boringssl"]) },
   ];
+}
+function missing(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return true; throw error; }
 }
 function safeRelative(path: string): string {
   if (!path || isAbsolute(path) || path.split("/").includes("..") || /[\r\n\0]/.test(path)) throw new Error(`Unsafe archive path: ${path}`);
@@ -83,7 +90,15 @@ function trackDependencies(directory: string, path: string, tracked: Set<string>
     ancestors(tracked, path === "." ? file : `${path}/${file}`);
   }
 }
-function inventory(directory: string, roots: string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
+function presentRoots(directory: string, roots: readonly Root[]): string[] {
+  const present: string[] = [];
+  for (const root of roots) {
+    if (!missing(join(directory, safeRelative(root.path)))) present.push(root.path);
+    else if (root.presence === "required") throw new Error(`Missing required native handoff root: ${root.path}`);
+  }
+  return present;
+}
+function inventory(directory: string, roots: readonly string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
   const paths: string[] = [];
   const tracked = new Set<string>();
   function visit(path: string): void {
@@ -111,68 +126,35 @@ async function hash(path: string): Promise<string> {
 function shell(script: string, ...args: string[]): void {
   execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script, "native-handoff"].concat(args), { stdio: "inherit" });
 }
-function commandOutput(command: string, args: string[]): string {
-  return execFileSync(command, args, { encoding: "utf8" }).trim();
-}
-async function transferMember(transfer: string, name: string, consume: (stream: AsyncIterable<Buffer>) => Promise<void>): Promise<void> {
-  const child = spawn("tar", ["--posix", "-xOf", transfer, name], { stdio: ["ignore", "pipe", "pipe"] });
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", chunk => { stderr += chunk; });
-  await consume(child.stdout);
-  const status = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", code => resolve(code ?? 1));
-  });
-  if (status !== 0) throw new Error(`Unable to read ${name} from native transfer: ${stderr.trim()}`);
-}
-async function hashTransferMember(transfer: string, name: string): Promise<string> {
-  const digest = createHash("sha256");
-  await transferMember(transfer, name, async stream => {
-    for await (const chunk of stream) digest.update(chunk);
-  });
-  return digest.digest("hex");
-}
-function transferBytes(transfer: string, name: string): Buffer {
-  return execFileSync("tar", ["--posix", "-xOf", transfer, name]);
-}
 function output(values: Record<string, string>): void {
   appendFileSync(required("GITHUB_OUTPUT"), Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
 }
-async function pack(state: Context, transfer: string): Promise<void> {
-  if (existsSync(transfer)) throw new Error("Refusing an existing handoff transfer");
+async function pack(state: Context, bundle: string): Promise<void> {
+  if (existsSync(bundle)) throw new Error("Refusing an existing handoff bundle");
+  mkdirSync(bundle);
   const scratch = mkdtempSync(join(required("RUNNER_TEMP"), "native-quality-pack-"));
-  const bundle = mkdtempSync(join(required("RUNNER_TEMP"), "native-quality-bundle-"));
-  try {
-    const manifest = await packArchives(state, bundle, scratch);
-    shell('tar --posix -C "$1" -cf "$2" target.tar.zst cargo.tar.zst sources.tar.zst manifest.json', bundle, transfer);
-    output({ "manifest-sha256": await hash(manifest), "producer-attempt": state.identity.attempt });
-    console.log(JSON.stringify({ nativeTransferBytes: statSync(transfer).size }));
-  } finally {
-    rmSync(bundle, { recursive: true, force: true });
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  try { await packArchives(state, bundle, scratch); }
+  finally { rmSync(scratch, { recursive: true, force: true }); }
 }
-async function packArchives(state: Context, bundle: string, scratch: string): Promise<string> {
+async function packArchives(state: Context, bundle: string, scratch: string): Promise<void> {
   const repositories: GitDirectory[] = [];
   const archives: Record<string, string> = {};
   mkdirSync(join(state.cargo, "git"), { recursive: true });
   for (const item of layout(state)) {
     const start = performance.now();
-    const paths = inventory(item.directory, item.roots, item.name, repositories);
+    const roots = presentRoots(item.directory, item.roots);
+    const paths = inventory(item.directory, roots, item.name, repositories);
     const list = join(scratch, "files");
     writeFileSync(list, paths.join("\0") + "\0");
     shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -o "$3"', item.directory, list, join(bundle, item.name));
     archives[item.name] = await hash(join(bundle, item.name));
-    console.log(JSON.stringify({ archive: item.name, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
+    console.log(JSON.stringify({ archive: item.name, roots, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
   }
   const bun = { head: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD"), tree: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD^{tree}") };
   const manifest = { schema: 1, identity: state.identity, archives, repositories, bun };
-  const path = join(bundle, "manifest.json");
-  writeFileSync(path, JSON.stringify(manifest));
-  return path;
+  writeFileSync(join(bundle, "manifest.json"), JSON.stringify(manifest));
+  output({ "manifest-sha256": await hash(join(bundle, "manifest.json")), "producer-attempt": state.identity.attempt });
 }
-
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid native handoff object");
   return Object.fromEntries(Object.entries(value));
@@ -187,43 +169,38 @@ function parseGit(value: unknown): GitDirectory {
   return { archive: name, path, bare: item.bare };
 }
 function absent(path: string): void {
-  try { lstatSync(path); }
-  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return; throw error; }
-  throw new Error(`Refusing to overlay native state: ${path}`);
+  if (!missing(path)) throw new Error(`Refusing to overlay native state: ${path}`);
 }
 function preflightDestinations(state: Context): void {
   for (const path of [state.target, join(state.cargo, "registry"), join(state.cargo, "git"), join(state.cargo, "bin/cargo-machete"), join(state.workspace, "vendor/bun"), join(state.workspace, "vendor/boringssl")]) absent(path);
 }
-async function inspect(state: Context, transfer: string) {
+async function inspect(state: Context, bundle: string) {
   digestText(required("NATIVE_QUALITY_MANIFEST_SHA256"));
-  if (!lstatSync(transfer).isFile()) throw new Error("Native handoff transfer must be a file");
-  const entries = commandOutput("tar", ["--posix", "-tf", transfer]).split("\n").filter(Boolean);
-  if (JSON.stringify(entries) !== JSON.stringify(transferNames)) throw new Error("Native transfer member whitelist mismatch");
-  const manifestBytes = transferBytes(transfer, "manifest.json");
-  if (createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
-  const manifest = object(JSON.parse(manifestBytes.toString("utf8")));
+  if (await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
+  const manifest = object(JSON.parse(readFileSync(join(bundle, "manifest.json"), "utf8")));
   if (manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)) throw new Error("Foreign native handoff identity");
   const archives = object(manifest.archives);
   if (JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)) throw new Error("Native archive whitelist mismatch");
-  for (const name of archiveNames) if (archives[name] !== await hashTransferMember(transfer, name)) throw new Error(`Native archive digest mismatch: ${name}`);
+  if (JSON.stringify(readdirSync(bundle).sort()) !== JSON.stringify(["manifest.json"].concat(archiveNames).sort())) throw new Error("Unexpected native bundle files");
+  for (const name of archiveNames) if (archives[name] !== await hash(join(bundle, name))) throw new Error(`Native archive digest mismatch: ${name}`);
   if (!Array.isArray(manifest.repositories)) throw new Error("Missing Git metadata inventory");
   const repositories = manifest.repositories.map(parseGit);
   preflightDestinations(state);
   return { repositories, bun: object(manifest.bun) };
 }
-
 function restoreGit(directory: string, repository: GitDirectory): void {
   const path = join(directory, repository.path);
   absent(join(path, "config"));
   writeFileSync(join(path, "config"), `[core]\nrepositoryformatversion = 0\nbare = ${repository.bare}\nfilemode = true\nlogallrefupdates = false\n`);
 }
-async function unpack(state: Context, transfer: string): Promise<void> {
+async function unpack(state: Context, bundle: string): Promise<void> {
   const start = performance.now();
-  const manifest = await inspect(state, transfer);
+  const manifest = await inspect(state, bundle);
   for (const item of layout(state)) {
     mkdirSync(item.directory, { recursive: true });
-    shell('tar --posix -xOf "$1" "$2" | zstd -dc | tar --no-same-owner -xpf - -C "$3"', transfer, item.name, item.directory);
+    shell('zstd -dc "$1" | tar --no-same-owner -xpf - -C "$2"', join(bundle, item.name), item.directory);
     for (const repository of manifest.repositories.filter(repository => repository.archive === item.name)) restoreGit(item.directory, repository);
+    rmSync(join(bundle, item.name));
   }
   const bun = join(state.workspace, "vendor/bun");
   if (git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree) throw new Error("Restored Bun Git identity mismatch");
@@ -235,9 +212,9 @@ async function unpack(state: Context, transfer: string): Promise<void> {
 
 if (import.meta.main) {
   const [command, bundle] = process.argv.slice(2);
-  if ((command !== "pack" && command !== "unpack") || !bundle || !isAbsolute(bundle)) throw new Error("Usage: ci-native-handoff.ts <pack|unpack> ABSOLUTE_TRANSFER");
+  if ((command !== "pack" && command !== "unpack") || !bundle || !isAbsolute(bundle)) throw new Error("Usage: ci-native-handoff.ts <pack|unpack> ABSOLUTE_BUNDLE");
   const state = context();
-  if (relative(state.workspace, bundle).startsWith("../") === false) throw new Error("Handoff transfer must be outside the checkout");
+  if (relative(state.workspace, bundle).startsWith("../") === false) throw new Error("Handoff bundle must be outside the checkout");
   if (command === "pack" && state.identity.attempt !== required("GITHUB_RUN_ATTEMPT")) throw new Error("Pack attempt is not the actual producer attempt");
   if (command === "pack") await pack(state, bundle);
   else await unpack(state, bundle);
