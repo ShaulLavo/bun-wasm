@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -287,6 +288,31 @@ function repositoryCopy(root: string, probes: readonly string[]): string {
   for (const name of probes) cpSync(join(repo, "scripts", name), join(root, "scripts", name));
   return root;
 }
+function orderedRepositoryIdentity(root: string, probes: readonly string[], reverse: boolean): string {
+  const script = `
+    import { mock } from "bun:test";
+    import * as fs from "node:fs";
+    import { join } from "node:path";
+    const readDirectory = fs.readdirSync;
+    const scripts = join(process.argv[1], "scripts");
+    const list = path => {
+      const names = readDirectory(path);
+      if (path !== scripts) return names;
+      names.sort();
+      return process.argv[2] === "reverse" ? names.reverse() : names;
+    };
+    mock.module("node:fs", () => ({ ...fs, readdirSync: list }));
+    const { tlsRepositoryIdentity } = await import(process.argv[3]);
+    console.log(JSON.stringify(list(scripts).filter(name => name.startsWith("tls-probe"))));
+    console.log(await tlsRepositoryIdentity(process.argv[1]));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script, root, reverse ? "reverse" : "forward", join(import.meta.dir, "tls-probe-inputs.ts")], { encoding: "utf8", timeout: 10000 });
+  expect(result.status, result.stderr).toBe(0);
+  const [order, identity = ""] = result.stdout.trim().split("\n");
+  expect(order).toBe(JSON.stringify(reverse ? probes.toReversed() : probes));
+  expect(identity).toMatch(/^[0-9a-f]{64}$/);
+  return identity;
+}
 test("TLS repository identity binds probe script bytes independently of directory order", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-tls-repository-"));
   try {
@@ -295,11 +321,10 @@ test("TLS repository identity binds probe script bytes independently of director
     for (const name of ["forward", "reverse"]) mkdirSync(join(scratch, name, "scripts"), { recursive: true });
     const forward = repositoryCopy(join(scratch, "forward"), probes);
     const reverse = repositoryCopy(join(scratch, "reverse"), probes.toReversed());
-    const listed = (root: string) => readdirSync(join(root, "scripts")).filter(name => name.startsWith("tls-probe"));
-    // The two copies really list in different orders, as the two runner images did.
-    expect(listed(forward)).not.toEqual(listed(reverse));
-    expect(await tlsRepositoryIdentity(reverse)).toBe(await tlsRepositoryIdentity(forward));
+    const identity = await tlsRepositoryIdentity(forward);
+    expect(orderedRepositoryIdentity(forward, probes, false)).toBe(identity);
+    expect(orderedRepositoryIdentity(reverse, probes, true)).toBe(identity);
     writeFileSync(join(reverse, "scripts", probes[0]!), readFileSync(join(reverse, "scripts", probes[0]!), "utf8") + "\n");
-    expect(await tlsRepositoryIdentity(reverse)).not.toBe(await tlsRepositoryIdentity(forward));
+    expect(orderedRepositoryIdentity(reverse, probes, true)).not.toBe(identity);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
