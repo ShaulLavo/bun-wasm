@@ -8,6 +8,7 @@ import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests.ts";
 import { parseProgramProfile, sharedGroupEnvironment } from "./src/program-profile.ts";
 import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, requireClosureFiles, verifyHermesLibrary, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
+import { parseC1PreflightConfig, validateC1Preflight } from "./c1-producer-preflight.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const [command, selectedProfile, ...extra] = process.argv.slice(2);
@@ -17,6 +18,9 @@ if (!process.env.BUN_WASM_ENGINE_ROOT) throw new Error("Set an explicit BUN_WASM
 const output = resolve(process.env.BUN_WASM_ENGINE_ROOT);
 const sysroot = process.env.BUN_WASM_SYSROOT;
 if (!sysroot) throw new Error("Source env.sh before running the producer");
+if (process.env.BUN_WASM_C1_PREFLIGHT_CONFIG) {
+  validateC1Preflight(parseC1PreflightConfig(JSON.parse(readFileSync(process.env.BUN_WASM_C1_PREFLIGHT_CONFIG, "utf8"))));
+}
 if (process.env.BUN_WASM_PROGRAM_PROFILE && parseProgramProfile(process.env.BUN_WASM_PROGRAM_PROFILE) !== profile) throw new Error("Producer profile differs from build environment");
 if (profile === "shared-group") {
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("Shared producer requires the explicit J2 shared sysroot");

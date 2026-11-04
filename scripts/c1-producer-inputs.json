@@ -1,0 +1,59 @@
+{
+  "schema": "bun-wasm.c1-producer-input-inventory.v1",
+  "source": {
+    "baseHead": "bdbac44b3e078d29a940232ca23971e44786fc4b",
+    "baseTree": "230939d6d9706d743d439dd909b89e3e79913ade",
+    "head": "ffbccf9a4bdf9628a75d751b0160ce79ba842ce0",
+    "tree": "27e95136c2e3ee91897c206b96184c2cef5fa55b"
+  },
+  "requiredSourcePaths": [
+    "vendor/bun/.git",
+    "vendor/bun/src",
+    "vendor/bun/Cargo.toml",
+    "vendor/bun/Cargo.lock",
+    "vendor/bun/vendor/lol-html",
+    "vendor/bun/vendor/rust-argon2",
+    "vendor/bun/build/debug/codegen/build_options.rs",
+    "vendor/boringssl/CMakeLists.txt",
+    "vendor/boringssl/cmake",
+    "vendor/boringssl/include",
+    "vendor/boringssl/crypto",
+    "vendor/boringssl/gen",
+    "vendor/boringssl/third_party",
+    "vendor/boringssl/util",
+    "vendor/boringssl/decrepit",
+    "third_party/zlib-ng"
+  ],
+  "requiredToolchain": [
+    "bun", "node", "git", "cargo", "rustc", "wasm-tools", "wasm-opt", "wasmtime", "cmake", "ninja", "clang", "clang++", "wasm-ld"
+  ],
+  "requiredHelpers": [
+    "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh"
+  ],
+  "tuple": {
+    "runtime": "0.0.109",
+    "relay": "0.0.109",
+    "programs": "programs-v0.0.15",
+    "programManifestBytes": 616752,
+    "programManifestSha256": "ce29ce655d6de6658d859d3d3fcfcf0d3bc383a2824c462ad0daddec8707a270",
+    "programManifestSchema": "waffle-program-release/2",
+    "hostInterface": 1
+  },
+  "networkReceipt": {
+    "owner": "Waffle network coordinator",
+    "kind": "new-compiled-fd3-fixture-artifact",
+    "fd": 3,
+    "artifactPath": "/work/reports/wave-20261101/network/C1/compiled-fd3-20261102/preview1-relay.fd3.wasm",
+    "artifactBytes": 484,
+    "artifactSha256": "8bd7e6a507c089fda3b3aa96409da25fc56c87c4baa242cb7f984be0519a80e7",
+    "receiptPath": "/work/reports/wave-20261101/network/C1/compiled-fd3-20261102/RECEIPT.json",
+    "receiptBytes": 3157,
+    "receiptSha256": "3a1b10247e9e9df338c97dd53b51aa07b3e41d2424669b879b29ea76048df80c"
+  },
+  "archives": {
+    "runtimeBytes": 2322914,
+    "runtimeSha256": "874314dbfb2263b5fa5ffc1d04a668440fe0fb2999d50567deee3c46cebb9302",
+    "relayBytes": 102556,
+    "relaySha256": "83e429364a8115f445e3ef8c13d601920f45e007f9b83e054c5e34a07c483538"
+  }
+}
