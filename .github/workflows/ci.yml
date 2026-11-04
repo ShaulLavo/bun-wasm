@@ -112,6 +112,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools
@@ -372,6 +391,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools
@@ -524,14 +562,6 @@ jobs:
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Unpack the verified JSC prebuild transfer
-        run: |
-          set -euo pipefail
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
-          [[ ! -e "$bundle" ]]
-          mkdir "$bundle"
-          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -540,21 +570,29 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          # Members stream from the downloaded transfer straight into the final trees; no second unpacked copy.
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
+          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
+          [[ ! -e "$manifest" ]]
+          tar --posix -xOf "$transfer" manifest > "$manifest"
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
+          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
+          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
+          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
+          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -787,6 +825,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools
@@ -915,14 +972,6 @@ jobs:
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Unpack the verified JSC prebuild transfer
-        run: |
-          set -euo pipefail
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
-          [[ ! -e "$bundle" ]]
-          mkdir "$bundle"
-          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -931,21 +980,29 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          # Members stream from the downloaded transfer straight into the final trees; no second unpacked copy.
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
+          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
+          [[ ! -e "$manifest" ]]
+          tar --posix -xOf "$transfer" manifest > "$manifest"
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
+          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
+          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
+          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
+          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
