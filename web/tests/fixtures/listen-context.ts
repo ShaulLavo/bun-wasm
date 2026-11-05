@@ -86,6 +86,7 @@ async function referenceScenario(kind: Kind): Promise<Observation[]> {
   try {
     if (kind === "error") await new Promise<void>(resolve => blocker.listen(0, "127.0.0.1", resolve));
     const port = kind === "error" ? (blocker.address() as AddressInfo).port : 0;
+    // oxlint-disable-next-line no-eval -- Evaluate the shared scenario text as the host modes do.
     const scenario: Scenario = (0, eval)(SCENARIO)(storage, server, kind, () => server.listen(port, "127.0.0.1"));
     await within(scenario.settled, `${kind} listen`);
     if (!server.listening) return scenario.observations;
