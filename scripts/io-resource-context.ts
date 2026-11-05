@@ -298,13 +298,21 @@ export async function hostDeadline<T>(milliseconds: number, operation: (signal: 
   const interrupted = () => controller.abort(new Error("Host execution interrupted"));
   const timer = setTimeout(() => controller.abort(new HostDeadlineError("Host execution deadline expired")), milliseconds);
   for (const signal of terminationSignals) process.once(signal, interrupted);
+  let failure: { readonly error: unknown } | null = null;
   try {
     return await abortable(operation(controller.signal), controller.signal);
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
     controller.abort(new Error("Execution finished"));
     clearTimeout(timer);
     for (const signal of terminationSignals) process.removeListener(signal, interrupted);
-    await cleanup();
+    try { await cleanup(); }
+    catch (error) {
+      if (failure === null) throw error;
+      throw new AggregateError([failure.error, error], `${String(failure.error)}; cleanup failed: ${String(error)}`, { cause: failure.error });
+    }
   }
 }
 
@@ -358,7 +366,7 @@ function startWeb(resources: ChromiumResources, webRoot: string): Promise<string
   return completion.promise;
 }
 
-async function chromiumBody(webRoot: string, invocation: Invocation, work: string, resources: ChromiumResources, signal: AbortSignal): Promise<Omit<Execution, "cleanup">> {
+async function chromiumBody(webRoot: string, invocation: Invocation, work: string, resources: ChromiumResources, signal: AbortSignal, progress: ChromiumProgress): Promise<void> {
   const { playwright, ready, run, writeFile } = await abortable(import("../web/tests/playground.mjs"), signal);
   signal.throwIfAborted();
   if (invocation.evidence.kind === "handoff") {
@@ -376,6 +384,7 @@ async function chromiumBody(webRoot: string, invocation: Invocation, work: strin
   const expected = expectedBrowserPayload(webRoot, path => pinned ? readFiveOwnerMember(pinned, path) : readFileSync(path));
   const observer = loadedObserver(new URL("bun-browser.wasm", url).href, expected,
     path => { if (pinned) requireFiveOwnerResponse(pinned, path); });
+  progress.observer = observer;
   context.on("response", observer.capture);
   const page = await abortable(context.newPage(), signal);
   await abortable(page.goto(`${url}?engine=browser&prompt=off`), signal);
@@ -384,27 +393,58 @@ async function chromiumBody(webRoot: string, invocation: Invocation, work: strin
   for (const name of readdirSync(work)) await abortable(writeFile(page, `/home/user/io-resource-context/${name}`, readFileSync(join(work, name), "utf8")), signal);
   const command = ["bun run io-resource-context/index.ts"].concat(invocation.rows).join(" ");
   const result = await abortable(run(page, command, (invocation.rows.length + 2) * ROW_BUDGET_MS), signal);
+  progress.code = result.code;
+  progress.timedOut = result.code === null;
   writeFileSync(join(invocation.out, "guest.log"), result.output);
   const read = `(async () => new TextDecoder().decode(await playground.fs.readFile(${JSON.stringify(`/home/user/io-resource-context/${RESULT_FILE}`)})))()`;
   const resultText = await abortable(page.evaluate(read), signal);
+  if (typeof resultText !== "string") throw new Error("Missing Chromium guest result");
+  progress.resultText = resultText;
   await abortable(observer.flush(), signal);
   await abortable(context.close(), signal);
-  const observations = await abortable(observer.finish(), signal);
-  if (typeof resultText !== "string") throw new Error("Missing Chromium guest result");
-  return { code: result.code, timedOut: result.code === null, resultText, loaded: observations.loaded, payloadEvidence: observations.payloads };
+  await abortable(observer.finish(), signal);
+}
+
+interface ChromiumProgress {
+  code: number | null;
+  timedOut: boolean;
+  resultText: string | null;
+  observer: ReturnType<typeof loadedObserver> | null;
+}
+
+function deadlineFailure(error: unknown): boolean {
+  if (error instanceof HostDeadlineError) return true;
+  return error instanceof AggregateError && error.errors.some(deadlineFailure);
+}
+
+export async function captureChromiumExecution(options: {
+  readonly budgetMs: number;
+  readonly operation: (signal: AbortSignal, progress: ChromiumProgress) => Promise<void>;
+  readonly cleanup: () => Promise<void>;
+  readonly cleanupStatus: () => Execution["cleanup"];
+}): Promise<Execution> {
+  const progress: ChromiumProgress = { code: null, timedOut: false, resultText: null, observer: null };
+  let error: string | null = null;
+  try {
+    await hostDeadline(options.budgetMs, signal => options.operation(signal, progress), options.cleanup);
+  } catch (caught) {
+    error = String(caught);
+    progress.timedOut ||= deadlineFailure(caught);
+  }
+  const observations = progress.observer?.snapshot();
+  return { code: progress.code, timedOut: progress.timedOut, resultText: progress.resultText,
+    loaded: observations?.loaded ?? [], payloadEvidence: observations?.payloads ?? [], cleanup: options.cleanupStatus(), error };
 }
 
 async function runChromium(webRoot: string, invocation: Invocation, work: string): Promise<Execution> {
   shortTmp();
   const resources: ChromiumResources = { server: null, browserServer: null, browser: null, serverGone: false, browserGone: false };
-  try {
-    const result = await hostDeadline((invocation.rows.length + 2) * ROW_BUDGET_MS,
-      signal => chromiumBody(webRoot, invocation, work, resources, signal), () => stopChromium(resources));
-    return { ...result, cleanup: { browserClosed: resources.browserGone, serverGroupGone: resources.serverGone } };
-  } catch (error) {
-    return { code: null, timedOut: error instanceof HostDeadlineError, resultText: null, loaded: [], error: String(error),
-      cleanup: { browserClosed: resources.browserGone, serverGroupGone: resources.serverGone } };
-  }
+  return await captureChromiumExecution({
+    budgetMs: (invocation.rows.length + 2) * ROW_BUDGET_MS,
+    operation: (signal, progress) => chromiumBody(webRoot, invocation, work, resources, signal, progress),
+    cleanup: () => stopChromium(resources),
+    cleanupStatus: () => ({ browserClosed: resources.browserGone, serverGroupGone: resources.serverGone }),
+  });
 }
 
 // ---- admission -----------------------------------------------------------------------------
@@ -470,7 +510,8 @@ export function buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execu
     : evidence;
   const admissionKind: "verified-c1-intake" | "source-check-only" = evidence.kind === "handoff" ? "verified-c1-intake" : "source-check-only";
   return {
-    schema: RESULT_SCHEMA, status, error: error ?? execution.error ?? null, surface, contextClass: contextClass(surface),
+    schema: RESULT_SCHEMA, status, error: execution.error ?? error ?? null,
+    diagnostics: error && execution.error && error !== execution.error ? [error] : [], surface, contextClass: contextClass(surface),
     evidence: projectedEvidence,
     qualification: evidence.kind === "handoff" && status === "pass" && omitted.length === 0,
     acceptanceScope: "Observed public-API rows only; named unqualified lifetime/fault limits remain",
@@ -483,6 +524,19 @@ export function buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execu
   };
 }
 export type FiveOwnerResult = ReturnType<typeof buildFiveOwnerResult>;
+
+export function inspectExecution(invocation: Invocation, execution: Execution): { parsed: GuestResult | null; error: string | null } {
+  let parsed: GuestResult | null = null;
+  try {
+    if (execution.resultText !== null) parsed = parseGuestResult(execution.resultText, invocation.rows, permittedRoutes(invocation.surface));
+    if (!execution.error && invocation.evidence.kind === "handoff" && invocation.surface.kind === "chromium") {
+      bindLoaded(invocation.evidence.handoff, "web", execution.loaded);
+    }
+  } catch (error) {
+    return { parsed, error: String(error) };
+  }
+  return { parsed, error: execution.error ?? null };
+}
 
 function finishRun(work: string, evidence: Evidence): void {
   rmSync(work, { recursive: true, force: true });
@@ -505,8 +559,9 @@ export async function main(argv: readonly string[]): Promise<number> {
     if (evidence.kind === "handoff" && surface.kind === "chromium") await verifyFiveOwnerGuest(evidence, "browser");
     fixtureFiles = stageFixture(work);
     execution = await execute(invocation, work);
-    if (evidence.kind === "handoff" && surface.kind === "chromium") bindLoaded(evidence.handoff, "web", execution.loaded);
-    parsed = execution.resultText === null ? null : parseGuestResult(execution.resultText, invocation.rows, permittedRoutes(surface));
+    const inspected = inspectExecution(invocation, execution);
+    parsed = inspected.parsed;
+    error = inspected.error;
   } catch (caught) {
     error = String(caught);
   } finally {

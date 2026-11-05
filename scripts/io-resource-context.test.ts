@@ -8,7 +8,7 @@ import { RESULT_SCHEMA, buildFiveOwnerResult, evaluateRow, main, parseGuestResul
 import { rowIds, rows, type Observation, type RowId } from "../tests/fixtures/io-resource-context/rows.ts";
 import { parseRowOutput } from "../tests/fixtures/io-resource-context/protocol.ts";
 import { isLoadedAsset, loadedObserver } from "./io-resource-context-assets.ts";
-import { hostDeadline, runGroup } from "./io-resource-context.ts";
+import { captureChromiumExecution, hostDeadline, inspectExecution, runGroup } from "./io-resource-context.ts";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { writeContractFixture } from "./c1/contract-fixture.ts";
@@ -405,4 +405,107 @@ test("LoadedObservation is exact decoded HTTP body evidence, including HTML", as
   expect(loaded).toHaveLength(2);
   expect(loaded[1]).toEqual({ url, method: "GET", status: 200, encoding: "gzip", bytes: 3, sha256: digest });
   expect(Object.keys(loaded[1]!).toSorted()).toEqual(["bytes", "encoding", "method", "sha256", "status", "url"]);
+});
+
+
+test("execution failure remains primary when deadline cleanup also throws", async () => {
+  const operation = new Error("guest result readback failed");
+  const cleanup = new Error("browser close failed");
+  let caught: unknown;
+  try {
+    await hostDeadline(1000, async () => { throw operation; }, async () => { throw cleanup; });
+  } catch (error) { caught = error; }
+  expect(String(caught)).toContain("guest result readback failed");
+  expect(String(caught)).toContain("browser close failed");
+  expect(caught).toBeInstanceOf(AggregateError);
+  if (!(caught instanceof AggregateError)) throw new Error("Expected both failures");
+  expect(caught.errors).toEqual([operation, cleanup]);
+  expect(caught.cause).toBe(operation);
+});
+
+test("result validation cannot replace the earlier execution failure", () => {
+  const invocation: Invocation = { rows: ["watch.caller-close"], out: "/unused", evidence: { kind: "source-check" },
+    surface: { kind: "chromium", webRoot: "/unused" } };
+  const result = buildFiveOwnerResult({ invocation, admitted: { artifacts: [], receipts: [] }, fixtureFiles: [],
+    execution: { code: null, timedOut: false, resultText: null, loaded: [], error: "first execution error", cleanup: { browserClosed: false } },
+    parsed: null, error: "loaded rows must all come from one loopback page origin", workRemoved: true });
+  expect(result.error).toBe("first execution error");
+  expect(result).toMatchObject({ status: "fail", qualification: false, loaded: [], payloadEvidence: [] });
+});
+
+
+function chromiumInvocation(evidence: Invocation["evidence"] = { kind: "source-check" }): Invocation {
+  return { rows: ["watch.caller-close"], out: "/unused", evidence, surface: { kind: "chromium", webRoot: "/unused" } };
+}
+
+async function retainedChromium(failure: "readback" | "observer" | "context" | "cleanup") {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const url = "http://127.0.0.1:43839/bun-browser.wasm";
+  const observer = loadedObserver(url, { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
+  return await captureChromiumExecution({
+    budgetMs: 1000,
+    operation: async (_signal, progress) => {
+      progress.observer = observer;
+      observer.capture(response(url, async () => bytes));
+      await observer.flush();
+      progress.code = 0;
+      if (failure === "readback") throw new Error("result readback failed");
+      progress.resultText = JSON.stringify(boundaryResult());
+      if (failure === "observer") observer.capture(response(`${url}?lost`, async () => { throw new Error("body unavailable"); }));
+      await observer.flush();
+      if (failure === "context") throw new Error("context close failed");
+      await observer.finish();
+    },
+    cleanup: async () => { if (failure === "cleanup") throw new Error("browser cleanup failed"); },
+    cleanupStatus: () => ({ browserClosed: failure !== "cleanup", serverGroupGone: true }),
+  });
+}
+
+test("Chromium retains observed bytes and completed readback through each later failure", async () => {
+  const stages: Parameters<typeof retainedChromium>[0][] = ["readback", "observer", "context", "cleanup"];
+  for (const stage of stages) {
+    const execution = await retainedChromium(stage);
+    expect(execution.code).toBe(0);
+    expect(execution.loaded).toHaveLength(1);
+    expect(execution.payloadEvidence).toHaveLength(1);
+    expect(execution.resultText === null).toBe(stage === "readback");
+    const invocation = chromiumInvocation();
+    const inspected = inspectExecution(invocation, execution);
+    expect(inspected.parsed === null).toBe(stage === "readback");
+    const result = buildFiveOwnerResult({ invocation, execution, ...inspected, admitted: { artifacts: [], receipts: [] }, fixtureFiles: [], workRemoved: true });
+    expect(result).toMatchObject({ status: "fail", qualification: false });
+    expect(result.loaded).toEqual(execution.loaded);
+    expect(result.unqualified).toHaveLength(10);
+  }
+});
+
+test("empty failed observations never enter the origin guard, but successful empty observations still fail", () => {
+  const f = syntheticHandoff();
+  const invocation = chromiumInvocation(f.pinned);
+  const execution = { code: null, timedOut: false, resultText: null, loaded: [], error: "original readback error", cleanup: { browserClosed: false } };
+  expect(inspectExecution(invocation, execution)).toEqual({ parsed: null, error: "original readback error" });
+  expect(inspectExecution(invocation, { ...execution, code: 0, error: null }).error).toContain("one loopback page origin");
+});
+
+test("observer snapshots retain only captured bodies and do not bypass finish validation", async () => {
+  const observer = loadedObserver("http://127.0.0.1/bun-browser.wasm", { bytes: 1, sha256: "a".repeat(64) });
+  observer.capture(response("http://127.0.0.1/worker.js", async () => new Uint8Array([1])));
+  observer.capture(response("http://127.0.0.1/lost.js", async () => { throw new Error("body lost"); }));
+  await expect(observer.finish()).rejects.toThrow("body lost");
+  const snapshot = observer.snapshot();
+  expect(snapshot.loaded).toHaveLength(1);
+  expect(snapshot.payloads).toHaveLength(1);
+  snapshot.loaded.pop();
+  expect(observer.snapshot().loaded).toHaveLength(1);
+});
+
+test("cleanup-only and timeout-plus-cleanup failures remain nonqualifying", async () => {
+  const cleanupOnly = await captureChromiumExecution({ budgetMs: 1000, operation: async () => {},
+    cleanup: async () => { throw new Error("cleanup only"); }, cleanupStatus: () => ({ browserClosed: false }) });
+  expect(cleanupOnly.error).toBe("Error: cleanup only");
+  const timeout = await captureChromiumExecution({ budgetMs: 10, operation: async () => new Promise<never>(() => {}),
+    cleanup: async () => { throw new Error("cleanup after timeout"); }, cleanupStatus: () => ({ browserClosed: false }) });
+  expect(timeout.timedOut).toBe(true);
+  expect(timeout.error).toContain("deadline expired");
+  expect(timeout.error).toContain("cleanup after timeout");
 });
