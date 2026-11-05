@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths, handoffMemberPaths, selectedReleaseArchives } from "../producer-closure.ts";
 import waffleRelease from "../waffle-release-inputs.json";
-import { DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake } from "./contract.ts";
+import {
+  DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, type ConsumerHandoff,
+} from "./contract.ts";
 import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
-import { admitHandoffFile, admitIntake, readSealedDelivery, requireHandoffArtifacts, sealDelivery } from "./delivery.ts";
+import { admitIntake, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
+import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 
 const scratch: string[] = [];
@@ -46,11 +49,14 @@ test("the executable fixture writes every contract file and each parses strictly
   const delivery = parseDelivery(json(join(fixture.delivery, "DELIVERY.json")));
   expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths().concat(["split/web/worker.js"]).sort());
   expect(parseIntake(json(fixture.intake)).members).toBe(delivery.files.length);
-  const handoff = parseHandoff(json(fixture.handoff));
+  const replay = parseReplayHandoff(json(fixture.handoff));
+  const handoff = replay.product;
+  expect(handoff).toEqual(parseHandoff(handoff));
   expect(Object.keys(handoff.artifacts).sort()).toEqual(HANDOFF_ROLES.toSorted());
   expect(Object.keys(handoff.outputs).sort()).toEqual(["five-owner", "relay", "tls"]);
-  requireHandoffArtifacts(handoff);
-  expect(admitHandoffFile(fixture.handoff, fileIdentity(fixture.handoff).sha256)).toEqual(handoff);
+  expect(parseReplay(json(fixture.replay)).harness).toEqual(replay.harness);
+  requireReplayHandoff(replay);
+  expect(admitReplayHandoffFile(fixture.handoff, fileIdentity(fixture.handoff).sha256).handoff).toEqual(replay);
   const inputs = parseInputManifest(json(fixture.inputs));
   expect(draftEntries(inputs).map(entry => entry.split(":")[0])).toEqual(["native.jsc", "native.sdk", "native.sysroot", "native.shell", "relay", "consumers.tls"]);
 });
@@ -75,7 +81,7 @@ test("filler or foreign sealed records refuse even when every member hash is lis
 
 test("the sealed launcher runs from its sealed path without any chmod", () => {
   const fixture = writeContractFixture(fresh());
-  const handoff = parseHandoff(json(fixture.handoff));
+  const handoff = parseReplayHandoff(json(fixture.handoff)).product;
   const launcher = handoff.artifacts.launcher.path;
   expect(EXECUTABLE_ROLES).toEqual(["launcher"]);
   expect(modeOf(launcher)).toBe(0o555);
@@ -101,39 +107,46 @@ test("ordinary payloads are sealed read-only and non-executable regardless of th
 
 test("verification refuses a launcher sealed 0444 and never repairs it", () => {
   const fixture = writeContractFixture(fresh());
-  const handoff = parseHandoff(json(fixture.handoff));
-  const launcher = handoff.artifacts.launcher.path;
+  const replay = parseReplayHandoff(json(fixture.handoff));
+  const launcher = replay.product.artifacts.launcher.path;
   chmodSync(launcher, 0o444);
   const before = statSync(launcher, { bigint: true });
   expect(() => readSealedDelivery(fixture.delivery)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
-  expect(() => requireHandoffArtifacts(handoff)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
+  expect(() => requireReplayHandoff(replay)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
+  expect(() => requireSealedArtifacts(replay.product)).toThrow("handoff launcher has mode 0444, expected sealed 0555");
   const after = statSync(launcher, { bigint: true });
   expect([after.mode, after.ctimeNs]).toEqual([before.mode, before.ctimeNs]);
   expect(spawnSync(launcher).error?.message).toContain("EACCES");
 });
 
-test("a handoff is only the one its sealed delivery, records and intake derive", () => {
+test("a handoff is only the one its replay contract, sealed delivery, records and intake derive", () => {
   const fixture = writeContractFixture(fresh());
-  const handoff = parseHandoff(json(fixture.handoff));
+  const replay = parseReplayHandoff(json(fixture.handoff));
+  const handoff = replay.product;
+  const derived = (product: ConsumerHandoff) => () => requireReplayHandoff({ ...replay, product });
   const outside = join(fixture.delivery, "..", "..", "outside-guest.wasm");
   copyFileSync(handoff.artifacts.quickjsGuest.path, outside);
   chmodSync(outside, 0o444);
-  expect(() => requireHandoffArtifacts({ ...handoff, artifacts: { ...handoff.artifacts, quickjsGuest: fileIdentity(outside) } })).toThrow("handoff differs");
+  expect(derived({ ...handoff, artifacts: { ...handoff.artifacts, quickjsGuest: fileIdentity(outside) } })).toThrow("handoff differs");
   const tls = handoff.fixtures.tls;
   if (tls.status !== "resolved") throw new Error("fixture TLS options are resolved");
-  expect(() => requireHandoffArtifacts({ ...handoff, fixtures: { tls: { ...tls, value: { ...tls.value, pagePort: 44000 } } } })).toThrow("handoff differs");
-  expect(() => requireHandoffArtifacts({ ...handoff, outputs: { ...handoff.outputs, tls: "/work/tmp/elsewhere" } })).toThrow("handoff differs");
-  expect(() => requireHandoffArtifacts({ ...handoff, browserTmp: "/work/tmp/c9" })).toThrow("handoff differs");
-  expect(() => admitHandoffFile(fixture.handoff, sha256("other"))).toThrow("pinned SHA-256");
+  expect(derived({ ...handoff, fixtures: { tls: { ...tls, value: { ...tls.value, pagePort: 44000 } } } })).toThrow("handoff differs");
+  expect(derived({ ...handoff, outputs: { ...handoff.outputs, tls: "/work/tmp/elsewhere" } })).toThrow("handoff differs");
+  expect(derived({ ...handoff, browserTmp: "/work/tmp/c9" })).toThrow("handoff differs");
+  expect(derived({ ...handoff, source: { head: "3".repeat(40), tree: "4".repeat(40) } })).toThrow("handoff differs");
+  expect(() => requireReplayHandoff({ ...replay, harness: { ...replay.harness, pullRequest: 2 } })).toThrow("handoff differs");
+  expect(() => requireReplayHandoff({ ...replay, hostTools: { ...replay.hostTools, mesh: replay.hostTools.tar } })).toThrow("handoff differs");
+  expect(() => admitReplayHandoffFile(fixture.handoff, sha256("other"))).toThrow("pinned SHA-256");
 });
 
 test("readers never change sealed metadata", () => {
   const fixture = writeContractFixture(fresh());
-  const paths = Object.values(parseHandoff(json(fixture.handoff)).artifacts).map(artifact => artifact.path).concat([join(fixture.delivery, "DELIVERY.json"), fixture.delivery]);
+  const replay = parseReplayHandoff(json(fixture.handoff));
+  const paths = Object.values(replay.product.artifacts).map(artifact => artifact.path).concat([join(fixture.delivery, "DELIVERY.json"), fixture.delivery]);
   const before = paths.map(path => { const stat = statSync(path, { bigint: true }); return [stat.mode, stat.ctimeNs, stat.ino]; });
   const sealed = readSealedDelivery(fixture.delivery);
   admitIntake(fixture.intake, fileIdentity(fixture.intake).sha256, sealed);
-  requireHandoffArtifacts(parseHandoff(json(fixture.handoff)));
+  requireReplayHandoff(replay);
   const after = paths.map(path => { const stat = statSync(path, { bigint: true }); return [stat.mode, stat.ctimeNs, stat.ino]; });
   expect(after).toEqual(before);
 });

@@ -10,6 +10,7 @@ import { parseRowOutput } from "../tests/fixtures/io-resource-context/protocol.t
 import { isLoadedAsset, loadedObserver } from "./io-resource-context-assets.ts";
 import { captureChromiumExecution, hostDeadline, inspectExecution, runGroup } from "./io-resource-context.ts";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { writeContractFixture } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
@@ -240,10 +241,31 @@ test("a pinned handoff cannot substitute fixture or dependency choices", async (
   const f = await syntheticSource();
   const h = f.pinned.handoff;
   const altered = { ...h, dependencies: { ...h.dependencies, browsers: { ...h.dependencies.browsers, sha256: "a".repeat(64) } } };
-  writeFileSync(f.handoff, JSON.stringify(altered));
+  writeFileSync(f.handoff, JSON.stringify({ ...f.pinned.replay, product: altered }));
   expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow("handoff differs");
-  writeFileSync(f.handoff, JSON.stringify({ ...h, fixtures: { tls: { status: "unresolved", missing: "changed" } } }));
+  writeFileSync(f.handoff, JSON.stringify({ ...f.pinned.replay, product: { ...h, fixtures: { tls: { status: "unresolved", missing: "changed" } } } }));
   expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow("handoff differs");
+});
+
+test("the consumer runs from the replay's harness checkout, not the product config's source root", async () => {
+  const f = await syntheticSource();
+  const elsewhere = join(f.root, "elsewhere");
+  execFileSync("git", ["clone", "-q", f.host, elsewhere]);
+  expect(() => bindFiveOwnerSource(f.pinned, elsewhere)).toThrow("not the harness checkout");
+  const harness = f.pinned.replay.harness;
+  const moved = { ...f.pinned, replay: { ...f.pinned.replay, harness: { ...harness, source: { ...harness.source, head: "f".repeat(40) } } } };
+  expect(() => bindFiveOwnerSource(moved, f.host)).toThrow("the replay names");
+});
+
+test("a merged harness commit ahead of the product source binds as its own identity", async () => {
+  const f = await syntheticSource();
+  writeFileSync(join(f.host, "consumer-driver.ts"), "// synthetic consumer harness change\n");
+  execFileSync("git", ["-C", f.host, "add", "-A"]);
+  execFileSync("git", ["-C", f.host, "-c", "user.email=iorc@test.invalid", "-c", "user.name=IORC fixture", "commit", "-qm", "harness change"]);
+  const source = { head: execFileSync("git", ["-C", f.host, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), tree: execFileSync("git", ["-C", f.host, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim() };
+  const harness = { ...f.pinned.replay, harness: { ...f.pinned.replay.harness, source } };
+  expect(() => bindFiveOwnerSource({ ...f.pinned, replay: harness }, f.host)).not.toThrow();
+  expect(f.pinned.handoff.source).toEqual(f.source);
 });
 
 test("original input custody and staged dependency bytes are not satisfied by their recorded labels", async () => {
@@ -271,12 +293,15 @@ test("handoff pin, tuple, unknown fields and registry routes fail closed", () =>
   expect(() => readFiveOwnerHandoff(f.handoff, "a".repeat(64))).toThrow("pinned");
   const h = f.pinned.handoff;
   const refuses = (value: unknown, message: string) => {
-    writeFileSync(f.handoff, JSON.stringify(value));
+    writeFileSync(f.handoff, JSON.stringify({ ...f.pinned.replay, product: value }));
     expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow(message);
   };
-  refuses({ ...h, tuple: { ...h.tuple, runtime: "0.0.109" } }, "source or tuple");
+  refuses({ ...h, tuple: { ...h.tuple, runtime: "0.0.109" } }, "handoff differs");
   refuses({ ...h, artifacts: { ...h.artifacts, unknown: h.artifacts.launcher } }, "unknown");
-  refuses({ ...h, artifacts: { ...h.artifacts, launcher: h.artifacts.shell } }, "registry member");
+  refuses({ ...h, artifacts: { ...h.artifacts, launcher: h.artifacts.shell } }, "handoff differs");
+  // A product handoff on its own, without the replay contract, is not admitted.
+  writeFileSync(f.handoff, JSON.stringify(h));
+  expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow("expected exactly");
 });
 
 test("the future executable mode is exact and never repaired by intake", () => {

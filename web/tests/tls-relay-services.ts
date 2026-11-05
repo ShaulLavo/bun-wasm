@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { acquireOwned, deadline, type TlsCleanup } from "../../scripts/tls-qualification-lifecycle.ts";
 import { object, text, recheckDependencies, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
 import type { TlsFixtureOptions as ServiceOptions } from "../../scripts/c1/contract.ts";
+import { hostToolPath, type HostTools } from "../../scripts/c1/replay.ts";
 
 import { piPostgresPlan } from "../../tests/servers/tls.ts";
 
@@ -81,9 +82,11 @@ function track(sockets: Set<Socket>, socket: Socket): void {
   socket.once("close", () => sockets.delete(socket));
   socket.on("error", () => socket.destroy());
 }
-async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean) {
+/** The lease holder: flock runs the declared shell, which reports the lock and then waits in the declared cat until stdin closes. */
+async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools) {
+  const argv = ["--nonblock", "/work/tmp/wave-heavy/pi.lock", hostToolPath(tools, "sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", hostToolPath(tools, "cat")];
   const lease = await acquireOwned(owner, signal, () => {
-    const child = spawn("flock", ["--nonblock", "/work/tmp/wave-heavy/pi.lock", "sh", "-c", "printf 'locked\\n'; cat >/dev/null"], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(hostToolPath(tools, "flock"), argv, { stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.resume();
     const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", code => code === 0 ? resolve() : reject(new Error("Pi lane lock unavailable"))); });
     void exited.catch(() => {});
@@ -100,13 +103,14 @@ async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => bool
     return { pid: lease.child.pid };
   } finally { lines.close(); }
 }
-async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>) {
+async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, tools: HostTools) {
+  const mesh = hostToolPath(tools, "mesh");
   signal.throwIfAborted();
   if (options.databaseMachine !== "pi") throw new Error("TLS PostgreSQL fixture requires the approved Pi host");
   let remoteClosed = true;
-  const lease = await piLane(owner, signal, () => remoteClosed);
+  const lease = await piLane(owner, signal, () => remoteClosed, tools);
   await record({ kind: "pi-lane-lock", path: "/work/tmp/wave-heavy/pi.lock", holderPid: lease.pid, acquired: true });
-  const home = execFileSync("mesh", ["ssh", options.databaseMachine, "--", "sh", "-c", 'printf "%s" "$HOME"'], { encoding: "utf8", timeout: 15_000 }).trim();
+  const home = execFileSync(mesh, ["ssh", options.databaseMachine, "--", "sh", "-c", 'printf "%s" "$HOME"'], { encoding: "utf8", timeout: 15_000 }).trim();
   const plan = piPostgresPlan(home, randomBytes(12).toString("hex"), options.databaseAddress, options.relayAddress + "/32");
   const root = plan.root;
   const code = await readFile(new URL("../../tests/servers/tls.ts", import.meta.url), "utf8");
@@ -114,7 +118,7 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   await record({ host: options.databaseMachine, kind: "remote-podman-postgres-owner", root, container: plan.name, volume: plan.volume, image: plan.image, imageCleanupOwner: "parent provisioner", ports: [45433, 45434], piLaneLock: "/work/tmp/wave-heavy/pi.lock" });
   const spawned = await acquireOwned(owner, signal, () => {
     remoteClosed = false;
-    const child = spawn("mesh", ["ssh", options.databaseMachine, "--", "bun", "--eval", program], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(mesh, ["ssh", options.databaseMachine, "--", "bun", "--eval", program], { stdio: ["pipe", "pipe", "pipe"] });
     const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", code => code === 0 ? resolve() : reject(new Error("Remote PostgreSQL owner failed"))); });
     void exited.catch(() => {});
     child.stderr.resume();
@@ -135,7 +139,7 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
       })));
       process.stdout.write(JSON.stringify({ ...row, portsAbsent: ports.every(Boolean) }));
       if (!Object.values(row).every(value => value === true) || !ports.every(Boolean)) process.exitCode = 1;`;
-    const absence = spawnSync("mesh", ["ssh", options.databaseMachine, "--", "bun", "--eval", verifier], { timeout: 45_000, encoding: "utf8" });
+    const absence = spawnSync(mesh, ["ssh", options.databaseMachine, "--", "bun", "--eval", verifier], { timeout: 45_000, encoding: "utf8" });
     await record({ host: options.databaseMachine, root, container: plan.name, volume: plan.volume, absenceCommandExit: absence.status, absenceSignal: absence.signal, observation: absence.stdout, childExitCode: child.exitCode, childSignal: child.signalCode });
     if (absence.error || absence.status !== 0) throw new Error("Remote Pi PostgreSQL container/volume/scratch absence unconfirmed");
     remoteClosed = true;
@@ -164,7 +168,7 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   signal.throwIfAborted();
   await recheckDependencies(intake);
   signal.throwIfAborted();
-  const db = await database(owner, options, signal, record);
+  const db = await database(owner, options, signal, record, intake.hostTools);
   let selected: PgCase = "verified";
   const audits = new Map<PgCase, PgWireAudit[]>();
   const sockets = new Set<Socket>();

@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { handoffMemberPaths, publicationAssets } from "./producer-closure.ts";
 import { DELIVERY_RECORDS, type C1Config, type ConsumerHandoff, type InputManifest, type ParentIntake, type ReleaseTuple, type SourceIdentity } from "./c1/contract.ts";
-import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE, fixtureDependencies, fixtureInputManifest, writeFixtureDelivery } from "./c1/contract-fixture.ts";
+import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE, fixtureDependencies, fixtureInputManifest, writeFixtureDelivery, writeReplayFixture } from "./c1/contract-fixture.ts";
 import { buildHandoff, readSealedDelivery, sealDelivery } from "./c1/delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./c1/identity.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, prepareTlsPage, type PageBuilder } from "./c1/tls-page.ts";
@@ -129,10 +129,13 @@ async function prepare(root: string, overrides: FixtureOverrides) {
   const intakePath = join(root, "INTAKE.json");
   put(intakePath, json((overrides.intake ?? (value => value))(intake)));
   const handoff = buildHandoff(delivery, fileIdentity(intakePath), inputs.consumers, config.fixtures, roots.qualify.output, roots.qualify.browserTmp);
-  const handoffPath = join(roots.qualify.output, "handoff.json");
-  put(handoffPath, json((overrides.handoff ?? (value => value))(handoff)));
-  const evidence: TlsEvidence = { handoff: handoffPath, handoffSha256: fileIdentity(handoffPath).sha256, output: join(handoff.outputs.tls, TLS_STAGE) };
-  return { root, host, source, delivery: deliveryRoot, intake: intakePath, handoff: handoffPath, built: handoff, inputs, evidence, close: () => removeFixture(root) };
+  const configPath = join(root, "config.json");
+  put(configPath, configBytes);
+  // The harness is the host checkout itself: a consumer change of nothing, so both identities name one commit here.
+  const replay = writeReplayFixture({ root: join(root, "replay"), config: configPath, intake: intakePath, delivery: manifestIdentity.path, harness: { sourceRoot: host, source },
+    roots: roots.qualify }, (overrides.handoff ?? (value => value))(handoff));
+  const evidence: TlsEvidence = { handoff: replay.handoff, handoffSha256: fileIdentity(replay.handoff).sha256, output: join(handoff.outputs.tls, TLS_STAGE) };
+  return { root, host, source, delivery: deliveryRoot, intake: intakePath, handoff: replay.handoff, replay: replay.replay, built: handoff, inputs, evidence, close: () => removeFixture(root) };
 }
 export type TlsFixture = Awaited<ReturnType<typeof qualificationFixture>>;
 

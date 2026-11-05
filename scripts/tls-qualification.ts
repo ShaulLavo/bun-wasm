@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import { TLS_STAGE, digest, preflightTls, recheckDependencies, type TlsEvidence } from "./tls-qualification-inputs.ts";
 import { qualifiedRun } from "./tls-qualification-lifecycle.ts";
 import { isEngine } from "./tls-qualification-context.ts";
+import { hostToolPath } from "./c1/replay.ts";
 import { startTlsServices } from "../web/tests/tls-relay-services.ts";
 import { runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
 
@@ -102,7 +103,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       await recheckDependencies(intake);
       abort.signal.throwIfAborted();
       phase = "mount";
-      const mount = execFileSync("findmnt", ["-T", "/work/tmp", "-n", "-o", "TARGET"], { encoding: "utf8", timeout: 5000 }).trim();
+      const mount = execFileSync(hostToolPath(intake.hostTools, "findmnt"), ["-T", "/work/tmp", "-n", "-o", "TARGET"], { encoding: "utf8", timeout: 5000 }).trim();
       if (!mount.startsWith("/work")) throw new Error("TLS qualification requires the mounted data drive");
       abort.signal.throwIfAborted();
       // A fresh stage directory inside the controller's own TLS output; a leftover result refuses.
@@ -113,10 +114,10 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       abort.signal.throwIfAborted();
       const machine = intake.fixtures.databaseMachine;
       phase = "pre-ledger-remote-inventory";
-      const remoteBefore = execFileSync("mesh", ["ssh", machine, "--", "sh", "-c", 'set -eu; test ! -e "$HOME/.local/state/machine-fleet/owner-busy"; ps -eo pid,comm; command -v bun; command -v podman; command -v openssl; test -d "$HOME/tmp"; df -Pk "$HOME/tmp"; tailscale ip -4; podman info --format "{{.Host.Security.Rootless}}"; podman ps -a --format json; podman volume ls --format json; podman images --format json; ss -lnt'], { encoding: "utf8", timeout: 15_000 });
+      const remoteBefore = execFileSync(hostToolPath(intake.hostTools, "mesh"), ["ssh", machine, "--", "sh", "-c", 'set -eu; test ! -e "$HOME/.local/state/machine-fleet/owner-busy"; ps -eo pid,comm; command -v bun; command -v podman; command -v openssl; test -d "$HOME/tmp"; df -Pk "$HOME/tmp"; tailscale ip -4; podman info --format "{{.Host.Security.Rootless}}"; podman ps -a --format json; podman volume ls --format json; podman images --format json; ss -lnt'], { encoding: "utf8", timeout: 15_000 });
       abort.signal.throwIfAborted();
       phase = "pre-ledger-local-inventory";
-      const localBefore = execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" });
+      const localBefore = execFileSync(hostToolPath(intake.hostTools, "ps"), ["-eo", "pid,comm"], { encoding: "utf8" });
       phase = "resource-ledger";
       await writeFile(join(owned, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore, remoteHost: machine, remoteBefore, creates: ["PC Pi lane flock lease process", "private Pi home/tmp scratch, uniquely named rootless Podman container and volume using the parent-held digest image", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context"], frozenDelivery: intake.handoff.delivery.root }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
       const created: object[] = [];

@@ -301,7 +301,16 @@ export interface Authenticated {
  * validators; draft roots are reported, never treated as admitted.
  */
 export function authenticate(run: ParsedRun, controllerRoot: string, scratch: string): Authenticated {
-  const source = bindSource(run, controllerRoot);
+  return admitInputs(run, bindSource(run, controllerRoot), scratch);
+}
+/**
+ * The input admission of `authenticate`, reading pins from
+ * `run.config.sourceRoot`, for a caller that has already bound that checkout
+ * to `source` by its own stricter rule. Only the consumer replay does: its
+ * harness checkout is a merged, reviewed commit whose diff from the product
+ * source touches no pin, lock, patch or build input (harness.ts).
+ */
+export function admitInputs(run: ParsedRun, source: SourceIdentity, scratch: string): Authenticated {
   const m = run.manifest;
   const sourceRoot = run.config.sourceRoot;
   admitReleases(m, sourceRoot);

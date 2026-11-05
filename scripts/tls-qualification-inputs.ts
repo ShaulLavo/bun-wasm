@@ -6,16 +6,17 @@ import { execFileSync } from "node:child_process";
 import { executableMemberPaths, tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
 import {
   SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, sameTuple,
-  type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
+  type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./c1/contract.ts";
 import { verifyTlsPage } from "./c1/tls-page.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./c1/loaded.ts";
-import { admitHandoffFile, readSealedDelivery, type SealedDelivery } from "./c1/delivery.ts";
+import type { SealedDelivery } from "./c1/delivery.ts";
+import { HOST_TOOL_NAMES, admitReplayHandoffFile, hostToolPath, type HarnessIdentity, type HostTools } from "./c1/replay.ts";
 import { fileIdentity, inside, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
 import { requireStagedDonor } from "./c1/inputs.ts";
 import type { QualificationEngine } from "./tls-qualification-context.ts";
 
-export class MissingTlsInput extends Error { readonly code = "TLS_EXISTING_INPUT_CONTRACT_MISSING"; }
+class MissingTlsInput extends Error { readonly code = "TLS_EXISTING_INPUT_CONTRACT_MISSING"; }
 /** The single runtime/relay/programs/interface tuple TLS accepts. Every other tuple is rejected. */
 export const tlsReleaseTuple: ReleaseTuple = { runtime: "0.0.110", relay: "0.0.109", programs: "programs-v0.0.15", programManifestSchema: "waffle-program-release/2", hostInterface: 1 };
 const installedRuntimePackages = new Map<string, string>([["waffle", tlsReleaseTuple.runtime], ["waffle-relay", tlsReleaseTuple.relay]]);
@@ -53,14 +54,14 @@ function requirePresent(paths: readonly string[], label: string): void {
   if (paths.some(path => !lstatSync(path, { throwIfNoEntry: false }))) throw new MissingTlsInput(`Missing authenticated ${label}`);
 }
 
-/** The controller owns pinned, full handoff admission; TLS adds only its consumer policy. */
+/** The controller owns pinned, full replay handoff admission; TLS adds only its consumer policy. */
 function admitHandoff(evidence: TlsEvidence) {
-  const handoff = admitHandoffFile(evidence.handoff, evidence.handoffSha256);
-  const delivery = readSealedDelivery(handoff.delivery.root);
+  const pinned = admitReplayHandoffFile(evidence.handoff, evidence.handoffSha256);
+  const handoff = pinned.handoff.product;
+  const { delivery } = pinned.product;
   if (!sameTuple(delivery.manifest.tuple, tlsReleaseTuple)) throw new Error("TLS requires the runtime110/relay109/programs15/schema2/interface1 tuple");
-  const handoffFile = { ...fileIdentity(evidence.handoff), sha256: evidence.handoffSha256 };
-  return { handoff, delivery, config: delivery.config, inputs: delivery.inputs,
-    records: [handoffFile, handoff.intake, delivery.identity, handoff.artifacts.config, handoff.artifacts.inputs] };
+  return { handoff, delivery, inputs: delivery.inputs, harness: pinned.handoff.harness, hostTools: pinned.handoff.hostTools,
+    records: [pinned.reference, pinned.handoff.replay, handoff.intake, delivery.identity, handoff.artifacts.config, handoff.artifacts.inputs] };
 }
 /** The config's bound fixture choices, propagated unchanged into the handoff. */
 function fixtureOptions(handoff: ConsumerHandoff): TlsFixtureOptions {
@@ -116,17 +117,21 @@ async function verifyDependencyTree(expected: TreeIdentity, label: string): Prom
   requireTree(expected, `${label} dependency`);
   return { root: expected.path, identity: expected, files };
 }
-async function verifyPgArchive(tarball: FileIdentity, modules: string): Promise<void> {
+/** GNU tar runs a gzip helper for .tgz reads; both are the replay's declared host tools, so `-z` never searches PATH. */
+function pgTar(tools: HostTools, args: readonly string[]): Buffer {
+  return execFileSync(hostToolPath(tools, "tar"), ["--use-compress-program", hostToolPath(tools, "gzip")].concat(args), { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+}
+async function verifyPgArchive(tarball: FileIdentity, modules: string, tools: HostTools): Promise<void> {
   requireFile(tarball, "pg public tarball");
-  const listing = execFileSync("tar", ["-tvzf", tarball.path], { encoding: "utf8", timeout: 15_000 });
+  const listing = pgTar(tools, ["-tvf", tarball.path]).toString("utf8");
   if (listing.split("\n").some(line => line && !line.startsWith("-") && !line.startsWith("d"))) throw new Error("pg tarball must contain ordinary files and directories");
-  const names = execFileSync("tar", ["-tzf", tarball.path], { encoding: "utf8", timeout: 15_000 }).trim().split("\n");
+  const names = pgTar(tools, ["-tf", tarball.path]).toString("utf8").trim().split("\n");
   const seen = new Set<string>();
   for (const name of names) {
     if (!name.startsWith("package/") || name.slice(8).split("/").some(part => part === ".." || part === ".") || seen.has(name)) throw new Error("Unsafe or duplicate pg tarball member");
     seen.add(name);
     if (name.endsWith("/")) continue;
-    const expected = execFileSync("tar", ["-xOzf", tarball.path, "--", name], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+    const expected = pgTar(tools, ["-xOf", tarball.path, "--", name]);
     const actual = fileIdentity(join(modules, "pg", name.slice(8)));
     if (!sameBytes(actual, { bytes: expected.length, sha256: sha256(expected) })) throw new Error(`Staged pg differs from the pinned public tarball: ${name}`);
   }
@@ -134,7 +139,7 @@ async function verifyPgArchive(tarball: FileIdentity, modules: string): Promise<
   if (JSON.stringify(actual) !== JSON.stringify(names.filter(name => !name.endsWith("/")).toSorted())) throw new Error("Staged pg differs from the pinned public tarball");
 }
 /** Unmodified pg 8.16.3: pinned public tarball, complete transitive tree and its frozen project files. */
-async function preflightPg(inputs: InputManifest) {
+async function preflightPg(inputs: InputManifest, tools: HostTools) {
   const requirement = inputs.consumers.tls;
   if (requirement.status === "unresolved") throw new MissingTlsInput(`TLS dependencies unresolved: ${requirement.missing}`);
   const { pgTarball, pgModules, pgPackageJson, pgLock } = requirement.value;
@@ -144,7 +149,7 @@ async function preflightPg(inputs: InputManifest) {
   requireFile(pgTarball, "pg public tarball");
   const locks = [requireFile(pgPackageJson, "pg package.json"), requireFile(pgLock, "pg bun.lock")];
   const pg = await verifyDependencyTree(pgModules, "pg");
-  await verifyPgArchive(pgTarball, pgModules.path);
+  await verifyPgArchive(pgTarball, pgModules.path, tools);
   const metadata = object(JSON.parse(readFileSync(join(pgModules.path, "pg/package.json"), "utf8")), "pg package");
   if (metadata.version !== "8.16.3") throw new Error("Unmodified pg 8.16.3 must be staged separately");
   return { pg, pgArchive: pgTarball, locks };
@@ -159,13 +164,14 @@ export async function verifyReviewedHostSource(root: string, expected: SourceIde
 const hostProjects = [["rootDependencies", ""], ["webDependencies", "web"]] as const;
 const frozenProjectFiles = ["package.json", "bun.lock"];
 /**
- * The sealed config's source checkout is the reviewed host. Its installed
- * root and web trees must be the authenticated donors, installed from that
- * source's own frozen package files.
+ * The replay's merged harness checkout is the host, a separate identity from
+ * the product source. Its installed root and web trees must be the
+ * authenticated donors, installed from its own frozen package files (which
+ * the harness guard keeps identical to the product source's).
  */
-function preflightHost(config: C1Config, inputs: InputManifest, reviewed: SourceIdentity) {
-  const root = config.sourceRoot;
-  requireReviewedHostSource(root, reviewed);
+function preflightHost(harness: HarnessIdentity, inputs: InputManifest) {
+  const root = harness.sourceRoot;
+  requireReviewedHostSource(root, harness.source);
   for (const name of ["web/src/net/relay.ts", "web/src/runner.ts"].concat(hostProjects.flatMap(([, directory]) => frozenProjectFiles.map(file => join(directory, file))))) git(root, "ls-files", "--error-unmatch", name);
   const host = hostProjects.map(([name, directory]) => {
     const donor = inputs.donors[name];
@@ -215,7 +221,8 @@ export function tlsLoaded(handoff: ConsumerHandoff, responses: readonly Observed
 }
 
 export async function preflightTls(evidence: TlsEvidence) {
-  const { handoff, delivery, config, inputs, records } = admitHandoff(evidence);
+  const { handoff, delivery, inputs, harness, hostTools, records } = admitHandoff(evidence);
+  for (const name of HOST_TOOL_NAMES) hostToolPath(hostTools, name);
   if (evidence.output !== join(handoff.outputs.tls, TLS_STAGE)) throw new Error(`TLS output must be the handoff's ${TLS_STAGE} directory beneath outputs.tls`);
   const fixtures = fixtureOptions(handoff);
   const custody = custodyReferences(delivery);
@@ -223,13 +230,13 @@ export async function preflightTls(evidence: TlsEvidence) {
   verifyPublicationBuilds(JSON.parse(readFileSync(handoff.artifacts.engineBuilds.path, "utf8")));
   requirePresent([handoff.dependencies.browsers.path], "Playwright browsers");
   requireTree(handoff.dependencies.browsers, "Playwright browsers");
-  const pg = await preflightPg(inputs);
-  const host = preflightHost(config, inputs, handoff.source);
+  const pg = await preflightPg(inputs, hostTools);
+  const host = preflightHost(harness, inputs);
   const page = sealedPage(delivery, host.root);
   const references = records.concat([handoff.artifacts.sourceArchive, handoff.artifacts.tlsPageReceipt, handoff.artifacts.tlsPgClient], custody);
   for (const reference of references) requireFile(reference, "TLS preflight reference");
   return {
-    handoff, fixtures, page, hostSource: host.root, output: evidence.output, source: handoff.source, tuple: handoff.tuple,
+    handoff, harness, hostTools, fixtures, page, hostSource: host.root, output: evidence.output, source: handoff.source, tuple: handoff.tuple,
     dependencies: { pg: pg.pg, host: host.host, locks: pg.locks.concat(host.locks) }, pgArchive: pg.pgArchive, references,
   };
 }
@@ -267,4 +274,5 @@ export async function recheckDependencies(intake: TlsIntake): Promise<void> {
   requireTree(intake.dependencies.pg.identity, "preflighted pg dependency");
   for (const tree of intake.dependencies.host) requireTree(tree, "preflighted host dependency");
   for (const lock of intake.dependencies.locks.concat([intake.pgArchive])) requireFile(lock, "preflighted frozen input");
+  for (const name of HOST_TOOL_NAMES) hostToolPath(intake.hostTools, name);
 }

@@ -298,22 +298,23 @@ export async function hostDeadline<T>(milliseconds: number, operation: (signal: 
   const interrupted = () => controller.abort(new Error("Host execution interrupted"));
   const timer = setTimeout(() => controller.abort(new HostDeadlineError("Host execution deadline expired")), milliseconds);
   for (const signal of terminationSignals) process.once(signal, interrupted);
-  let failure: { readonly error: unknown } | null = null;
+  let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };
   try {
-    return await abortable(operation(controller.signal), controller.signal);
+    outcome = { ok: true, value: await abortable(operation(controller.signal), controller.signal) };
   } catch (error) {
-    failure = { error };
-    throw error;
-  } finally {
-    controller.abort(new Error("Execution finished"));
-    clearTimeout(timer);
-    for (const signal of terminationSignals) process.removeListener(signal, interrupted);
-    try { await cleanup(); }
-    catch (error) {
-      if (failure === null) throw error;
-      throw new AggregateError([failure.error, error], `${String(failure.error)}; cleanup failed: ${String(error)}`, { cause: failure.error });
-    }
+    outcome = { ok: false, error };
   }
+  controller.abort(new Error("Execution finished"));
+  clearTimeout(timer);
+  for (const signal of terminationSignals) process.removeListener(signal, interrupted);
+  // Cleanup always runs; its error never replaces the first execution error.
+  try { await cleanup(); }
+  catch (error) {
+    if (outcome.ok) throw error;
+    throw new AggregateError([outcome.error, error], `${String(outcome.error)}; cleanup failed: ${String(error)}`, { cause: outcome.error });
+  }
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
 }
 
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -506,7 +507,8 @@ export function buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execu
   const status = error || !workRemoved ? "fail" : resultStatus(surface, verdicts, execution, parsed);
   const omitted = rowIds.filter(id => !invocation.rows.includes(id));
   const projectedEvidence = evidence.kind === "handoff"
-    ? { kind: evidence.kind, reference: evidence.reference, source: evidence.handoff.source, tuple: evidence.handoff.tuple, intake: evidence.handoff.intake }
+    ? { kind: evidence.kind, reference: evidence.reference, source: evidence.handoff.source, tuple: evidence.handoff.tuple, intake: evidence.handoff.intake,
+      replay: evidence.replay.replay, harness: evidence.replay.harness }
     : evidence;
   const admissionKind: "verified-c1-intake" | "source-check-only" = evidence.kind === "handoff" ? "verified-c1-intake" : "source-check-only";
   return {

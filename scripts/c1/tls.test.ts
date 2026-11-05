@@ -6,11 +6,12 @@ import { dirname, join } from "node:path";
 import { completePublicationArtifactPaths, tlsPagePaths } from "../producer-closure.ts";
 import { TLS_RESERVED_PORTS, fixtureDrafts, parseConfig, parseHandoff, type ConsumerHandoff } from "./contract.ts";
 import { FIXTURE_SOURCE, FIXTURE_TLS_OPTIONS, writeContractFixture } from "./contract-fixture.ts";
-import { requireHandoffArtifacts } from "./delivery.ts";
+import { requireSealedArtifacts } from "./delivery.ts";
+import { parseReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./loaded.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, UNRESOLVED_RELAY, prepareTlsPage, verifyTlsPage, type PageBuilder } from "./tls-page.ts";
-import { completedConsumerResult, fiveOwnerDriver, tlsDriver } from "./operations.ts";
+import { childResult, completedConsumerResult, driverOutcome, fiveOwnerDriver, tlsDriver } from "./operations.ts";
 
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-c1-tls-")));
 afterAll(() => {
@@ -20,6 +21,8 @@ afterAll(() => {
 let count = 0;
 function fresh(): string { return join(scratch, String(++count)); }
 function json(path: string): unknown { return JSON.parse(readFileSync(path, "utf8")); }
+/** The product view a replay handoff carries. */
+function productOf(path: string): ConsumerHandoff { return parseReplayHandoff(json(path)).product; }
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
@@ -27,18 +30,16 @@ function write(path: string, content: string): void {
 
 test("five-owner admitted invocations use only the pinned handoff and surface selection", () => {
   const fixture = writeContractFixture(fresh());
-  const handoff = parseHandoff(json(fixture.handoff));
+  const handoff = productOf(fixture.handoff);
   const sourceRoot = fresh();
   write(join(sourceRoot, "scripts/io-resource-context.ts"), "// Synthetic driver presence only.\n");
   const handoffFile = fileIdentity(fixture.handoff);
   const drivers = fiveOwnerDriver(handoff, { sourceRoot, env: { BUN_EXE: process.execPath }, handoffFile });
   if (typeof drivers === "string") throw new Error(drivers);
-  expect(drivers).toHaveLength(3);
-  for (const [index, name] of ["quickjs", "jsc", "chromium"].entries()) {
-    const selection = name === "chromium" ? ["--surface", "chromium"] : ["--surface", "native", "--engine", name];
-    expect(drivers[index]?.argv).toEqual([process.execPath, "scripts/io-resource-context.ts"].concat(selection,
-      ["--handoff", handoffFile.path, "--handoff-sha256", handoffFile.sha256, "--out", join(handoff.outputs["five-owner"], name)]));
-  }
+  // The replay reruns Chromium only; native QuickJS and JSC keep their first observations.
+  expect(drivers.map(driver => driver.argv)).toEqual([[process.execPath, "scripts/io-resource-context.ts", "--surface", "chromium",
+    "--handoff", handoffFile.path, "--handoff-sha256", handoffFile.sha256, "--out", join(handoff.outputs["five-owner"], "chromium")]]);
+  expect(drivers.map(driver => driver.surface)).toEqual(["web"]);
 });
 
 test.each(["partial", "pending-intake", "source-check"])("exit-zero %s evidence is preserved without declaring qualification", status => {
@@ -48,9 +49,36 @@ test.each(["partial", "pending-intake", "source-check"])("exit-zero %s evidence 
   expect(outcome.result).toEqual(child);
 });
 
+test("a failed driver keeps its first error and the whole result it wrote", () => {
+  const out = fresh();
+  const child = { status: "fail", error: "first Chromium execution error", diagnostics: ["later empty loaded validation"], loaded: [], cleanup: { browserClosed: false } };
+  write(join(out, "result.json"), JSON.stringify(child));
+  let refused = false;
+  const outcome = driverOutcome(out, "bun exited 1", childResult(out), () => { refused = true; return "never consulted"; });
+  expect(outcome).toEqual({ out, status: "fail", error: "bun exited 1", result: child });
+  expect(refused).toBe(false);
+});
+
+test("a driver with no readable result is recorded as such, never synthesized", () => {
+  const out = fresh();
+  const outcome = driverOutcome(out, "bun exited 1", childResult(out), () => undefined);
+  expect(outcome).toMatchObject({ out, status: "fail", error: "bun exited 1" });
+  expect("result" in outcome).toBe(false);
+  expect(String((outcome as { resultUnavailable?: string }).resultUnavailable)).toContain("ENOENT");
+  const completed = driverOutcome(out, undefined, childResult(out), () => undefined);
+  expect(completed).toMatchObject({ status: "fail", error: expect.stringContaining("ENOENT") });
+});
+
+test("a completed driver whose result is refused keeps that result beside the refusal", () => {
+  const out = fresh();
+  write(join(out, "result.json"), JSON.stringify({ loaded: [] }));
+  expect(driverOutcome(out, undefined, childResult(out), () => "loaded rows must all come from one loopback page origin"))
+    .toEqual({ out, status: "fail", error: "loaded rows must all come from one loopback page origin", result: { loaded: [] } });
+});
+
 test("TLS result readback uses exactly the output directory passed to the driver", () => {
   const fixture = writeContractFixture(fresh());
-  const parsed = parseHandoff(json(fixture.handoff));
+  const parsed = productOf(fixture.handoff);
   const pgRoot = fresh();
   for (const name of ["pg.tgz", "package.json", "bun.lock", "modules/pg/index.js"]) write(join(pgRoot, name), `synthetic ${name}\n`);
   const handoff: ConsumerHandoff = { ...parsed, dependencies: { ...parsed.dependencies, tls: { status: "resolved", value: {
@@ -74,7 +102,7 @@ test("the one config carries typed TLS fixture options and the handoff propagate
   const fixture = writeContractFixture(fresh());
   const config = parseConfig(json(fixture.config));
   expect(config.fixtures.tls).toEqual({ status: "resolved", value: FIXTURE_TLS_OPTIONS });
-  expect(parseHandoff(json(fixture.handoff)).fixtures).toEqual(config.fixtures);
+  expect(productOf(fixture.handoff).fixtures).toEqual(config.fixtures);
   expect(fixtureDrafts(config.fixtures)).toEqual([]);
   // The TLS contract's private PostgreSQL and native trust observer ports.
   expect(TLS_RESERVED_PORTS).toEqual([45433, 45434]);
@@ -111,7 +139,7 @@ test("missing or altered TLS options and an undefined fixture block refuse", () 
   expect(() => parseConfig({ ...config, fixtures: { tls: { status: "resolved", value: missing } } })).toThrow("missing relayAddress");
   const { fixtures: _fixtures, ...without } = config;
   expect(() => parseConfig(without)).toThrow("missing fixtures");
-  const handoff = json(fixture.handoff) as Record<string, unknown>;
+  const handoff = (json(fixture.handoff) as { product: Record<string, unknown> }).product;
   expect(() => parseHandoff({ ...handoff, fixtures: { tls: { status: "resolved", value: { ...FIXTURE_TLS_OPTIONS, databaseAddress: "1.1.1.1" } } } })).toThrow("private fleet address");
 });
 
@@ -202,7 +230,7 @@ test("a TLS page receipt from another source, or a changed bundled input, refuse
 
 function fixtureHandoff(): { handoff: ConsumerHandoff; web: LoadedObservation[]; tls: LoadedObservation[] } {
   const fixture = writeContractFixture(fresh());
-  return { handoff: parseHandoff(json(fixture.handoff)), web: parseLoaded((json(fixture.loadedWeb) as { loaded: unknown }).loaded), tls: parseLoaded((json(fixture.loadedTls) as { loaded: unknown }).loaded) };
+  return { handoff: productOf(fixture.handoff), web: parseLoaded((json(fixture.loadedWeb) as { loaded: unknown }).loaded), tls: parseLoaded((json(fixture.loadedTls) as { loaded: unknown }).loaded) };
 }
 
 test("observed web and TLS responses bind to admitted members, including decoded gzip", () => {
@@ -288,7 +316,7 @@ test("loaded rows must be real successful GET observations, not partial claims",
 
 test("delivered TLS members are sealed read-only and checked by the handoff, never repaired", () => {
   const { handoff } = fixtureHandoff();
-  requireHandoffArtifacts(handoff);
+  requireSealedArtifacts(handoff);
   for (const role of ["tlsPageIndex", "tlsPageEntry", "tlsPageReceipt", "tlsPgClient"] as const) expect(lstatSync(handoff.artifacts[role].path).mode & 0o777).toBe(0o444);
   expect(lstatSync(join(handoff.tlsPageRoot, "worker.js")).mode & 0o777).toBe(0o444);
   expect(lstatSync(handoff.tlsPageRoot).mode & 0o777).toBe(0o555);

@@ -85,8 +85,10 @@ describe("strict controller intake before setup", () => {
     expect(intake.hostSource).toBe(f.host);
     expect(intake.fixtures).toEqual(FIXTURE_TLS_OPTIONS);
     expect(intake.page.map(row => relative(intake.handoff.tlsPageRoot, row.path)).toSorted()).toEqual(["chunks/shared.js", "fs-worker.js", "index.html", "notification-worker.js", "tls-relay-page.js", "worker.js"]);
-    expect(intake.references).toHaveLength(17);
-    expect(intake.references.map(row => row.path)).toEqual(expect.arrayContaining([f.handoff, f.intake, join(f.delivery, tlsPagePaths.receipt), join(f.delivery, "inputs/native-custody-preseal.json")]));
+    expect(intake.references).toHaveLength(18);
+    expect(intake.references.map(row => row.path)).toEqual(expect.arrayContaining([f.handoff, f.replay, f.intake, join(f.delivery, tlsPagePaths.receipt), join(f.delivery, "inputs/native-custody-preseal.json")]));
+    expect(intake.harness).toMatchObject({ sourceRoot: f.host, source: f.source, pullRequest: 1 });
+    expect(Object.keys(intake.hostTools)).toEqual(["mesh", "flock", "sh", "cat", "findmnt", "ps", "tar", "gzip"]);
     expect(intake.dependencies.pg.files.map(row => relative(intake.dependencies.pg.root, row.path))).toEqual(["pg-protocol/index.ts", "pg/lib/index.ts", "pg/package.json"]);
     expect(intake.dependencies.host.map(tree => tree.path)).toEqual([join(f.host, "node_modules"), join(f.host, "web/node_modules")]);
     expect(intake.dependencies.locks).toHaveLength(6);
@@ -113,7 +115,25 @@ describe("pinned handoff and output", () => {
     await refused(f.evidence, /handoff bytes differ from the pinned SHA-256/);
   });
   test("pinned but edited handoff differs from the derived one", () => refusedWith({ handoff: handoff => ({ ...handoff, webRoot: join(handoff.webRoot, "other") }) }, /handoff differs/));
-  test("missing handoff", async () => { const f = await fixture(); rmSync(f.handoff); await refused(f.evidence, /ENOENT/); });
+  test("missing handoff", async () => { const f = await fixture(); rmSync(f.handoff); await refused(f.evidence, /expected an absolute regular file/); });
+  test("replay contract changed after the handoff pinned it", async () => {
+    const f = await fixture();
+    rewriteJson(f.replay, value => value);
+    await refused(f.evidence, /replay contract bytes differ from the pinned SHA-256/);
+  });
+  test("harness checkout is not at the replay's merged commit", async () => {
+    const f = await fixture();
+    writeFileSync(join(f.host, "web/src/runner.ts"), "export const changed = 1;\n");
+    execFileSync("git", ["-C", f.host, "-c", "user.email=tls@test.invalid", "-c", "user.name=TLS fixture", "commit", "-qam", "unreviewed harness change"]);
+    await refused(f.evidence, /Host checkout differs from reviewed TLS source/);
+  });
+  test("a declared host tool changed after the replay pinned it", async () => {
+    const f = await fixture();
+    const replay = JSON.parse(readFileSync(f.replay, "utf8")) as { hostTools: { mesh: { path: string } } };
+    chmodSync(replay.hostTools.mesh.path, 0o700);
+    appendFileSync(replay.hostTools.mesh.path, "# replaced\n");
+    await refused(f.evidence, /host tool mesh changed/);
+  });
   test("intake bytes changed after the handoff pinned them", async () => {
     const f = await fixture();
     rewriteJson(f.intake, value => value);

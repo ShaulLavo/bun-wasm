@@ -147,10 +147,7 @@
     "ss",
     "build.mjs",
     "^c\\+\\+$",
-    "findmnt",
-    "mesh",
-    "podman",
-    "flock"
+    "podman"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"
