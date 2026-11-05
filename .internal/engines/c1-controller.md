@@ -1,281 +1,358 @@
 # One C1 controller
 
-Status: Approved design, plan checkpoint. No build, claim or production under this
-document. Execution needs a separate grant after the combined plan and C1 intake.
+Status: Approved no-build preparation. Parent incorporated the seven bounded
+corrections from the independent Sol review of b6398db3. Design A remains the
+chosen shape. The original CHANGES REQUESTED verdict remains historical evidence;
+this reconciliation does not claim code, production or consumer acceptance.
 
-Base: main `61a86be3741b22576b149d271e6ea87618c20e9c`, tree
-`180a04fd181f22f703e6a3e9e54870eef844279d` (includes PR 470). The final product
-head and tree are the actual merged controller plus Next fixture/driver source,
-never this base and never a dirty overlay.
+Base: main 61a86be3741b22576b149d271e6ea87618c20e9c, tree
+180a04fd181f22f703e6a3e9e54870eef844279d, including PR 470. Final source is NOT
+frozen. It must be the actual merged controller, fixture/driver and required TLS
+adapter source, never this base, a dirty overlay or a synthetic merge label.
+Unit 6 is consumed. There is no new production execution grant.
 
-## Where things stand
+## Contract and scope
 
-Current main has no C1 controller. It has the split producer
-(`scripts/engine-producer.ts`), the publication registry
-(`scripts/producer-closure.ts`) and the PR458 claim guard
-(`scripts/producer-start.ts`). Everything else that ran unit 6 lives only in the
-unmerged control branch `5aef1f42` (13 commits on `dac56d02`): about 2,400 lines
-of TypeScript, a pinned Python template rewritten by string surgery, a
-repo-checked cohort inventory, a per-unit authority record and a bwrap
-pre-claim proof. That branch is a donor of code and lessons only; none of its
-cohort pins, unit names or template are carried over.
+One runtime 110 production serves three independently owned consumers: five-owner
+qualification, Bun TLS and remaining relay needs not covered by unit 6. Count the
+shared build once. Next owns the aggregate consumer requirements and five-owner
+fixtures/drivers/checks; TLS owns its contract and driver adapter; relay owns its
+remaining consumer requirements. Engines owns controller/config/input-manifest
+source and a read-only produced-byte handoff, not another consumer build pipeline.
 
-Unit 6 product `ffbccf9a` is not current main: main moved runtime to 0.0.110,
-Waffle native source to `f1bccf55`, Bash to `fc8327a3`, the BoringSSL source
-group gained `ssl`, `jsc/common.sh` changed (`write-tree --missing-ok`) and
-Cargo.lock gained crates. So no unit 6 byte is a current-main candidate.
+Canonical aggregate requirements are under
+/work/reports/wave-20261105/bun/runtime110-qualification-contract/CONSUMER-CONTRACT.json:
+16,006 bytes, SHA-256
+8f7fdd337114f2cd7188601845a416cd57b7a54aa6889f1b016aa2dda7409730.
+TLS-CONSUMER-CONTRACT.json is 22,783 bytes, SHA-256
+cb87f25fb6e7b379936135102e844293004946053f96a42d4072df7e1d9f3c4a.
+Next's prepared five-owner DRIVER-CONTRACT.json is 8,469 bytes, SHA-256
+32e9aa03a4f3f6b416e73bc05ba35b886a8c2e8e65c4fd23eecb84511c53e92c
+at /work/reports/wave-20261105/bun/pr470-real-guest-preparation/.
+These are consumer requirements, not additional producer configs, input manifests,
+intake receipts or execution authority. Relay's exact requirements are pending.
+Driver contracts remain subject to their owners' source review and merge.
 
-## Two whole-controller shapes
+## Grounding and alternatives
 
-**A. One process owns one typed run (chosen).** `scripts/c1-controller.ts`
-parses one config and one input manifest, claims roots, stages copies, sources
-`env.sh` once to get the product environment `E`, proves `E` is a fixed point of
-re-sourcing, then sets `process.env = E` and runs a typed stage table. Command
-stages are children of a process-group runner with `E` plus a declared
-stage-local overlay. In-process steps (captures, restaging, sealing) import the
-product's own helpers from the same tree, so captures and builds read one
-environment by construction. Rehearsal is the same run over a private copy of a
-retained artifact root, with a suffix of the stage table.
+Current main has the split producer, complete-publication registry and
+producer-start.ts claim guard, but no C1 controller. Successful historical control
+5aef1f42 is a code/lesson donor only: roughly 2,400 lines, a rewritten Python
+template, a pinned cohort inventory and per-unit authority documents. Do not graft
+its source cohort, old validators or historical pins into current main.
 
-**B. Recipe strings plus helper CLI.** A TypeScript port of the Python template:
-each stage is a bash string prefixed with `source ./env.sh`, and a separate
-publication CLI is called per step with its context passed through environment
-variables and a prepared-inputs file. This is closest to what passed unit 6.
+Unit 6 used ffbccf9a and runtime 109. Current main changed runtime/Bash pins,
+BoringSSL source closure, jsc/common.sh and Cargo.lock. Unit 6 guests, sides,
+launcher and native profiles are not automatically current-source candidates.
+Its independent byte admission is not TLS acceptance: the old builtins.js maps
+node:tls to unsupportedModule.
 
-A is smaller: no context serialization, no helper dispatch, no per-stage
-re-sourcing whose sameness rests on idempotence, no separate control checkout
-(the controller is product source now, so "load validators from the product, not
-the control" disappears). B keeps three failure points the assessment named
-(unsourced capture, per-stage env drift, duplicated metadata). Rejected outright:
-porting the control branch as-is (template surgery, cohort JSON, authority).
+A, chosen: one TypeScript process owns one typed operation. It loads one config
+and one input manifest, admits actual inputs/environment, executes shared stage
+definitions, validates/seals output and owns descendant cleanup. Product helpers
+come from the selected source. Rehearsal shares definitions, not copied recipes.
+
+B, rejected: port Python recipes to TypeScript strings and dispatch a separate
+publication CLI, sourcing env.sh in each child. That keeps duplicated context,
+environment drift and serialized metadata. No historical template surgery,
+separate control cohort or per-unit paperwork remains in A.
 
 ## Caller usage
 
-```sh
-source env.sh            # only to find bun; the run rebuilds its own environment
-bun scripts/c1-controller.ts check    /private/c1.config.json
-bun scripts/c1-controller.ts rehearse /private/c1.config.json --from /retained/artifact [--stage NAME]
-bun scripts/c1-controller.ts run      /private/c1.config.json --execute <config sha256>
-```
+~~~sh
+bun scripts/c1-controller.ts check CONFIG
+bun scripts/c1-controller.ts rehearse CONFIG --from RETAINED [--stage NAME]
+bun scripts/c1-controller.ts run CONFIG --execute CONFIG_SHA256
+bun scripts/c1-controller.ts qualify CONFIG --intake RECEIPT --intake-sha256 SHA256
+~~~
 
-- `check` authenticates config, manifest and every input read-only, prints the
-  config digest and every unverified draft entry, and exits nonzero on any draft.
-  It then stages only the private toolchain copies into the configured private
-  root, establishes `E`, runs the environment gates and the native entry, and
-  removes the private root. No report, artifact or product write.
-- `run` requires `--execute` equal to the SHA-256 of the config file bytes (the
-  file must be canonical JSON, so the digest is stable). That flag is the
-  explicit intent; there is no authority document, unit number or exhausted-unit
-  list.
-- `rehearse` never seals a delivery and is never qualifying (below).
+The config digest binds exact raw bytes, not a reserialized copy. The run flag is
+explicit execution intent; the approved combined execution decision still comes
+from managing. There is no unit number, exhausted-unit list or authority document.
+Check refuses production inputs that remain draft. Rehearsal can test generic
+mechanics while source-specific inputs remain draft, but is never qualifying.
+Qualify is a separate post-intake operation, never a preseal producer stage.
 
-## Core types (sketch)
+## Domain shape
 
-```ts
-// scripts/c1/inputs.ts
+~~~ts
 interface FileIdentity { readonly path: string; readonly bytes: number; readonly sha256: string }
 interface TreeIdentity extends FileIdentity { readonly files: number }
 type Provenance =
   | { readonly status: "verified"; readonly receipts: readonly FileIdentity[] }
-  | { readonly status: "draft"; readonly missing: string };   // never launch-ready
-
+  | { readonly status: "draft"; readonly missing: string };
 interface InputManifest {
   readonly schema: "bun-wasm.c1-inputs/1";
-  readonly source: { readonly head: string; readonly tree: string };
-  readonly runtime: { readonly version: string; readonly sourceCommit: string; readonly archive: FileIdentity; readonly provenance: Provenance };
-  readonly relay: { readonly version: string; readonly archive: FileIdentity; readonly provenance: Provenance };
-  readonly programs: { readonly tag: string; readonly schema: string; readonly hostInterface: number;
-    readonly manifest: FileIdentity; readonly checksums: FileIdentity; readonly archives: readonly FileIdentity[] };
-  readonly fd3: { readonly artifact: FileIdentity; readonly receipt: FileIdentity; readonly provenance: Provenance };
-  readonly native: { readonly jsc: NativeRoot; readonly sdk: NativeRoot; readonly sysroot: NativeRoot;
-    readonly shell: NativeRoot & { readonly bashWeb: string } };
-  readonly donors: Readonly<Record<DonorName, TreeIdentity>>;   // bun, boringssl, 3x node_modules, cargo, rustup, tools, bunCache
+  readonly source: SourceIdentity;
+  readonly runtime: RuntimeInput;
+  readonly relay: RelayInput;
+  readonly programs: ProgramInputs;
+  readonly fd3: Fd3Inputs;
+  readonly native: NativeInputs;
+  readonly donors: Readonly<Record<DonorName, TreeIdentity>>;
   readonly tools: Readonly<Record<ToolName, FileIdentity>>;
+  readonly consumerDependencies: ConsumerDependencies;
 }
-interface NativeRoot { readonly root: string; readonly files: readonly FileIdentity[]; readonly provenance: Provenance }
-
 interface C1Config {
   readonly schema: "bun-wasm.c1-config/1";
   readonly sourceRoot: string;
-  readonly manifest: FileIdentity;            // binds the one input manifest
-  readonly roots: { readonly report: string; readonly artifact: string; readonly private: string;
-    readonly browserTmp: string; readonly qualification: string };
+  readonly manifest: FileIdentity;
+  readonly roots: OwnedRootSelection;
   readonly jobs: number;
 }
-function loadRun(configPath: string): { config: C1Config; manifest: InputManifest; digest: string };
-function authenticate(run): Authenticated;    // all hashes, native reuse validators, no writes
-
-// scripts/c1/environment.ts
-interface ProductEnvironment { readonly env: Readonly<Record<string, string>>; readonly tools: Readonly<Record<ToolName, string>> }
-function establishEnvironment(a: Authenticated): Promise<ProductEnvironment>;  // allowlisted base, source once, fixed-point proof, tool and receipt gates
-
-// scripts/c1/run.ts
+type Action =
+  | { readonly kind: "command"; readonly command: (c: Context) => Command }
+  | { readonly kind: "step"; readonly step: (c: Context, signal: AbortSignal, owner: OwnedProcesses) => Promise<void> };
+type Eligibility = "production-only" | "validated-retained" | "generic-rehearsal";
 interface Stage {
-  readonly name: string;                      // log name in the report
-  readonly sourceBound: boolean;              // consumes bytes built from the selected source
-  readonly needs: readonly string[];          // artifact-relative inputs from earlier stages
-  readonly command?: (c: Context) => { argv: readonly string[]; overlay?: Readonly<Record<string, string>> };
-  readonly step?: (c: Context) => Promise<void>;
+  readonly name: string;
+  readonly eligibility: Eligibility;
+  readonly needs: readonly ArtifactRequirement[];
+  readonly action: Action;
 }
-const STAGES: readonly Stage[];
-function claim(roots): Claimed;               // exclusive mkdir, report first, 0700
-function runStages(c: Context, stages: readonly Stage[], signal: AbortSignal): Promise<void>;
+function admit(run: ParsedRun, scope: AdmissionScope): Promise<Authenticated>;
+function establishEnvironment(inputs: PreparedInputs): Promise<ProductEnvironment>;
+function claim(roots: RootSelection): Claimed;
+function runStages(context: Context, stages: readonly Stage[], signal: AbortSignal): Promise<void>;
+~~~
 
-// scripts/c1/publication.ts: capture, restage, stageGuest, matrix, stageDelivery, verifyDelivery, seal
-```
+Names are sketches, not a second handwritten protocol. Derive concrete receipt
+and artifact types from maintained helpers. Parse exact JSON variants at the
+boundary; reject unknown/missing tool and donor names. Caller-supplied verified
+labels and empty receipt lists do not authenticate anything. Authentication checks
+actual bytes, original receipt semantics and source/interface/provenance, then
+constructs the internal authenticated value without casts.
 
-`DonorName` and the required path lists come from the product where it already
-says them: the BoringSSL and Bun paths from `guest-source-manifest.ts` groups,
-the runtime and program pins from `waffle-release-inputs.json`, the Bash pin
-from `web/package.json`, the WebKit and Bun commits from `jsc/common.sh` and
-`sync-bun.sh`. The manifest supplies only what the product cannot know: local
-paths, donor tree identities, tool binaries, the relay and fd3 identities, and
-native roots with their original receipts. A value both sides state must agree.
+The manifest supplies external facts: local paths, full donor identities, tool
+binaries, original native/relay/fd3 receipts and complete consumer dependency
+closure. Derive product-pinned runtime/program/Bash/source requirements from the
+selected source; if both sides state a value they must agree. Original program
+source/tool provenance is never rewritten as runtime 110 provenance.
 
-## Run flow
+## Admission and environment before a durable claim
 
-1. Parse and authenticate (no writes). Any `draft` provenance refuses `run`.
-2. Claim: `mkdir` report (0700, non-recursive, fails if present), then artifact,
-   private and browser roots. Fresh-root rules from preflight carry over: absolute,
-   absent, parent present, disjoint from each other, from the product and from
-   every input. Teardown is installed before the first write.
-3. Stage donors: reflink copies, explicit tool selection, internal absolute links
-   rebased, no hard links, staged tree identity rechecked. CMake and Ninja stay
-   at the sysroot receipt's canonical paths.
-4. Establish `E`: base environment is an allowlist (HOME, USER, LANG, a PATH of
-   pinned tool directories plus `/usr/bin:/bin`) plus the prepared values; no
-   ambient Rust flags, launcher overrides or tokens can enter. `bash -c 'source
-   ./env.sh; env -0'` gives `E`. Re-sourcing under `E` (env.sh twice, then
-   jsc/common.sh) must give identical values and identical resolved tools; only
-   PATH may grow. Gates: every pinned tool resolves to its bytes, Rust and Waffle
-   tools to the private copies, SDK tools to the native SDK, CMake and Ninja to
-   the receipt paths, target Rust flags link the native sysroot, the sysroot
-   receipt equals `wasiSysrootInputs` under `E`, the JSC stamp equals
-   `jsc_inputs_hash` under `E`. Recorded once as `environment.json`.
-5. Stages, in order: native entry, capture before, default Browser, source-cache
-   Browser, tools, split producer, JSC embedding (overlay
-   `BUN_WASM_LAUNCHER=<engine root>/launcher/bun-wasm`), default and source-cache
-   Web guests, the Next five-owner callback driver (handoff, below), matrix inputs,
-   publication matrix (overlay `TMPDIR=TMP=TEMP=<browserTmp>`), split verify,
-   native after, capture after, native preseal, capture preseal, stage, source
-   archive, complete-publication verify, seal.
-6. Seal: write `DELIVERY.json` once, inventory excludes itself, files 0444,
-   directories 0555, `RESULT.json` binds the manifest digest. Status is
-   `producer-complete; awaiting-independent-parent-byte-intake`;
-   `parentByteIntake`, host qualification, acceptance and deployment stay null.
-7. Teardown on every outcome: stop the current stage's group (TERM, 30 s, KILL),
-   wait until no member of the group remains, then remove staged product paths,
-   private and browser roots. Report and artifact are kept. One `cleanup.json`.
+Bind the running controller repository to sourceRoot and manifest head/tree before
+executing product helpers. Keep structural parsing, byte authentication and full
+sourced native admission distinct; none can silently stand in for the others.
 
-Report contents: `inputs.json` (the authenticated manifest copy with recomputed
-identities), `environment.json`, `stages.json` plus one log per stage,
-`RESULT.json` (status, delivery digest, failure if any) and `cleanup.json`.
-The seven overlapping custody and start/exit summaries go away. The delivery's
-before/after/preseal captures stay, because they are the drift gate.
+Install teardown before any write. Use invocation-owned private admission scratch
+for actual tool/dependency copies and the same logical paths the run will use.
+Include installed Waffle and authenticated archives resolved by native helpers,
+not toolchain copies alone. A private view/namespace may expose prospective logical
+paths without writing original product/native roots or claiming the final report.
+Reuse the authenticated staged copies for run rather than assemble a second
+independent environment. Validate that the final staged view matches its witness.
 
-## Rehearsal
+The same admission routine serves check and run. All required sourced native and
+sysroot compatibility facts must be established before durable report claim.
+Reject missing Waffle inputs, stale JSC stamps and missing native objects without
+adding original files, changing the persistent index, downloading or rebuilding.
+Native patch verification uses a private Git index and object directory, with
+original objects available read-only as alternates. Do not call a builder CLI with
+a hidden downloader fallback and describe it as read-only validation. In
+particular, write-tree --missing-ok is not pure. Check original metadata and bytes
+before/after admission and remove the private scope on every outcome.
 
-`rehearse --from R` claims fresh report, private and browser roots, reflinks `R`
-into the private root and runs the stage suffix from `--stage` (default: first
-stage whose `needs` are present) against that copy, in the same `E`. The
-original `R` is hashed before and after and must not change.
+E is established from an allowlisted base and selected-source env.sh, not ambient
+Rust flags, launcher overrides, tokens or copied historical flags. Compare
+semantic environment values and resolved executable bytes after repeated sourcing.
+Normalize only declared shell bookkeeping such as _, SHLVL and PWD and duplicate
+PATH prefixes; do not ignore compiler flags or arbitrary variables.
 
-The selected source and tuple are enforced. When `R`'s recorded source or tuple
-differs, each `sourceBound` stage is reported `blocked` with the list of
-current-source artifacts that do not exist; only generic stages run (repeated
-restaging over 0444 originals, seal on the copy, drain and cleanup). Output is
-`REHEARSAL.json` with `qualifying: false` always, the provenance of `R` (path,
-recorded source and tuple, tree identity) and per-stage `ran | blocked | failed`.
-It never writes `DELIVERY.json` status or `RESULT.json`. Unit 6 bytes can
-therefore exercise copying, restaging, sealing and cleanup, and nothing else.
+Record E once. Maintained Browser, tools, source-cache and JSC helpers apply
+explicit profile transformations: target directories, guest tool selection,
+engineEnvironment and PATH_NO_BINARYEN. Captures and commands use the same variant
+of E. Publish E before environment-sensitive initialization or pass it explicitly.
+Never import the argv-parsing engine-producer CLI as a library.
 
-For relocated copies to verify, the split producer manifest records the
-launcher, its receipt and the web root relative to the engine root (one small
-`engine-producer.ts` change). External roots such as the native prebuild stay
-absolute.
+Canonical CMake/Ninja paths must match the original sysroot receipt; private
+shadow copies fail. Bind all Rust, SDK, Waffle, Bun/Node and native paths/versions/
+bytes and complete offline lockfile/build-std inputs. Use private copies, no
+writable hard links to a seed and no mutation of held donor caches.
 
-## Next handoff
+## Root ownership
 
-The callback matrix is Next's driver in the merged source. The controller runs it
-as one stage: argv from the source tree, read-only exact artifact paths, their
-original receipts and recomputed identities as a JSON input, and
-`roots.qualification` as its only writable output. The controller does not
-rebuild anything for it and does not duplicate consumer qualification.
+All writable roots and staged product destinations undergo canonical physical
+parent, freshness, symlink/alias and containment checks against source, config,
+manifest, receipts, donor/native roots and any external rehearsal root R. Inputs
+may not contain outputs or be reachable through an output alias. Browser scratch
+also reserves space for the exact expanded runner suffix, at most 48 UTF-8 bytes.
 
-## Invariants kept
+| Operation | Acquired roots | Retained output |
+| --- | --- | --- |
+| check | invocation-owned admission scratch only | bounded caller-requested check evidence; no configured root claim |
+| run | report, artifact, private, browser | report and sealed/failed artifact |
+| rehearse | report, private, browser; retained copy under private | report and explicitly rehearsal-only evidence, no producer artifact claim |
+| qualify | fresh qualification output plus private/browser scratch | separate consumer results and cleanup; producer report/delivery read-only |
 
-| Invariant | Where |
-| --- | --- |
-| Exclusive fresh roots | `claim()`: non-recursive mkdir, report first, disjointness checks |
-| Source and tuple equality | product pins vs manifest, `git` head/tree/clean at start, after build, preseal |
-| Full hashes, custody, native reuse | ported validators: JSC artifact list, compiler header roots, WebKit patch tree, sysroot receipt, shell receipt and pin, Bun patch series, Cargo path deps |
-| Physical short browser scratch | browserTmp is a claimed root: derived TMPDIR at most 48 bytes, physical parent, observed while live, empty after |
-| Atomic writable staging | `restage()`: temp copy, 0644, rename; originals keep bytes, mode, inode |
-| Complete publication registry | `requireCompletePublicationFiles` from the same tree |
-| Drain before deleting dependencies | process-group runner, teardown waits for empty group |
-| Delivery vs parent intake | sealed status fields, rehearsal never qualifying |
+After full admission, run exclusively creates its report first, mode 0700, then
+its other final roots. A Claimed value owns only roots this invocation actually
+created. On a later claim failure, keep its report, clean only acquired scratch
+and never remove or modify the pre-existing conflicting root. Existing-root
+refusal performs neither preparation nor cleanup on the existing report.
+Register staged product output ownership before the stage that creates it.
 
-Validators that read the native JSC backing still create and remove a temporary
-Git index and may refresh timestamps of byte-identical loose objects; the
-content-custody contract permits this. Nothing else writes to an input.
+Qualification exclusively claims its fresh output once and writes distinct
+five-owner/TLS/relay results beneath it. It cannot overwrite a prior qualification,
+producer root, source or input. No consumer starts with an unowned writable path.
 
-## Deletion and migration
+## Production and cleanup
 
-- Delete `scripts/producer-start.ts`, its test and `checks/quality-producer-start.json`;
-  the claim moves into `claim()`. No other caller exists on main.
-- Rename the registry's `inputs/runtime107-release.tgz` to
-  `inputs/runtime-release.tgz` (question 4).
-- Do not merge or graft the control branch; it stays historical with the unit 6
-  evidence. No historical report, artifact or receipt changes.
-- New modules: `scripts/c1-controller.ts` and `scripts/c1/{inputs,environment,run,publication}.ts`,
-  with tests and one `checks/web-c1-*.json` per test file. Target under 1,500
-  lines of source.
+The production sequence retains: full native admission, capture before, default
+Browser, distinct source-cache Browser, tools, one split core/QuickJS/JSC producer,
+full selected-launcher JSC embedding, default/source-cache Web consumers, complete
+Chromium/Firefox/WebKit publication, split verification, native/source/vendor/input
+after/preseal checks, publication/source archive/complete registry and single-write
+sealing. No new consumer is inserted before sealing or independent byte intake.
 
-## Verification
+The embedding launcher binding is stage-local, never a global supplied-launcher
+shortcut. Browser scratch is physical, observed while live, within the 48-byte
+limit and empty after shutdown. Apply this rule to every Chromium stage, including
+hook smoke and later lane-owned consumer drivers, not only the final matrix.
 
-Ordinary host tests on synthetic inputs, each written to fail on the old
-behavior first:
+Keep existing source/vendor/native before/after/preseal captures until all current
+validators migrate together. One external input manifest does not mean deleting
+the three-phase drift gate. Reduce overlapping report/start/exit summaries to one
+authenticated input record, environment record, stage log/index, result and cleanup.
+Seal DELIVERY exactly once after full validation, with a closed payload set,
+0444 files/0555 directories and an external manifest digest. Producer status means
+awaiting independent parent byte intake, never consumer acceptance.
 
-- unit 4: a private CMake or Ninja shadowing the receipt tool fails the
-  environment gate;
-- assessment faults: a core input capture taken outside `E` differs from the
-  build's (the old split), and under `E` they match; the embedding stage without
-  its overlay resolves the wrong launcher; the source-cache stage loses the
-  sysroot link flags without `E`;
-- source or tuple mismatch (head, tree, dirty tree, runtime, relay, programs,
-  Bash pin, fd3) fails before claim;
-- repeated restaging over 0444 originals;
-- TMPDIR: 12-byte root passes, 13-byte root and symlinked parent fail before
-  claim, a runner reporting a longer or foreign scratch is stopped;
-- cancellation with a TERM-ignoring grandchild drains the group before any
-  dependency removal;
-- claim: existing report, overlapping roots and a wrong `--execute` digest leave
-  nothing created;
-- rehearsal: mismatched retained source blocks every source-bound stage, records
-  provenance, never marks qualifying, and leaves the retained root unchanged;
-- draft provenance refuses `run` and is listed by `check`.
+Share or extract the maintained ownership in run-with-timeout.mts: subreaping,
+descendant identity and birth time, detached/setsid children and in-process-step
+subprocesses. Every step receives cancellation and uses this owner. Escalate and
+verify the whole owned set after ordinary exit as well as abort. Cover a parent
+that exits first and a matrix child that ignores TERM. PID reuse must not target
+an unrelated process. If drain is unproved, retain dependencies and report unsafe
+cleanup rather than delete them or wait forever.
 
-Then `bun run quality`, `tsc` for scripts, knip, duplicates and check discovery.
-The only real-input command is `check` against the parent's read-only backing,
-and only once Next's inputs are verified and the parent grants it. No guest,
-native or launcher build.
+## Retained-artifact rehearsal
 
-## Questions for Next
+Rehearsal runs no build/producer action. It validates the requested stages against
+ArtifactRequirement identities and authenticated source/tuple/profile/receipts,
+not file presence or a first-available-file suffix heuristic. Blocked prerequisites
+propagate. A matching source with a stale receipt remains blocked; an explicit
+inadmissible stage refuses. Hash the protected retained original before and after;
+all writes belong to its private copy and owned scratch.
 
-1. Final source: which merged commit carries the five-owner driver and its check
-   manifest, and the driver's exact argv, input JSON shape and output contract
-   under `roots.qualification`?
-2. Native JSC: since `jsc/common.sh` changed, does Next expect a new native JSC
-   prebuild (its own grant), or a proof that the stamp is unchanged? Until then
-   the JSC root is `draft`.
-3. Bash `fc8327a3` guests and receipt: where do they come from, and who owns them?
-4. Does independent intake of the sealed runtime 109 delivery read main's
-   registry (the `runtime107-release.tgz` name) or the producer manifest's
-   absolute launcher and web root paths? If so, rename and relativize only after
-   that intake completes.
-5. Runtime 0.0.110 local archive path and its authentication record; relay
-   0.0.109 archive source.
-6. Cargo offline cache: will the donor be refreshed for the new Cargo.lock
-   crates, and who proves it before a run?
-7. Delivery layout: keep the nine per-phase custody files, or accept one
-   `custody.json` with three phases?
+A mismatched old source can exercise generic copy/restage/seal mechanics and cleanup
+while production inputs remain draft. It cannot run unproved current-source
+consumers. Qualifying is always false. Existing copied ADMISSION/DELIVERY/status
+files are historical input, never new evidence. Do not run a verifier that promotes
+ADMISSION or emit fresh production RESULT/DELIVERY from rehearsal. A rehearsal-only
+inventory/seal tests the same mechanics without claiming producer status.
+
+The complete unit 6 delivery is runtime 109 evidence only. It is held immutable.
+Failed unit 5 binaries have a specific cleanup release and are not new test inputs.
+
+## Strict delivery, intake and three-consumer interface
+
+Emit a single read-only handoff for the sealed producer output. Before any consumer,
+qualify requires independent parent intake of that exact delivery root, manifest
+and custody digest, source and tuple. Missing/wrong intake or old unit 6 admission
+for a new closure refuses all consumers. A matching intake reaches each required
+lane-owned driver once, without any build action.
+
+Publish actual exported delivery/intake/dependency types and an executable fixture
+early in implementation, then reconcile directly with Next and TLS before freezing
+source. The interface binds original absolute paths and actual membership/bytes/
+hashes for guest/core/side/launcher/host/source/config/input/environment/native
+receipts, complete host dependencies/frozen locks and consumer dependencies. A
+current arbitrary install cannot be blessed merely by hashing it after the fact.
+Private executable views copy byte-identical sealed launchers and preserve original
+receipts; never chmod the 0444 sealed payload.
+
+Next's prepared driver at 55af5a4e is subject to its independent source review.
+It explicitly selects qjs/jsc guest+launcher+shell/env or Chromium web root, fresh
+output and --qualify HEAD TREE. Bind every actually loaded Browser .wasm/.js byte
+to the admitted registry before accepting a result. Its result schema is
+bun-wasm.io-resource-context.result.v1 with 22 requested rows and ten explicitly
+unqualified fault/GC/descriptor limits; host-only controls are not engine passes.
+
+TLS PRs 456/461/462 already landed; do not repush old aabe67d4 source. TLS owns
+runtime 110 adapter preparation e33458e8 and its remaining strict synthetic fixture
+migration. It is approved for preparation only, not real intake support. Reconcile
+its existing runtime 109/historical parent/source-release fields to ONE selected
+new strict delivery/intake/dependency contract. Do not manufacture old fields,
+reuse a unit 6 receipt, pass a config hash as an old source-release authority hash
+or add an old/new fallback. Engines changes controller/closure fields; TLS changes
+its owned driver. No duplicate TLS implementation or source push.
+
+TLS requires current registered Rust/client/roots/crypto source, actual libssl+
+libcrypto Cargo binding through maintained crypto production, exact runtime 110 /
+relay 109 / interface 1, original receipts/custody, complete frozen unmodified
+pg 8.16.3/transitive inputs and host dependencies. No extra TLS feature/native
+profile is guessed. Auxiliary page/worker bundle placement and identity are a
+pre-freeze interface item; consumers never rebuild guests. Database/browser/
+credential/provisioning execution is not authorized now. TLS marginal estimate is
+1.75-3.5 focused and 2.5-5 elapsed hours beyond shared production/five-owner work.
+The old 4-7 focused / 5-9 elapsed estimate is BASE five-owner+warm-production only.
+The expanded total waits for relay marginal cost and all controller/driver gates.
+
+## Caller migration and blocking tests
+
+Relative launcher/receipt/web paths require writer, engine-producer verifier,
+measure-runtime-js reader and their fixtures to migrate together. Reject absolute
+injected paths and traversal before resolving under the selected engine root.
+Preserve original receipt bytes. No old/new fallback. Historical consumers use
+explicitly selected pinned historical validators, not rewritten old evidence.
+
+Rename the historical runtime107-release.tgz registry entry to the actual selected
+runtime archive path only with all current readers and TLS adapter migrated. Do
+not satisfy the new closure using an unused old archive or relabelled bytes.
+
+Remove standalone producer-start.ts only while migrating its refusal/exclusive
+claim tests to QUALITY-owned discovery, preserving that blocking owner. Test old
+files/directories/all symlink and dangling-link forms, unchanged metadata,
+simultaneous contenders, absent parent/invalid args, and retained claims after
+failure/signal/failed execution. Losing/existing-root starts change no old report
+and perform no preparation or cleanup on it. Only the obsolete execve same-PID
+assertion goes. Web-owned tests cover other behavior without duplicate guard runs.
+
+New code is TypeScript and maximum nesting is three blocks. The 1,500-line guide
+is not permission to compress validators or weaken failure details. Use a small
+module map owning inputs, environment, process lifecycle and publication facts,
+not pass-through or temporal wrappers. Migrate callers and delete superseded
+active APIs in this wave; retained historical controls/evidence remain untouched.
+
+## Implementation verification and remaining draft data
+
+Required controls include prior CMake/Ninja shadowing, capture/build flag mismatch,
+wrong embedding launcher, lost source-cache flags, source/tuple/dirty/provenance
+mismatch, repeated 0444 staging, observed physical scratch, admission with missing
+Git objects/Waffle inputs or a wrong stamp, every root alias/overlap/partial claim,
+discriminated action validation, stale/blocked rehearsal prerequisites, all detached
+cleanup/cancellation paths, current reader migration and intake-gated consumers.
+Use real maintained code on private inputs, no declaration/launcher/receipt stubs.
+Run existing discovery owners, quality/types/lint/knip/duplicates and relevant
+host tests. No real-input check until its current inputs are authenticated and the
+parent grants that no-build check. No native/guest/launcher/fd3 build is granted.
+
+Concrete runtime archive: /work/cache/bun-wasm/qualification-inputs/waffle-0.0.110.tgz,
+2,360,942 bytes, SHA-256
+8887911306a2a500f7f9e103485132dcfd46ff2590576b3cce86f2201d75fb30.
+Relay 109/programs 15 original paths, hashes and program source/tool provenance
+are in the aggregate contract. fd3 reuse needs actual current source/interface/
+provenance/hash validation of its unchanged original 484-byte artifact and
+3,157-byte receipt. SDK/sysroot and JSC are candidates only: current jsc/common.sh
+inputs changed, so no restamp or relocated configured CMake tree is admitted.
+Current Bash must bind fc8327a39fd367193ff8db8c894788ab29544c12; old 32b9103c is not
+admitted. Keep held donor inputs unchanged; Engines owns any separately prepared
+private current-lockfile/build-std cache closure proof.
+
+Still draft: actual merged final source; exact reviewed driver and new strict
+intake/dependency interfaces; current JSC/Bash admission or separately approved
+preparation; complete current offline Cargo and host/pg dependencies; host readiness
+and aggregate costs. Implement the controller/interface without pretending those
+facts exist. Source landing, shared build and consumer execution are separate
+checkpoints. Final combined execution-ready plan goes to managing once these are
+resolved; no per-unit documents or another design competition.
+
+## Independent review reconciliation
+
+Original review at b6398db3 remains CHANGES REQUESTED. Parent incorporated R1
+post-intake consumers; R2 shared private read-only admission before report claim;
+R3 per-operation root ownership; R4 discriminated actions/validated rehearsal
+eligibility; R5 identity-aware escaped-descendant ownership; R6 all current reader
+migration; R7 quality-owned guard semantics. Design A is unchanged. Opus now
+implements this reconciled plan; one independent Sol implementation review follows.
