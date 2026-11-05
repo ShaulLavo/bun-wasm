@@ -7,6 +7,8 @@
     writableEnded: boolean;
     writableFinished: boolean;
     _completed: boolean;
+    _keepAlive: boolean;
+    errored: unknown;
     _destroyError?: unknown;
     socket?: { destroy(error?: unknown): unknown; removeListener(event: string, listener: () => void): unknown };
     _socketClosed: () => void;
@@ -19,6 +21,7 @@
   function destroy(this: Response, error?: unknown): Response {
     if (this.destroyed) return this;
     this.destroyed = true;
+    this.errored = error;
     this._completed = true;
     this._destroyError = error || Object.assign(new Error("Cannot call write after a stream was destroyed"), { code: "ERR_STREAM_DESTROYED" });
     if (this.socket) this.socket.destroy(error);
@@ -45,9 +48,10 @@
     return this;
   }
 
+  // Node finishes an end the transport already accepted unless destroy supplied an error.
   function completeEnd(this: Response, callback?: Callback, error?: unknown): void {
-    if (this.destroyed) {
-      if (typeof callback === "function") callback(error || this._destroyError);
+    if (this.destroyed && (error || this.errored || this.closed)) {
+      if (typeof callback === "function") callback(error || this.errored || this._destroyError);
       return;
     }
     if (this.socket) this.socket.removeListener("close", this._socketClosed);
@@ -62,11 +66,22 @@
     this._emitClose();
   }
 
+  function completeBody(this: Response, callback: Callback, connectionText: string, error?: unknown): void {
+    try {
+      callback(error);
+    } catch (failure) {
+      internal.nextTick(() => this._emitClose());
+      throw failure;
+    } finally {
+      if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
+    }
+  }
+
   function writeDestroyed(callback?: Callback): false {
     const error = Object.assign(new Error("Cannot call write after a stream was destroyed"), { code: "ERR_STREAM_DESTROYED" });
     if (typeof callback === "function") internal.nextTick(() => callback(error));
     return false;
   }
 
-  return { destroy, _emitClose: emitClose, _endDestroyed: endDestroyed, _completeEnd: completeEnd, _writeDestroyed: writeDestroyed };
+  return { errored: null, writable: true, destroy, _emitClose: emitClose, _endDestroyed: endDestroyed, _completeEnd: completeEnd, _completeBody: completeBody, _writeDestroyed: writeDestroyed };
 })

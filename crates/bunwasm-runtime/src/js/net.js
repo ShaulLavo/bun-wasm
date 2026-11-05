@@ -1114,11 +1114,7 @@
         }
         const connection = (this._framingHeaders || this._headers).get("connection")?.[1];
         const connectionText = Array.isArray(connection) ? connection.join(",") : String(connection || "");
-        this._conn.write(new Uint8Array(0), error => {
-          if (error) { callback(error); this._emitClose(); return; }
-          callback();
-          if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
-        });
+        this._conn.write(new Uint8Array(0), error => this._completeBody(callback, connectionText, error));
       }
     }
 

@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/http-response-lifecycle.test.ts",
+  "localRuntime": true
+}
