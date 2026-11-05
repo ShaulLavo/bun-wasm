@@ -17,28 +17,55 @@ interface Server {
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/net_listener.ts", import.meta.url), "utf8");
 const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`));
 
-function fixture(referenced = true) {
+// The engine's async-context slot and bootstrap.js's runInContext.
+function frameSlot() {
+  const slot = { current: undefined as unknown };
+  function runInContext(context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) {
+    const previous = slot.current;
+    slot.current = context;
+    try {
+      return fn.apply(receiver, args);
+    } finally {
+      slot.current = previous;
+    }
+  }
+  return { slot, getAsyncContext: () => slot.current, runInContext };
+}
+
+function fixture(referenced = true, listenFrame?: string) {
   let address: string | number = -2;
   const closed: number[] = [];
   const events: unknown[][] = [];
+  const frames = frameSlot();
+  // The frame each listener callback ran in.
+  const seen: unknown[][] = [];
   const error = Object.assign(new Error("bind failed"), { code: "EADDRINUSE" });
-  const accepting: Waiter = { ref: referenced, step: () => false };
+  const accepting: Waiter = { ref: referenced, step: () => { seen.push(["accept", frames.slot.current]); return false; } };
   const waiters = new Set<Waiter>();
   const server: Server = {
     listening: true, _listener: 7, _referenced: referenced,
     _starting: null,
-    emit(event, error) { events.push(error ? [event, error] : [event]); },
+    emit(event, error) {
+      events.push(error ? [event, error] : [event]);
+      seen.push([event, frames.slot.current]);
+    },
   };
-  const native = { hostLocalAddr: () => address, hostClose: (handle: number) => { closed.push(handle); return 0; } };
-  factory({ native }).start(server, {
+  const native = {
+    getAsyncContext: frames.getAsyncContext,
+    hostLocalAddr: () => address,
+    hostClose: (handle: number) => { closed.push(handle); return 0; },
+  };
+  frames.slot.current = listenFrame;
+  factory({ native, runInContext: frames.runInContext }).start(server, {
     addWaiter(waiter: Waiter) { waiters.add(waiter); return waiter; },
     accept() { waiters.add(accepting); return accepting; },
     hostError: () => error,
   });
+  frames.slot.current = undefined;
   function pump() {
     for (const waiter of Array.from(waiters)) if (waiter.step()) waiters.delete(waiter);
   }
-  return { server, accepting, waiters, events, error, closed, pump, ready(value: string | number) { address = value; } };
+  return { server, accepting, waiters, events, seen, frames, error, closed, pump, ready(value: string | number) { address = value; } };
 }
 
 test("HTTP startup waits for the bound host address without timers", () => {
@@ -73,6 +100,28 @@ test("closing a pending listener prevents a late listening event", () => {
   expect(state.server._starting).toBeNull();
 });
 
+test("readiness and acceptance run in the listen-time frame and restore the caller's", () => {
+  const state = fixture(true, "listen-frame");
+  state.frames.slot.current = "caller";
+  state.ready("{}");
+  state.pump();
+  state.pump();
+  expect(state.seen).toEqual([["listening", "listen-frame"], ["accept", "listen-frame"]]);
+  expect(state.frames.slot.current).toBe("caller");
+  // Acceptance keeps the waiter the caller registered.
+  expect(state.server._accepting).toBe(state.accepting);
+  expect(state.waiters.has(state.accepting)).toBe(true);
+});
+
+test("a late bind error is emitted in the listen-time frame", () => {
+  const state = fixture(true, "listen-frame");
+  state.frames.slot.current = "caller";
+  state.ready(-1);
+  state.pump();
+  expect(state.seen).toEqual([["error", "listen-frame"]]);
+  expect(state.frames.slot.current).toBe("caller");
+});
+
 test("an unreferenced server keeps its bind request alive until completion", () => {
   const state = fixture(false);
   expect(state.server._starting?.ref).toBe(true);
@@ -94,7 +143,9 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     const code = name === "net_address.ts" ? netAddressSource() : new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`);
     return runInNewContext(code, { TextEncoder });
   };
+  const frames = frameSlot();
   const native = {
+    getAsyncContext: frames.getAsyncContext,
     hostListen() { listeners.set(++listener, { ready: false, open: true, connections: [] }); return listener; },
     hostLocalPort: () => 1234,
     hostLocalAddr(handle: number) { return listeners.get(handle)?.ready ? "{}" : -2; },
@@ -109,7 +160,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
   const ports = load("net_port.ts")();
   const addressModules = { net_address: load("net_address.ts")({ require: () => ports }) };
   const modules = {
-    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: addressModules.net_address, net_listener: factory({ native }),
+    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: addressModules.net_address, net_listener: factory({ native, runInContext: frames.runInContext }),
     net_hostname: load("net_hostname.ts")({ require: (name: keyof typeof addressModules) => addressModules[name] }),
     http_common: load("http_common.ts")(), http_agent: load("http_agent.ts")(), websocket: { clientClass: () => undefined },
   };
@@ -118,7 +169,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     web: {}, builtinFactories: {},
     require: (name: keyof typeof modules) => modules[name],
     builtin: () => ({ Readable, Writable, Duplex, getDefaultHighWaterMark }), nextTick(callback: () => void) { ticks.push(callback); },
-    pumpIo: () => false, ioPending: () => 0,
+    runInContext: frames.runInContext, pumpIo: () => false, ioPending: () => 0,
   };
   Object.assign(modules, {
     http_server_response: load("http_server_response.ts")(internal),

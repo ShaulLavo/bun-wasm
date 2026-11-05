@@ -1,6 +1,6 @@
 (function (internal: BunWasm.Internal) {
   type Waiter = { ref: boolean; step(): boolean | "progress" };
-  type Startup = Waiter & { phase: "binding" | "announcing" };
+  type Startup = Waiter & { phase: "binding" | "announcing"; context: unknown };
   type Server = {
     listening: boolean;
     _listener: number;
@@ -14,6 +14,14 @@
     accept(): Waiter;
     hostError(handle: number, fallback: string): Error;
   };
+  // The listener's callbacks run in the frame current at listen(), as a Node server resource's
+  // do. The host enters every I/O turn at the root frame, so without this the listening and
+  // error events and accepted connections would see none.
+  function inContext<T extends Waiter>(context: unknown, waiter: T): T {
+    const step = waiter.step;
+    waiter.step = () => internal.runInContext(context, step, waiter, []) as boolean | "progress";
+    return waiter;
+  }
   function step(server: Server, options: Options, startup: Startup): boolean {
     if (server._starting !== startup) return true;
     if (startup.phase === "announcing") return false;
@@ -34,16 +42,18 @@
     if (server._starting !== startup) return true;
     server._starting = null;
     if (!server.listening) return true;
-    server._accepting = options.accept();
+    server._accepting = inContext(startup.context, options.accept());
     server._accepting.ref = server._referenced !== false;
     return true;
   }
   function start(server: Server, options: Options): void {
-    const startup: Startup = {
+    const context = internal.native.getAsyncContext();
+    const startup: Startup = inContext(context, {
       ref: true,
       phase: "binding",
+      context,
       step: () => step(server, options, startup),
-    };
+    });
     server._starting = startup;
     options.addWaiter(startup);
   }

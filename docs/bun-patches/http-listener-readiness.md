@@ -24,12 +24,22 @@ request remains referenced until its completion or cancellation. The Node host's
 port probe is not proof that its later named-host bind succeeded. No delay or
 retry is used, and fake timers do not control the I/O waiter.
 
+The startup and accept waiters run in the async-context frame current when
+`listen()` was called, as a Node server resource's callbacks do: `enterWith`
+before it, a scoped `run` around it, and not a frame entered after it. The
+`listening` and bind `error` events and accepted connections see that frame,
+and the caller's frame is restored after each step. The host enters every I/O
+turn in the root frame ([0008](0008-await-context-hooks.md)), so without this
+they would see none. `web/tests/listen-context.test.ts` compares the maintained
+listener, scheduler and HTTP request path with Node's own server on the hook
+path and with a native continuation provider.
+
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. |
+| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. Startup and acceptance run in the listen-time async-context frame. |
 
 [Ledger scope and pinned revisions](scope.md).
 
