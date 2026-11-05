@@ -75,10 +75,10 @@
         frame.release();
       }
     }
-    function close(error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
+    function close(error: Error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
       shutdown(error, queueDisconnect);
     }
-    function end(error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
+    function end(error: Error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
       shutdown(error, queueOwnDisconnect);
     }
     function flush() {
