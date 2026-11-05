@@ -3,6 +3,7 @@ mod io;
 mod local;
 mod migration;
 mod overrides;
+mod pending;
 mod resolve;
 mod version;
 
