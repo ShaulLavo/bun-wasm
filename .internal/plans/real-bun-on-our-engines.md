@@ -544,8 +544,9 @@ unchanged. The separately admitted private browser fallback guest (`425bef5a`)
 is a different artifact and is not involved.
 
 On an iPhone in Safari, the Waffle Nuxt E3 run `e3-r110-chunked-1` staged 24
-chunks of 8,388,608 bytes. The restorer (SHA-256 `60190aeb…`) then exited 1 on
-its first chunk, before Nuxt ran:
+chunks with an 8 MiB chunk limit. The first chunk contained 8,388,608 bytes.
+The restorer (SHA-256 `60190aeb…`) then exited 1 on that first chunk, before
+Nuxt ran:
 
 ```
 memory allocation of 8388608 bytes failed
@@ -594,8 +595,9 @@ numbers hold on both.
    one chunk (JavaScript heap, input-sized).
 3. `native.hash(alg, input)` goes to `web/src/engine-host.js:296` `call`. The
    `Writer` (`engine-host.js:129`) serializes `[alg, input]`, doubling its
-   buffer from 256 bytes, so it holds a buffer of up to twice the encoded size
-   during the last growth (JavaScript heap).
+   capacity from 256 bytes. For this input its JavaScript backing buffer
+   reaches 16,777,216 bytes. Capacity is not a measurement of live heap or
+   peak memory.
 4. `engine-host.js:299` `exports.bunwasm_alloc(w.len)` allocates a zeroed guest
    buffer of `w.len` = 8,388,608 + 21 framing bytes (array header, the
    `"sha256"` string, the byte-length header) at `engine_host.rs:222`. The
@@ -613,56 +615,79 @@ The failure most likely maps to step 5: the reported size is exactly n (step 4
 asks for n + 21), and the stack shows two nested `Reader::val` frames under
 `bunwasm_call`, which matches decoding an array whose second item is bytes. At
 that point the guest heap holds both the 8 MiB + 21 byte input and the new
-8 MiB copy request. This is a source match, not a symbol-level proof: the
-copy is inlined into `Reader::val`, and frames 80 and 91, presumably Rust's
-allocation-error path, have no names in the capture. It does not explain why
-the allocation failed.
+8 MiB copy request. This is a source match, not proof of the exact
+allocating source line: the copy is inlined into `Reader::val`. The admitted
+guest's name section identifies frame 80 as `alloc::raw_vec::handle_error`
+and frame 91 as `alloc::alloc::handle_alloc_error`. Those names confirm an
+allocation-error path, not why the allocation failed.
 
 One nearby ownership fact, not tied to this failure: `RESULT`
 (`engine_host.rs:159`) is a thread-local `Vec` that `set_result` clears but
-never shrinks. If the preceding `readSync` reached `read_descriptor`
-(`natives.rs:965`) with an 8 MiB length, that call allocated an 8 MiB buffer and
-left `RESULT` with at least 8 MiB of capacity for the rest of the process. How
-the restorer's `readSync` sized its native reads in this run was not checked.
+never shrinks. However, the regular-file `readSync` path in
+`node_fs.js:451-476,502-506` splits large reads through `readRegularPieces`,
+requesting at most 1 MiB from each native `read_descriptor` call. The public
+8 MiB read therefore establishes neither an 8 MiB native read nor 8 MiB of
+retained `RESULT` capacity. Actual native read sizes and retained capacity
+were not instrumented.
+
+### Completed read-only verification
+
+The independent source review selected the Browser guest through the sealed
+`split/web/engine-builds.json` registry and verified SHA-256
+`ddadea2faae59b516f51e743009b49d41db8a57bd3add1dcec33d105e2739b7c`
+at `browser/default/bun-browser.wasm`. `wasm-tools print --skeleton` read its
+name and memory sections without guest instantiation or execution. Function
+7679 is `Reader::val`, and 7835 is `bunwasm_call`; functions 80 and 91 are
+identified above.
+
+Memory 0 declares 247 initial pages and 16,384 maximum pages. With 65,536
+bytes per page these are 16,187,392 and 1,073,741,824 bytes. Neither
+declaration reveals memory size at failure, free allocator capacity,
+successful or refused growth, or the allocation-failure cause. No guest
+build, device run or threshold experiment occurred.
 
 ### Unknowns
 
-- Whether functions 80 and 91 are the allocation-error handler and abort, and
-  whether the inlined copy really is the `:132` `to_vec`. Needs a read of the
-  admitted guest's name section; it already names functions 7679 and 7835.
-- Why the allocation failed: guest heap state, declared memory maximum,
-  browser refusal to grow memory, or something else. Not knowable from source.
-- The guest heap size and peak at the time of the abort. Nothing recorded it.
-- Whether the earlier `EIO` in `e3-r110-import-1` (same host frame region) is
-  the same allocation. Not shown.
+- Whether the inlined allocation is exactly the `:132` `to_vec`. Function
+  names and the request size support that mapping, but no source-line symbols
+  or allocator-site measurement prove it.
+- Why the allocation failed: live guest heap state, a refused memory growth,
+  fragmentation, total browser memory pressure, or another cause. The
+  declarations above do not distinguish these possibilities.
+- The guest's live allocation bytes and peak at failure. Nothing recorded them.
+- Whether the earlier `EIO` in `e3-r110-import-1` is the same allocation.
+  Sharing a host frame region does not establish that.
 
-### Next bounded source verification (approved, no execution)
+### Future regression direction. No build authorized
 
-1. Read the function names for indices 80, 91, 7679 and 7835 from the admitted
-   runtime 110 guest's name section with a read-only tool. Do not modify,
-   rebuild or rerun the delivered bytes.
-2. Read the same guest's memory section for its declared initial and maximum
-   pages, and record them as facts with no conclusion about cause.
-3. Trace the browser `fs.readSync` path from JavaScript to `read_descriptor` and
-   record what length it requests for an 8 MiB read.
-4. Write the result into this section. Stop there; any cause claim needs new
-   execution and an owner decision.
+A later fix needs a known SHA-256 correctness vector for an 8 MiB input.
+If that fix removes the decode copy, add separate allocation accounting:
+construct the encoded `["sha256", bytes]` input before accounting starts,
+then count allocation requests of at least the payload size only while
+`decode` runs. The present bytes branch requests one payload-sized copy.
+The borrowed-decode direction would assert zero such additional requests,
+while checking decoded content and argument lifetime. Exclude input
+construction, native hashing and result encoding from this counter.
 
-### Proposed regression direction (not a fix, not approved for a build)
+This metric counts allocation requests and their sizes. It does not measure
+live allocator bytes, JavaScript heap, or committed WebAssembly linear
+memory. Do not substitute `memory.buffer.byteLength` or an uncalibrated
+"near one input" growth budget. Incremental native hashing or shrinking
+`RESULT` are separate candidate changes that need their own stated metric;
+no fix is selected by this record.
 
-Add a host-only regression that hashes an 8 MiB `Uint8Array` with
-`Bun.CryptoHasher` through `bunwasm_call` and checks that the guest's peak heap
-growth stays near one input size rather than two. Candidate directions to
-evaluate in that change: decode bytes as a slice borrowed from `input` instead
-of `to_vec`, feed `CryptoHasher.update` into a native incremental hasher instead
-of concatenating in `digest`, and shrink `RESULT` after a large result. Any of
-these changes the guest, so it needs a guest rebuild, a pass on all three
-engines and a new admission. The sealed runtime 110 delivery stays as it is.
+Any runtime change needs its own reviewed source, guest build and applicable
+engine verification before a new admission. This task authorizes none of
+those executions. The sealed runtime 110 delivery stays unchanged.
 
 Waffle's lead is bounding each restorer hash, read and write to small windows on
-the original product to reach Nuxt. That is a diagnostic workaround, not a
-runtime fix and not proof of cause.
+the original product to reach Nuxt. Multiple small `update` calls on one
+current hasher still produce one combined native call at `digest`, so they
+do not bound that call. The workaround must bound the total bytes per digest
+or use genuinely incremental hashing while preserving its verification
+semantics. That is not a runtime fix or proof of cause.
 
 Evidence: `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/lead-debugger/e3-r110-chunked-1/`
-(`RESULT.md`, `records.jsonl` phase record 5, journal record 52). The projection
+(`RESULT.md`, `records.jsonl` line 5, journal array index 52 with worker
+sequence 16). The projection
 and source references are in `/work/reports/wave-20261105/engines/host-api-allocation-e3/`.
