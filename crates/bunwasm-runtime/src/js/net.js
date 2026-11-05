@@ -649,6 +649,7 @@
         if (!stopped) {
           stopped = true;
           waiters.delete(accepting);
+          accepting = null;
           native.hostClose(listener);
           htmlServer.dispose(server);
           // Idle keep-alive connections close now; busy ones after their
@@ -658,10 +659,10 @@
         return Promise.resolve();
       },
       ref() {
-        accepting.ref = !stopped;
+        if (accepting) accepting.ref = true;
       },
       unref() {
-        accepting.ref = false;
+        if (accepting) accepting.ref = false;
       },
       upgrade(req, upgradeOptions = {}) {
         const state = requests.get(req);
@@ -746,7 +747,7 @@
       }
     }
 
-    const accepting = acceptLoop(listener, (conn) => {
+    let accepting = acceptLoop(listener, (conn) => {
       connections.add(conn);
       const destroy = conn.destroy.bind(conn);
       conn.destroy = () => {
@@ -755,6 +756,10 @@
       };
       serveHttp(conn, handleRequest);
     });
+    // A frame entered at Bun.serve() is where its connections start reading and its requests
+    // run, as under Bun. Started outside any frame, it keeps each turn's own frame.
+    const context = native.getAsyncContext();
+    if (context !== undefined) accepting = internal.require("net_listener").inContext(context, accepting);
     htmlServer.attach(server, routes, options.development);
     return server;
   }

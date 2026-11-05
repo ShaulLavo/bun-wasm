@@ -7,6 +7,7 @@
   "use strict";
   const native = internal.native;
   const { Buffer } = internal.require("buffer");
+  const frames = internal.require("resource_frame");
   // WASI errno values from runtime_proc, negated.
   const AGAIN = -6;
   // Subscription kinds of procPoll.
@@ -541,6 +542,9 @@
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
     const spec = start(cmd, options, false);
+    // The startup notification and onExit run in the frame current at spawn(); the exited Promise,
+    // output streams and stdin callbacks keep their own frames.
+    const frame = frames.capture();
     let observingStart = typeof spec.options._onSpawn === "function";
     let pendingSpawn = false;
     internal.require("net");
@@ -662,13 +666,21 @@
     }
     function finish(status: Exit) {
       ipc?.finish();
+      try {
+        settle(status);
+      } finally {
+        // onExit was the last callback in the spawn frame.
+        frame.release();
+      }
+    }
+    function settle(status: Exit) {
       if (status.kind === 2) {
         // The wait has already consumed the child. Do not signal or wait it a second time.
         settled = true;
         clearExitHooks();
         const error = processError(-status.code, "spawn", spec.meta.executable);
         rejectExit(error);
-        if (typeof spec.options.onExit === "function") spec.options.onExit(child, null, null, error);
+        if (typeof spec.options.onExit === "function") frame.run(spec.options.onExit, spec.options, [child, null, null, error]);
         return;
       }
       const signalCode = status.kind === 1 ? signalName(status.code) : null;
@@ -678,14 +690,18 @@
       child.signalCode = signalCode;
       clearExitHooks();
       resolveExit(code);
-      if (typeof spec.options.onExit === "function") spec.options.onExit(child, child.exitCode, child.signalCode, null);
+      if (typeof spec.options.onExit === "function") frame.run(spec.options.onExit, spec.options, [child, child.exitCode, child.signalCode, null]);
     }
     function close() {
       if (closed) return;
       closed = true;
-      workerChildren.delete(child);
-      ipc?.close();
-      sink.destroy();
+      try {
+        workerChildren.delete(child);
+        ipc?.end();
+        sink.destroy();
+      } finally {
+        frame.release();
+      }
     }
     function observeAndWait(): Exit | null {
       if (observingStart) {
@@ -708,7 +724,7 @@
         // Kill probes cache entry synchronously, but Node events stay on the async step.
         if (pendingSpawn) {
           pendingSpawn = false;
-          (spec.options._onSpawn as () => void)();
+          frame.run(spec.options._onSpawn as () => void, spec.options, []);
         }
         if (status) {
           sink.destroy(Object.assign(new Error("stdin closed before drain"), { code: "EPIPE", errno: -32, syscall: "write" }));
@@ -746,6 +762,13 @@
       return watching(list);
     }
     function fail(error: unknown) {
+      try {
+        teardown(error);
+      } finally {
+        frame.release();
+      }
+    }
+    function teardown(error: unknown) {
       // Public failure is final, but teardown must still observe the selected child outcome.
       const pending = !settled;
       if (pending) terminate(spec.pid, spec.job);
@@ -764,6 +787,13 @@
     Object.defineProperty(child, "_finishWorker", { value: close });
     if (spec.worker) Object.defineProperty(child, "_workerChannel", { value: spec.worker });
     Object.defineProperty(child, "_abortWorker", { value() {
+      try {
+        abortWorker();
+      } finally {
+        frame.release();
+      }
+    } });
+    function abortWorker() {
       if (!settled) terminate(spec.pid, spec.job);
       if (!reaped) reapLater(spec.job, spec);
       for (const state of states) {
@@ -774,7 +804,7 @@
       settled = true;
       resolveExit(1);
       close();
-    } });
+    }
     registered = true;
     internal.addIoWaiter(waiter);
     if (spec.options._worker) trackWorkerChild(child);

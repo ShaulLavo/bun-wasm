@@ -42,6 +42,15 @@ compares the maintained adapter, on the hook path and with a native continuation
 provider, with native Bun over loopback sockets, and checks the caller's frame
 around a synchronous pump and each stop path's retirement.
 
+`Bun.serve` started inside an explicit frame (`enterWith` or `run`) binds its accept waiter to that frame
+through the same `inContext`, so its connections start reading there and route handlers run in it, as native
+Bun reports. A server started outside any frame is unchanged: each request starts in the turn's frame, which
+is root on the hook path. Native Bun instead reports the frame current at its first request, so this is a
+known difference. `stop` drops the accept waiter. Direct `server.fetch` stays a caller entry and `reload`
+keeps the registration frame; native Bun runs both in the original or reloaded registration frame. Those
+differences predate the root entry and are not changed here. A fetch handler after the server's internal
+await relies on prepared source for its frame on the hook path.
+
 Bun's `src/js/node/net.ts` depends on native Bun sockets, private stream modules,
 and runtime intrinsics. Its BlockList and SocketAddress use native bindings.
 These adapters implement the public contracts over our host handles while those
@@ -54,6 +63,6 @@ The upstream comparisons are recorded in [TCP support](../tcp.md).
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/net_address.ts`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
-| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. `Bun.listen` accepts in its listen-time async-context frame. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. `Bun.listen` accepts in its listen-time async-context frame, and an explicitly framed `Bun.serve` in its serve-time frame. |
 
 [Ledger scope and pinned revisions](scope.md).

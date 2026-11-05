@@ -4,6 +4,7 @@ import * as nodePath from "node:path";
 import { runInNewContext } from "node:vm";
 import { EventEmitter } from "node:events";
 import * as nodeStream from "node:stream";
+import { resourceFrames, type ContextSlot } from "./resource-frame-source";
 
 // spawn.ts against an in-memory runtime_proc service: descriptors, pipes with reference counts,
 // typed wait and job reaping. Real hosts are covered by the browser, Node and native ABI suites.
@@ -194,13 +195,13 @@ interface TestTimers {
   setImmediate: typeof setImmediate;
 }
 
-export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[] } = {}) {
+export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[]; contexts?: ContextSlot } = {}) {
   const waiters: any[] = [];
   const process = Object.assign(new EventEmitter(), { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", exitCode: 0, cwd: () => "/work" });
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise, process,
   });
-  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) } };
+  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) }, resource_frame: resourceFrames(options.contexts) };
   const internal = {
     native: fake.native,
     web: { ReadableStream, Response },

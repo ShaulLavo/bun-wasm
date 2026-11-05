@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 function productionSource(name: string) {
@@ -205,7 +206,7 @@ function productionBackend() {
       fsWatchRead: () => reads.shift() ?? -6,
       fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
-    require: (name: string) => name === "events" ? EventEmitter : { Buffer },
+    require: (name: string) => name === "events" ? EventEmitter : name === "resource_frame" ? resourceFrames() : { Buffer },
     addIoWaiter: (waiter: { step(): unknown }) => { waiters.add(waiter); return waiter; },
     removeIoWaiter: (waiter: { step(): unknown }) => waiters.delete(waiter),
     nextTick: queueMicrotask,

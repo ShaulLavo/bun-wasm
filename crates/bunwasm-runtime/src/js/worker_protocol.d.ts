@@ -150,6 +150,16 @@ declare namespace BunWasm {
     /** A filesystem watch, stepped before the other waiters in each pump (see net.js pumpIo). */
     watch?: boolean;
   }
+  /** The frame a resource's own callbacks run in, captured when it starts (resource_frame.ts). */
+  interface ResourceFrame {
+    /** Calls `callback` in the resource's frame; once released, calls nothing and returns undefined. */
+    run<This, Args extends readonly unknown[], R>(callback: (this: This, ...args: Args) => R, receiver: This, args: Args): R | undefined;
+    /** Runs the waiter's own step and fail in the frame, on the same waiter object. Once released,
+     * step reports done without running, and fail runs only for a step that threw before then. */
+    bind<W extends IoWaiter>(waiter: W): W;
+    /** Drops the frame. Idempotent; a dispatch already running keeps its frame until it returns. */
+    release(): void;
+  }
   interface NetWaiterModule {
     addWaiter<W extends IoWaiter>(waiter: W): W;
     removeWaiter(waiter: IoWaiter): void;
@@ -176,6 +186,7 @@ declare namespace BunWasm {
     cancelIoWaiters(): void;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
+    require(name: "resource_frame"): { capture(): ResourceFrame };
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
     workerErrorData?: (error: unknown) => WorkerErrorData;
