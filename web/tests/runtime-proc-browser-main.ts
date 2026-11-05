@@ -291,7 +291,8 @@ try {
   const explicit = parameters.has("explicit");
   // Omitting runtimeProcess is intentional: a generic root must be recognized from real imports,
   // not only when a privileged caller already knows to manufacture the transport.
-  run = startRun({ engine: "browser", adapter: "preview1", module, args: ["abi-parent"], env: { PWD: "/" },
+  // A Preview1 root receives exactly this argv; argc 2 selects the root role.
+  run = startRun({ engine: "browser", adapter: "preview1", module, args: [executable, "abi-parent"], env: { PWD: "/" },
     runtime, moduleScope: false, ...(explicit ? { runtimeProcess: createWorkerProcessTransport({
       pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer,
     }) } : {}) }, {

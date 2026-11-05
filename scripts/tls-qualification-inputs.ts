@@ -1,26 +1,39 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
-import { requireCompletePublicationFiles, verifyPublicationBuilds, verifyPublicationNativeBacking, type ProducerSource } from "./producer-closure.ts";
+import { executableMemberPaths, tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
+import {
+  SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, sameTuple,
+  type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
+} from "./c1/contract.ts";
+import { verifyTlsPage } from "./c1/tls-page.ts";
+import { bindLoaded, parseLoaded, type LoadedObservation } from "./c1/loaded.ts";
+import { admitHandoffFile, readSealedDelivery, type SealedDelivery } from "./c1/delivery.ts";
+import { fileIdentity, inside, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
+import { requireStagedDonor } from "./c1/inputs.ts";
+import type { QualificationEngine } from "./tls-qualification-context.ts";
 
 export class MissingTlsInput extends Error { readonly code = "TLS_EXISTING_INPUT_CONTRACT_MISSING"; }
-const deliveryContract = "bun-wasm.complete-producer-delivery.v2";
-export const parentOwner = "mcp:e5ea79c9-80ba-4f6e-b71a-4886c114af80";
-export interface FileIdentity { readonly bytes: number; readonly sha256: string }
-export interface NamedIdentity extends FileIdentity { readonly path: string }
+/** The single runtime/relay/programs/interface tuple TLS accepts. Every other tuple is rejected. */
+export const tlsReleaseTuple: ReleaseTuple = { runtime: "0.0.110", relay: "0.0.109", programs: "programs-v0.0.15", programManifestSchema: "waffle-program-release/2", hostInterface: 1 };
+const installedRuntimePackages = new Map<string, string>([["waffle", tlsReleaseTuple.runtime], ["waffle-relay", tlsReleaseTuple.relay]]);
+export function requireInstalledRuntimePackage(name: string, metadata: Record<string, unknown>): void {
+  const expected = installedRuntimePackages.get(name);
+  if (!expected || metadata.version !== expected) throw new Error("Reviewed host requires exact installed runtime110/relay109");
+}
+/** The only stage this source unit runs; its output is that stage's directory beneath the handoff's TLS output. */
+export const TLS_STAGE = "pg-early";
+/**
+ * What the caller pins: the exact handoff bytes, which bind the parent
+ * intake hash and the selected source, and the output it assigns. Every
+ * handoff claim is then re-derived from sealed bytes before use.
+ */
 export interface TlsEvidence {
-  readonly delivery: string;
-  readonly admission: string;
-  readonly admissionSha256: string;
-  readonly deliverySha256: string;
-  readonly sourceReleaseSha256: string;
-  readonly reviewedSource: ProducerSource;
-  readonly hostSource: string;
-  readonly pgModules: string;
-  readonly pgArchive: string;
-  readonly pgArchiveSha256: string;
+  readonly handoff: string;
+  readonly handoffSha256: string;
+  readonly output: string;
 }
 export function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}`);
@@ -35,45 +48,55 @@ export function digest(value: unknown, label: string, length = 64): string {
   if (!new RegExp(`^[a-f0-9]{${length}}$`).test(result)) throw new Error(`Invalid ${label}`);
   return result;
 }
-function identity(value: unknown, label: string): FileIdentity {
-  const row = object(value, label);
-  if (typeof row.bytes !== "number" || !Number.isSafeInteger(row.bytes) || row.bytes < 1) throw new Error(`Invalid ${label} bytes`);
-  return { bytes: row.bytes, sha256: digest(row.sha256, `${label} SHA-256`) };
+/** An absent authenticated input is a missing contract input, reported before any setup. */
+function requirePresent(paths: readonly string[], label: string): void {
+  if (paths.some(path => !lstatSync(path, { throwIfNoEntry: false }))) throw new MissingTlsInput(`Missing authenticated ${label}`);
 }
-function namedIdentity(value: unknown, label: string): NamedIdentity {
-  const row = object(value, label);
-  return { path: text(row.path, `${label} path`), ...identity(row, label) };
+
+/** The controller owns pinned, full handoff admission; TLS adds only its consumer policy. */
+function admitHandoff(evidence: TlsEvidence) {
+  const handoff = admitHandoffFile(evidence.handoff, evidence.handoffSha256);
+  const delivery = readSealedDelivery(handoff.delivery.root);
+  if (!sameTuple(delivery.manifest.tuple, tlsReleaseTuple)) throw new Error("TLS requires the runtime110/relay109/programs15/schema2/interface1 tuple");
+  const handoffFile = { ...fileIdentity(evidence.handoff), sha256: evidence.handoffSha256 };
+  return { handoff, delivery, config: delivery.config, inputs: delivery.inputs,
+    records: [handoffFile, handoff.intake, delivery.identity, handoff.artifacts.config, handoff.artifacts.inputs] };
 }
-function source(value: unknown): ProducerSource {
-  const row = object(value, "source");
-  return { head: digest(row.head ?? row.commit, "source head", 40), tree: digest(row.tree, "source tree", 40) };
+/** The config's bound fixture choices, propagated unchanged into the handoff. */
+function fixtureOptions(handoff: ConsumerHandoff): TlsFixtureOptions {
+  const tls = handoff.fixtures.tls;
+  if (tls.status === "unresolved") throw new MissingTlsInput(`TLS fixture options unresolved: ${tls.missing}`);
+  return tls.value;
 }
-function sameSource(value: unknown, expected: ProducerSource): void {
-  const actual = source(value);
-  if (actual.head !== expected.head || actual.tree !== expected.tree) throw new Error("TLS reviewed source head/tree mismatch");
+/**
+ * The sealed TLS page, built from this source before sealing. Its receipt,
+ * outputs, bundled source inputs and resolved relay import are checked by the
+ * controller's own verifier; the page is served only from these members.
+ */
+function sealedPage(delivery: SealedDelivery, sourceRoot: string): FileIdentity[] {
+  verifyTlsPage(delivery.root, sourceRoot, delivery.manifest.source);
+  return delivery.manifest.files.filter(file => file.path.startsWith(`${tlsPagePaths.root}/`))
+    .map(file => ({ path: join(delivery.root, file.path), bytes: file.bytes, sha256: file.sha256 }));
 }
-export async function fileIdentity(path: string): Promise<FileIdentity> {
-  const info = await lstat(path);
-  if (!info.isFile()) throw new Error("TLS evidence must be a regular file, not a symlink");
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return { bytes: info.size, sha256: hash.digest("hex") };
+
+const custodyFamilies = ["", "native-custody-", "vendor-custody-"];
+const custodyPhases = ["before", "after", "preseal"];
+/** Before, after and preseal custody snapshots stay identical members of the sealed delivery. */
+function custodyReferences(delivery: SealedDelivery): FileIdentity[] {
+  const members = new Map(delivery.manifest.files.map(file => [file.path, file]));
+  return custodyFamilies.flatMap(family => {
+    const rows = custodyPhases.flatMap(phase => members.get(`inputs/${family}${phase}.json`) ?? []);
+    const first = rows[0];
+    if (!first || rows.length !== custodyPhases.length || rows.some(row => !sameBytes(row, first))) throw new Error("TLS before/after/preseal custody mismatch");
+    return rows.map(row => ({ path: join(delivery.root, row.path), bytes: row.bytes, sha256: row.sha256 }));
+  });
 }
-async function requireIdentity(path: string, expected: FileIdentity): Promise<void> {
-  const actual = await fileIdentity(path);
-  if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) throw new Error(`TLS byte/custody mismatch for ${path}`);
+/** Delivered runtime and relay archives are exactly the authenticated inputs. */
+function requireRetainedArchives(handoff: ConsumerHandoff, inputs: InputManifest): void {
+  if (!sameBytes(handoff.artifacts.runtimeArchive, inputs.runtime.archive) || !sameBytes(handoff.artifacts.relayArchive, inputs.relay.archive)) throw new Error("TLS runtime or relay archive differs from its authenticated input");
 }
-async function pinnedJson(path: string, sha256: string): Promise<Record<string, unknown>> {
-  digest(sha256, "pinned SHA-256");
-  const bytes = await readFile(path);
-  if (!(await lstat(path)).isFile() || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("TLS pinned evidence hash mismatch");
-  return object(JSON.parse(bytes.toString("utf8")), "TLS evidence");
-}
-export function deliveryPath(root: string, path: string): string {
-  if (isAbsolute(path) || path.includes("\\") || path.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Unsafe delivery path");
-  return join(root, path);
-}
-async function walk(root: string, path = "", label = "TLS delivery"): Promise<string[]> {
+
+async function walk(root: string, path = "", label = "TLS dependency"): Promise<string[]> {
   let results: string[] = [];
   for (const entry of await readdir(join(root, path), { withFileTypes: true })) {
     const name = path ? `${path}/${entry.name}` : entry.name;
@@ -83,220 +106,165 @@ async function walk(root: string, path = "", label = "TLS delivery"): Promise<st
   }
   return results;
 }
-async function verifyInventory(root: string, value: unknown): Promise<NamedIdentity[]> {
-  if (!Array.isArray(value)) throw new Error("Missing complete TLS delivery inventory");
-  const files = value.map(row => namedIdentity(row, "delivery file"));
-  requireCompletePublicationFiles(files);
-  const expected = files.map(row => row.path).concat(["DELIVERY.json"]).sort();
-  const actual = (await walk(root)).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("TLS delivery inventory has missing or extra files");
-  for (const row of files) await requireIdentity(deliveryPath(root, row.path), row);
-  return files;
+interface DependencyTree { readonly root: string; readonly identity: TreeIdentity; readonly files: readonly FileIdentity[] }
+/** An ordinary-file tree whose complete identity is the authenticated one; its files are what may be seeded. */
+async function verifyDependencyTree(expected: TreeIdentity, label: string): Promise<DependencyTree> {
+  requirePresent([expected.path], `${label} dependency tree`);
+  if (!(await lstat(expected.path)).isDirectory()) throw new Error(`${label} dependency root must be an ordinary directory, not a symlink`);
+  const paths = (await walk(expected.path, "", `${label} dependency`)).toSorted();
+  const files = paths.map(path => fileIdentity(join(expected.path, path)));
+  requireTree(expected, `${label} dependency`);
+  return { root: expected.path, identity: expected, files };
 }
-async function reference(value: unknown): Promise<Record<string, unknown>> {
-  const row = namedIdentity(value, "parent intake reference");
-  if (!isAbsolute(row.path)) throw new Error("Parent intake reference must be absolute");
-  await requireIdentity(row.path, row);
-  return pinnedJson(row.path, row.sha256);
-}
-export function parseParentIntake(value: unknown, expected: ProducerSource, root: string) {
-  const row = object(value, "independent parent intake");
-  if (row.kind !== "independent-parent-byte-admission" || row.owner !== parentOwner
-    || row.parentByteIntakePassed !== true || row.packetBytesAdmitted !== true) throw new Error("Independent parent byte admission required; CURRENT is not admission");
-  sameSource(row.source, expected);
-  if (row.deliveryRoot !== root) throw new Error("Parent intake delivery root mismatch");
-  const tuple = object(row.tuple, "parent tuple");
-  if (tuple.runtime !== "0.0.109" || tuple.relay !== "0.0.109" || tuple.hostInterface !== 1
-    || JSON.stringify(tuple.engines) !== JSON.stringify(["quickjs", "jsc", "browser"])) throw new Error("TLS requires an explicit matching runtime/relay109 three-engine intake");
-  const intake = object(row.byteIntake, "byte intake");
-  if (intake.missingExtraSymlinkOrBadHashes !== 0 || intake.sourceArchiveMatchesExactGitArchive !== true
-    || intake.normalBuildProgramCompanionLauncherAndClosureHelpersPassed !== true) throw new Error("Incomplete parent byte/custody checks");
-  const gates = object(row.gates, "parent gates");
-  const custody = object(gates.beforeAfterPresealCustody, "parent custody");
-  for (const family of ["source-inputs", "native-custody-", "vendor-custody-"]) identity(custody[family], family);
-  return row;
-}
-export async function preflightTls(inputs: TlsEvidence) {
-  for (const path of [inputs.delivery, inputs.admission, inputs.hostSource, inputs.pgModules, inputs.pgArchive]) if (!isAbsolute(path)) throw new Error("TLS inputs require explicit absolute paths");
-  const root = resolve(inputs.delivery);
-  if (!(await lstat(root)).isDirectory()) throw new Error("TLS delivery root must be a real directory");
-  const parent = parseParentIntake(await pinnedJson(inputs.admission, inputs.admissionSha256), inputs.reviewedSource, root);
-  const deliveryRef = namedIdentity(parent.deliveryManifest, "delivery manifest");
-  if (deliveryRef.path !== join(root, "DELIVERY.json") || deliveryRef.sha256 !== inputs.deliverySha256) throw new Error("Parent delivery manifest identity mismatch");
-  const manifest = await reference(deliveryRef);
-  sameSource(manifest.source, inputs.reviewedSource);
-  const files = await verifyInventory(root, manifest.files);
-  const producerRef = namedIdentity(parent.producerAdmission, "producer admission");
-  if (producerRef.path !== join(root, "inputs/ADMISSION.json")) throw new Error("Producer admission path mismatch");
-  const producer = await reference(producerRef);
-  sameSource(producer.source, inputs.reviewedSource);
-  verifyPublicationBuilds(producer.builds);
-  verifyPublicationNativeBacking(producer.nativeBacking);
-  verifyPublicationNativeBacking(manifest.nativeBacking);
-  const releaseRef = namedIdentity(parent.sourceRelease, "reviewed TLS source release");
-  if (releaseRef.sha256 !== inputs.sourceReleaseSha256) throw new Error("Reviewed TLS source release identity mismatch");
-  const release = await reference(releaseRef);
-  sameSource(release.source, inputs.reviewedSource);
-  if (release.kind !== "tested-producer-source-release") throw new Error("Tested source release required");
-  const releasedTuple = object(release.tuple, "source release tuple");
-  if (releasedTuple.runtime !== "0.0.109" || releasedTuple.relay !== "0.0.109" || releasedTuple.hostInterface !== 1) throw new Error("Reviewed TLS source release does not select runtime/relay109");
-  const reuseRef = namedIdentity(parent.canonicalReuse, "canonical reuse");
-  if (reuseRef.path !== join(root, "inputs/CANONICAL-REUSE.json")) throw new Error("Canonical reuse path mismatch");
-  const reuse = await reference(reuseRef);
-  const originals = await verifyReuse(root, reuse, files);
-  const archive = namedIdentity(parent.sourceArchive, "source archive");
-  if (archive.path !== join(root, "source.tar.gz")) throw new Error("Source archive path mismatch");
-  await requireIdentity(archive.path, archive);
-  await verifyCustody(root, files, object(object(parent.gates, "gates").beforeAfterPresealCustody, "custody"));
-  const dependencies = await preflightDependencies(inputs, files, originals);
-  verifyHostSource(inputs.hostSource, inputs.reviewedSource);
-  for (const name of ["waffle", "waffle-relay"]) {
-    const metadata = object(JSON.parse(await readFile(join(inputs.hostSource, "web/node_modules", name, "package.json"), "utf8")), "installed runtime package");
-    if (metadata.version !== "0.0.109") throw new Error("Reviewed host requires exact installed runtime/relay109");
-  }
-  const pg = object(JSON.parse(await readFile(join(inputs.pgModules, "pg/package.json"), "utf8")), "pg package");
-  if (pg.version !== "8.16.3") throw new Error("Unmodified pg 8.16.3 must be staged separately");
-  await verifyPgArchive(inputs);
-  const references = await preflightReferences(inputs, parent, files);
-  const pgArchive = { path: inputs.pgArchive, ...await fileIdentity(inputs.pgArchive) };
-  if (pgArchive.sha256 !== inputs.pgArchiveSha256) throw new Error("pg archive changed before reference capture");
-  const selected = object(parent.tuple, "tuple");
-  const tuple = { runtime: selected.runtime, relay: selected.relay, hostInterface: selected.hostInterface, engines: selected.engines };
-  return { inputs, files, dependencies, references, pgArchive, source: inputs.reviewedSource, contract: deliveryContract, tuple };
-}
-export type TlsIntake = Awaited<ReturnType<typeof preflightTls>>;
-async function verifyReuse(root: string, reuse: Record<string, unknown>, files: readonly NamedIdentity[]): Promise<NamedIdentity[]> {
-  if (!Array.isArray(reuse.staged)) throw new Error("Missing canonical original/reuse custody");
-  const members = new Map(files.map(row => [row.path, row]));
-  const seen = new Set<string>();
-  const originals: NamedIdentity[] = [];
-  for (const value of reuse.staged) {
-    const row = object(value, "reuse entry");
-    const staged = namedIdentity(row, "reuse entry");
-    const originalPath = text(row.originalPath, "original reuse path");
-    if (!isAbsolute(originalPath) || resolve(originalPath) !== originalPath) throw new Error("Original reuse path must remain absolute and canonical");
-    if (seen.has(staged.path)) throw new Error("Duplicate staged reuse path");
-    seen.add(staged.path);
-    const member = members.get(staged.path);
-    if (!member) throw new Error("Reuse path must be a delivery manifest member");
-    if (member.bytes !== staged.bytes || member.sha256 !== staged.sha256) throw new Error("Reuse manifest byte/custody mismatch");
-    await requireIdentity(originalPath, staged);
-    await requireIdentity(deliveryPath(root, staged.path), staged);
-    originals.push({ path: originalPath, bytes: staged.bytes, sha256: staged.sha256 });
-  }
-  return originals;
-}
-async function verifyCustody(root: string, files: readonly NamedIdentity[], parent: Record<string, unknown>): Promise<void> {
-  for (const family of ["", "native-custody-", "vendor-custody-"]) {
-    const rows = ["before", "after", "preseal"].map(phase => files.find(row => row.path === `inputs/${family}${phase}.json`));
-    const first = rows[0];
-    if (!first || rows.some(row => !row || row.sha256 !== first.sha256 || row.bytes !== first.bytes)) throw new Error("TLS before/after/preseal custody mismatch");
-    const intake = identity(parent[family || "source-inputs"], "parent custody");
-    if (intake.bytes !== first.bytes || intake.sha256 !== first.sha256) throw new Error("TLS parent byte/custody mismatch");
-    await requireIdentity(join(root, first.path), first);
-  }
-}
-function git(root: string, ...args: string[]): string { return execFileSync("git", ["-C", root].concat(args), { encoding: "utf8" }).trim(); }
-function verifyReviewedHostSourceSync(root: string, expected: ProducerSource): void {
-  if (git(root, "rev-parse", "HEAD") !== expected.head || git(root, "rev-parse", "HEAD^{tree}") !== expected.tree) throw new Error("Host checkout differs from reviewed TLS source");
-  if (git(root, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Host checkout must be clean reviewed source");
-}
-function verifyHostSource(root: string, expected: ProducerSource): void {
-  verifyReviewedHostSourceSync(root, expected);
-  for (const name of ["web/src/net/relay.ts", "web/src/runner.ts"]) {
-    const path = resolve(root, name);
-    if (relative(root, path).startsWith("..")) throw new Error("Invalid host source path");
-    git(root, "ls-files", "--error-unmatch", name);
-  }
-}
-
-async function verifyPgArchive(inputs: TlsEvidence): Promise<void> {
-  const archive = await fileIdentity(inputs.pgArchive);
-  if (archive.sha256 !== digest(inputs.pgArchiveSha256, "public pg tarball SHA-256")) throw new Error("pg public tarball hash mismatch");
-  const listing = execFileSync("tar", ["-tvzf", inputs.pgArchive], { encoding: "utf8", timeout: 15_000 });
+async function verifyPgArchive(tarball: FileIdentity, modules: string): Promise<void> {
+  requireFile(tarball, "pg public tarball");
+  const listing = execFileSync("tar", ["-tvzf", tarball.path], { encoding: "utf8", timeout: 15_000 });
   if (listing.split("\n").some(line => line && !line.startsWith("-") && !line.startsWith("d"))) throw new Error("pg tarball must contain ordinary files and directories");
-  const names = execFileSync("tar", ["-tzf", inputs.pgArchive], { encoding: "utf8", timeout: 15_000 }).trim().split("\n");
+  const names = execFileSync("tar", ["-tzf", tarball.path], { encoding: "utf8", timeout: 15_000 }).trim().split("\n");
   const seen = new Set<string>();
   for (const name of names) {
     if (!name.startsWith("package/") || name.slice(8).split("/").some(part => part === ".." || part === ".") || seen.has(name)) throw new Error("Unsafe or duplicate pg tarball member");
     seen.add(name);
     if (name.endsWith("/")) continue;
-    const expected = execFileSync("tar", ["-xOzf", inputs.pgArchive, "--", name], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
-    await requireIdentity(join(inputs.pgModules, "pg", name.slice(8)), { bytes: expected.length, sha256: createHash("sha256").update(expected).digest("hex") });
+    const expected = execFileSync("tar", ["-xOzf", tarball.path, "--", name], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+    const actual = fileIdentity(join(modules, "pg", name.slice(8)));
+    if (!sameBytes(actual, { bytes: expected.length, sha256: sha256(expected) })) throw new Error(`Staged pg differs from the pinned public tarball: ${name}`);
   }
-  const actual = (await walk(join(inputs.pgModules, "pg"))).map(name => `package/${name}`).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(names.filter(name => !name.endsWith("/")).sort())) throw new Error("Staged pg differs from the pinned public tarball");
+  const actual = (await walk(join(modules, "pg"))).map(name => `package/${name}`).toSorted();
+  if (JSON.stringify(actual) !== JSON.stringify(names.filter(name => !name.endsWith("/")).toSorted())) throw new Error("Staged pg differs from the pinned public tarball");
+}
+/** Unmodified pg 8.16.3: pinned public tarball, complete transitive tree and its frozen project files. */
+async function preflightPg(inputs: InputManifest) {
+  const requirement = inputs.consumers.tls;
+  if (requirement.status === "unresolved") throw new MissingTlsInput(`TLS dependencies unresolved: ${requirement.missing}`);
+  const { pgTarball, pgModules, pgPackageJson, pgLock } = requirement.value;
+  const project = dirname(pgModules.path);
+  if (basename(pgModules.path) !== "node_modules" || pgPackageJson.path !== join(project, "package.json") || pgLock.path !== join(project, "bun.lock")) throw new Error("TLS pg project files must sit beside its node_modules");
+  requirePresent([pgTarball.path, pgPackageJson.path, pgLock.path], "pg tarball and frozen project files");
+  requireFile(pgTarball, "pg public tarball");
+  const locks = [requireFile(pgPackageJson, "pg package.json"), requireFile(pgLock, "pg bun.lock")];
+  const pg = await verifyDependencyTree(pgModules, "pg");
+  await verifyPgArchive(pgTarball, pgModules.path);
+  const metadata = object(JSON.parse(readFileSync(join(pgModules.path, "pg/package.json"), "utf8")), "pg package");
+  if (metadata.version !== "8.16.3") throw new Error("Unmodified pg 8.16.3 must be staged separately");
+  return { pg, pgArchive: pgTarball, locks };
 }
 
-export interface DependencyTree { readonly root: string; readonly files: readonly NamedIdentity[] }
-export async function verifyDependencyTree(root: string, authenticated: readonly NamedIdentity[], label: string): Promise<DependencyTree> {
-  if (!isAbsolute(root) || resolve(root) !== root) throw new Error("Dependency root must preserve its original absolute path");
-  let info;
-  try { info = await lstat(root); }
-  catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new MissingTlsInput(`Missing authenticated ${label} dependency tree`); throw error; }
-  if (!info.isDirectory()) throw new Error(`${label} dependency root must be an ordinary directory, not a symlink`);
-  const paths = (await walk(root, "", `${label} dependency`)).map(path => join(root, path)).sort();
-  const files = authenticated.filter(row => row.path.startsWith(root + "/")).toSorted((a, b) => a.path.localeCompare(b.path));
-  if (!files.length || JSON.stringify(paths) !== JSON.stringify(files.map(row => row.path).sort())) throw new MissingTlsInput(`Missing authenticated ${label} dependency coverage or unexpected files; require existing DELIVERY.json/canonical-reuse originalPath membership`);
-  for (const row of files) await requireIdentity(row.path, row);
-  return { root, files };
-}
-async function preflightDependencies(inputs: TlsEvidence, files: readonly NamedIdentity[], originals: readonly NamedIdentity[]) {
-  const admitted = new Map<string, NamedIdentity>();
-  for (const row of files.map(row => ({ ...row, path: deliveryPath(inputs.delivery, row.path) })).concat(originals)) {
-    const previous = admitted.get(row.path);
-    if (previous && (previous.bytes !== row.bytes || previous.sha256 !== row.sha256)) throw new Error("Conflicting authenticated dependency bytes");
-    admitted.set(row.path, row);
-  }
-  const records = Array.from(admitted.values());
-  const pg = await verifyDependencyTree(inputs.pgModules, records, "pg");
-  const host = [];
-  for (const root of [join(inputs.hostSource, "node_modules"), join(inputs.hostSource, "web/node_modules")]) host.push(await verifyDependencyTree(root, records, "host"));
-  const locks: NamedIdentity[] = [];
-  for (const root of [dirname(inputs.pgModules), inputs.hostSource, join(inputs.hostSource, "web")]) {
-    for (const name of ["package.json", "bun.lock"]) locks.push(await authenticatedFile(join(root, name), admitted));
-  }
-  return { pg, host, locks };
-}
-async function authenticatedFile(path: string, admitted: ReadonlyMap<string, NamedIdentity>): Promise<NamedIdentity> {
-  const row = admitted.get(path);
-  if (!row) throw new MissingTlsInput(`Missing authenticated frozen dependency lock/input ${path}; existing admission/canonical original inventory required`);
-  await requireIdentity(path, row);
-  return row;
-}
-export async function readVerifiedFile(row: NamedIdentity): Promise<Uint8Array<ArrayBuffer>> {
-  if (!(await lstat(row.path)).isFile()) throw new Error("Dependency must remain an ordinary file");
-  const bytes = await readFile(row.path);
-  if (bytes.length !== row.bytes || createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new Error("Dependency byte/custody mismatch immediately before use");
-  return bytes;
-}
-export async function verifyReviewedHostSource(root: string, expected: ProducerSource): Promise<void> {
+function git(root: string, ...args: string[]): string { return execFileSync("git", ["-C", root].concat(args), { encoding: "utf8" }).trim(); }
+function requireReviewedHostSource(root: string, expected: SourceIdentity): void {
   if (git(root, "rev-parse", "HEAD") !== expected.head || git(root, "rev-parse", "HEAD^{tree}") !== expected.tree) throw new Error("Host checkout differs from reviewed TLS source");
   if (git(root, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Host checkout must be clean reviewed source");
 }
-export async function preflightReferences(inputs: TlsEvidence, parent: Record<string, unknown>, files: readonly NamedIdentity[]) {
-  const parentIdentity = await fileIdentity(inputs.admission);
-  if (parentIdentity.sha256 !== inputs.admissionSha256) throw new Error("Parent intake changed before reference capture");
-  const references: NamedIdentity[] = [{ path: inputs.admission, ...parentIdentity }];
-  for (const key of ["deliveryManifest", "producerAdmission", "sourceRelease", "sourceArchive", "canonicalReuse"]) {
-    const row = namedIdentity(parent[key], key);
-    if (!isAbsolute(row.path)) throw new Error("Preflight reference must retain its original absolute path");
-    await requireIdentity(row.path, row);
-    references.push(row);
-  }
-  for (const family of ["", "native-custody-", "vendor-custody-"]) {
-    for (const phase of ["before", "after", "preseal"]) {
-      const row = files.find(row => row.path === `inputs/${family}${phase}.json`);
-      if (!row) throw new Error("Missing preflight custody reference");
-      const path = deliveryPath(inputs.delivery, row.path);
-      await requireIdentity(path, row);
-      references.push({ ...row, path });
-    }
-  }
-  return references;
+export async function verifyReviewedHostSource(root: string, expected: SourceIdentity): Promise<void> { requireReviewedHostSource(root, expected); }
+const hostProjects = [["rootDependencies", ""], ["webDependencies", "web"]] as const;
+const frozenProjectFiles = ["package.json", "bun.lock"];
+/**
+ * The sealed config's source checkout is the reviewed host. Its installed
+ * root and web trees must be the authenticated donors, installed from that
+ * source's own frozen package files.
+ */
+function preflightHost(config: C1Config, inputs: InputManifest, reviewed: SourceIdentity) {
+  const root = config.sourceRoot;
+  requireReviewedHostSource(root, reviewed);
+  for (const name of ["web/src/net/relay.ts", "web/src/runner.ts"].concat(hostProjects.flatMap(([, directory]) => frozenProjectFiles.map(file => join(directory, file))))) git(root, "ls-files", "--error-unmatch", name);
+  const host = hostProjects.map(([name, directory]) => {
+    const donor = inputs.donors[name];
+    const staged = join(root, directory, "node_modules");
+    requirePresent([donor.path, staged], `host ${name} dependency tree`);
+    requireTree(donor, `host ${name} donor`);
+    requireStagedDonor(name, donor, staged, root);
+    return treeIdentity(staged);
+  });
+  const locks = hostProjects.flatMap(([name, directory]) => frozenProjectFiles.map(file => {
+    const frozen = fileIdentity(join(root, directory, file));
+    if (!sameBytes(fileIdentity(join(dirname(inputs.donors[name].path), file)), frozen)) throw new Error(`Host ${name} was not installed from the reviewed frozen ${file}`);
+    return frozen;
+  }));
+  for (const name of installedRuntimePackages.keys()) requireInstalledRuntimePackage(name, object(JSON.parse(readFileSync(join(root, "web/node_modules", name, "package.json"), "utf8")), "installed runtime package"));
+  return { root, host, locks };
 }
 
+/** Guest roles a TLS engine loads, from the controller's role registry. */
+export function guestArtifacts(handoff: ConsumerHandoff, engine: QualificationEngine): readonly FileIdentity[] {
+  if (engine === "browser") return [handoff.artifacts.browserGuest];
+  if (engine === "quickjs") return [handoff.artifacts.quickjsGuest, handoff.artifacts.quickjsSide];
+  return [handoff.artifacts.jscGuest, handoff.artifacts.jscSide];
+}
+
+/** One real response as the page received it: its request method, status, Content-Encoding and decoded body. */
+export interface ObservedResponse {
+  readonly url: string;
+  readonly method: string;
+  readonly status: number;
+  readonly contentEncoding: string | undefined;
+  readonly body: Uint8Array;
+}
+/**
+ * The result's `loaded` rows: every successful GET the page or its workers
+ * received, typed and bound by the controller's own parser and validator
+ * before any result is written. Other GET responses loaded nothing; they are
+ * kept for the record. POST control requests are not loaded objects.
+ */
+export function tlsLoaded(handoff: ConsumerHandoff, responses: readonly ObservedResponse[]) {
+  const gets = responses.filter(response => response.method === "GET");
+  const rows: unknown[] = gets.filter(response => response.status === 200).map(response => ({ url: response.url, method: response.method, status: response.status,
+    encoding: response.contentEncoding ?? "identity", bytes: response.body.byteLength, sha256: sha256(response.body) }));
+  const loaded: LoadedObservation[] = parseLoaded(rows);
+  bindLoaded(handoff, "tls", loaded);
+  return { loaded, unloaded: gets.filter(response => response.status !== 200).map(response => ({ url: response.url, status: response.status })) };
+}
+
+export async function preflightTls(evidence: TlsEvidence) {
+  const { handoff, delivery, config, inputs, records } = admitHandoff(evidence);
+  if (evidence.output !== join(handoff.outputs.tls, TLS_STAGE)) throw new Error(`TLS output must be the handoff's ${TLS_STAGE} directory beneath outputs.tls`);
+  const fixtures = fixtureOptions(handoff);
+  const custody = custodyReferences(delivery);
+  requireRetainedArchives(handoff, inputs);
+  verifyPublicationBuilds(JSON.parse(readFileSync(handoff.artifacts.engineBuilds.path, "utf8")));
+  requirePresent([handoff.dependencies.browsers.path], "Playwright browsers");
+  requireTree(handoff.dependencies.browsers, "Playwright browsers");
+  const pg = await preflightPg(inputs);
+  const host = preflightHost(config, inputs, handoff.source);
+  const page = sealedPage(delivery, host.root);
+  const references = records.concat([handoff.artifacts.sourceArchive, handoff.artifacts.tlsPageReceipt, handoff.artifacts.tlsPgClient], custody);
+  for (const reference of references) requireFile(reference, "TLS preflight reference");
+  return {
+    handoff, fixtures, page, hostSource: host.root, output: evidence.output, source: handoff.source, tuple: handoff.tuple,
+    dependencies: { pg: pg.pg, host: host.host, locks: pg.locks.concat(host.locks) }, pgArchive: pg.pgArchive, references,
+  };
+}
+export type TlsIntake = Awaited<ReturnType<typeof preflightTls>>;
+
+async function requireSealedPath(root: string, path: string, mode: number): Promise<void> {
+  const member = relative(root, path);
+  if (!inside(root, path) || !member) throw new Error("Delivered file is outside its sealed root");
+  const expected = executableMemberPaths().includes(member) ? SEALED_EXECUTABLE_MODE : SEALED_FILE_MODE;
+  if ((mode & 0o7777) !== Number.parseInt(expected, 8)) throw new Error("TLS sealed file mode changed immediately before use");
+  let directory = dirname(path);
+  for (;;) {
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || (stat.mode & 0o7777) !== SEALED_DIRECTORY_MODE) throw new Error("TLS sealed directory mode changed immediately before use");
+    if (directory === root) return;
+    directory = dirname(directory);
+  }
+}
+/** Sealed delivery reads also check registry modes and ancestors before and after the byte read. */
+export async function readVerifiedFile(row: FileIdentity, sealedRoot?: string): Promise<Uint8Array<ArrayBuffer>> {
+  const before = await lstat(row.path);
+  if (!before.isFile()) throw new Error("Dependency must remain an ordinary file");
+  if (sealedRoot !== undefined) await requireSealedPath(sealedRoot, row.path, before.mode);
+  const bytes = await readFile(row.path);
+  if (bytes.length !== row.bytes || createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new Error("Dependency byte/custody mismatch immediately before use");
+  if (sealedRoot !== undefined) {
+    const after = await lstat(row.path);
+    if (!after.isFile()) throw new Error("Delivered file must remain an ordinary file");
+    await requireSealedPath(sealedRoot, row.path, after.mode);
+  }
+  return bytes;
+}
 export async function recheckDependencies(intake: TlsIntake): Promise<void> {
-  for (const tree of intake.dependencies.host.concat([intake.dependencies.pg])) await verifyDependencyTree(tree.root, tree.files, "preflighted");
-  for (const lock of intake.dependencies.locks) await requireIdentity(lock.path, lock);
+  requireTree(intake.handoff.dependencies.browsers, "Playwright browsers");
+  requireTree(intake.dependencies.pg.identity, "preflighted pg dependency");
+  for (const tree of intake.dependencies.host) requireTree(tree, "preflighted host dependency");
+  for (const lock of intake.dependencies.locks.concat([intake.pgArchive])) requireFile(lock, "preflighted frozen input");
 }

@@ -464,7 +464,8 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
     launched.add(worker);
     expect(worker.request?.module).toBe(module);
     expect(worker.request?.adapter).toBe(adapter);
-    expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
+    if (adapter === "preview1") expect({ args: worker.request?.args, env: worker.request?.env }).toEqual({ args: [], env: {} });
+    else expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
     return { run, worker };
   };
   try {

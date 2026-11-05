@@ -29,7 +29,7 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     }
     const shell = (command: string, env: Record<string, string> = {}) => {
       const result = Bun.spawnSync(["bash", "-c", 'source "$1/jsc/common.sh"; copy_jsc_config_inputs; ' + command, "jsc-inputs-test", root], {
-        env: { ...process.env, ...env, JSC_BUILD_DIR: join(root, "build"), WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: sdk, BUN_WASM_SYSROOT: sysroot, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        env: { ...process.env, ...env, TMPDIR: root, JSC_BUILD_DIR: join(root, "build"), WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: sdk, BUN_WASM_SYSROOT: sysroot, PATH: `${bin}:${process.env.PATH ?? ""}` },
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(result.stderr.toString()).toBe("");
@@ -40,6 +40,12 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("JSC fixture scratch is owned by the fixture rather than the workstation", () => {
+  fixture((root, shell) => {
+    expect(shell('printf "%s" "$TMPDIR"')).toBe(root);
+  });
+});
 
 test("JSC stamp ignores scratch policy but fingerprints effective compiler inputs", () => {
   fixture((root, shell) => {

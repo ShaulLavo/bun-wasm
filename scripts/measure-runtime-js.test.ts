@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
@@ -82,9 +82,10 @@ function writeClosureFixture(root: string) {
     mkdirSync(join(file, ".."), { recursive: true });
     writeFileSync(file, `synthetic identity fixture ${path}`, { mode: 0o700 });
   }
-  const path = join(root, "launcher/bun-wasm"), receipt = `${path}.launcher.json`;
-  const launcher = { path, receipt, ...launcherReceipt(path, source) };
-  writeFileSync(receipt, JSON.stringify(launcher));
+  const path = join(root, "launcher/bun-wasm");
+  const original = launcherReceipt(path, source);
+  writeFileSync(`${path}.launcher.json`, JSON.stringify(original));
+  const launcher = { path: "launcher/bun-wasm", receipt: "launcher/bun-wasm.launcher.json", ...original };
   const files = producerArtifactPaths("split").map(path => {
     const bytes = readFileSync(join(root, path));
     return { path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -107,6 +108,18 @@ test("measurement consumes the current complete closure and original launcher re
   });
 });
 
+test("a relocated closure verifies in place without rewriting its receipts", () => {
+  closureFixture(root => {
+    const moved = join(root, "..", `${basename(root)}-moved`);
+    try {
+      cpSync(root, moved, { recursive: true });
+      const receipt = readFileSync(join(moved, "launcher/bun-wasm.launcher.json"), "utf8");
+      expect(verifyMeasurementClosure(moved).launcher.path).toBe(join(moved, "launcher/bun-wasm"));
+      expect(readFileSync(join(moved, "launcher/bun-wasm.launcher.json"), "utf8")).toBe(receipt);
+    } finally { rmSync(moved, { recursive: true, force: true }); }
+  });
+});
+
 test("measurement rejects incomplete and mismatched producer identities before execution", () => {
   closureFixture((root, manifest) => {
     const save = (value: unknown) => writeFileSync(join(root, "manifest.json"), JSON.stringify(value));
@@ -116,7 +129,11 @@ test("measurement rejects incomplete and mismatched producer identities before e
     expect(() => verifyMeasurementClosure(root)).toThrow("Launcher source");
     save({ ...manifest, profile: "shared-group" });
     expect(() => verifyMeasurementClosure(root)).toThrow("supported paired-engine split closure");
-    save({ ...manifest, launcher: { ...manifest.launcher, path: "/changed" } });
+    save({ ...manifest, launcher: { ...manifest.launcher, path: join(root, "launcher/bun-wasm") } });
+    expect(() => verifyMeasurementClosure(root)).toThrow("relative launcher");
+    save({ ...manifest, launcher: { ...manifest.launcher, receipt: "../launcher/bun-wasm.launcher.json" } });
+    expect(() => verifyMeasurementClosure(root)).toThrow("relative launcher");
+    save({ ...manifest, launcher: { ...manifest.launcher, artifact: { ...manifest.launcher.artifact, bytes: 1 } } });
     expect(() => verifyMeasurementClosure(root)).toThrow("Manifest launcher differs");
     save(manifest);
     mkdirSync(join(root, ".producer-lock"));
