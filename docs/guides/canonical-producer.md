@@ -12,47 +12,21 @@ JSC sides. It never rebuilds native VM libraries implicitly. Production needs a
 fresh exact tested-source authorization, a clean exclusive checkout, and a new
 output root. An old authorization or held packet cannot authorize another unit.
 
-## Mandatory production driver entry
+## Production controller
 
-The sole producer owner must use this entry command for both fresh driver
-preparation and execution. Set the three absolute paths first. The report's
-parent must already exist; the report itself must not exist, even as an empty
-directory or dangling symlink.
+Production runs through one maintained controller, `scripts/c1-controller.ts`,
+with one config and one authenticated input manifest (`scripts/c1/contract.ts`).
+`check` admits every input without claiming a root; `run --execute <config
+SHA-256>` produces. The flag names the exact config bytes; it grants no
+production authorization by itself.
 
-```sh
-node "$GUARD_CHECKOUT/scripts/producer-start.ts" \
-  --report-root "$FRESH_REPORT_ROOT" -- \
-  "$(command -v node)" "$FRESH_DRIVER_PREPARER"
-```
-
-`GUARD_CHECKOUT` is the checkout containing the reviewed orchestration guard.
-`FRESH_DRIVER_PREPARER` is a trusted TypeScript preparation entry outside all
-historical report and artifact roots. It prepares the new controller/config and
-then runs that controller in the same invocation. It must take its report root
-from `process.env.BUN_WASM_PRODUCER_REPORT_ROOT`, which the guard sets, rather
-than hard-code a previous root or load a previous report's environment/helper.
-The preparation entry must direct every report write, including its failure
-records and cleanup records, to that root.
-
-Run the guard with Node.js 24 or later on a POSIX host. It uses one non-recursive,
-exclusive `mkdir` before loading or executing any preparation/controller code.
-An existing file, directory, symlink or competing claim refuses the invocation
-without running preparation or cleanup. Only the winning invocation receives
-the root. It replaces itself with the command, preserving its PID, inherited
-standard streams, exit status and signal termination without a supervisor.
-
-Do not create the report, write controller/config/evidence files, source a held
-report's environment, run its `start.sh`, redirect output into it, or install
-report-writing failure/cleanup callbacks before this entry. Put any outer
-runner's diagnostics outside report roots. No outer failure handler may clean
-up a refused root. This entry guards the report claim, not arbitrary paths in
-trusted driver code; artifact custody checks remain mandatory.
-
-The claim stays on success, preparation failure, execution failure and signal
-termination. Never remove it automatically or reuse it for another start. Keep
-its diagnostics for the owner; use a different brand-new root for an authorized
-retry. This command grants no production authorization. It changes orchestration
-only, not the approved guest checkout, source/tree tuple, artifacts or pins.
+Every root must not exist, even as an empty directory or dangling symlink, and
+its parent must be a physical directory. Roots are disjoint from each other and
+from the source, config, manifest, receipts, donors and native inputs. Each is
+created with one non-recursive, exclusive `mkdir`. An existing file, directory,
+symlink or competing claim refuses the invocation without preparation or
+cleanup. The report is claimed first after admission and kept on success,
+failure and signal termination; never remove or reuse it. A retry uses new roots.
 
 ## Engine commands inside the claimed driver
 
@@ -109,10 +83,14 @@ reuse provenance, current host and reader code, native JSC admission, and before
 after, and pre-seal input, vendor, and native custody. Missing one of these files
 is a failure, not a reduced publication profile. `verifyPublicationBuilds`
 accepts exactly the six supported raw guest names and their fingerprints.
-`verifyPublicationNativeBacking` accepts only JSC and the shared sysroot. Original
-Bash sidecars, runtime and program release inputs, vendor evidence, and the native
-JSC header manifest remain required delivery files.
-Decompressed served files must match the admitted raw bytes.
+`verifyPublicationNativeBacking` accepts only JSC and the shared sysroot. The
+runtime and relay archives the source pins (`selectedReleaseArchives`), program
+release inputs, vendor evidence, and the native JSC header manifest remain
+required delivery files. Decompressed served files must match the admitted raw bytes.
+
+The delivery is sealed once. Registry executables (`executableMemberPaths`, the
+native launcher) are 0555, every other file 0444, directories 0555. Consumers
+never chmod sealed files; they run the launcher from its sealed path.
 
 Every remaining gate stays blocking:
 
@@ -128,10 +106,9 @@ The authoritative memory maximum remains 1,073,741,824 bytes. Hook fixtures reta
 an 8,388,608-byte allocation and a 1,140,850,688-byte failure request. Synthetic
 source fixtures are not accepted workload bytes or a production gate verdict.
 
-The consumer tuple remains runtime 0.0.107, programs 0.0.15, program manifest
-schema 2, and host interface 1. Bash uses original artifact 13057504313, attempt 1,
-from source `32b9103c762954bbe6e728fb86dc6cafa532edea`, after canonical intake.
-There is no duplicate Bash build or byte admission implied by source qualification.
+The consumer tuple and Bash pin are the selected source's own
+(`scripts/waffle-release-inputs.json`, `web/package.json`). Source qualification
+implies no duplicate Bash build or byte admission.
 
 Failed or held roots and their releases, artifacts, receipts, and retention
 records remain immutable and non-admitted. Do not trim or reseal them into this
