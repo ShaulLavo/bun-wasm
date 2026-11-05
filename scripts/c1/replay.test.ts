@@ -9,7 +9,7 @@ import { CONSUMER_HARNESS_PATHS, admitHarness, changedPaths, requireConsumerPath
 import { admitHostTool, admitHostTools } from "./host-tools.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 import { replay, requireOriginal } from "./operations.ts";
-import { admitProduct, parseReplay, type AdmittedProduct, type HarnessIdentity, type ReplayContract } from "./replay.ts";
+import { HARNESS_TARGET_BRANCH, admitProduct, parseReplay, type AdmittedProduct, type HarnessIdentity, type ReplayContract } from "./replay.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS } from "./tls-page.ts";
 
 /** Synthetic fixtures only: a fixture Git host, a sealed fixture delivery and recorded GitHub answers. None of it is product evidence. */
@@ -40,7 +40,7 @@ async function harnessFixture(path = "scripts/io-resource-context.ts") {
   const contract = parseReplay(JSON.parse(readFileSync(f.replay, "utf8")));
   const product: AdmittedProduct = admitProduct(contract.product);
   const source = commit(f.host, path, "// synthetic consumer harness change\n");
-  const harness: HarnessIdentity = { sourceRoot: f.host, source, repository: "fixture/bun-wasm", pullRequest: 7,
+  const harness: HarnessIdentity = { sourceRoot: f.host, source, repository: "fixture/bun-wasm", targetBranch: HARNESS_TARGET_BRANCH, pullRequest: 7,
     review: fixtureReview(f.root, source) };
   return { f, contract, product, harness };
 }
@@ -50,9 +50,12 @@ function recorded(harness: HarnessIdentity, edit: (facts: Facts) => void = () =>
   const base = `repos/${harness.repository}`;
   const facts: Facts = {
     [`${base}/pulls/${harness.pullRequest}`]: { merged: true, merged_at: "2026-11-05T00:00:00Z", merge_commit_sha: harness.source.head, html_url: "https://github.com/fixture/bun-wasm/pull/7",
-      base: { ref: "main", repo: { full_name: harness.repository } }, head: { sha: harness.review.candidate.head } },
+      base: { ref: "consumer/runtime110", repo: { full_name: harness.repository } }, head: { sha: harness.review.candidate.head } },
     [`${base}/git/commits/${harness.review.candidate.head}`]: { tree: { sha: harness.review.candidate.tree } },
     [`${base}/git/commits/${harness.source.head}`]: { tree: { sha: harness.source.tree } },
+    [`${base}/git/ref/heads/consumer/runtime110`]: { ref: "refs/heads/consumer/runtime110", object: { type: "commit", sha: harness.source.head } },
+    // Main has moved on with installer, lock and product commits; the replay never reads it.
+    [`${base}/git/ref/heads/main`]: { ref: "refs/heads/main", object: { type: "commit", sha: "e".repeat(40) } },
   };
   edit(facts);
   const reads: string[] = [];
@@ -106,19 +109,52 @@ test("a merged, reviewed, consumer-only harness is admitted with both identities
   expect(evidence.product).toEqual(f.source);
   expect(evidence.harness.source).toEqual(harness.source);
   expect(evidence.changedPaths).toEqual(["scripts/io-resource-context.ts"]);
-  expect(evidence.pullRequest).toEqual({ url: "https://github.com/fixture/bun-wasm/pull/7", mergedAt: "2026-11-05T00:00:00Z", mergeCommit: harness.source.head, head: harness.source.head, base: "main" });
+  expect(evidence.pullRequest).toEqual({ url: "https://github.com/fixture/bun-wasm/pull/7", mergedAt: "2026-11-05T00:00:00Z", mergeCommit: harness.source.head, head: harness.source.head,
+    base: "consumer/runtime110", branchHead: harness.source.head });
   expect(evidence.review).toEqual({ artifact: harness.review.artifact, reconciliation: harness.review.reconciliation, evidence: [] });
+  expect(read.reads).not.toContain(`repos/${harness.repository}/git/ref/heads/main`);
 });
 
+const BRANCH = "repos/fixture/bun-wasm/git/ref/heads/consumer/runtime110";
 test.each([
   ["not merged", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], merged: false }; }, "is not merged"],
   ["merged as another commit", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], merge_commit_sha: "a".repeat(40) }; }, "merged as"],
-  ["merged into another branch", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], base: { ref: "release", repo: { full_name: "fixture/bun-wasm" } } }; }, "did not merge into fixture/bun-wasm main"],
+  ["merged into main", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], base: { ref: "main", repo: { full_name: "fixture/bun-wasm" } } }; }, "did not merge into fixture/bun-wasm consumer/runtime110"],
+  ["merged into an unrelated branch", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], base: { ref: "consumer/runtime109", repo: { full_name: "fixture/bun-wasm" } } }; }, "did not merge into fixture/bun-wasm consumer/runtime110"],
+  ["merged into a fork's harness branch", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], base: { ref: "consumer/runtime110", repo: { full_name: "fork/bun-wasm" } } }; }, "did not merge into fixture/bun-wasm consumer/runtime110"],
   ["merged from another head", (facts: Facts, pull: string) => { facts[pull] = { ...facts[pull], head: { sha: "b".repeat(40) } }; }, "is not the reviewed candidate"],
+  ["whose branch has since moved to an unrelated commit", (facts: Facts) => { facts[BRANCH] = { ref: "refs/heads/consumer/runtime110", object: { type: "commit", sha: "f".repeat(40) } }; }, `consumer/runtime110 head ${"f".repeat(40)} is not the harness`],
+  ["whose branch head is main's head", (facts: Facts) => { facts[BRANCH] = { ref: "refs/heads/consumer/runtime110", object: { type: "commit", sha: "e".repeat(40) } }; }, `consumer/runtime110 head ${"e".repeat(40)} is not the harness`],
+  ["whose target is a tag, not a branch", (facts: Facts) => { facts[BRANCH] = { ref: "refs/tags/consumer/runtime110", object: { type: "tag", sha: "f".repeat(40) } }; }, "is not a branch of fixture/bun-wasm"],
+  ["whose target branch does not exist", (facts: Facts) => { delete facts[BRANCH]; }, `no recorded ${BRANCH}`],
 ] as const)("public merge facts refuse a pull request %s", async (_name, edit, message) => {
   const { f, product, harness } = await harnessFixture();
   const read = recorded(harness, facts => edit(facts, `repos/${harness.repository}/pulls/${harness.pullRequest}`));
   await expect(admitHarness(harness, f.host, product, read)).rejects.toThrow(message);
+});
+
+test("the harness target branch is one strict contract field, never main or a fallback", async () => {
+  const { f, harness } = await harnessFixture();
+  const contract = JSON.parse(readFileSync(f.replay, "utf8"));
+  expect(parseReplay(contract).harness.targetBranch).toBe("consumer/runtime110");
+  expect(() => parseReplay({ ...contract, harness: { ...contract.harness, targetBranch: "main" } })).toThrow("replay.harness.targetBranch: expected consumer/runtime110");
+  const { targetBranch: _dropped, ...legacy } = contract.harness;
+  expect(() => parseReplay({ ...contract, harness: legacy })).toThrow("replay.harness: expected exactly");
+  expect(() => parseReplay({ ...contract, harness: { ...contract.harness, targetBranch: "consumer/runtime110", base: "main" } })).toThrow("replay.harness: expected exactly");
+  expect(harness.targetBranch).toBe(HARNESS_TARGET_BRANCH);
+});
+
+test("a harness that took main's product or lock commits refuses even when its merge facts are perfect", async () => {
+  const { f, product, harness } = await harnessFixture();
+  for (const path of ["web/bun.lock", "scripts/c1/stages.ts", "src/assets.ts"]) {
+    const moved = commit(f.host, path, `// main moved: ${path}\n`);
+    const merged = { ...harness, source: moved, review: fixtureReview(f.root, moved) };
+    const read = recorded(merged);
+    const refusal = String(await admitHarness(merged, f.host, product, read).catch(error => error));
+    expect(refusal).toContain("harness changes product source or build inputs: ");
+    expect(refusal).toContain(path);
+    expect(read.reads).toEqual([]);
+  }
 });
 
 test("a reviewed candidate whose tree is not the merged tree refuses", async () => {
