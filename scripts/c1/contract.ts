@@ -35,12 +35,12 @@ export interface ReleaseTuple {
 }
 
 /** Caller-stated origin. Draft entries are known gaps and refuse production. */
-export type Provenance =
+type Provenance =
   | { readonly status: "verified"; readonly receipts: readonly FileIdentity[] }
   | { readonly status: "draft"; readonly missing: string };
 
 /** A consumer requirement that is either fully stated or explicitly open. */
-export type Requirement<T> =
+type Requirement<T> =
   | { readonly status: "resolved"; readonly value: T }
   | { readonly status: "unresolved"; readonly missing: string };
 
@@ -52,7 +52,7 @@ export const CONSUMERS = ["five-owner", "tls", "relay"] as const;
 export type ConsumerName = typeof CONSUMERS[number];
 
 export interface NativeRoot { readonly root: string; readonly files: readonly FileIdentity[]; readonly provenance: Provenance }
-export interface TlsDependencies {
+interface TlsDependencies {
   /** Unmodified public pg tarball, pinned by its own SHA-256. */
   readonly pgTarball: FileIdentity;
   /** The complete installed pg tree with every transitive package. */
@@ -82,9 +82,9 @@ export interface InputManifest {
   readonly consumers: ConsumerDependencies;
 }
 
-export interface RunRoots { readonly report: string; readonly artifact: string; readonly private: string; readonly browserTmp: string }
-export interface RehearseRoots { readonly report: string; readonly private: string; readonly browserTmp: string }
-export interface QualifyRoots { readonly output: string; readonly private: string; readonly browserTmp: string }
+interface RunRoots { readonly report: string; readonly artifact: string; readonly private: string; readonly browserTmp: string }
+interface RehearseRoots { readonly report: string; readonly private: string; readonly browserTmp: string }
+interface QualifyRoots { readonly output: string; readonly private: string; readonly browserTmp: string }
 export interface C1Config {
   readonly schema: "bun-wasm.c1-config/1";
   readonly sourceRoot: string;
@@ -184,13 +184,13 @@ function count(value: unknown, label: string, minimum: number): number {
   return value;
 }
 /** Canonical absolute path: no `.`/`..` segments, no trailing slash. */
-export function absolutePath(value: unknown, label: string): string {
+function absolutePath(value: unknown, label: string): string {
   const path = text(value, label);
   if (!isAbsolute(path) || resolve(path) !== path || path === "/") fail(label, "expected a canonical absolute path");
   return path;
 }
 /** Relative member path without traversal, absolute or empty segments. */
-export function memberPath(value: unknown, label: string): string {
+function memberPath(value: unknown, label: string): string {
   const path = text(value, label);
   if (isAbsolute(path) || path.includes("\\") || path.split("/").some(part => part === "" || part === "." || part === "..")) fail(label, "expected a safe relative path");
   return path;
@@ -200,24 +200,24 @@ function list<T>(value: unknown, label: string, item: (value: unknown, label: st
   return value.map((entry, index) => item(entry, `${label}[${index}]`));
 }
 
-export function parseSource(value: unknown, label = "source"): SourceIdentity {
+function parseSource(value: unknown, label = "source"): SourceIdentity {
   const fields = row(value, label, ["head", "tree"]);
   return { head: hex(fields.head, 40, `${label}.head`), tree: hex(fields.tree, 40, `${label}.tree`) };
 }
-export function parseFile(value: unknown, label: string): FileIdentity {
+function parseFile(value: unknown, label: string): FileIdentity {
   const fields = row(value, label, ["path", "bytes", "sha256"]);
   return { path: absolutePath(fields.path, `${label}.path`), bytes: count(fields.bytes, `${label}.bytes`, 0), sha256: sha256Text(fields.sha256, `${label}.sha256`) };
 }
-export function parseTree(value: unknown, label: string): TreeIdentity {
+function parseTree(value: unknown, label: string): TreeIdentity {
   const fields = row(value, label, ["path", "bytes", "sha256", "files"]);
   return { path: absolutePath(fields.path, `${label}.path`), bytes: count(fields.bytes, `${label}.bytes`, 0), sha256: sha256Text(fields.sha256, `${label}.sha256`), files: count(fields.files, `${label}.files`, 1) };
 }
-export function parseMember(value: unknown, label: string): MemberIdentity {
+function parseMember(value: unknown, label: string): MemberIdentity {
   const fields = row(value, label, ["path", "bytes", "sha256", "mode"]);
   if (fields.mode !== SEALED_FILE_MODE && fields.mode !== SEALED_EXECUTABLE_MODE) fail(`${label}.mode`, `expected ${SEALED_FILE_MODE} or ${SEALED_EXECUTABLE_MODE}`);
   return { path: memberPath(fields.path, `${label}.path`), bytes: count(fields.bytes, `${label}.bytes`, 0), sha256: sha256Text(fields.sha256, `${label}.sha256`), mode: fields.mode };
 }
-export function parseTuple(value: unknown, label = "tuple"): ReleaseTuple {
+function parseTuple(value: unknown, label = "tuple"): ReleaseTuple {
   const fields = row(value, label, ["runtime", "relay", "programs", "programManifestSchema", "hostInterface"]);
   return { runtime: text(fields.runtime, `${label}.runtime`), relay: text(fields.relay, `${label}.relay`), programs: text(fields.programs, `${label}.programs`),
     programManifestSchema: text(fields.programManifestSchema, `${label}.programManifestSchema`), hostInterface: count(fields.hostInterface, `${label}.hostInterface`, 1) };
@@ -256,7 +256,7 @@ function parseTls(value: unknown, label: string): TlsDependencies {
   return { pgTarball: parseFile(fields.pgTarball, `${label}.pgTarball`), pgModules: parseTree(fields.pgModules, `${label}.pgModules`),
     pgPackageJson: parseFile(fields.pgPackageJson, `${label}.pgPackageJson`), pgLock: parseFile(fields.pgLock, `${label}.pgLock`) };
 }
-export function parseConsumerDependencies(value: unknown, label = "consumers"): ConsumerDependencies {
+function parseConsumerDependencies(value: unknown, label = "consumers"): ConsumerDependencies {
   const fields = row(value, label, ["browsers", "tls", "relay"]);
   return { browsers: parseTree(fields.browsers, `${label}.browsers`), tls: parseRequirement(fields.tls, `${label}.tls`, parseTls),
     relay: parseRequirement<never>(fields.relay, `${label}.relay`, undefined) };

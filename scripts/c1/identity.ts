@@ -3,7 +3,7 @@ import { closeSync, existsSync, lstatSync, openSync, readSync, readdirSync, read
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FileIdentity, TreeIdentity } from "./contract.ts";
 
-export class IdentityError extends Error {}
+class IdentityError extends Error {}
 const chunk = Buffer.allocUnsafe(1024 * 1024);
 
 export function sha256(bytes: Uint8Array | string): string { return createHash("sha256").update(bytes).digest("hex"); }

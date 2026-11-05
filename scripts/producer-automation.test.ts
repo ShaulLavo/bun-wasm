@@ -109,11 +109,12 @@ test("the producer records its launcher and web root relative to itself, so a mo
     expect(readFileSync(join(moved, "launcher/bun-wasm.launcher.json"), "utf8")).toBe(receipt);
     const save = (value: unknown) => writeFileSync(join(moved, "manifest.json"), JSON.stringify(value));
     save({ ...manifest, launcher: { ...manifest.launcher, path: join(output, "launcher/bun-wasm") } });
-    expect(invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).stderr.toString()).toContain("relative launcher");
+    const refusal = () => invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).stderr?.toString();
+    expect(refusal()).toContain("relative launcher");
     save({ ...manifest, webRoot: join(output, "web") });
-    expect(invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).stderr.toString()).toContain("relative web directory");
+    expect(refusal()).toContain("relative web directory");
     save({ ...manifest, launcher: { ...manifest.launcher, receipt: "../out/launcher/bun-wasm.launcher.json" } });
-    expect(invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).stderr.toString()).toContain("relative launcher");
+    expect(refusal()).toContain("relative launcher");
   });
 });
 

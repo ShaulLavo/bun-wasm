@@ -9,11 +9,11 @@ import {
 } from "./contract.ts";
 import { fileIdentity, sameBytes, sha256 } from "./identity.ts";
 
-export class DeliveryError extends Error {}
-export const MANIFEST = "DELIVERY.json";
+class DeliveryError extends Error {}
+const MANIFEST = "DELIVERY.json";
 
 /** The mode the registry assigns a member. Input mode bits and names never decide it. */
-export function sealedMode(path: string): SealedMode {
+function sealedMode(path: string): SealedMode {
   return executableMemberPaths().includes(path) ? SEALED_EXECUTABLE_MODE : SEALED_FILE_MODE;
 }
 function octal(mode: number): string { return `0${(mode & 0o7777).toString(8)}`; }
@@ -33,12 +33,7 @@ function directories(root: string, path = ""): string[] {
 }
 
 /** Every payload file with its bytes and registry-assigned sealed mode. The manifest is never a member. */
-export function deliveryMembers(root: string): MemberIdentity[] {
-  return walk(root).filter(path => path !== MANIFEST).map(path => {
-    const file = fileIdentity(join(root, path));
-    return { path, bytes: file.bytes, sha256: file.sha256, mode: sealedMode(path) };
-  });
-}
+export function deliveryMembers(root: string): MemberIdentity[] { return treeMembers(root, [MANIFEST]); }
 
 export interface SealFacts {
   readonly source: SourceIdentity;
@@ -55,11 +50,26 @@ export function sealDelivery(root: string, facts: SealFacts): FileIdentity {
   const files = deliveryMembers(root);
   requireCompletePublicationFiles(files);
   const manifest: DeliveryManifest = { schema: "bun-wasm.c1-delivery/1", status: DELIVERY_STATUS, ...facts, files, parentByteIntake: null, consumerAcceptance: null, deployment: null };
-  writeFileSync(join(root, MANIFEST), JSON.stringify(manifest, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-  for (const file of files) chmodSync(join(root, file.path), Number.parseInt(file.mode, 8));
-  chmodSync(join(root, MANIFEST), Number.parseInt(SEALED_FILE_MODE, 8));
+  return sealTree(root, MANIFEST, manifest, files);
+}
+/**
+ * The seal mechanics shared by production and rehearsal: write the inventory
+ * file exactly once, then apply the registry modes. `members` must not list
+ * the inventory file itself.
+ */
+export function sealTree(root: string, inventory: string, value: unknown, members: readonly MemberIdentity[]): FileIdentity {
+  writeFileSync(join(root, inventory), JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+  for (const file of members) chmodSync(join(root, file.path), Number.parseInt(file.mode, 8));
+  chmodSync(join(root, inventory), Number.parseInt(SEALED_FILE_MODE, 8));
   for (const path of directories(root)) chmodSync(join(root, path), SEALED_DIRECTORY_MODE);
-  return fileIdentity(join(root, MANIFEST));
+  return fileIdentity(join(root, inventory));
+}
+/** Payload members excluding any named historical inventory files. */
+export function treeMembers(root: string, exclude: readonly string[]): MemberIdentity[] {
+  return walk(root).filter(path => !exclude.includes(path)).map(path => {
+    const file = fileIdentity(join(root, path));
+    return { path, bytes: file.bytes, sha256: file.sha256, mode: sealedMode(path) };
+  });
 }
 
 function requireMember(root: string, member: MemberIdentity): void {
