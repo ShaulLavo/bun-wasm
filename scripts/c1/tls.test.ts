@@ -7,9 +7,10 @@ import { completePublicationArtifactPaths, tlsPagePaths } from "../producer-clos
 import { TLS_RESERVED_PORTS, fixtureDrafts, parseConfig, parseHandoff, type ConsumerHandoff } from "./contract.ts";
 import { FIXTURE_SOURCE, FIXTURE_TLS_OPTIONS, writeContractFixture } from "./contract-fixture.ts";
 import { requireHandoffArtifacts } from "./delivery.ts";
-import { sha256 } from "./identity.ts";
+import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./loaded.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, UNRESOLVED_RELAY, prepareTlsPage, verifyTlsPage, type PageBuilder } from "./tls-page.ts";
+import { tlsDriver } from "./operations.ts";
 
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-c1-tls-")));
 afterAll(() => {
@@ -23,6 +24,26 @@ function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
 }
+
+test("TLS result readback uses exactly the output directory passed to the driver", () => {
+  const fixture = writeContractFixture(fresh());
+  const parsed = parseHandoff(json(fixture.handoff));
+  const pgRoot = fresh();
+  for (const name of ["pg.tgz", "package.json", "bun.lock", "modules/pg/index.js"]) write(join(pgRoot, name), `synthetic ${name}\n`);
+  const handoff: ConsumerHandoff = { ...parsed, dependencies: { ...parsed.dependencies, tls: { status: "resolved", value: {
+    pgTarball: fileIdentity(join(pgRoot, "pg.tgz")), pgPackageJson: fileIdentity(join(pgRoot, "package.json")),
+    pgLock: fileIdentity(join(pgRoot, "bun.lock")), pgModules: treeIdentity(join(pgRoot, "modules")),
+  } } } };
+  const invocations = tlsDriver(handoff, { sourceRoot: FIXTURE_SOURCE, env: { BUN_EXE: process.execPath }, handoffFile: fileIdentity(fixture.handoff) });
+  if (typeof invocations === "string") throw new Error(invocations);
+  expect(invocations).toHaveLength(1);
+  const driver = invocations[0];
+  if (!driver) throw new Error("missing TLS driver");
+  const option = driver.argv.indexOf("--output");
+  expect(option).toBeGreaterThanOrEqual(0);
+  expect(driver.out).toBe(driver.argv[option + 1]);
+  expect(driver.out).toBe(join(handoff.outputs.tls, "pg-early"));
+});
 
 test("the one config carries typed TLS fixture options and the handoff propagates them unchanged", () => {
   const fixture = writeContractFixture(fresh());
