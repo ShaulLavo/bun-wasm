@@ -33,8 +33,9 @@ function loadTools(): Promise<WebAssembly.Module> {
 export interface RunOptions {
   engine: Engine;
   module: WebAssembly.Module;
-  /** Arguments after `bun`. */
+  /** Arguments after `bun`; a Preview1 root's complete argv. */
   args: string[];
+  /** Bun roots add their engine PATH; a Preview1 root receives exactly this environment. */
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
   runtime: ProcessRuntime;
@@ -74,6 +75,17 @@ function slotsMode(): RunRequest["slots"] {
 }
 
 const registeredPrograms = new WeakMap<ProcessRuntime, Set<string>>();
+
+/** A Preview1 root is a generic program: it gets a snapshot of the caller's exact argv and
+ * environment. Only a Bun root gets its engine executable as argv[0], PATH and BUNWASM_EXEC_PATH. */
+function rootCommand(options: RunOptions): Pick<RunRequest, "args" | "env"> {
+  if (options.adapter === "preview1") return { args: options.args.slice(), env: { ...options.env } };
+  const executable = `${ENGINE_BIN[options.engine]}/bun`;
+  return {
+    args: [executable].concat(options.args),
+    env: { ...engineEnvironment(options.engine, bunEnvironment(options.env)), BUNWASM_EXEC_PATH: executable },
+  };
+}
 
 async function preparePreview1Network(
   options: RunOptions,
@@ -154,8 +166,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       runtimeProcess: options.runtimeProcess,
       module: options.module,
       linkPlan: programLinkPlan(options.module),
-      args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
-      env: { ...engineEnvironment(options.engine, options.adapter === "preview1" ? options.env : bunEnvironment(options.env)), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
+      ...rootCommand(options),
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
       net: ring,
