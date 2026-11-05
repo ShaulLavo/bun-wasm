@@ -195,12 +195,14 @@ test("publication detects changed snapshot bytes even after matching browser rec
 test("real CLI resolves its default dist inside a checkout path containing spaces and #", async () => {
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
-    await mkdir(join(root, "scripts/src"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "producer-closure.ts"].concat(receiptCliSources)) {
+    await mkdir(join(root, "scripts/src"), { recursive: true }); await mkdir(join(root, "scripts/c1")); await mkdir(dist);
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "producer-closure.ts", "c1/contract.ts"].concat(receiptCliSources)) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
     await mkdir(join(root, "src"));
     await copyFile(new URL("../../src/engine-kind.ts", import.meta.url), join(root, "src/engine-kind.ts"));
+    await mkdir(join(root, "web"));
+    await copyFile(new URL("../../web/package.json", import.meta.url), join(root, "web/package.json"));
     const input = join(dist, "bun.wasm"); await writeFile(input, wasm);
     const child = Bun.spawn([process.execPath, join(root, "scripts/publish-guest.ts"), input, "--account-id", "a".repeat(32)], {
       env: { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" },
