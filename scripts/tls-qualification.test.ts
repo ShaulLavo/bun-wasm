@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { inspect } from "node:util";
 import { FirstFailure, RunSecrets, TlsQualificationFailure, formatTlsFailure, parseTlsArguments, runTlsCli } from "./tls-qualification.ts";
 import {
   TLS_STAGE, guestArtifacts, preflightTls, readVerifiedFile, recheckDependencies, requireInstalledRuntimePackage, tlsLoaded, tlsReleaseTuple, verifyReviewedHostSource,
@@ -22,7 +23,7 @@ import { fixtureHostTools } from "./c1/contract-fixture.ts";
 import type { HostTool, HostTools } from "./c1/replay.ts";
 import { PassThrough } from "node:stream";
 import { verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
-import { FixtureCommandError, ownerFailureLine, piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
+import { FixtureCommandError, execute, ownerFailureLine, piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
  * Every fixture here is synthetic parser data built from the controller's
@@ -834,6 +835,18 @@ describe("primary TLS host failure evidence", () => {
     expect(JSON.parse(text).primary.message).toContain("more characters]");
     expect(() => new RunSecrets().add("short")).toThrow("too short");
   });
+  test("actual byte-key inspection values are removed from messages and stacks", () => {
+    const secrets = new RunSecrets();
+    const key = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 33));
+    secrets.add(key);
+    const forms = [inspect(key), inspect(new Uint8Array(key))];
+    const error = new Error(`relay key rejected: ${forms.join("; ")}`);
+    const diagnostic = JSON.parse(formatTlsFailure(new TlsQualificationFailure("browser", error, secrets)));
+    expect(diagnostic.primary.message).toContain("relay key rejected:");
+    for (const form of forms) { expect(diagnostic.primary.message).not.toContain(form); expect(diagnostic.primary.stack).not.toContain(form); }
+    expect(diagnostic.primary.message).not.toContain("21 22 23 24");
+    expect(diagnostic.primary.stack).toContain("relay key rejected:");
+  });
   test("a successful run writes nothing and claims nothing", async () => {
     const messages: string[] = [];
     expect(await runTlsCli(async () => {}, message => { messages.push(message); })).toBe(0);
@@ -843,7 +856,11 @@ describe("primary TLS host failure evidence", () => {
 
 describe("Pi lane lease and remote owner evidence (host-only, a scratch lock file, no Pi)", () => {
   const scratch: string[] = [];
-  afterEach(async () => { for (const root of scratch.splice(0)) await rm(root, { recursive: true, force: true }); });
+  const leases: TlsCleanup[] = [];
+  afterEach(async () => {
+    await Promise.allSettled(leases.splice(0).map(owner => owner.close()));
+    for (const root of scratch.splice(0)) await rm(root, { recursive: true, force: true });
+  });
   function localTool(name: "flock" | "sh" | "cat"): HostTool {
     const found = Bun.which(name);
     if (!found) throw new Error(`test needs a local ${name}`);
@@ -855,6 +872,7 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     const tools: HostTools = { ...fixtureHostTools(join(root, "tools")), flock: localTool("flock"), sh: localTool("sh"), cat: localTool("cat") };
     const lock = join(root, "pi.lock");
     const owner = new TlsCleanup();
+    leases.push(owner);
     const lease = await piLane(owner, new AbortController().signal, () => reconciled, tools, lock);
     return { owner, lease, lock: { path: lock, flock: tools.flock.path } };
   }
@@ -881,9 +899,54 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     expect(running(lease.pid)).toBe(false);
     expect(lockFree(lock)).toBe(true);
   });
+  test.each([true, false])("a stopped lease descendant is gone and its lock released after timeout, reconciled=%s", async reconciled => {
+    const { owner, lease, lock } = await lane(reconciled);
+    if (!lease.pid) throw new Error("Expected an owned lease PID");
+    const members = readFileSync(`/proc/${lease.pid}/task/${lease.pid}/children`, "utf8").trim().split(/\s+/).map(Number);
+    expect(members).toHaveLength(1);
+    const member = members[0];
+    if (!member || readFileSync(`/proc/${member}/comm`, "utf8").trim() !== "cat") throw new Error("Expected the owned cat descendant");
+    process.kill(member, "SIGSTOP");
+    const failure = await owner.close().catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(String(failure.errors[0])).toContain(reconciled ? "deadline" : "unreconciled");
+    if (!reconciled) expect(String(failure.errors[0].cause)).toContain("deadline");
+    expect(running(lease.pid)).toBe(false);
+    expect(running(member)).toBe(false);
+    expect(lockFree(lock)).toBe(true);
+  }, 20_000);
+  test.each(["raw", "json", "url"] as const)("remote command stderr redacts before its bound and owner ledger: %s", async form => {
+    const secret = 'synthetic-remote-password-0123456789abcdef\n"';
+    const secrets = new RunSecrets();
+    secrets.add(secret);
+    const value = form === "json" ? JSON.stringify(secret).slice(1, -1) : form === "url" ? encodeURIComponent(secret) : secret;
+    const code = `const value = process.env.SYNTHETIC_RUN_SECRET; const cut = Math.floor(value.length / 2); process.stderr.write(value.slice(0, cut)); setTimeout(() => { process.stderr.write(value.slice(cut) + "x".repeat(4096 - 10)); process.exitCode = 23; }, 5);`;
+    const failure = await execute(process.execPath, ["--eval", code], { timeout: 5000, secrets, env: { ...process.env, SYNTHETIC_RUN_SECRET: value } }).catch(error => error);
+    expect(failure).toBeInstanceOf(FixtureCommandError);
+    expect(failure.code).toBe(23);
+    expect(failure.stderr.length).toBeLessThanOrEqual(4096);
+    expect(failure.stderr).not.toContain(value.slice(-10));
+    const ledger = ownerFailureLine([failure], secrets);
+    expect(ledger).not.toContain(value.slice(-10));
+    expect(JSON.parse(ledger).failures[0].message).toContain("exited 23");
+  });
+  test.each(["raw", "json", "url"] as const)("stderr secrets are redacted before the tail boundary and across chunks: %s", async form => {
+    const secret = "synthetic-password-0123456789abcdef\n\"";
+    const secrets = new RunSecrets();
+    secrets.add(secret);
+    const value = form === "json" ? JSON.stringify(secret).slice(1, -1) : form === "url" ? encodeURIComponent(secret) : secret;
+    const stream = new PassThrough();
+    const tail = stderrTail(stream, secrets);
+    const cut = Math.floor(value.length / 2);
+    stream.write("safe prefix " + value.slice(0, cut));
+    stream.end(value.slice(cut) + "x".repeat(64 * 1024 - 10));
+    await new Promise(resolve => stream.once("end", resolve));
+    expect(tail()).not.toContain(value.slice(-10));
+    expect(tail().length).toBeLessThanOrEqual(64 * 1024);
+  });
   test("a remote owner's stderr is kept as a bounded tail", async () => {
     const stream = new PassThrough();
-    const tail = stderrTail(stream, 8);
+    const tail = stderrTail(stream, new RunSecrets(), 8);
     stream.write("first line\n");
     stream.end("podman exited 2\n");
     await new Promise(resolve => stream.once("end", resolve));

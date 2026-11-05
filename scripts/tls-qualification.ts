@@ -8,35 +8,11 @@ import { isEngine } from "./tls-qualification-context.ts";
 import { hostToolPath } from "./c1/replay.ts";
 import { startTlsServices } from "../web/tests/tls-relay-services.ts";
 import { runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
+import { RunSecrets } from "../tests/servers/tls.ts";
 
 type TlsPhase = "arguments" | "preflight" | "dependencies" | "mount" | "output-directory"
   | "pre-ledger-remote-inventory" | "pre-ledger-local-inventory" | "resource-ledger" | "services" | "browser" | "cleanup-receipt" | "result";
-/**
- * The secret values this run created or received, registered where each first
- * exists: the database password, the relay credential, the relay token-signing
- * key and every minted token. Diagnostics redact exactly these values and the
- * escaped forms a message can carry them in (JSON string escapes, URL
- * encoding, and hex, base64 and decimal-list renderings of key bytes). No
- * other text is hidden: phase, message, stack, errno and command lines stay.
- */
-export class RunSecrets {
-  private readonly forms = new Set<string>();
-  add(value: string | Uint8Array): void {
-    const renderings = typeof value === "string" ? [value] : byteRenderings(value);
-    for (const rendering of renderings) {
-      if (rendering.length < 16) throw new Error("A run secret is too short to redact without hiding ordinary text");
-      for (const form of [rendering, JSON.stringify(rendering).slice(1, -1), encodeURIComponent(rendering)]) this.forms.add(form);
-    }
-  }
-  redact(text: string): string {
-    const longestFirst = Array.from(this.forms).sort((a, b) => b.length - a.length);
-    return longestFirst.reduce((redacted, form) => redacted.split(form).join("[redacted run secret]"), text);
-  }
-}
-function byteRenderings(bytes: Uint8Array): string[] {
-  const buffer = Buffer.from(bytes);
-  return [buffer.toString("hex"), buffer.toString("base64"), buffer.toString("base64url"), Array.from(bytes).join(","), Array.from(bytes).join(", ")];
-}
+export { RunSecrets } from "../tests/servers/tls.ts";
 export class TlsQualificationFailure extends Error {
   constructor(readonly phase: TlsPhase, cause: unknown, readonly secrets: RunSecrets = new RunSecrets()) { super(`TLS qualification failed during ${phase}`, { cause }); }
 }

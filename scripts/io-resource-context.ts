@@ -15,6 +15,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpat
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { withConsumerGroups } from "./consumer-process-groups.ts";
 import { verifyLauncher } from "./producer-closure.ts";
 import { expectedBrowserPayload, loadedObserver, type BrowserMade, type LoadedAsset } from "./io-resource-context-assets.ts";
 import { bindFiveOwnerBrowser, bindFiveOwnerOutput, bindFiveOwnerSource, readFiveOwnerHandoff, readFiveOwnerMember, recheckFiveOwnerBrowser, recheckFiveOwnerHandoff, requireFiveOwnerMember, requireFiveOwnerResponse, verifyFiveOwnerGuest, type PinnedHandoff } from "./io-resource-context-intake.ts";
@@ -355,13 +356,17 @@ export async function stopChromium(resources: ChromiumResources): Promise<void> 
   const { stopProcessGroup } = await import("../web/tests/next-framework-process.ts");
   const browserServer = await resources.browserServer?.catch(() => null) ?? null;
   const child = browserServer?.process();
-  const killed = await Promise.allSettled([resources.server ? stopProcessGroup(resources.server) : undefined, browserServer?.kill()]);
-  const drained = await Promise.allSettled([child ? stopProcessGroup(child) : undefined]);
-  const browser = await resources.browser?.catch(() => null) ?? null;
-  const disconnected = await Promise.allSettled([browser?.close()]);
+  const groups = [resources.server, child].filter((value): value is ChildProcess => value != null);
+  const failures = await withConsumerGroups(groups, async () => {
+    const killed = await Promise.allSettled([resources.server ? stopProcessGroup(resources.server) : undefined, browserServer?.kill()]);
+    const drained = await Promise.allSettled([child ? stopProcessGroup(child) : undefined]);
+    const browser = await resources.browser?.catch(() => null) ?? null;
+    const disconnected = await Promise.allSettled([browser?.close()]);
+    return killed.concat(drained, disconnected);
+  });
   resources.serverGone = groupGone(resources.server);
   resources.browserGone = groupGone(child);
-  const failure = killed.concat(drained, disconnected).find(result => result.status === "rejected");
+  const failure = failures.find(result => result.status === "rejected");
   if (failure?.status === "rejected") throw failure.reason;
   if (!resources.serverGone || !resources.browserGone) throw new Error("Chromium execution left an owned process group");
 }

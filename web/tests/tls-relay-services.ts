@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { stopConsumerGroup } from "../../scripts/consumer-process-groups.ts";
 import { acquireOwned, deadline, type TlsCleanup } from "../../scripts/tls-qualification-lifecycle.ts";
 import { object, text, recheckDependencies, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
 import type { TlsFixtureOptions as ServiceOptions } from "../../scripts/c1/contract.ts";
@@ -91,7 +92,7 @@ function track(sockets: Set<Socket>, socket: Socket): void {
 export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock") {
   const argv = ["--nonblock", lock, hostToolPath(tools, "sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", hostToolPath(tools, "cat")];
   const lease = await acquireOwned(owner, signal, () => {
-    const child = spawn(hostToolPath(tools, "flock"), argv, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(hostToolPath(tools, "flock"), argv, { detached: true, stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.resume();
     const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", code => code === 0 ? resolve() : reject(new Error("Pi lane lock unavailable"))); });
     void exited.catch(() => {});
@@ -99,9 +100,13 @@ export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () 
   }, async ({ child, exited }) => {
     const reconciled = closed();
     child.stdin.end();
+    let failure: unknown;
     try { await deadline(exited, new AbortController().signal, 5000); }
-    catch (error) { child.kill("SIGKILL"); throw error; }
-    if (!reconciled) throw new Error("Pi lane released with the remote PostgreSQL fixture unreconciled; its named container, volume and scratch stay for reconciliation under a fresh pi.lock");
+    catch (error) { failure = error; }
+    await stopConsumerGroup(child);
+    await exited.catch(() => {});
+    if (!reconciled) throw new Error("Pi lane released with the remote PostgreSQL fixture unreconciled; its named container, volume and scratch stay for reconciliation under a fresh pi.lock", { cause: failure });
+    if (failure) throw failure;
   });
   const lines = createInterface({ input: lease.child.stdout });
   try {
@@ -111,11 +116,11 @@ export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () 
   } finally { lines.close(); }
 }
 /** The last bytes a child wrote to stderr, for its failure record. Redacted where it is recorded. */
-export function stderrTail(stream: NodeJS.ReadableStream, limit = 64 * 1024): () => string {
-  let tail = "";
+export function stderrTail(stream: NodeJS.ReadableStream, secrets: RunSecrets, limit = 64 * 1024): () => string {
+  const tail = secrets.tail(limit);
   stream.setEncoding("utf8");
-  stream.on("data", (chunk: string) => { tail = (tail + chunk).slice(-limit); });
-  return () => tail;
+  stream.on("data", (chunk: string) => { tail.write(chunk); });
+  return () => tail.read();
 }
 async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, tools: HostTools, secrets: RunSecrets) {
   const mesh = hostToolPath(tools, "mesh");
@@ -133,7 +138,7 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   const spawned = await acquireOwned(owner, signal, () => {
     remoteClosed = false;
     const child = spawn(mesh, ["ssh", options.databaseMachine, "--", "bun", "--eval", program], { stdio: ["pipe", "pipe", "pipe"] });
-    const stderr = stderrTail(child.stderr);
+    const stderr = stderrTail(child.stderr, secrets);
     const exited = new Promise<void>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, closedBy) => code === 0 ? resolve() : reject(new Error(`Remote PostgreSQL owner exited ${code ?? closedBy}: ${secrets.redact(stderr()).trim()}`)));
