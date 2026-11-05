@@ -207,7 +207,7 @@ function fixtureHandoff(): { handoff: ConsumerHandoff; web: LoadedObservation[];
 
 test("observed web and TLS responses bind to admitted members, including decoded gzip", () => {
   const { handoff, web, tls } = fixtureHandoff();
-  expect(bindLoaded(handoff, "web", web).map(binding => binding.route)).toEqual(["web", "web", "web"]);
+  expect(bindLoaded(handoff, "web", web).map(binding => binding.route)).toEqual(["web", "web", "web", "web"]);
   expect(bindLoaded(handoff, "tls", tls).map(binding => binding.route)).toEqual(["tls-page", "tls-page", "tls-page", "tls-fixture", "guest-artifact", "control"]);
 });
 
@@ -216,12 +216,11 @@ test("the selected gzip-only Browser guest binds by its raw compressed body with
   const bytes = readFileSync(join(handoff.webRoot, "bun-browser.wasm.gz"));
   const row: LoadedObservation = { url: "http://127.0.0.1:43839/bun-browser.wasm.gz", method: "GET", status: 200,
     encoding: "identity", bytes: bytes.byteLength, sha256: sha256(bytes) };
-  const html = web[0];
-  if (!html) throw new Error("missing Browser page observation");
-  expect(bindLoaded(handoff, "web", [html, row]).map(binding => binding.member)).toContain(join(handoff.webRoot, "bun-browser.wasm.gz"));
-  expect(() => bindLoaded(handoff, "web", [html, { ...row, sha256: sha256("changed") }])).toThrow("differ from the admitted member");
+  const pageAndWorker = web.filter(observation => !observation.url.includes(".wasm"));
+  expect(bindLoaded(handoff, "web", pageAndWorker.concat([row])).map(binding => binding.member)).toContain(join(handoff.webRoot, "bun-browser.wasm.gz"));
+  expect(() => bindLoaded(handoff, "web", pageAndWorker.concat([{ ...row, sha256: sha256("changed") }]))).toThrow("differ from the admitted member");
   // The compressed bytes are never a decoded observation of the .wasm path.
-  expect(() => bindLoaded(handoff, "web", [html, { ...row, url: "http://127.0.0.1:43839/bun-browser.wasm" }])).toThrow("differ from the admitted member");
+  expect(() => bindLoaded(handoff, "web", pageAndWorker.concat([{ ...row, url: "http://127.0.0.1:43839/bun-browser.wasm" }]))).toThrow("differ from the admitted member");
 });
 
 test.each([
@@ -238,6 +237,11 @@ test.each([
 ])("five-owner observations with %s refuse", (_name, change, message) => {
   const { handoff, web } = fixtureHandoff();
   expect(() => bindLoaded(handoff, "web", change(web))).toThrow(message);
+});
+
+test("Browser page and guest observations without the actual worker never establish worker coverage", () => {
+  const { handoff, web } = fixtureHandoff();
+  expect(() => bindLoaded(handoff, "web", web.filter(row => !row.url.endsWith("/worker.js")))).toThrow("did not load");
 });
 
 test("TLS observations bind guests by role, raw only, and need the page, worker and Browser guest", () => {

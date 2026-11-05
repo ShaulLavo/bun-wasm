@@ -33,7 +33,7 @@ function payload(path: string): string | Uint8Array {
   return path.endsWith(".json") ? `${JSON.stringify({ fixture: path })}\n` : `fixture ${path}\n`;
 }
 export function writeFixtureDelivery(root: string): void {
-  for (const path of completePublicationArtifactPaths()) write(join(root, path), payload(path));
+  for (const path of completePublicationArtifactPaths().concat(["split/web/worker.js"])) write(join(root, path), payload(path));
 }
 function fixtureFile(root: string, name: string): FileIdentity {
   write(join(root, name), `fixture input ${name}\n`);
@@ -80,7 +80,7 @@ function observed(origin: string, path: string, file: string, encoding: LoadedOb
 function fixtureLoaded(handoff: ConsumerHandoff) {
   const origin = "http://127.0.0.1:43839";
   const web = [observed(origin, "/", join(handoff.webRoot, "index.html"), "identity"), observed(origin, "/bun-browser.wasm", join(handoff.webRoot, "bun-browser.wasm"), "gzip"),
-    observed(origin, "/bun.wasm", join(handoff.webRoot, "bun.wasm"), "gzip")];
+    observed(origin, "/bun.wasm", join(handoff.webRoot, "bun.wasm"), "gzip"), observed(origin, "/worker.js", join(handoff.webRoot, "worker.js"), "identity")];
   const guest = handoff.artifacts.browserGuest;
   const tls = [observed(origin, "/", join(handoff.tlsPageRoot, "index.html"), "identity"), observed(origin, "/tls-relay-page.js", join(handoff.tlsPageRoot, "tls-relay-page.js"), "identity"),
     observed(origin, "/fs-worker.js", join(handoff.tlsPageRoot, "fs-worker.js"), "identity"), observed(origin, "/pg-client.ts", handoff.artifacts.tlsPgClient.path, "identity"),

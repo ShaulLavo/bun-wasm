@@ -44,7 +44,7 @@ function replaceJson(root: string, member: string, change: (value: Record<string
 test("the executable fixture writes every contract file and each parses strictly", () => {
   const fixture = writeContractFixture(fresh());
   const delivery = parseDelivery(json(join(fixture.delivery, "DELIVERY.json")));
-  expect(delivery.files.length).toBe(completePublicationArtifactPaths().length);
+  expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths().concat(["split/web/worker.js"]).sort());
   expect(parseIntake(json(fixture.intake)).members).toBe(delivery.files.length);
   const handoff = parseHandoff(json(fixture.handoff));
   expect(Object.keys(handoff.artifacts).sort()).toEqual(HANDOFF_ROLES.toSorted());

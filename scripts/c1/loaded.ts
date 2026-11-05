@@ -147,7 +147,7 @@ function requireCoverage(handoff: ConsumerHandoff, surface: LoadedSurface, bound
   const at = (member: string) => join(handoff.delivery.root, member);
   const guest = surface === "web" ? ["", ".gz", ".br"].map(suffix => at(`split/web/bun-browser.wasm${suffix}`)) : [handoff.artifacts.browserGuest.path];
   if (!guest.some(member => members.has(member))) fail(`the ${surface} consumer loaded no WebAssembly Browser guest (${guest[0]})`);
-  const required = surface === "web" ? [at("split/web/index.html")] : [at(tlsPagePaths.index), at(tlsPagePaths.entry), at(`${tlsPagePaths.root}/fs-worker.js`)];
+  const required = surface === "web" ? [at("split/web/index.html"), at("split/web/worker.js")] : [at(tlsPagePaths.index), at(tlsPagePaths.entry), at(`${tlsPagePaths.root}/fs-worker.js`)];
   const missing = required.filter(member => !members.has(member));
   if (missing.length) fail(`the ${surface} consumer did not load ${missing.join(", ")}`);
 }
