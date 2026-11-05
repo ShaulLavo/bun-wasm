@@ -1,6 +1,7 @@
 import { createRuntime } from "waffle";
 import { loadBunWasm, parseBunWasmAsset } from "../../src/assets.ts";
 import { startRun, type Run } from "../src/runner.ts";
+import { runtimeRelay } from "../src/net/relay.ts";
 import { assertPgResult, isCase, isEngine, type QualificationCase } from "../../scripts/tls-qualification-context.ts";
 import { TlsCleanup, acquireOwned, closeObservedCase, deadline, trackCaseRuntime } from "../../scripts/tls-qualification-lifecycle.ts";
 import type { ProcessRuntime } from "../../src/process-runtime.ts";
@@ -34,18 +35,15 @@ async function seed(runtime: ProcessRuntime, ca: string, mode: QualificationCase
   await runtime.filesystem.flush();
 }
 async function relayOwner(runtime: ProcessRuntime, endpoint: string, observed: string[]) {
-  // Resolved to the explicitly reviewed host checkout by the qualification build.
-  const entry = "tls-reviewed-relay";
-  const api = await import(entry);
-  if (typeof api.runtimeRelay !== "function") throw new Error("Reviewed C1 runtimeRelay is unavailable");
-  const value = await api.runtimeRelay(runtime, { endpoint, carriers: ["websocket"],
+  // Static, so the sealed page bundle carries the selected source's relay; nothing resolves it at run time.
+  const value = await runtimeRelay(runtime, { endpoint, carriers: ["websocket"],
     getToken: async () => {
       const response = await fetch("/token", { method: "POST", cache: "no-store" });
       if (!response.ok) throw new Error("TLS relay token request failed");
       return response.text();
-    }, onCarrier: (carrier: string) => observed.push(carrier), connectTimeoutMs: 15_000,
+    }, onCarrier: carrier => observed.push(carrier), connectTimeoutMs: 15_000,
   });
-  if (!value || typeof value !== "object" || typeof value.connect !== "function" || typeof value.close !== "function") throw new Error("Invalid C1 runtime relay owner");
+  if (!value) throw new Error("Invalid C1 runtime relay owner");
   return { connect: value.connect, close: value.close.bind(value) };
 }
 let active: Run | undefined;

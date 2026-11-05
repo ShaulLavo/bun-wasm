@@ -194,19 +194,24 @@ export function tlsDriver(handoff: ConsumerHandoff, context: Parameters<Driver>[
   return [{ out, surface: "tls", env: browserEnv(handoff), argv: [context.env.BUN_EXE ?? "bun", "scripts/tls-qualification.ts", "--stage", "pg-early", "--browser", "chromium", "--engine", "browser",
     "--handoff", context.handoffFile.path, "--handoff-sha256", context.handoffFile.sha256, "--output", out] }];
 }
+export function fiveOwnerDriver(handoff: ConsumerHandoff, context: Parameters<Driver>[1]): ReturnType<Driver> {
+  if (!existsSync(join(context.sourceRoot, "scripts/io-resource-context.ts"))) return "the selected source has no scripts/io-resource-context.ts driver";
+  const bun = context.env.BUN_EXE ?? "bun";
+  const out = (name: string) => join(handoff.outputs["five-owner"], name);
+  const pinned = ["--handoff", context.handoffFile.path, "--handoff-sha256", context.handoffFile.sha256];
+  const native = (engine: "quickjs" | "jsc") => ({ out: out(engine), argv: [bun, "scripts/io-resource-context.ts", "--surface", "native", "--engine", engine]
+    .concat(pinned, ["--out", out(engine)]) });
+  return [native("quickjs"), native("jsc"), { out: out("chromium"), surface: "web", env: browserEnv(handoff),
+    argv: [bun, "scripts/io-resource-context.ts", "--surface", "chromium"].concat(pinned, ["--out", out("chromium")]) }];
+}
+
+/** Process completion preserves child evidence; it is never qualification acceptance. */
+export function completedConsumerResult(out: string, result: unknown): { out: string; status: "completed"; result: unknown } {
+  return { out, status: "completed", result };
+}
 /** Each consumer's driver, or why it cannot run yet. Consumers only read the handoff. */
 const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
-  "five-owner": (handoff, context) => {
-    if (!existsSync(join(context.sourceRoot, "scripts/io-resource-context.ts"))) return "the selected source has no scripts/io-resource-context.ts driver";
-    const bun = context.env.BUN_EXE ?? "bun";
-    const out = (name: string) => join(handoff.outputs["five-owner"], name);
-    const qualify = ["--qualify", handoff.source.head, handoff.source.tree];
-    const native = (engine: "quickjs" | "jsc") => ({ out: out(engine), argv: [bun, "scripts/io-resource-context.ts", "--surface", "native", "--engine", engine,
-      "--guest", handoff.artifacts[engine === "quickjs" ? "quickjsGuest" : "jscGuest"].path, "--launcher", handoff.artifacts.launcher.path,
-      "--shell", handoff.artifacts.shell.path, "--env-utility", handoff.artifacts.envUtility.path, "--out", out(engine)].concat(qualify) });
-    return [native("quickjs"), native("jsc"), { out: out("chromium"), surface: "web", env: browserEnv(handoff),
-      argv: [bun, "scripts/io-resource-context.ts", "--surface", "chromium", "--web-root", handoff.webRoot, "--out", out("chromium")].concat(qualify) }];
-  },
+  "five-owner": fiveOwnerDriver,
   // TLS reads everything (delivery, intake, dependencies, fixture options, its sealed page) from the one pinned handoff.
   tls: tlsDriver,
   relay: handoff => handoff.dependencies.relay.status === "unresolved" ? `relay requirements unresolved: ${handoff.dependencies.relay.missing}` : "relay has no driver",
@@ -254,8 +259,8 @@ async function runConsumer(name: ConsumerName, handoff: ConsumerHandoff, handoff
       const result: unknown = JSON.parse(readFileSync(join(driver.out, "result.json"), "utf8"));
       if (driver.surface) requireLoaded(handoff, driver.surface, result);
       if (driver.surface && readdirSync(handoff.browserTmp).length) throw new AdmissionError(`${name} left browser scratch in ${handoff.browserTmp}`);
-      outcomes.push({ out: driver.out, status: "pass" });
+      outcomes.push(completedConsumerResult(driver.out, result));
     } catch (error) { outcomes.push({ out: driver.out, status: "fail", error: message(error) }); }
   }
-  return { status: outcomes.every(outcome => outcome.status === "pass") ? "pass" : "fail", outcomes };
+  return { status: outcomes.every(outcome => outcome.status === "completed") ? "completed" : "fail", outcomes };
 }
