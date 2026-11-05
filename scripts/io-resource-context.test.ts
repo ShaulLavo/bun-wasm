@@ -8,6 +8,7 @@ import { RESULT_SCHEMA, buildFiveOwnerResult, evaluateRow, main, parseGuestResul
 import { rowIds, rows, type Observation, type RowId } from "../tests/fixtures/io-resource-context/rows.ts";
 import { parseRowOutput } from "../tests/fixtures/io-resource-context/protocol.ts";
 import { browserMade, isLoadedAsset, loadedObserver } from "./io-resource-context-assets.ts";
+import { stopConsumerGroup } from "./consumer-process-groups.ts";
 import { captureChromiumExecution, hostDeadline, inspectExecution, runGroup, stopChromium, type ChromiumResources } from "./io-resource-context.ts";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -603,13 +604,16 @@ test("browser-made classification is exact about scheme, origin and the module p
   expect(() => browserMade("blob:null/x", `${PAGE}/bun-browser.wasm`, false)).toThrow("another origin");
 });
 
+test("loaded body errors retain the response URL and original cause", async () => {
+  const observer = loadedObserver(`${PAGE}/bun-browser.wasm`, { bytes: 0, sha256: "0".repeat(64) });
+  observer.capture(response(`${PAGE}/worker.js`, async () => { throw new Error("No resource with given identifier found"); }));
+  await expect(observer.flush()).rejects.toThrow(`${PAGE}/worker.js: Error: No resource with given identifier found`);
+});
+
 // Real detached process groups stand in for the web server and Playwright's browser server.
 const owned: ChildProcess[] = [];
-afterEach(() => {
-  for (const child of owned.splice(0)) {
-    if (child.pid === undefined) continue;
-    try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
-  }
+afterEach(async () => {
+  await Promise.all(owned.splice(0).map(stopConsumerGroup));
 });
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -709,4 +713,18 @@ test("never-started resources are gone, and a kill that stopped nothing still le
   expect(leaderAlive).toMatchObject({ browserGone: true });
   expect(alive(browser.member)).toBe(false);
   expect(browser.child.exitCode !== null || browser.child.signalCode !== null).toBe(true);
+});
+
+// Exact group ownership must not consume another Bun-managed child or its wait event.
+test("Chromium descendant reaping leaves unrelated groups and their direct-child wait events alone", async () => {
+  const unrelated = await group(MEMBER);
+  const browser = await group(MEMBER);
+  const state = resources(null, Promise.resolve({ kill: playwrightKill(browser.child), process: () => browser.child }));
+  await stopChromium(state);
+  expect(state.browserGone).toBe(true);
+  expect(alive(unrelated.member)).toBe(true);
+  expect(unrelated.child.exitCode).toBeNull();
+  await stopConsumerGroup(unrelated.child);
+  expect(unrelated.child.exitCode !== null || unrelated.child.signalCode !== null).toBe(true);
+  expect(alive(unrelated.member)).toBe(false);
 });

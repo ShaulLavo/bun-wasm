@@ -82,7 +82,7 @@ export function loadedObserver(browserUrl: string, expected: BytesIdentity, guar
       const received = identity(bytes);
       assets.push({ role: "loaded", path, encoding, ...received, payload: encoding === "gzip" ? identity(payload) : received });
       loaded.push({ url: path, method, status, encoding: transport, ...received });
-    }).catch(error => { errors.push(error); });
+    }).catch(error => { errors.push(new Error(`Loaded response ${path}: ${String(error)}`, { cause: error })); });
     pending.push(task);
   }
   async function flush(): Promise<void> {

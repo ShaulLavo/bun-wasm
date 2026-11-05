@@ -1,11 +1,72 @@
 import { execFile, spawn, type ExecFileOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { inspect } from "node:util";
 import { chmod, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { createServer, createConnection, type Socket } from "node:net";
 import { createSecureContext, TLSSocket, connect as tlsConnect } from "node:tls";
+
+/** Exact values owned by one run. No message, phase or stack is hidden wholesale. */
+export class RunSecrets {
+  private readonly forms = new Set<string>();
+  private sorted: readonly string[] = [];
+  add(value: string | Uint8Array): void {
+    const renderings = typeof value === "string" ? [value] : byteRenderings(value);
+    for (const rendering of renderings) {
+      if (rendering.length < 16) throw new Error("A run secret is too short to redact without hiding ordinary text");
+      for (const form of [rendering, JSON.stringify(rendering).slice(1, -1), encodeURIComponent(rendering)]) this.forms.add(form);
+    }
+    this.sorted = Array.from(this.forms).sort((a, b) => b.length - a.length);
+  }
+  renderings(): readonly string[] { return this.sorted; }
+  redact(text: string): string { return this.sorted.reduce((redacted, form) => redacted.split(form).join("[redacted run secret]"), text); }
+  tail(limit: number): RedactedTail { return new RedactedTail(this, limit); }
+}
+function byteRenderings(bytes: Uint8Array): string[] {
+  const buffer = Buffer.from(bytes);
+  return [buffer.toString("hex"), buffer.toString("base64"), buffer.toString("base64url"), Array.from(bytes).join(","), Array.from(bytes).join(", "),
+    Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(" "), inspect(buffer), inspect(bytes), inspect(new Uint8Array(bytes))];
+}
+function prefixOverlap(text: string, form: string): number {
+  for (let length = Math.min(text.length, form.length - 1); length > 0; length--) if (text.endsWith(form.slice(0, length))) return length;
+  return 0;
+}
+function firstSecret(text: string, forms: readonly string[]): { index: number; form: string } | undefined {
+  let found: { index: number; form: string } | undefined;
+  for (const form of forms) {
+    const index = text.indexOf(form);
+    if (index >= 0 && (!found || index < found.index)) found = { index, form };
+  }
+  return found;
+}
+/** Commit only secret-safe text; a possible split value stays in a bounded raw suffix. */
+class RedactedTail {
+  private committed = "";
+  private pending = "";
+  constructor(private readonly secrets: RunSecrets, private readonly limit: number) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("A diagnostic tail needs a positive limit");
+  }
+  write(chunk: string): void {
+    let text = this.pending + chunk;
+    this.pending = "";
+    const forms = this.secrets.renderings();
+    while (text.length) {
+      const boundary = forms.reduce((cut, form) => Math.min(cut, text.length - prefixOverlap(text, form)), text.length);
+      const match = firstSecret(text, forms);
+      if (!match || boundary <= match.index) {
+        this.commit(text.slice(0, boundary));
+        this.pending = text.slice(boundary);
+        return;
+      }
+      this.commit(text.slice(0, match.index) + "[redacted run secret]");
+      text = text.slice(match.index + match.form.length);
+    }
+  }
+  read(): string { return this.secrets.redact(this.committed + this.pending).slice(-this.limit); }
+  private commit(text: string): void { this.committed = (this.committed + text).slice(-this.limit); }
+}
 
 export const PI_POSTGRES_IMAGE = "docker.io/library/postgres@sha256:7a8050e52090c5f77effbe7e0cbed4a0587306776c3f26dc99933a63c619eaf1";
 const PI_POSTGRES_CONFIG = "c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7";
@@ -47,14 +108,19 @@ export class FixtureCommandError extends Error {
     super(`${command} ${signal ? `ended by ${signal}` : `exited ${code}`}${stderr ? `: ${stderr}` : ""}`);
   }
 }
-async function execute(executable: string, args: readonly string[], options: ExecFileOptions, allowed: readonly number[] = [0]) {
+type CommandOptions = ExecFileOptions & { readonly secrets?: RunSecrets };
+export async function execute(executable: string, args: readonly string[], options: CommandOptions, allowed: readonly number[] = [0]) {
   const result = Promise.withResolvers<{ code: number; stdout: string }>();
-  const child = execFile(executable, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+  const { secrets = new RunSecrets(), ...commandOptions } = options;
+  const stderr = secrets.tail(4096);
+  const child = execFile(executable, args, { ...commandOptions, encoding: "utf8" }, (error, stdout) => {
     const code = error ? error.code : 0;
     if (typeof code === "number" && allowed.includes(code)) { result.resolve({ code, stdout }); return; }
     const command = [executable].concat(args.slice(0, 2)).join(" ");
-    result.reject(new FixtureCommandError(command, code ?? null, error?.signal ?? null, String(stderr).trim().slice(-4096)));
+    result.reject(new FixtureCommandError(command, code ?? null, error?.signal ?? null, stderr.read().trim()));
   });
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => { stderr.write(chunk); });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   try { return await result.promise; } finally { await closed; }
 }
@@ -79,20 +145,21 @@ export async function removePiPostgres(plan: ReturnType<typeof piPostgresPlan>, 
   // Images are prepared and owned by Engines. No pull, alias, prune or rmi here.
 }
 /** One stderr line naming every failure the owner saw, so the PC driver can record the concrete cause. */
-export function ownerFailureLine(failures: readonly unknown[]): string {
+export function ownerFailureLine(failures: readonly unknown[], secrets: RunSecrets = new RunSecrets()): string {
   const describe = (error: unknown): unknown => {
     if (!(error instanceof Error)) return { value: String(error) };
     const inner = error instanceof AggregateError ? { errors: error.errors.map(describe) } : {};
     return { name: error.name, message: error.message, code: Reflect.get(error, "code") ?? null, signal: Reflect.get(error, "signal") ?? null, ...inner };
   };
-  return JSON.stringify({ kind: "pi-postgres-owner-failures", failures: failures.map(describe) }) + "\n";
+  return secrets.redact(JSON.stringify({ kind: "pi-postgres-owner-failures", failures: failures.map(describe) })) + "\n";
 }
 export async function postgresOwner(root: string, bind: string, relayCidr: string): Promise<void> {
   const id = root.slice(root.lastIndexOf("bun-wasm-tls-") + "bun-wasm-tls-".length);
   const plan = piPostgresPlan(homedir(), id, bind, relayCidr);
   if (root !== plan.root) throw new Error("Pi PostgreSQL scratch must be under its remote home/tmp");
   const abort = new AbortController();
-  const options = { cwd: root, timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal };
+  const secrets = new RunSecrets();
+  const options = { cwd: root, timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal, secrets };
   const owned = { container: false, volume: false };
   const failures: unknown[] = [];
   let rootOwned = false;
@@ -107,8 +174,8 @@ export async function postgresOwner(root: string, bind: string, relayCidr: strin
   const timer = setTimeout(stop, 11 * 60_000);
   const commands = startupCommands(() => guard, stop);
   void commands.done.then(stop, stop);
-  const pod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal }, args[1] === "exists" ? [0, 1] : [0]);
-  const cleanPod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024 }, args[1] === "exists" ? [0, 1] : [0]);
+  const pod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal, secrets }, args[1] === "exists" ? [0, 1] : [0]);
+  const cleanPod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024, secrets }, args[1] === "exists" ? [0, 1] : [0]);
   try {
     await checkPiHost(bind, abort.signal);
     await requireAbsent("container", plan.name, pod);
@@ -119,6 +186,7 @@ export async function postgresOwner(root: string, bind: string, relayCidr: strin
     await mkdir(root, { mode: 0o700 });
     rootOwned = true;
     let password = randomBytes(32).toString("base64url");
+    secrets.add(password);
     await prepareSecrets(plan, password, options);
     await rm(join(root, "ca.key"));
     abort.signal.throwIfAborted();
@@ -128,7 +196,7 @@ export async function postgresOwner(root: string, bind: string, relayCidr: strin
     await pod(plan.createArgs);
     await pod(["cp", join(root, "container"), `${plan.name}:/run/tls`]);
     await pod(["start", plan.name]);
-    await ready(plan.name, abort.signal);
+    await ready(plan.name, abort.signal, secrets);
     const publication = (await pod(["port", plan.name])).stdout.trim();
     if (publication !== `5432/tcp -> ${bind}:45433`) throw new Error("Pi PostgreSQL publication must bind only the selected Tailscale address");
     const auth = (await pod(["exec", "--user", "postgres", plan.name, "psql", "-XAt", "-U", "postgres", "-c", "SELECT current_setting('ssl') = 'on' AND current_setting('password_encryption') = 'scram-sha-256' AND rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname = 'postgres'"])).stdout.trim();
@@ -162,7 +230,7 @@ export async function postgresOwner(root: string, bind: string, relayCidr: strin
     process.removeListener("SIGHUP", stop);
   }
   if (!failures.length) return;
-  process.stderr.write(ownerFailureLine(failures));
+  process.stderr.write(ownerFailureLine(failures, secrets));
   throw new AggregateError(failures, "Pi PostgreSQL fixture failed or cleanup unconfirmed");
 }
 async function checkPiHost(bind: string, signal: AbortSignal): Promise<void> {
@@ -175,9 +243,11 @@ async function checkPiHost(bind: string, signal: AbortSignal): Promise<void> {
   if ((await execute("tailscale", ["ip", "-4"], options)).stdout.trim() !== bind) throw new Error("Pi Tailscale address mismatch");
   if ((await execute("podman", ["info", "--format", "{{.Host.Security.Rootless}}"], options)).stdout.trim() !== "true") throw new Error("Pi Podman must be rootless");
 }
-async function prepareSecrets(plan: ReturnType<typeof piPostgresPlan>, password: string, options: ExecFileOptions): Promise<void> {
+async function prepareSecrets(plan: ReturnType<typeof piPostgresPlan>, password: string, options: CommandOptions): Promise<void> {
   await execute("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-subj", "/CN=bun-wasm run CA", "-days", "2", "-addext", "basicConstraints=critical,CA:TRUE"], options);
+  options.secrets?.add(await readFile(join(plan.root, "ca.key"), "utf8"));
   await execute("openssl", ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr", "-subj", "/CN=pg.tls.test"], options);
+  options.secrets?.add(await readFile(join(plan.root, "server.key"), "utf8"));
   await writeFile(join(plan.root, "extensions"), "subjectAltName=DNS:pg.tls.test\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n");
   await execute("openssl", ["x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "server.pem", "-days", "2", "-extfile", "extensions"], options);
   await chmod(join(plan.root, "server.key"), 0o600);
@@ -187,10 +257,10 @@ async function prepareSecrets(plan: ReturnType<typeof piPostgresPlan>, password:
   await writeFile(join(directory, "password"), password, { mode: 0o600 });
   await writeFile(join(directory, "pg_hba.conf"), plan.hba, { mode: 0o600 });
 }
-async function ready(container: string, signal: AbortSignal): Promise<void> {
+async function ready(container: string, signal: AbortSignal, secrets: RunSecrets): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt++) {
     signal.throwIfAborted();
-    try { await execute("podman", ["exec", container, "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-t", "3", "-U", "postgres"], { timeout: 20_000, signal }); return; }
+    try { await execute("podman", ["exec", container, "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-t", "3", "-U", "postgres"], { timeout: 20_000, signal, secrets }); return; }
     catch { signal.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, 1000)); }
   }
   throw new Error("Pi PostgreSQL did not become ready within its bounded startup");

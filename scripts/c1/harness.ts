@@ -23,7 +23,7 @@ export const CONSUMER_HARNESS_PATHS: readonly string[] = [
   // Controller tests and their synthetic fixture.
   "scripts/c1/contract-fixture.ts", "scripts/c1/contract.test.ts", "scripts/c1/controller.test.ts", "scripts/c1/tls.test.ts", "scripts/c1/replay.test.ts",
   // Five-owner Chromium driver.
-  "scripts/io-resource-context.ts", "scripts/io-resource-context-intake.ts", "scripts/io-resource-context-assets.ts", "scripts/io-resource-context.test.ts",
+  "scripts/consumer-process-groups.ts", "scripts/io-resource-context.ts", "scripts/io-resource-context-intake.ts", "scripts/io-resource-context-assets.ts", "scripts/io-resource-context.test.ts",
   // TLS driver and its host-side services, without the modules the sealed page bundles.
   "scripts/tls-qualification.ts", "scripts/tls-qualification-inputs.ts", "scripts/tls-qualification-fixture.ts", "scripts/tls-qualification.test.ts",
   "web/tests/tls-relay-services.ts", "web/tests/tls-relay-browser.ts",

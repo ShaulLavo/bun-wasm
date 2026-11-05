@@ -98,14 +98,20 @@ whole `result.json`, or why none is readable.
   with the shared `stopProcessGroup` utility and reads `browserClosed` only
   after the browser group is empty. Playwright's own kill waits only for the
   browser leader, so helpers of that group could still exist when it
-  returned.
+  returned. `scripts/consumer-process-groups.ts` enables Linux child
+  subreaping before cleanup and reaps only adopted zombie grandchildren in
+  the owned detached groups. PID birth identities prevent reuse; direct-child
+  exit events remain Bun's, and unrelated groups are never reaped.
 - `scripts/tls-qualification.ts` tags failures by phase and keeps the first
   setup or exercise error when cleanup also fails. Every phase keeps its
   message, stack, errno fields and nested errors. Only registered run secrets
   are redacted: the database password, the relay credential, the relay
   token-signing key and each minted token, registered where the driver creates
   or receives them, in their raw, JSON-escaped, URL-encoded and byte-rendered
-  forms, before any diagnostic text is bounded. The browser prelaunch check
+  forms, including Buffer and typed-array inspection. Both the PC stderr
+  observer and remote command owner redact complete values across chunk
+  boundaries before retaining a bounded tail. TLS private keys stay on the
+  Pi, where their redaction is registered locally. The browser prelaunch check
   binds the running harness identity separately from the delivered product
   identity. `scripts/tls-qualification-lifecycle.ts` and
   `scripts/tls-qualification-context.ts` are bundled inputs of the sealed TLS
@@ -116,5 +122,8 @@ whole `result.json`, or why none is readable.
   and the volume independently (the volume without `--force`, so Podman
   itself refuses one still in use), and prints its failures on stderr. The
   driver records that stderr, redacted, in the remote cleanup ledger row. The
-  Pi lane lease always ends with cleanup; an unreconciled remote fixture is
-  left as it is, named in the ledger, and still fails the run.
+  Pi lane lease has its own detached process group. Cleanup closes stdin,
+  then ends and reaps the entire group even if a stopped descendant prevents
+  normal EOF handling. The original timeout or unreconciled-resource error
+  remains a failure after local termination. An unreconciled remote fixture
+  is left as it is, named in the ledger.
