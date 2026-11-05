@@ -186,6 +186,14 @@ function requireLoaded(handoff: ConsumerHandoff, surface: LoadedSurface, result:
 interface DriverRun { argv: string[]; env?: Record<string, string>; out: string; surface?: LoadedSurface }
 type Driver = (handoff: ConsumerHandoff, context: { sourceRoot: string; env: Readonly<Record<string, string>>; handoffFile: FileIdentity }) => DriverRun[] | string;
 const browserEnv = (handoff: ConsumerHandoff) => ({ TMPDIR: handoff.browserTmp, TMP: handoff.browserTmp, TEMP: handoff.browserTmp });
+/** TLS writes its result under the same output directory passed to its CLI. */
+export function tlsDriver(handoff: ConsumerHandoff, context: Parameters<Driver>[1]): ReturnType<Driver> {
+  if (handoff.dependencies.tls.status === "unresolved") return `TLS dependencies unresolved: ${handoff.dependencies.tls.missing}`;
+  if (handoff.fixtures.tls.status === "unresolved") return `TLS fixture options unresolved: ${handoff.fixtures.tls.missing}`;
+  const out = join(handoff.outputs.tls, "pg-early");
+  return [{ out, surface: "tls", env: browserEnv(handoff), argv: [context.env.BUN_EXE ?? "bun", "scripts/tls-qualification.ts", "--stage", "pg-early", "--browser", "chromium", "--engine", "browser",
+    "--handoff", context.handoffFile.path, "--handoff-sha256", context.handoffFile.sha256, "--output", out] }];
+}
 /** Each consumer's driver, or why it cannot run yet. Consumers only read the handoff. */
 const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
   "five-owner": (handoff, context) => {
@@ -200,13 +208,7 @@ const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
       argv: [bun, "scripts/io-resource-context.ts", "--surface", "chromium", "--web-root", handoff.webRoot, "--out", out("chromium")].concat(qualify) }];
   },
   // TLS reads everything (delivery, intake, dependencies, fixture options, its sealed page) from the one pinned handoff.
-  tls: (handoff, context) => {
-    if (handoff.dependencies.tls.status === "unresolved") return `TLS dependencies unresolved: ${handoff.dependencies.tls.missing}`;
-    if (handoff.fixtures.tls.status === "unresolved") return `TLS fixture options unresolved: ${handoff.fixtures.tls.missing}`;
-    const out = handoff.outputs.tls;
-    return [{ out, surface: "tls", env: browserEnv(handoff), argv: [context.env.BUN_EXE ?? "bun", "scripts/tls-qualification.ts", "--stage", "pg-early", "--browser", "chromium", "--engine", "browser",
-      "--handoff", context.handoffFile.path, "--handoff-sha256", context.handoffFile.sha256, "--output", join(out, "pg-early")] }];
-  },
+  tls: tlsDriver,
   relay: handoff => handoff.dependencies.relay.status === "unresolved" ? `relay requirements unresolved: ${handoff.dependencies.relay.missing}` : "relay has no driver",
 };
 
