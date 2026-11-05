@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import { createServer, request, type Server } from "node:http";
+import { createServer, request, Server } from "node:http";
 import { createConnection, createServer as createTcpServer, Socket, type AddressInfo, type Server as TcpServer } from "node:net";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -106,7 +106,7 @@ function within<T>(promise: Promise<T>, what: string): Promise<T> {
 }
 
 async function closeNode(server: Server | TcpServer): Promise<void> {
-  if ("closeAllConnections" in server) server.closeAllConnections();
+  if (server instanceof Server) server.closeAllConnections();
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 
@@ -140,7 +140,7 @@ async function referenceScenario(protocol: Protocol, kind: Kind): Promise<Observ
     if (!server.listening) return scenario.observations;
     const bound = (server.address() as AddressInfo).port;
     await (protocol === "tcp" ? referenceConnection(bound) : referenceRequest(bound));
-    if ("closeAllConnections" in server) server.closeAllConnections();
+    if (server instanceof Server) server.closeAllConnections();
     await new Promise<void>(resolve => storage.run("closer", () => server.close(() => { scenario.see("close"); resolve(); })));
     return scenario.observations;
   } finally {

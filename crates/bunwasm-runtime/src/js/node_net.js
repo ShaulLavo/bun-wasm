@@ -8,8 +8,7 @@
     const { _normalizeArgs, isTcpListenOptions, port, error } = internal.require("net_address");
     // A socket or server resource runs its I/O steps in the frame current where it registered
     // them, as Node's resources do; the host enters each I/O turn at the root frame.
-    const { inContext } = internal.require("net_listener");
-    const bindResource = waiter => inContext(native.getAsyncContext(), waiter);
+    const bindResource = waiter => internal.require("net_listener").inContext(native.getAsyncContext(), waiter);
 
     class Socket extends Duplex {
       constructor(options = {}) {

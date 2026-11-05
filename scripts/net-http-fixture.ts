@@ -95,6 +95,7 @@ export function fixture() {
   };
   modules.tls_transport = load("tls_transport")(internal);
   modules.net_path = load("net_path")(internal);
+  modules.net_listener = load("net_listener")(internal);
   modules.http_server_response = load("http_server_response")(internal);
   modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);
