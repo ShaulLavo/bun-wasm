@@ -528,3 +528,141 @@ or the new startup waiter. Evidence and the native control are in
 full upstream results are in `timers-browser.json` and `timers-browser-logs/`
 in the same directory. The real-Bun follow-up lane retains this baseline
 artifact until the timer follow-up is reproduced, then removes it.
+
+## Browser host call allocation abort on an 8 MiB hash input (iOS E3)
+
+Status: Approved (owner, 2026-11-05) for recording this finding and for the
+source-only diagnosis below. Not approved: a new guest build, a device run, a
+threshold scan or a runtime change. Those need a separate owner decision.
+
+### What was observed
+
+The product is the original admitted runtime 110 browser guest, source
+`e1dea936b0fe9de664ecc3980550cc091d1be120` (tree `bb90b2ff`). Its sealed
+delivery in `/work/artifacts/bun-wasm-runtime110-20261105/delivery` stays
+unchanged. The separately admitted private browser fallback guest (`425bef5a`)
+is a different artifact and is not involved.
+
+On an iPhone in Safari, the Waffle Nuxt E3 run `e3-r110-chunked-1` staged 24
+chunks of 8,388,608 bytes. The restorer (SHA-256 `60190aeb…`) then exited 1 on
+its first chunk, before Nuxt ran:
+
+```
+memory allocation of 8388608 bytes failed
+RuntimeError: Unreachable code should not be executed (evaluating 'e.bunwasm_call(v,F,R.len)')
+```
+
+The captured import-rejection stack, innermost first:
+
+```
+wasm-function[91]
+wasm-function[80]
+bunwasm_runtime::engine_host::Reader::val   (wasm-function[7679])
+bunwasm_runtime::engine_host::Reader::val   (wasm-function[7679])
+bunwasm_call                                (wasm-function[7835])
+p  (__bunwasm/worker.js:8:71598)
+digest
+readChunk (restore-tree.ts:287)
+```
+
+Restorer line 287 is `sha256(bytes)`, defined as
+`new Bun.CryptoHasher("sha256").update(bytes).digest("hex")`. The stack names
+`digest`, not `update`, as the frame that crossed into the guest. That fits the
+source: `update` only buffers in JavaScript.
+
+In the same guest process, earlier steps had succeeded: a `readFileSync` of the
+3,097,113-byte `tree.json`, a hash of 2,075,558 bytes of inventory text through
+the same hasher, and the `readSync` loop that filled this same 8 MiB chunk.
+Those are different operations in different memory states. They establish no
+size threshold, no size interval, and no cause in total memory, fragmentation,
+a wasm memory growth limit or Safari's allocator. One earlier large-file read on
+PC Chromium did not reproduce this; no threshold campaign was run. The Nuxt
+command never ran, and no `TypeError` cause is attributed. No Waffle defect is
+shown.
+
+### Source call chain at e1 (static reading only)
+
+`engine_host.rs`, `engine-host.js`, `bun.js`, `web.js` and `natives.rs` have no
+diff between `e1dea936` and main `cac10b72` for the code below, so the line
+numbers hold on both.
+
+1. `crates/bunwasm-runtime/src/js/bun.js:291` `CryptoHasher.update` copies the
+   input with `internal.toUint8(data).slice()` and keeps it in `#chunks`
+   (JavaScript heap, input-sized).
+2. `bun.js:296` `digest` calls `internal.concatBytes(this.#chunks)`
+   (`web.js:656`), which always allocates a new array of the total size, even for
+   one chunk (JavaScript heap, input-sized).
+3. `native.hash(alg, input)` goes to `web/src/engine-host.js:296` `call`. The
+   `Writer` (`engine-host.js:129`) serializes `[alg, input]`, doubling its
+   buffer from 256 bytes, so it holds a buffer of up to twice the encoded size
+   during the last growth (JavaScript heap).
+4. `engine-host.js:299` `exports.bunwasm_alloc(w.len)` allocates a zeroed guest
+   buffer of `w.len` = 8,388,608 + 21 framing bytes (array header, the
+   `"sha256"` string, the byte-length header) at `engine_host.rs:222`. The
+   JavaScript side copies the encoding into it. This allocation succeeded,
+   because `bunwasm_call` was entered.
+5. `engine_host.rs:262` `bunwasm_call` takes ownership of that buffer as
+   `input` and calls `decode(&input)`. The outer `Reader::val` (`:120`) reads
+   the array tag and recurses for each item. The inner `Reader::val` reads the
+   bytes tag and runs `Val::Bytes(self.take(n).to_vec())` at `:132`, a second
+   guest allocation of exactly n = 8,388,608 bytes. `input` is dropped only
+   after `decode` returns (`:269`).
+6. Not reached: `natives.rs:1321` `hash` and `set_result` (`engine_host.rs:193`).
+
+The failure most likely maps to step 5: the reported size is exactly n (step 4
+asks for n + 21), and the stack shows two nested `Reader::val` frames under
+`bunwasm_call`, which matches decoding an array whose second item is bytes. At
+that point the guest heap holds both the 8 MiB + 21 byte input and the new
+8 MiB copy request. This is a source match, not a symbol-level proof: the
+copy is inlined into `Reader::val`, and frames 80 and 91, presumably Rust's
+allocation-error path, have no names in the capture. It does not explain why
+the allocation failed.
+
+One nearby ownership fact, not tied to this failure: `RESULT`
+(`engine_host.rs:159`) is a thread-local `Vec` that `set_result` clears but
+never shrinks. If the preceding `readSync` reached `read_descriptor`
+(`natives.rs:965`) with an 8 MiB length, that call allocated an 8 MiB buffer and
+left `RESULT` with at least 8 MiB of capacity for the rest of the process. How
+the restorer's `readSync` sized its native reads in this run was not checked.
+
+### Unknowns
+
+- Whether functions 80 and 91 are the allocation-error handler and abort, and
+  whether the inlined copy really is the `:132` `to_vec`. Needs a read of the
+  admitted guest's name section; it already names functions 7679 and 7835.
+- Why the allocation failed: guest heap state, declared memory maximum,
+  browser refusal to grow memory, or something else. Not knowable from source.
+- The guest heap size and peak at the time of the abort. Nothing recorded it.
+- Whether the earlier `EIO` in `e3-r110-import-1` (same host frame region) is
+  the same allocation. Not shown.
+
+### Next bounded source verification (approved, no execution)
+
+1. Read the function names for indices 80, 91, 7679 and 7835 from the admitted
+   runtime 110 guest's name section with a read-only tool. Do not modify,
+   rebuild or rerun the delivered bytes.
+2. Read the same guest's memory section for its declared initial and maximum
+   pages, and record them as facts with no conclusion about cause.
+3. Trace the browser `fs.readSync` path from JavaScript to `read_descriptor` and
+   record what length it requests for an 8 MiB read.
+4. Write the result into this section. Stop there; any cause claim needs new
+   execution and an owner decision.
+
+### Proposed regression direction (not a fix, not approved for a build)
+
+Add a host-only regression that hashes an 8 MiB `Uint8Array` with
+`Bun.CryptoHasher` through `bunwasm_call` and checks that the guest's peak heap
+growth stays near one input size rather than two. Candidate directions to
+evaluate in that change: decode bytes as a slice borrowed from `input` instead
+of `to_vec`, feed `CryptoHasher.update` into a native incremental hasher instead
+of concatenating in `digest`, and shrink `RESULT` after a large result. Any of
+these changes the guest, so it needs a guest rebuild, a pass on all three
+engines and a new admission. The sealed runtime 110 delivery stays as it is.
+
+Waffle's lead is bounding each restorer hash, read and write to small windows on
+the original product to reach Nuxt. That is a diagnostic workaround, not a
+runtime fix and not proof of cause.
+
+Evidence: `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/lead-debugger/e3-r110-chunked-1/`
+(`RESULT.md`, `records.jsonl` phase record 5, journal record 52). The projection
+and source references are in `/work/reports/wave-20261105/engines/host-api-allocation-e3/`.
