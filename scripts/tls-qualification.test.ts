@@ -37,7 +37,13 @@ async function refused(evidence: TlsEvidence, expected: RegExp | string): Promis
   expect(setups).toBe(0);
 }
 async function refusedWith(overrides: FixtureOverrides, expected: RegExp | string): Promise<void> {
-  await refused((await fixture(overrides)).evidence, expected);
+  let setups = 0;
+  await expect(qualifiedRun(async () => preflightTls((await fixture(overrides)).evidence), async () => { setups++; }, async () => {})).rejects.toThrow(expected);
+  expect(setups).toBe(0);
+}
+function refusedTuple(change: Partial<typeof FIXTURE_TUPLE>, expected: RegExp): Promise<void> {
+  const tuple = { ...FIXTURE_TUPLE, ...change };
+  return refusedWith({ tuple, inputs: inputs => ({ ...inputs, tuple }) }, expected);
 }
 async function admitted(evidence: TlsEvidence): Promise<TlsIntake> {
   let reached: TlsIntake | undefined;
@@ -165,7 +171,7 @@ describe("wrong root", () => {
 });
 
 describe("wrong source", () => {
-  test("handoff claims another source", () => refusedWith({ handoff: handoff => ({ ...handoff, source: other }) }, /handoff source head\/tree mismatch/));
+  test("handoff claims another source", () => refusedWith({ handoff: handoff => ({ ...handoff, source: other }) }, /handoff differs/));
   test("intake source", () => refusedWith({ intake: intake => ({ ...intake, source: other }) }, /intake source or tuple differs/));
   test("sealed inputs select another source", () => refusedWith({ inputs: inputs => ({ ...inputs, source: other }) }, /sealed inputs select another source or tuple/));
   test("delivery of another source than the host", () => refusedWith({ deliverySource: other }, /sealed inputs select another source/));
@@ -182,10 +188,10 @@ describe("wrong source", () => {
 });
 
 describe("wrong tuple", () => {
-  test("runtime109 delivery", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.109" } }, /runtime110\/relay109/));
-  test("runtime107 delivery", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.107" } }, /runtime110\/relay109/));
-  test("other programs release", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, programs: "programs-v0.0.14" } }, /programs15/));
-  test("other program manifest schema", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, programManifestSchema: "waffle-program-release/1" } }, /schema2/));
+  test("runtime109 delivery", () => refusedTuple({ runtime: "0.0.109" }, /runtime110\/relay109/));
+  test("runtime107 delivery", () => refusedTuple({ runtime: "0.0.107" }, /runtime110\/relay109/));
+  test("other programs release", () => refusedTuple({ programs: "programs-v0.0.14" }, /programs15/));
+  test("other program manifest schema", () => refusedTuple({ programManifestSchema: "waffle-program-release/1" }, /schema2/));
   test("intake tuple", () => refusedWith({ intake: intake => ({ ...intake, tuple: { ...intake.tuple, hostInterface: 2 } }) }, /intake source or tuple differs/));
   test("installed runtime and relay packages", () => {
     expect(() => requireInstalledRuntimePackage("waffle", { version: "0.0.110" })).not.toThrow();
@@ -198,8 +204,8 @@ describe("wrong tuple", () => {
 describe("wrong manifest and count", () => {
   test("intake names other DELIVERY.json bytes", () => refusedWith({ intake: intake => ({ ...intake, delivery: { ...intake.delivery, sha256: "e".repeat(64) } }) }, /different DELIVERY\.json/));
   test("sealed config names another input manifest", () => refusedWith({ config: config => ({ ...config, manifest: { ...config.manifest, sha256: "a".repeat(64) } }) }, /names another input manifest/));
-  test("sealed config record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.config]: "{}" } }, /config record differs from DELIVERY\.json/));
-  test("sealed inputs record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.inputs]: "{}" } }, /inputs record differs from DELIVERY\.json/));
+  test("sealed config record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.config]: "{}" } }, /sealed config record differs from the digest DELIVERY\.json binds/));
+  test("sealed inputs record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.inputs]: "{}" } }, /sealed inputs record differs from the digest DELIVERY\.json binds/));
   test("intake member count", () => refusedWith({ intake: intake => ({ ...intake, members: intake.members - 1 }) }, /member count/));
 });
 
