@@ -169,6 +169,29 @@ export function verifyWorkerProof(output: string, status: number | null): void {
   if (status !== 0 || /^FAIL /m.test(output) || lines.length !== workerProofLabels.length
     || workerProofLabels.some((label, index) => lines[index] !== `PASS ${label}` && !lines[index]?.startsWith(`PASS ${label} `))) throw new Error("Shared-group worker proof failed");
 }
+/** Producer members a manifest names, relative to the engine root so a copy verifies where it lies. */
+export const producerLauncherPath = "launcher/bun-wasm";
+export const producerLauncherReceiptPath = "launcher/bun-wasm.launcher.json";
+export const producerWebRoot = "web";
+/** Resolve a manifest-recorded member under `root`. Absolute, traversing or empty segments are refused. */
+export function producerMember(root: string, value: unknown, label: string): string {
+  if (typeof value !== "string" || value === "" || value.startsWith("/") || value.includes("\\")
+    || value.split("/").some(part => part === "" || part === "." || part === "..")) throw new Error(`Producer manifest ${label} must be a relative member path`);
+  return `${root}/${value}`;
+}
+/**
+ * The manifest's launcher record must name the producer's own launcher and
+ * receipt by relative path and match that original receipt and these bytes.
+ */
+export function verifyManifestLauncher(root: string, value: unknown, source: ProducerSource): LauncherReceipt {
+  if (!value || typeof value !== "object" || !("path" in value) || !("receipt" in value)) throw new Error("Manifest launcher record is missing");
+  if (value.path !== producerLauncherPath || value.receipt !== producerLauncherReceiptPath) throw new Error("Manifest launcher must name the producer's own relative launcher and receipt");
+  const launcher = producerMember(root, value.path, "launcher");
+  const verified = verifyLauncher(launcher, JSON.parse(readFileSync(producerMember(root, value.receipt, "launcher receipt"), "utf8")), source);
+  if (JSON.stringify(value) !== JSON.stringify({ path: producerLauncherPath, receipt: producerLauncherReceiptPath, ...verified })) throw new Error("Manifest launcher differs from its original receipt");
+  return verified;
+}
+
 export function launcherReceipt(path: string, source: ProducerSource): LauncherReceipt {
   accessSync(path, constants.X_OK);
   const bytes = readFileSync(path);
