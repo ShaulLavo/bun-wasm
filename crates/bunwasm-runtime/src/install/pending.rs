@@ -32,8 +32,8 @@ impl Pending {
         self.poll = FIRST_POLL;
     }
 
-    /// The next `poll` timeout in milliseconds, at least 1 and never past the deadline, or `None`
-    /// once the request has gone `timeout` without progress.
+    /// The next `poll` timeout, clipped to the remaining progress time with a 1 ms minimum.
+    /// A sub-millisecond remainder rounds up; `None` means the progress deadline has expired.
     pub fn next_poll_ms(&mut self, now: Instant) -> Option<i32> {
         let remaining = self
             .timeout

@@ -361,10 +361,7 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
     loop {
         match host::read(handle, 64 * 1024) {
             Ok(bytes) if bytes.is_empty() => return Ok(out),
-            Ok(bytes) => {
-                out.extend_from_slice(&bytes);
-                pending.progressed(Instant::now());
-            }
+            Ok(bytes) => append_progress(&mut out, &mut pending, &bytes),
             Err(host::AGAIN) => wait(&mut pending, url)?,
             Err(_) => return Err(network_error(handle, registry)),
         }
@@ -372,6 +369,11 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
             return Err("Download exceeds 256 MiB limit".into());
         }
     }
+}
+
+fn append_progress(out: &mut Vec<u8>, pending: &mut Pending, bytes: &[u8]) {
+    out.extend_from_slice(bytes);
+    pending.progressed(Instant::now());
 }
 
 fn wait(pending: &mut Pending, url: &str) -> Result<()> {
