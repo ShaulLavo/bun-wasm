@@ -385,3 +385,23 @@ for (const protocol of ["tcp", "http"] as const) {
   test(`${protocol} unref-before-listen completes the get-port-please probe`, () => checkUnreferencedProbe(protocol));
   test(`${protocol} unref during bind affects acceptance without losing startup`, () => checkUnrefDuringBind(protocol));
 }
+
+
+const closeCases: ["http" | "tcp", boolean][] = [["http", false], ["http", true], ["tcp", false], ["tcp", true]];
+for (const [protocol, bound] of closeCases) {
+  test(`${protocol} close releases retired waiter references after ${bound ? "ready" : "pending"} bind`, () => {
+    const state = httpFixture(protocol);
+    try {
+      state.server.listen(1234);
+      if (bound) { state.ready([]); state.pump(); }
+      state.server.close();
+      state.pump();
+      expect(state.server._starting).toBeNull();
+      expect(state.server._accepting).toBeNull();
+      expect(state.internal.ioPending()).toBe(0);
+    } finally {
+      state.server.close();
+      state.pump();
+    }
+  });
+}

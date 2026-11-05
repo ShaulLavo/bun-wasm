@@ -787,6 +787,8 @@
     if (server.listening) {
       waiters.delete(server._accepting);
       waiters.delete(server._starting);
+      server._accepting = null;
+      server._starting = null;
       if (server._pipeName === undefined) native.hostClose(server._listener);
       else internal.require("net_path").close(server, hostError, typeof callback === "function");
       server.listening = false;
@@ -1115,11 +1117,7 @@
         }
         const connection = (this._framingHeaders || this._headers).get("connection")?.[1];
         const connectionText = Array.isArray(connection) ? connection.join(",") : String(connection || "");
-        this._conn.write(new Uint8Array(0), error => {
-          if (error) { callback(error); this._emitClose(); return; }
-          callback();
-          if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
-        });
+        this._conn.write(new Uint8Array(0), error => this._completeBody(callback, connectionText, error));
       }
     }
 

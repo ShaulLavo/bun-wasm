@@ -58,3 +58,5 @@ from exiting before the port probe's listen/close callbacks, which blocked the
 unchanged Nuxt CLI before it reached its default child-process fork. Closing
 still cancels the pending request. No timer, retry or forced permanent listener
 reference is introduced.
+
+Closing a server clears its retired startup and acceptance references after removing the waiters. This releases their captured context when the closed server remains reachable. The focused pending-bind and ready-bind close controls cover both HTTP and TCP servers.
