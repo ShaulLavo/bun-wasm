@@ -114,7 +114,6 @@
       ],
       "ignoreDependencies": [
         "benchmark",
-        "miniflare",
         "pg"
       ],
       "ignoreUnresolved": [
