@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { FileIdentity, SourceIdentity } from "./contract.ts";
+import type { SourceIdentity } from "./contract.ts";
+import { isDeepStrictEqual } from "node:util";
+import { sameSource } from "./contract.ts";
 import { requireFile } from "./identity.ts";
 import { git } from "./inputs.ts";
-import { requireHarnessCheckout, type AdmittedProduct, type HarnessIdentity } from "./replay.ts";
+import { parseReviewReconciliation, requireHarnessCheckout, type AdmittedProduct, type HarnessIdentity } from "./replay.ts";
 import { tlsPagePaths } from "../producer-closure.ts";
 
 /**
@@ -24,7 +26,7 @@ export const CONSUMER_HARNESS_PATHS: readonly string[] = [
   "scripts/io-resource-context.ts", "scripts/io-resource-context-intake.ts", "scripts/io-resource-context-assets.ts", "scripts/io-resource-context.test.ts",
   // TLS driver and its host-side services, without the modules the sealed page bundles.
   "scripts/tls-qualification.ts", "scripts/tls-qualification-inputs.ts", "scripts/tls-qualification-fixture.ts", "scripts/tls-qualification.test.ts",
-  "web/tests/tls-relay-services.ts",
+  "web/tests/tls-relay-services.ts", "web/tests/tls-relay-browser.ts",
   // The check manifest and records that describe this harness.
   "checks/web-c1-replay.json", "docs/bun-patches/c1-consumer-replay.md", ".internal/engines/c1-controller.md",
   // Unused-code configuration: host tools are no longer called by name.
@@ -45,7 +47,7 @@ export interface HarnessEvidence {
   readonly product: SourceIdentity;
   readonly changedPaths: readonly string[];
   readonly pullRequest: { readonly url: string; readonly mergedAt: string; readonly mergeCommit: string; readonly head: string; readonly base: string };
-  readonly review: FileIdentity;
+  readonly review: ReturnType<typeof requireReview>;
 }
 
 class HarnessError extends Error {}
@@ -99,19 +101,42 @@ async function requireMerged(harness: HarnessIdentity, read: GitHubRead): Promis
   if (harness.review.candidate.tree !== harness.source.tree) fail("the merged tree is not the reviewed candidate tree");
   return { url: String(field(pull, "html_url")), mergedAt: String(field(pull, "merged_at")), mergeCommit: harness.source.head, head: harness.review.candidate.head, base: "main" };
 }
-/**
- * The independent review is an external artifact pinned by its bytes. It must
- * name the reviewed candidate's commit and tree and carry a PASS verdict line.
- */
-export function requireReview(harness: HarnessIdentity): FileIdentity {
-  const identity = requireFile(harness.review.artifact, "harness review artifact");
-  let text: string;
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(identity.path)); }
-  catch { fail("harness review artifact is not UTF-8 text"); }
-  const { head, tree } = harness.review.candidate;
-  if (!text.includes(head) || !text.includes(tree)) fail("harness review artifact does not name the reviewed candidate commit and tree");
-  if (!/^(?:[#*\s]*Verdict:?\s*\**\s*)?PASS\b/m.test(text)) fail("harness review artifact has no PASS verdict line");
-  return identity;
+/** The untouched independent review and a separate, byte-pinned coordinator correction record. */
+export function requireReview(harness: HarnessIdentity) {
+  const artifact = requireFile(harness.review.artifact, "harness review artifact");
+  const review: unknown = JSON.parse(readFileSync(artifact.path, "utf8"));
+  const verdict = field(review, "verdict");
+  if (field(review, "schema") !== "bun-wasm.independent-consumer-replay-review/1" || field(review, "sourceReviewComplete") !== true) fail("harness independent review is incomplete");
+  if (verdict !== "PASS" && verdict !== "CHANGES REQUESTED") fail("harness independent review has no completed verdict");
+  if (field(review, "approved") !== (verdict === "PASS")) fail("harness independent review verdict and approval differ");
+  const findings = reviewFindings(review, verdict);
+  const reconciliation = requireFile(harness.review.reconciliation, "harness review reconciliation");
+  const correction = parseReviewReconciliation(JSON.parse(readFileSync(reconciliation.path, "utf8")));
+  if (!isDeepStrictEqual(correction.review, artifact)) fail("reconciliation names another independent review");
+  if (!isDeepStrictEqual(field(review, "candidate"), correction.reviewed)) fail("independent review does not name the reconciled commit and tree");
+  if (!sameSource(correction.candidate, harness.review.candidate)) fail("reconciliation names another final candidate");
+  const paths = changedPaths(harness.sourceRoot, correction.reviewed, correction.candidate);
+  requireConsumerPaths(paths);
+  if (!isDeepStrictEqual(paths, correction.changedPaths)) fail("correction diff differs from the reconciliation");
+  if (!isDeepStrictEqual(findings, correction.resolvedFindings.toSorted())) fail("reconciliation does not resolve every independent finding exactly once");
+  if (paths.length && !findings.length) fail("candidate changed after a finding-free review");
+  if (findings.length && !correction.evidence.length) fail("finding resolutions have no test evidence");
+  const evidence = correction.evidence.map(identity => requireFile(identity, "review correction evidence"));
+  return { artifact, reconciliation, evidence };
+}
+function reviewFindings(review: unknown, verdict: string): string[] {
+  const rows = field(review, "findings");
+  if (!Array.isArray(rows)) fail("independent review has no findings list");
+  const ids = rows.map(row => field(row, "id"));
+  if (ids.some(id => typeof id !== "string" || !id) || new Set(ids).size !== ids.length) fail("independent finding IDs must be unique non-empty strings");
+  if ((verdict === "PASS") !== (ids.length === 0)) fail("independent review verdict and findings differ");
+  return (ids as string[]).sort();
+}
+/** Protect every pinned review and correction artifact from the replay output roots. */
+export function reviewProtectedPaths(harness: HarnessIdentity): string[] {
+  const reference = requireFile(harness.review.reconciliation, "harness review reconciliation");
+  const correction = parseReviewReconciliation(JSON.parse(readFileSync(reference.path, "utf8")));
+  return [harness.review.artifact.path, reference.path].concat(correction.evidence.map(identity => identity.path));
 }
 
 /**

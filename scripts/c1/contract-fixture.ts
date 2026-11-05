@@ -9,7 +9,7 @@ import {
 import type { LoadedObservation } from "./loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, sealDelivery } from "./delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
-import { HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type ReplayContract, type ReplayRoots } from "./replay.ts";
+import { HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type HarnessIdentity, type ReplayContract, type ReplayRoots } from "./replay.ts";
 
 /**
  * Executable schema fixture: a synthetic sealed delivery with every registry
@@ -110,6 +110,16 @@ function localTool(name: HostToolName): HostTool {
 export function fixtureHostTools(root: string): HostTools {
   return Object.fromEntries(HOST_TOOL_NAMES.map(name => [name, name === "tar" || name === "gzip" ? localTool(name) : stubTool(root, name)])) as Record<HostToolName, HostTool>;
 }
+/** Byte-pinned synthetic independent review and finding-free coordinator disposition. */
+export function fixtureReview(root: string, candidate: SourceIdentity): HarnessIdentity["review"] {
+  const directory = join(root, `review-${candidate.head.slice(0, 8)}`);
+  const artifact = join(directory, "RESULT.json");
+  write(artifact, JSON.stringify({ schema: "bun-wasm.independent-consumer-replay-review/1", sourceReviewComplete: true, verdict: "PASS", approved: true, candidate, findings: [] }) + "\n");
+  const reconciliation = join(directory, "RECONCILIATION.json");
+  write(reconciliation, JSON.stringify({ schema: "bun-wasm.c1-review-reconciliation/1", review: fileIdentity(artifact), reviewed: candidate, candidate, changedPaths: [], resolvedFindings: [], evidence: [] }) + "\n");
+  return { artifact: fileIdentity(artifact), candidate, reconciliation: fileIdentity(reconciliation) };
+}
+
 export interface ReplayFixtureParts {
   /** New directory for the contract, review artifact, stub tools and original output. */
   readonly root: string;
@@ -127,16 +137,16 @@ export interface ReplayFixtureParts {
 export function writeReplayFixture(parts: ReplayFixtureParts, product: unknown): { readonly replay: string; readonly handoff: string } {
   const { root, harness } = parts;
   const sealed = parseDelivery(JSON.parse(readFileSync(parts.delivery, "utf8")));
-  const review = join(root, "review/RESULT.md");
-  write(review, `# Synthetic review\n\nPASS\n\nCandidate ${harness.source.head}, tree ${harness.source.tree}.\n`);
+  const review = fixtureReview(root, harness.source);
   const original = join(root, "original");
   write(join(original, "handoff.json"), "{}\n");
   write(join(original, "QUALIFICATION.json"), "{}\n");
   for (const engine of NOT_RERUN) write(join(original, "five-owner", engine, "result.json"), `${JSON.stringify({ fixture: engine })}\n`);
   const contract: ReplayContract = { schema: "bun-wasm.c1-replay/1",
     product: { config: fileIdentity(parts.config), intake: fileIdentity(parts.intake), delivery: fileIdentity(parts.delivery), source: sealed.source, tuple: sealed.tuple, members: sealed.files.length },
-    harness: { ...harness, repository: "fixture/bun-wasm", pullRequest: 1, review: { artifact: fileIdentity(review), candidate: harness.source } },
-    original: { output: original, handoff: fileIdentity(join(original, "handoff.json")), qualification: fileIdentity(join(original, "QUALIFICATION.json")) },
+    harness: { ...harness, repository: "fixture/bun-wasm", pullRequest: 1, review },
+    original: { output: original, handoff: fileIdentity(join(original, "handoff.json")), qualification: fileIdentity(join(original, "QUALIFICATION.json")),
+      native: { quickjs: fileIdentity(join(original, "five-owner/quickjs/result.json")), jsc: fileIdentity(join(original, "five-owner/jsc/result.json")) } },
     hostTools: fixtureHostTools(join(root, "host-tools")), roots: parts.roots };
   const replay = join(root, "REPLAY.json");
   write(replay, JSON.stringify(contract, null, 2) + "\n");

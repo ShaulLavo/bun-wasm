@@ -4,11 +4,11 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { qualificationFixture, type TlsFixture } from "../tls-qualification-fixture.ts";
-import { fixtureHostTools } from "./contract-fixture.ts";
+import { fixtureHostTools, fixtureReview } from "./contract-fixture.ts";
 import { CONSUMER_HARNESS_PATHS, admitHarness, changedPaths, requireConsumerPaths, requireReview, requireUnbundled, type GitHubRead } from "./harness.ts";
 import { admitHostTool, admitHostTools } from "./host-tools.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
-import { replay } from "./operations.ts";
+import { replay, requireOriginal } from "./operations.ts";
 import { admitProduct, parseReplay, type AdmittedProduct, type HarnessIdentity, type ReplayContract } from "./replay.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS } from "./tls-page.ts";
 
@@ -33,12 +33,6 @@ function commit(root: string, path: string, content: string): { head: string; tr
   git(root, "-c", "user.email=replay@test.invalid", "-c", "user.name=Replay fixture", "commit", "-qm", `change ${path}`);
   return { head: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
 }
-function reviewFile(root: string, candidate: { head: string; tree: string }, verdict = "PASS"): string {
-  const path = join(root, `review-${candidate.head.slice(0, 8)}-${verdict}.md`);
-  writeFileSync(path, `# Synthetic independent review\n\n## Verdict\n\n${verdict}. No findings.\n\nReviewed candidate ${candidate.head}, tree ${candidate.tree}.\n`);
-  return path;
-}
-
 /** A fixture whose host checkout gains one more commit: the harness, with the fixture's product commit as its base. */
 async function harnessFixture(path = "scripts/io-resource-context.ts") {
   const f = await qualificationFixture();
@@ -47,7 +41,7 @@ async function harnessFixture(path = "scripts/io-resource-context.ts") {
   const product: AdmittedProduct = admitProduct(contract.product);
   const source = commit(f.host, path, "// synthetic consumer harness change\n");
   const harness: HarnessIdentity = { sourceRoot: f.host, source, repository: "fixture/bun-wasm", pullRequest: 7,
-    review: { artifact: fileIdentity(reviewFile(f.root, source)), candidate: source } };
+    review: fixtureReview(f.root, source) };
   return { f, contract, product, harness };
 }
 type Facts = Record<string, Record<string, unknown>>;
@@ -113,7 +107,7 @@ test("a merged, reviewed, consumer-only harness is admitted with both identities
   expect(evidence.harness.source).toEqual(harness.source);
   expect(evidence.changedPaths).toEqual(["scripts/io-resource-context.ts"]);
   expect(evidence.pullRequest).toEqual({ url: "https://github.com/fixture/bun-wasm/pull/7", mergedAt: "2026-11-05T00:00:00Z", mergeCommit: harness.source.head, head: harness.source.head, base: "main" });
-  expect(evidence.review).toEqual(harness.review.artifact);
+  expect(evidence.review).toEqual({ artifact: harness.review.artifact, reconciliation: harness.review.reconciliation, evidence: [] });
 });
 
 test.each([
@@ -130,21 +124,63 @@ test.each([
 test("a reviewed candidate whose tree is not the merged tree refuses", async () => {
   const { f, product, harness } = await harnessFixture();
   const candidate = f.source;
-  const reviewed: HarnessIdentity = { ...harness, review: { artifact: fileIdentity(reviewFile(f.root, candidate)), candidate } };
+  const reviewed: HarnessIdentity = { ...harness, review: fixtureReview(f.root, candidate) };
   await expect(admitHarness(reviewed, f.host, product, recorded(reviewed))).rejects.toThrow("the merged tree is not the reviewed candidate tree");
   const wrong = recorded(harness, facts => { facts[`repos/${harness.repository}/git/commits/${harness.source.head}`] = { tree: { sha: "c".repeat(40) } }; });
   await expect(admitHarness(harness, f.host, product, wrong)).rejects.toThrow("tree differs from GitHub's");
 });
 
-test("the review artifact is pinned by bytes and must name the candidate and a PASS verdict", async () => {
-  const { f, harness } = await harnessFixture();
-  expect(requireReview(harness)).toEqual(harness.review.artifact);
-  const failed = reviewFile(f.root, harness.source, "FAIL");
-  expect(() => requireReview({ ...harness, review: { ...harness.review, artifact: fileIdentity(failed) } })).toThrow("no PASS verdict");
-  const other = reviewFile(f.root, f.source);
-  expect(() => requireReview({ ...harness, review: { ...harness.review, artifact: fileIdentity(other) } })).toThrow("does not name the reviewed candidate");
-  appendFileSync(harness.review.artifact.path, "edited\n");
+test("the independent review and its correction disposition are separately pinned", async () => {
+  const { harness } = await harnessFixture();
+  expect(requireReview(harness)).toEqual({ artifact: harness.review.artifact, reconciliation: harness.review.reconciliation, evidence: [] });
+  const review = JSON.parse(readFileSync(harness.review.artifact.path, "utf8"));
+  writeFileSync(harness.review.artifact.path, JSON.stringify({ ...review, verdict: "INCOMPLETE" }));
+  const changed = { ...harness, review: { ...harness.review, artifact: fileIdentity(harness.review.artifact.path) } };
+  expect(() => requireReview(changed)).toThrow("no completed verdict");
   expect(() => requireReview(harness)).toThrow("harness review artifact changed");
+});
+
+/** A completed independent review with one concrete finding and the coordinator's exact correction. */
+async function correctedReview() {
+  const { f, harness, product } = await harnessFixture();
+  const reviewed = harness.source;
+  const candidate = commit(f.host, "web/tests/tls-relay-browser.ts", "// synthetic correction\n");
+  writeFileSync(harness.review.artifact.path, JSON.stringify({ schema: "bun-wasm.independent-consumer-replay-review/1", sourceReviewComplete: true, verdict: "CHANGES REQUESTED", approved: false, candidate: reviewed, findings: [{ id: "F1" }] }));
+  const artifact = fileIdentity(harness.review.artifact.path);
+  const evidencePath = join(f.root, "correction-tests.log");
+  writeFileSync(evidencePath, "synthetic regression failed before; passed after\n");
+  const correction = { schema: "bun-wasm.c1-review-reconciliation/1", review: artifact, reviewed, candidate, changedPaths: ["web/tests/tls-relay-browser.ts"], resolvedFindings: ["F1"], evidence: [fileIdentity(evidencePath)] };
+  const pin = (value: unknown): HarnessIdentity => {
+    writeFileSync(harness.review.reconciliation.path, JSON.stringify(value));
+    return { ...harness, source: candidate, review: { artifact, candidate, reconciliation: fileIdentity(harness.review.reconciliation.path) } };
+  };
+  return { f, product, correction, pin };
+}
+test("a reviewed candidate with exact, evidenced finding corrections can merge without relabeling its independent verdict", async () => {
+  const { f, product, correction, pin } = await correctedReview();
+  const harness = pin(correction);
+  const evidence = await admitHarness(harness, f.host, product, recorded(harness));
+  expect(evidence.review.artifact).toEqual(correction.review);
+  expect(JSON.parse(readFileSync(correction.review.path, "utf8")).verdict).toBe("CHANGES REQUESTED");
+  expect(evidence.harness.review.candidate).toEqual(correction.candidate);
+});
+test.each([
+  ["unresolved finding", { resolvedFindings: [] }, "resolve every independent finding"],
+  ["duplicate resolution", { resolvedFindings: ["F1", "F1"] }, "resolve every independent finding"],
+  ["unrecorded change", { changedPaths: [] }, "correction diff differs"],
+  ["missing evidence", { evidence: [] }, "no test evidence"],
+] as const)("review corrections refuse %s", async (_name, edit, message) => {
+  const { correction, pin } = await correctedReview();
+  expect(() => requireReview(pin({ ...correction, ...edit }))).toThrow(message);
+});
+test("correction evidence bytes and the exact reviewed source stay bound", async () => {
+  const { correction, pin } = await correctedReview();
+  const harness = pin(correction);
+  const evidence = correction.evidence[0];
+  if (!evidence) throw new Error("fixture correction has evidence");
+  appendFileSync(evidence.path, "changed\n");
+  expect(() => requireReview(harness)).toThrow("review correction evidence changed");
+  expect(() => requireReview(pin({ ...correction, reviewed: correction.candidate }))).toThrow("does not name the reconciled commit and tree");
 });
 
 test("dirty, foreign, product-changing or page-input-changing harnesses refuse before any GitHub read", async () => {
@@ -164,6 +200,15 @@ test("the product commit must be the harness's ancestor with its stated tree", a
   const { f, harness } = await harnessFixture();
   expect(() => changedPaths(f.host, harness.source, f.source)).toThrow("is not an ancestor");
   expect(() => changedPaths(f.host, { ...f.source, tree: "d".repeat(40) }, harness.source)).toThrow("another tree");
+});
+
+test.each(["quickjs", "jsc"] as const)("original %s result bytes are pinned at both custody boundaries", async engine => {
+  const { contract } = await harnessFixture();
+  const native = { quickjs: fileIdentity(join(contract.original.output, "five-owner/quickjs/result.json")), jsc: fileIdentity(join(contract.original.output, "five-owner/jsc/result.json")) };
+  const original = { ...contract.original, native };
+  expect(requireOriginal(original)).toMatchObject({ [engine]: { original: native[engine] } });
+  appendFileSync(native[engine].path, "changed native evidence\n");
+  expect(() => requireOriginal(original)).toThrow(`original ${engine} result changed`);
 });
 
 test("host tools are admitted by resolved path, bytes, execute bit, PATH resolution and version line", () => {

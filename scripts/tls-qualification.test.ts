@@ -18,6 +18,7 @@ import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
 import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
 import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
+import { verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
 import { piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
@@ -106,6 +107,20 @@ describe("strict controller intake before setup", () => {
     await expect(qualifiedRun(async () => { throw new Error("No reviewed TLS delivery"); }, async () => { setup = true; }, async () => {})).rejects.toThrow("No reviewed TLS");
     expect(setup).toBe(false);
   });
+});
+
+test("browser prelaunch binds the distinct harness while preserving product identity", async () => {
+  const f = await fixture();
+  const intake = await admitted(f.evidence);
+  writeFileSync(join(f.host, "consumer-checkpoint.txt"), "consumer-only source checkpoint\n");
+  execFileSync("git", ["-C", f.host, "add", "consumer-checkpoint.txt"]);
+  execFileSync("git", ["-C", f.host, "-c", "user.email=tls@test.invalid", "-c", "user.name=TLS fixture", "commit", "-qm", "consumer-only checkpoint"]);
+  const git = (ref: string) => execFileSync("git", ["-C", f.host, "rev-parse", ref], { encoding: "utf8" }).trim();
+  const harness = { ...intake.harness, source: { head: git("HEAD"), tree: git("HEAD^{tree}") } };
+  expect(harness.source).not.toEqual(intake.source);
+  await expect(verifyTlsBrowserHost({ ...intake, harness })).resolves.toBeUndefined();
+  expect(intake.source).toEqual(f.source);
+  await expect(verifyTlsBrowserHost(intake)).rejects.toThrow("Host checkout differs from reviewed TLS source");
 });
 
 describe("pinned handoff and output", () => {

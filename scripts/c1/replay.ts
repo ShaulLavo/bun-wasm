@@ -43,10 +43,15 @@ export interface HarnessIdentity {
   readonly source: SourceIdentity;
   readonly repository: string;
   readonly pullRequest: number;
-  readonly review: { readonly artifact: FileIdentity; readonly candidate: SourceIdentity };
+  readonly review: { readonly artifact: FileIdentity; readonly candidate: SourceIdentity; readonly reconciliation: FileIdentity };
 }
 /** The first qualification's output. It stays as it is; the replay only reads and pins it. */
-export interface OriginalQualification { readonly output: string; readonly handoff: FileIdentity; readonly qualification: FileIdentity }
+export interface OriginalQualification {
+  readonly output: string;
+  readonly handoff: FileIdentity;
+  readonly qualification: FileIdentity;
+  readonly native: Readonly<Record<typeof NOT_RERUN[number], FileIdentity>>;
+}
 export interface ReplayRoots { readonly output: string; readonly private: string; readonly browserTmp: string }
 export interface ReplayContract {
   readonly schema: "bun-wasm.c1-replay/1";
@@ -126,19 +131,45 @@ function hostTools(value: unknown, label: string): HostTools {
 }
 function harness(value: unknown, label: string): HarnessIdentity {
   const fields = row(value, label, ["sourceRoot", "source", "repository", "pullRequest", "review"]);
-  const review = row(fields.review, `${label}.review`, ["artifact", "candidate"]);
+  const review = row(fields.review, `${label}.review`, ["artifact", "candidate", "reconciliation"]);
   const repository = text(fields.repository, `${label}.repository`);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) fail(`${label}.repository: expected owner/name`);
   return { sourceRoot: absolute(fields.sourceRoot, `${label}.sourceRoot`), source: source(fields.source, `${label}.source`), repository,
     pullRequest: integer(fields.pullRequest, `${label}.pullRequest`),
-    review: { artifact: file(review.artifact, `${label}.review.artifact`), candidate: source(review.candidate, `${label}.review.candidate`) } };
+    review: { artifact: file(review.artifact, `${label}.review.artifact`), candidate: source(review.candidate, `${label}.review.candidate`),
+      reconciliation: file(review.reconciliation, `${label}.review.reconciliation`) } };
+}
+
+/** Independent findings stay unchanged; the coordinator pins their corrections separately. */
+export interface ReviewReconciliation {
+  readonly schema: "bun-wasm.c1-review-reconciliation/1";
+  readonly review: FileIdentity;
+  readonly reviewed: SourceIdentity;
+  readonly candidate: SourceIdentity;
+  readonly changedPaths: readonly string[];
+  readonly resolvedFindings: readonly string[];
+  readonly evidence: readonly FileIdentity[];
+}
+function strings(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string" || item === "")) fail(`${label}: expected non-empty strings`);
+  return value as string[];
+}
+export function parseReviewReconciliation(value: unknown): ReviewReconciliation {
+  const fields = row(value, "review reconciliation", ["schema", "review", "reviewed", "candidate", "changedPaths", "resolvedFindings", "evidence"]);
+  if (fields.schema !== "bun-wasm.c1-review-reconciliation/1") fail("invalid review reconciliation schema");
+  if (!Array.isArray(fields.evidence)) fail("review reconciliation evidence must be a list");
+  return { schema: "bun-wasm.c1-review-reconciliation/1", review: file(fields.review, "reconciliation.review"),
+    reviewed: source(fields.reviewed, "reconciliation.reviewed"), candidate: source(fields.candidate, "reconciliation.candidate"),
+    changedPaths: strings(fields.changedPaths, "reconciliation.changedPaths"), resolvedFindings: strings(fields.resolvedFindings, "reconciliation.resolvedFindings"),
+    evidence: fields.evidence.map(value => file(value, "reconciliation.evidence")) };
 }
 
 export function parseReplay(value: unknown): ReplayContract {
   const fields = row(value, "replay", ["schema", "product", "harness", "original", "hostTools", "roots"]);
   if (fields.schema !== "bun-wasm.c1-replay/1") fail("replay.schema: expected bun-wasm.c1-replay/1");
   const product = row(fields.product, "replay.product", ["config", "intake", "delivery", "source", "tuple", "members"]);
-  const original = row(fields.original, "replay.original", ["output", "handoff", "qualification"]);
+  const original = row(fields.original, "replay.original", ["output", "handoff", "qualification", "native"]);
+  const native = row(original.native, "replay.original.native", NOT_RERUN);
   const roots = row(fields.roots, "replay.roots", ["output", "private", "browserTmp"]);
   return {
     schema: "bun-wasm.c1-replay/1",
@@ -146,7 +177,7 @@ export function parseReplay(value: unknown): ReplayContract {
       source: source(product.source, "replay.product.source"), tuple: tuple(product.tuple, "replay.product.tuple"), members: integer(product.members, "replay.product.members") },
     harness: harness(fields.harness, "replay.harness"),
     original: { output: absolute(original.output, "replay.original.output"), handoff: file(original.handoff, "replay.original.handoff"),
-      qualification: file(original.qualification, "replay.original.qualification") },
+      qualification: file(original.qualification, "replay.original.qualification"), native: { quickjs: file(native.quickjs, "replay.original.native.quickjs"), jsc: file(native.jsc, "replay.original.native.jsc") } },
     hostTools: hostTools(fields.hostTools, "replay.hostTools"),
     roots: { output: absolute(roots.output, "replay.roots.output"), private: absolute(roots.private, "replay.roots.private"), browserTmp: absolute(roots.browserTmp, "replay.roots.browserTmp") },
   };

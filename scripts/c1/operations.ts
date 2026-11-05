@@ -6,7 +6,7 @@ import { bindLoaded, parseLoaded, type LoadedSurface } from "./loaded.ts";
 import { fileIdentity, requireFile, sha256 } from "./identity.ts";
 import { AdmissionError, admitInputs, authenticate, cleanSource, loadRun, protectedPaths, type Authenticated, type ParsedRun } from "./inputs.ts";
 import { HOST_TOOL_NAMES, NOT_RERUN, REPLAYED, admitProduct, deriveReplayHandoff, loadReplay, requireReplayHandoff, type LoadedReplay, type OriginalQualification, type ReplayContract } from "./replay.ts";
-import { admitHarness, publicGitHub, type GitHubRead } from "./harness.ts";
+import { admitHarness, publicGitHub, reviewProtectedPaths, type GitHubRead } from "./harness.ts";
 import { admitHostTools } from "./host-tools.ts";
 import { Staging, baseEnvironment, establishEnvironment, stageDonors, type ProductEnvironment } from "./admission.ts";
 import { STAGE_DRAIN, runOwned } from "./process.ts";
@@ -260,15 +260,19 @@ function consumerRun(product: ParsedRun, contract: ReplayContract): ParsedRun {
 /** Every external path a replay reads beyond the product run's own inputs; no fresh root may overlap one. */
 function replayProtectedPaths(replay: LoadedReplay, product: ParsedRun): string[] {
   const { contract } = replay;
-  return [replay.identity.path, product.config.sourceRoot, dirname(contract.product.delivery.path), contract.product.intake.path, contract.original.output,
-    contract.harness.review.artifact.path].concat(HOST_TOOL_NAMES.map(name => contract.hostTools[name].path));
+  return [replay.identity.path, product.config.sourceRoot, dirname(contract.product.delivery.path), contract.product.intake.path, contract.original.output]
+    .concat(reviewProtectedPaths(contract.harness), HOST_TOOL_NAMES.map(name => contract.hostTools[name].path));
 }
 /** The first qualification stays as it was: its handoff, record and native results are pinned, never rewritten. */
-function requireOriginal(original: OriginalQualification) {
+export function requireOriginal(original: OriginalQualification) {
   requireFile(original.handoff, "original qualification handoff");
   requireFile(original.qualification, "original qualification record");
   if (dirname(original.handoff.path) !== original.output || dirname(original.qualification.path) !== original.output) throw new AdmissionError("original handoff and record must sit in the original output");
-  return Object.fromEntries(NOT_RERUN.map(engine => [engine, { status: "not-rerun", original: fileIdentity(join(original.output, "five-owner", engine, "result.json")) }]));
+  return Object.fromEntries(NOT_RERUN.map(engine => {
+    const expected = original.native[engine];
+    if (expected.path !== join(original.output, "five-owner", engine, "result.json")) throw new AdmissionError(`original ${engine} result must sit in its original output`);
+    return [engine, { status: "not-rerun", original: requireFile(expected, `original ${engine} result`) }];
+  }));
 }
 
 /**

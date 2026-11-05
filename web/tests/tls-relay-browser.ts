@@ -19,6 +19,9 @@ function guestAsset(intake: TlsIntake, engine: QualificationEngine, origin: stri
 async function observe(response: BrowserResponse): Promise<ObservedResponse> {
   return { url: response.url(), method: response.request().method(), status: response.status(), contentEncoding: response.headers()["content-encoding"], body: await response.body() };
 }
+export async function verifyTlsBrowserHost(intake: Pick<TlsIntake, "hostSource" | "harness">): Promise<void> {
+  await verifyReviewedHostSource(intake.hostSource, intake.harness.source);
+}
 export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnType<typeof startTlsServices>>, owner: TlsCleanup, engine: QualificationEngine, signal: AbortSignal) {
   signal.throwIfAborted();
   const options = intake.fixtures;
@@ -62,7 +65,7 @@ export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnT
   signal.throwIfAborted();
   await recheckDependencies(intake);
   signal.throwIfAborted();
-  await verifyReviewedHostSource(intake.hostSource, intake.source);
+  await verifyTlsBrowserHost(intake);
   const playwright: typeof import("playwright") = await import(pathToFileURL(Bun.resolveSync("playwright", intake.hostSource)).href);
   const browser = await acquireOwned(owner, signal, () => playwright.chromium.launch({ headless: true }), browser => browser.close());
   let cancellationClose: Promise<void> | undefined;
