@@ -375,13 +375,16 @@ resolved; no per-unit documents or another design competition.
 - `scripts/c1/delivery.ts`: single-write seal with registry modes, sealed
   delivery reader, intake admission, handoff.
 
-Known gaps at this checkpoint: the JSC stamp mismatch has no host test of its
-own (missing Git objects and missing Waffle inputs do); in-process captures
-call synchronous product helpers that cannot be cancelled mid-call, their
-children are still owned and drained; TLS and relay consumers report
-`not-run` until their drivers adopt `bun-wasm.c1-handoff/1`; main's TLS
-preflight tests fail against the new registry until TLS migrates in the same
-landing.
+After the amended implementation review (F1-F9): every step runs as an owned
+child (`scripts/c1/step.ts` over the named exports in `scripts/c1/steps.ts`),
+so abort drains captures like commands; `jsc/common.sh`'s WebKit check is
+private for every caller, which changes the JSC input stamp (jsc/ sources are
+JSC inputs), so any existing native JSC stays draft until a current build or
+current-compatible original is admitted; complete native admission (stamp,
+archive list, WebKit tree, CMake cache, sysroot verification, header groups)
+runs before any durable claim, behind a native-backing metadata witness.
+Relay adds no producer gate (`RELAY_DECISION`); its conditional post-intake
+consumer belongs to Relay and the controller reports it as not run.
 
 ## TLS interface amendment
 
