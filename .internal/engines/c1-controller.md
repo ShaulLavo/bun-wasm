@@ -383,6 +383,32 @@ children are still owned and drained; TLS and relay consumers report
 preflight tests fail against the new registry until TLS migrates in the same
 landing.
 
+## TLS interface amendment
+
+- Fixture options: `config.fixtures.tls` is a typed `resolved | unresolved`
+  `TlsFixtureOptions` (fleet database host, distinct private database and relay
+  addresses, unprivileged distinct page and relay ports outside the TLS
+  fixture's own 45433/45434). It is bound by the config digest, refuses
+  secrets by schema, counts as draft until resolved, and reaches consumers
+  only through `handoff.fixtures`. Dependency bytes stay in the input manifest.
+- TLS page: the production-only `tls-page-producer.log` stage runs
+  `scripts/c1/tls-page.ts`, which bundles `web/tests/tls-relay-page.ts` and the
+  maintained workers with `scripts/browser-build.ts` into `tls/page/`, copies
+  the pg client to `tls/fixture/`, and writes `tls/page.build.json` binding the
+  source, every bundled input and every output. Complete publication runs
+  `verifyTlsPage`; the delivery seals it 0444. Qualify serves it read-only from
+  `handoff.tlsPageRoot`. The page's relay import must be static: the current
+  variable `tls-reviewed-relay` import does not bundle, so production refuses
+  until TLS changes its page.
+- Loaded evidence: `scripts/c1/loaded.ts` exports `LoadedObservation`,
+  `parseLoaded` and `bindLoaded`. Consumers record real GET responses (decoded
+  bytes and Content-Encoding) as a top-level `loaded` array; the validator
+  derives each row's admitted object from its URL (web root representations,
+  TLS page, guest artifact by role, admitted pg seed, pg client, `/seed`
+  control) and refuses any unbound, foreign-origin or mismatched row.
+- TLS argv proposal for its migrated CLI: `--stage pg-early --browser chromium
+  --engine browser --handoff <handoff.json> --handoff-sha256 <sha> --output <dir>`.
+
 ## Independent review reconciliation
 
 Original review at b6398db3 remains CHANGES REQUESTED. Parent incorporated R1
