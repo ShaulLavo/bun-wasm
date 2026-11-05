@@ -10,7 +10,7 @@ import { SYSROOT_PROBE, Staging, environmentDifferences, nativeWitness, requireC
 import { FIXTURE_SOURCE, FIXTURE_TUPLE } from "./contract-fixture.ts";
 import { sha256 } from "./identity.ts";
 import { admitWebkit } from "./inputs.ts";
-import { Invocation, rehearse, treeWitness } from "./operations.ts";
+import { Invocation, operationSucceeded, rehearse, treeWitness, type Cleanup } from "./operations.ts";
 import { publicationMatrix, restage, smokeInputs, verifyMatrixScratch } from "./publication.ts";
 import { STAGES, blockReason, runStages, validateStages, type Stage, type StageContext } from "./stages.ts";
 
@@ -294,10 +294,15 @@ test("the controller refuses missing staged Waffle inputs before the sysroot bui
 
 /** Exactly the maintained helper, sourced from this checkout, against an owned tiny WebKit and native root. */
 function maintainedWebkitCheck(fixture: ReturnType<typeof webkitFixture>, native: string) {
+  const tools = fresh("maintained-webkit-tools");
+  const bin = join(tools, "bin");
+  mkdirSync(bin, { recursive: true });
+  // Sourcing common.sh resolves wasm-opt, but this read-only check must never execute it.
+  write(join(bin, "wasm-opt"), "#!/bin/sh\nexit 99\n", 0o755);
   const script = 'source "$1/jsc/common.sh"\nWEBKIT_DIR="$2"\nJSC_SRC="$3"\nWEBKIT_COMMIT="$4"\ncheck_jsc_webkit_tree\n';
   const pin = fixture.git("rev-parse", "HEAD~0");
   return spawnSync("/usr/bin/bash", ["-c", script, "webkit-check", repository, fixture.webkit, join(fixture.source, "jsc"), pin],
-    { encoding: "utf8", env: { ...process.env, JSC_BUILD_DIR: native, TMPDIR: fresh(`webkit-tmp-${Math.random().toString(36).slice(2)}`) } });
+    { encoding: "utf8", env: { ...process.env, WASM_TOOLS: tools, PATH: `${bin}:/usr/bin:/bin`, JSC_BUILD_DIR: native, TMPDIR: fresh(`webkit-tmp-${Math.random().toString(36).slice(2)}`) } });
 }
 test("the maintained WebKit check writes neither the native root nor the repository, at every caller", () => {
   const root = fresh("maintained-webkit");
@@ -400,6 +405,17 @@ test("teardown removes sealed owned copies after drain, and records a removal it
   chmodSync(locked, 0o755);
   expect(failed.drained).toBe(true);
   expect(failed.removalFailed.map(entry => entry.path)).toEqual([join(locked, "private")]);
+});
+
+test("controller success refuses unsafe, failed or source-dirty cleanup", () => {
+  const clean: Cleanup = { drained: true, survivors: [], removed: [], retainedUnsafe: [], removalFailed: [], retained: ["report"], sourceClean: true };
+  expect(operationSucceeded({ cleanup: clean })).toBe(true);
+  expect(operationSucceeded({ error: new Error("failed"), cleanup: clean })).toBe(false);
+  const failures: readonly Partial<Cleanup>[] = [
+    { drained: false }, { survivors: ["owned process"] }, { retainedUnsafe: ["scratch"] },
+    { removalFailed: [{ path: "scratch", error: "EACCES" }] }, { sourceClean: false },
+  ];
+  for (const failure of failures) expect(operationSucceeded({ cleanup: { ...clean, ...failure } })).toBe(false);
 });
 
 test("the rehearsal witness covers content, not just metadata", () => {

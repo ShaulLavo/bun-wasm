@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { enableSubreaper } from "./linux-subreaper.mts";
 import { sha256Text } from "./c1/contract.ts";
 import { loadRun } from "./c1/inputs.ts";
-import { check, produce, qualify, rehearse } from "./c1/operations.ts";
+import { check, operationSucceeded, produce, qualify, rehearse } from "./c1/operations.ts";
 
 const usage = `Usage:
   bun scripts/c1-controller.ts check CONFIG
@@ -20,7 +20,7 @@ async function main(signal: AbortSignal): Promise<boolean> {
   const run = loadRun(resolve(configPath));
   const outcome = await select(operation, run, values, signal);
   process.stdout.write(JSON.stringify({ operation, configSha256: run.configSha256, ...outcome, error: outcome.error instanceof Error ? outcome.error.message : outcome.error }, null, 2) + "\n");
-  return outcome.error === undefined && outcome.cleanup.drained;
+  return operationSucceeded(outcome);
 }
 type Values = { execute?: string; from?: string; stage?: string; intake?: string; "intake-sha256"?: string };
 function select(operation: string | undefined, run: ReturnType<typeof loadRun>, values: Values, signal: AbortSignal) {

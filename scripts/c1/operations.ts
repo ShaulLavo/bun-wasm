@@ -25,6 +25,12 @@ export interface Cleanup {
   readonly retained: readonly string[];
   readonly sourceClean: boolean;
 }
+/** Process drain alone is not successful cleanup. */
+export function operationSucceeded(outcome: { readonly error?: unknown; readonly cleanup: Cleanup }): boolean {
+  const { cleanup } = outcome;
+  return outcome.error === undefined && cleanup.drained && cleanup.sourceClean
+    && cleanup.survivors.length === 0 && cleanup.retainedUnsafe.length === 0 && cleanup.removalFailed.length === 0;
+}
 /** Product outputs a run creates inside the source checkout; registered before any stage runs. */
 const PRODUCT_OUTPUTS = ["dist", "web/dist"];
 
