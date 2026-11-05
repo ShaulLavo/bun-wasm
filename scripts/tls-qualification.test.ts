@@ -18,6 +18,7 @@ import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
 import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
 import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
+import { piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
  * Every fixture here is synthetic parser data built from the controller's
@@ -623,3 +624,59 @@ async function acquisitionCancellation(root: string, boundary: number, during: b
   expect(released).toEqual(acquired.toReversed());
   for (const path of acquired) await expect(readFile(path)).rejects.toHaveProperty("code", "ENOENT");
 }
+
+
+describe("Pi TLS PostgreSQL ownership", () => {
+  const id = "0123456789abcdef01234567";
+  const plan = () => piPostgresPlan("/home/pi", id, "100.94.222.118", "100.77.94.94/32");
+  test("uses only the prepared official arm64 digest, Pi scratch and private publish", () => {
+    const value = plan();
+    expect(value.root).toBe(`/home/pi/tmp/bun-wasm-tls-${id}`);
+    expect(value.image).toBe("docker.io/library/postgres@sha256:7a8050e52090c5f77effbe7e0cbed4a0587306776c3f26dc99933a63c619eaf1");
+    expect(value.createArgs).toContain("--pull=never");
+    expect(value.createArgs).toContain("100.94.222.118:45433:5432");
+    expect(value.createArgs).toContain(`${value.volume}:/var/lib/postgresql/data`);
+    for (const expected of ["--memory=768m", "--cpus=1.5", "--pids-limit=128", "--shm-size=128m", "POSTGRES_PASSWORD_FILE=/run/tls/password", "ssl=on", "password_encryption=scram-sha-256"]) expect(value.createArgs).toContain(expected);
+    expect(value.hba).toContain("hostnossl all all 0.0.0.0/0 reject");
+    expect(value.hba).toContain("hostssl all all 0.0.0.0/0 scram-sha-256");
+    expect(value.createArgs.join(" ")).not.toMatch(/--privileged|--network=host|POSTGRES_PASSWORD=/);
+  });
+  test("rejects public addresses, path escapes and unowned names", () => {
+    for (const args of [["/home/pi", "../escape", "100.94.222.118", "100.77.94.94/32"], ["/home/pi/../other", id, "100.94.222.118", "100.77.94.94/32"], ["/home/pi", id, "0.0.0.0", "100.77.94.94/32"], ["/home/pi", id, "100.94.222.118", "8.8.8.8/32"]]) {
+      expect(() => piPostgresPlan(args[0] ?? "", args[1] ?? "", args[2] ?? "", args[3] ?? "")).toThrow();
+    }
+  });
+  test("authenticates the prepared image without pulling or accepting empty inspect output", () => {
+    const image = { Id: "sha256:c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7", Architecture: "arm64", Os: "linux", Digest: plan().image.split("@")[1] };
+    expect(assertPiPostgresImage([image]).id).toBe(image.Id);
+    for (const bad of [[], [{}], [{ ...image, Architecture: "amd64" }], [{ ...image, Digest: "sha256:" + "0".repeat(64) }], [{ ...image, Id: "sha256:" + "0".repeat(64) }]]) expect(() => assertPiPostgresImage(bad)).toThrow();
+  });
+  test("tears down only acquired names and confirms container absence before volume removal", async () => {
+    const commands: string[][] = [];
+    const run: PodmanRun = async args => { commands.push(Array.from(args)); return { code: args.includes("exists") ? 1 : 0, stdout: "" }; };
+    await removePiPostgres(plan(), { container: true, volume: true }, run);
+    expect(commands).toEqual([["rm", "--force", "--ignore", plan().name], ["container", "exists", plan().name], ["volume", "rm", "--ignore", plan().volume], ["volume", "exists", plan().volume]]);
+    expect(commands.flat()).not.toContain("rmi");
+    commands.length = 0;
+    await removePiPostgres(plan(), { container: false, volume: false }, run);
+    expect(commands).toEqual([]);
+  });
+  test("does not remove the volume after uncertain physical container stop", async () => {
+    const commands: string[][] = [];
+    const run: PodmanRun = async args => { commands.push(Array.from(args)); return { code: 0, stdout: "" }; };
+    await expect(removePiPostgres(plan(), { container: true, volume: true }, run)).rejects.toThrow("container absence");
+    expect(commands.some(args => args[0] === "volume")).toBe(false);
+  });
+  test("preflight and orchestration require Podman, not host PostgreSQL or Pi /work", async () => {
+    const cli = await readFile(new URL("./tls-qualification.ts", import.meta.url), "utf8");
+    expect(cli).toContain("podman info");
+    expect(cli).not.toMatch(/command -v (initdb|postgres|pg_isready)|df -Pk \/work\/tmp/);
+    const services = await readFile(new URL("../web/tests/tls-relay-services.ts", import.meta.url), "utf8");
+    expect(services).toContain('piPostgresPlan(');
+    expect(services).not.toContain('`/work/tmp/bun-wasm-tls-');
+    const fixture = await readFile(new URL("../tests/servers/tls.ts", import.meta.url), "utf8");
+    expect(fixture).not.toMatch(/execute\("(initdb|pg_isready)"|spawn\("postgres"|findmnt|pod\(\["pull"/);
+    expect(fixture).toContain("await armStartupGuard(");
+    expect(fixture).toContain('process.once("SIGTERM", stop)');
+  });
+});

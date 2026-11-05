@@ -1,88 +1,175 @@
 import { execFile, spawn, type ExecFileOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { createServer, createConnection, type Socket } from "node:net";
 import { createSecureContext, TLSSocket, connect as tlsConnect } from "node:tls";
 
-async function execute(executable: string, args: readonly string[], options: ExecFileOptions) {
-  const result = Promise.withResolvers<{ stdout: string; stderr: string }>();
-  const child = execFile(executable, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => error ? result.reject(error) : result.resolve({ stdout, stderr }));
+export const PI_POSTGRES_IMAGE = "docker.io/library/postgres@sha256:7a8050e52090c5f77effbe7e0cbed4a0587306776c3f26dc99933a63c619eaf1";
+const PI_POSTGRES_CONFIG = "c54a696c68013b2f8f42f479e00a2b6ad24c5ef10ee31cdfb8972cec3dad7eb7";
+export type PodmanRun = (args: readonly string[]) => Promise<{ code: number; stdout: string }>;
+function tailscaleAddress(value: string): boolean {
+  const octets = value.split(".").map(Number);
+  return octets.length === 4 && octets.every(n => Number.isInteger(n) && n >= 0 && n <= 255) && octets[0] === 100 && (octets[1] ?? 0) >= 64 && (octets[1] ?? 255) <= 127 && octets.join(".") === value;
+}
+export function piPostgresPlan(home: string, id: string, bind: string, relayCidr: string) {
+  if (!isAbsolute(home) || resolve(home) !== home || !/^[a-f0-9]{24}$/.test(id) || !tailscaleAddress(bind)
+    || !relayCidr.endsWith("/32") || !tailscaleAddress(relayCidr.slice(0, -3)) || relayCidr === bind + "/32") throw new Error("Invalid Pi PostgreSQL owner paths or addresses");
+  const name = `bun-wasm-tls-${id}`, volume = `${name}-data`, root = join(home, "tmp", name);
+  // Rootless port forwarding may rewrite the peer address. The published socket
+  // is Tailscale-only; all container TCP authentication still requires TLS and SCRAM.
+  const hba = "local all all peer\nhostnossl all all 0.0.0.0/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\n";
+  const createArgs = ["create", "--pull=never", "--name", name, "--memory=768m", "--cpus=1.5", "--pids-limit=128", "--shm-size=128m",
+    "--publish", `${bind}:45433:5432`, "--volume", `${volume}:/var/lib/postgresql/data`, "--env", "POSTGRES_PASSWORD_FILE=/run/tls/password",
+    "--env", "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=peer", "--entrypoint", "/bin/sh", PI_POSTGRES_IMAGE,
+    "-c", 'chown postgres:postgres /run/tls /run/tls/server.key /run/tls/server.pem /run/tls/password /run/tls/pg_hba.conf && exec docker-entrypoint.sh "$@"', "tls-postgres",
+    "postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=20", "-c", "password_encryption=scram-sha-256", "-c", "ssl=on",
+    "-c", "ssl_cert_file=/run/tls/server.pem", "-c", "ssl_key_file=/run/tls/server.key", "-c", "hba_file=/run/tls/pg_hba.conf",
+    "-c", "log_connections=off", "-c", "logging_collector=off"];
+  return { name, volume, root, image: PI_POSTGRES_IMAGE, bind, relayCidr, hba, createArgs };
+}
+function imageObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid prepared Pi image metadata");
+  return Object.fromEntries(Object.entries(value));
+}
+export function assertPiPostgresImage(value: unknown) {
+  if (!Array.isArray(value) || value.length !== 1) throw new Error("Prepared digest-pinned Pi PostgreSQL image missing");
+  const row = imageObject(value[0]);
+  if (typeof row.Id !== "string" || row.Id.replace(/^sha256:/, "") !== PI_POSTGRES_CONFIG || row.Architecture !== "arm64" || row.Os !== "linux"
+    || row.Digest !== PI_POSTGRES_IMAGE.split("@")[1]) throw new Error("Prepared Pi PostgreSQL image identity mismatch");
+  return { id: row.Id, digest: row.Digest, architecture: row.Architecture, os: row.Os };
+}
+async function execute(executable: string, args: readonly string[], options: ExecFileOptions, allowed: readonly number[] = [0]) {
+  const result = Promise.withResolvers<{ code: number; stdout: string }>();
+  const child = execFile(executable, args, { ...options, encoding: "utf8" }, (error, stdout) => {
+    const code = error ? error.code : 0;
+    if (typeof code !== "number" || !allowed.includes(code)) { result.reject(new Error(`${executable} fixture command failed`)); return; }
+    result.resolve({ code, stdout });
+  });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   try { return await result.promise; } finally { await closed; }
 }
+async function requireAbsent(kind: "container" | "volume", name: string, run: PodmanRun): Promise<void> {
+  if ((await run([kind, "exists", name])).code !== 1) throw new Error(`Pi PostgreSQL ${kind} absence unconfirmed`);
+}
+export async function removePiPostgres(plan: ReturnType<typeof piPostgresPlan>, owned: { container: boolean; volume: boolean }, run: PodmanRun): Promise<void> {
+  if (owned.container) {
+    if ((await run(["rm", "--force", "--ignore", plan.name])).code !== 0) throw new Error("Pi PostgreSQL container removal failed");
+    await requireAbsent("container", plan.name, run);
+  }
+  if (owned.volume) {
+    if ((await run(["volume", "rm", "--ignore", plan.volume])).code !== 0) throw new Error("Pi PostgreSQL volume removal failed");
+    await requireAbsent("volume", plan.volume, run);
+  }
+  // Images are prepared and owned by Engines. No pull, alias, prune or rmi here.
+}
 export async function postgresOwner(root: string, bind: string, relayCidr: string): Promise<void> {
-  if (!/^\/work\/tmp\/bun-wasm-tls-[a-zA-Z0-9-]+$/.test(root) || !/^[\d.]+$/.test(bind) || !/^[\d.]+\/32$/.test(relayCidr)) throw new Error("Invalid PostgreSQL owner paths or addresses");
+  const id = root.slice(root.lastIndexOf("bun-wasm-tls-") + "bun-wasm-tls-".length);
+  const plan = piPostgresPlan(homedir(), id, bind, relayCidr);
+  if (root !== plan.root) throw new Error("Pi PostgreSQL scratch must be under its remote home/tmp");
   const abort = new AbortController();
   const options = { cwd: root, timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal };
+  const owned = { container: false, volume: false };
+  const failures: unknown[] = [];
   let rootOwned = false;
-  let child: ReturnType<typeof spawn> | undefined;
-  let interrupted = false;
-  const stopped = Promise.withResolvers<void>();
-  let exited: Promise<void> | undefined;
+  let waiter: ReturnType<typeof spawn> | undefined;
+  let waitClosed: Promise<void> | undefined;
   let guard: Awaited<ReturnType<typeof startStartupGuard>> | undefined;
-  const stop = () => { interrupted = true; abort.abort(new Error("Native fixture stopped")); stopped.resolve(); child?.kill("SIGTERM"); };
+  const stopped = Promise.withResolvers<void>();
+  const stop = () => { abort.abort(new Error("Pi TLS fixture stopped")); stopped.resolve(); };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
   process.once("SIGHUP", stop);
+  const timer = setTimeout(stop, 11 * 60_000);
+  const commands = startupCommands(() => guard, stop);
+  void commands.done.then(stop, stop);
+  const pod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024, signal: abort.signal }, args[1] === "exists" ? [0, 1] : [0]);
+  const cleanPod: PodmanRun = args => execute("podman", args, { timeout: 30_000, maxBuffer: 1024 * 1024 }, args[1] === "exists" ? [0, 1] : [0]);
   try {
-    abort.signal.throwIfAborted();
-    const mount = await execute("findmnt", ["-T", "/work/tmp", "-n", "-o", "TARGET"], { timeout: 5000, signal: abort.signal });
-    if (!mount.stdout.trim().startsWith("/work")) throw new Error("PostgreSQL fixture requires the mounted data drive");
+    await checkPiHost(bind, abort.signal);
+    await requireAbsent("container", plan.name, pod);
+    await requireAbsent("volume", plan.volume, pod);
+    const image = assertPiPostgresImage(JSON.parse((await pod(["image", "inspect", plan.image])).stdout));
+    if (await realpath(join(homedir(), "tmp")) !== join(homedir(), "tmp")) throw new Error("Pi scratch parent must not redirect");
     abort.signal.throwIfAborted();
     await mkdir(root, { mode: 0o700 });
     rootOwned = true;
+    let password = randomBytes(32).toString("base64url");
+    await prepareSecrets(plan, password, options);
+    await rm(join(root, "ca.key"));
     abort.signal.throwIfAborted();
-    const password = randomBytes(32).toString("base64url");
-    await execute("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-subj", "/CN=bun-wasm run CA", "-days", "2", "-addext", "basicConstraints=critical,CA:TRUE"], options);
-    await execute("openssl", ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr", "-subj", "/CN=pg.tls.test"], options);
-    abort.signal.throwIfAborted();
-    await writeFile(join(root, "extensions"), "subjectAltName=DNS:pg.tls.test\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n");
-    await execute("openssl", ["x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "server.pem", "-days", "2", "-extfile", "extensions"], options);
-    abort.signal.throwIfAborted();
-    await chmod(join(root, "server.key"), 0o600);
-    abort.signal.throwIfAborted();
-    await writeFile(join(root, "password"), password, { mode: 0o600 });
-    await execute("initdb", ["-D", "data", "--username=postgres", "--pwfile=password", "--auth-local=peer", "--auth-host=scram-sha-256"], options);
-    abort.signal.throwIfAborted();
-    await rm(join(root, "password"));
-    abort.signal.throwIfAborted();
-    await writeFile(join(root, "data/pg_hba.conf"), `local all all peer\nhostnossl all all 0.0.0.0/0 reject\nhostssl all all ${relayCidr} scram-sha-256\n`);
-    abort.signal.throwIfAborted();
-    await writeFile(join(root, "data/postgresql.conf"), `listen_addresses='${bind}'\nport=45433\nssl=on\nssl_cert_file='${root}/server.pem'\nssl_key_file='${root}/server.key'\npassword_encryption='scram-sha-256'\nunix_socket_directories='${root}'\nlogging_collector=off\nlog_connections=off\n`);
-    if (interrupted) throw new Error("PostgreSQL setup cancelled");
-    child = spawn("postgres", ["-D", join(root, "data")], { stdio: ["ignore", "ignore", "ignore"] });
-    exited = new Promise<void>((resolve, reject) => { child?.once("error", reject); child?.once("close", code => code === 0 || interrupted ? resolve() : reject(new Error("PostgreSQL owner exited"))); });
-    void exited.catch(() => {});
-    await ready(root, bind, options, () => interrupted);
-    abort.signal.throwIfAborted();
+    owned.volume = true;
+    await pod(["volume", "create", plan.volume]);
+    owned.container = true;
+    await pod(plan.createArgs);
+    await pod(["cp", join(root, "container"), `${plan.name}:/run/tls`]);
+    await pod(["start", plan.name]);
+    await ready(plan.name, abort.signal);
+    const publication = (await pod(["port", plan.name])).stdout.trim();
+    if (publication !== `5432/tcp -> ${bind}:45433`) throw new Error("Pi PostgreSQL publication must bind only the selected Tailscale address");
+    const auth = (await pod(["exec", "--user", "postgres", plan.name, "psql", "-XAt", "-U", "postgres", "-c", "SELECT current_setting('ssl') = 'on' AND current_setting('password_encryption') = 'scram-sha-256' AND rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname = 'postgres'"])).stdout.trim();
+    if (auth !== "t") throw new Error("Pi PostgreSQL TLS/SCRAM configuration was not observed");
+    await rm(join(root, "container/password"));
     guard = await startStartupGuard(root, bind, abort.signal);
     const guardObservedBytes = await armStartupGuard(root, bind, guard, abort.signal);
-    process.stdout.write(JSON.stringify({ guardObservedBytes, guardPort: 45434, ca: await readFile(join(root, "ca.pem"), "utf8"), password, port: 45433, pid: child.pid }) + "\n");
-    await Promise.race([stopped.promise, exited, startupCommands(() => guard, stop)]);
+    abort.signal.throwIfAborted();
+    waiter = spawn("podman", ["wait", plan.name], { stdio: ["ignore", "ignore", "ignore"] });
+    waitClosed = new Promise<void>(resolve => { waiter?.once("close", () => resolve()); waiter?.once("error", () => resolve()); });
+    const exited = waitClosed.then(() => { if (!abort.signal.aborted) throw new Error("Pi PostgreSQL exited before teardown"); });
+    void exited.catch(() => {});
+    process.stdout.write(JSON.stringify({ guardObservedBytes, guardPort: 45434, ca: await readFile(join(root, "ca.pem"), "utf8"), password, port: 45433, root,
+      container: plan.name, volume: plan.volume, image, publication, tlsScramObserved: true }) + "\n");
+    password = "";
+    await Promise.race([stopped.promise, exited]);
+  } catch (error) { failures.push(error); } finally {
     stop();
-    await exited;
-  } finally {
-    stop();
-    const killTimer = setTimeout(() => child?.kill("SIGKILL"), 10_000);
-    try {
-      await cleanupNativeFixture(root, rootOwned, guard, exited);
-    } finally {
-      clearTimeout(killTimer);
-      process.removeListener("SIGTERM", stop);
-      process.removeListener("SIGINT", stop);
-      process.removeListener("SIGHUP", stop);
-    }
+    const settled = await Promise.allSettled([Promise.resolve().then(() => guard?.close()), removePiPostgres(plan, owned, cleanPod)]);
+    waiter?.kill("SIGTERM");
+    await waitClosed;
+    for (const row of settled) if (row.status === "rejected") failures.push(row.reason);
+    // These files were copied, not mounted. Remove host secrets even if Podman stop failed.
+    const scratch = await Promise.allSettled([rootOwned ? rm(root, { recursive: true, force: true }) : Promise.resolve()]);
+    for (const row of scratch) if (row.status === "rejected") failures.push(row.reason);
+    commands.close();
+    await commands.done;
+    clearTimeout(timer);
+    process.removeListener("SIGTERM", stop);
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGHUP", stop);
   }
+  if (failures.length) throw new AggregateError(failures, "Pi PostgreSQL fixture failed or cleanup unconfirmed");
 }
-async function ready(root: string, host: string, options: { cwd: string; timeout: number; maxBuffer: number }, cancelled: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (cancelled()) throw new Error("PostgreSQL readiness cancelled");
-    try { await execute("pg_isready", ["-h", host, "-p", "45433", "-t", "1"], { ...options, timeout: 3000 }); return; }
-    catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+async function checkPiHost(bind: string, signal: AbortSignal): Promise<void> {
+  const busy = join(homedir(), ".local/state/machine-fleet/owner-busy");
+  const present = await stat(busy).then(() => true, error => { if (error instanceof Error && "code" in error && error.code === "ENOENT") return false; throw error; });
+  if (present) throw new Error("Pi is reserved by the owner");
+  const memory = await readFile("/proc/meminfo", "utf8");
+  if (Number(/^MemAvailable:\s+(\d+)/m.exec(memory)?.[1] ?? 0) < 1536 * 1024) throw new Error("Pi has less than 1536 MiB available");
+  const options = { timeout: 5000, signal };
+  if ((await execute("tailscale", ["ip", "-4"], options)).stdout.trim() !== bind) throw new Error("Pi Tailscale address mismatch");
+  if ((await execute("podman", ["info", "--format", "{{.Host.Security.Rootless}}"], options)).stdout.trim() !== "true") throw new Error("Pi Podman must be rootless");
+}
+async function prepareSecrets(plan: ReturnType<typeof piPostgresPlan>, password: string, options: ExecFileOptions): Promise<void> {
+  await execute("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-subj", "/CN=bun-wasm run CA", "-days", "2", "-addext", "basicConstraints=critical,CA:TRUE"], options);
+  await execute("openssl", ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr", "-subj", "/CN=pg.tls.test"], options);
+  await writeFile(join(plan.root, "extensions"), "subjectAltName=DNS:pg.tls.test\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n");
+  await execute("openssl", ["x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "server.pem", "-days", "2", "-extfile", "extensions"], options);
+  await chmod(join(plan.root, "server.key"), 0o600);
+  const directory = join(plan.root, "container");
+  await mkdir(directory, { mode: 0o700 });
+  for (const name of ["server.key", "server.pem"]) await copyFile(join(plan.root, name), join(directory, name));
+  await writeFile(join(directory, "password"), password, { mode: 0o600 });
+  await writeFile(join(directory, "pg_hba.conf"), plan.hba, { mode: 0o600 });
+}
+async function ready(container: string, signal: AbortSignal): Promise<void> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    signal.throwIfAborted();
+    try { await execute("podman", ["exec", container, "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-t", "3", "-U", "postgres"], { timeout: 20_000, signal }); return; }
+    catch { signal.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, 1000)); }
   }
-  throw new Error(`PostgreSQL did not become ready in ${root}`);
+  throw new Error("Pi PostgreSQL did not become ready within its bounded startup");
 }
 
 async function startStartupGuard(root: string, bind: string, signal: AbortSignal) {
@@ -96,6 +183,7 @@ async function startStartupGuard(root: string, bind: string, signal: AbortSignal
   const close = async () => {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve, reject) => server.listening ? server.close(error => error ? reject(error) : resolve()) : resolve());
+    if (server.listening || sockets.size) throw new Error("Pi TLS observer cleanup unconfirmed");
   };
   try { await bindStartupGuard(server, bind, signal); signal.throwIfAborted(); }
   catch (error) { await close(); throw error; }
@@ -146,13 +234,14 @@ function controlUpgrade(socket: Socket, ca: Buffer, bytes: Buffer | string, done
   secure.once("close", done);
 }
 
-function startupCommands(owner: () => Awaited<ReturnType<typeof startStartupGuard>> | undefined, stop: () => void): Promise<void> {
-  return new Promise(resolve => {
-    const lines = createInterface({ input: process.stdin });
+function startupCommands(owner: () => Awaited<ReturnType<typeof startStartupGuard>> | undefined, stop: () => void) {
+  const lines = createInterface({ input: process.stdin });
+  const done = new Promise<void>(resolve => {
     const audit = () => owner()?.drain().then(() => process.stdout.write(JSON.stringify({ plaintextBytes: owner()?.reset() }) + "\n")).catch(stop);
     lines.on("line", line => line === "guard-audit" ? audit() : lines.close());
-    lines.once("close", resolve);
+    lines.once("close", () => { stop(); resolve(); });
   });
+  return { done, close: () => lines.close() };
 }
 
 function bindStartupGuard(server: ReturnType<typeof createServer>, host: string, signal: AbortSignal): Promise<void> {
@@ -166,11 +255,4 @@ function bindStartupGuard(server: ReturnType<typeof createServer>, host: string,
     if (signal.aborted) { cancel(); return; }
     server.listen({ port: 45434, host, signal }, () => { clean(); resolve(); });
   });
-}
-
-async function cleanupNativeFixture(root: string, owned: boolean, guard: Awaited<ReturnType<typeof startStartupGuard>> | undefined, exited: Promise<void> | undefined): Promise<void> {
-  const settled = await Promise.allSettled([Promise.resolve().then(() => guard?.close()), exited]);
-  const failures = settled.filter(row => row.status === "rejected").map(row => row.reason);
-  if (failures.length) throw new AggregateError(failures, "Native fixture cleanup failed; preserve owned scratch until physical stop is confirmed");
-  if (owned) await rm(root, { recursive: true, force: true });
 }
