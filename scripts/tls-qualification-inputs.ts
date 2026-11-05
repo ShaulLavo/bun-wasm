@@ -3,15 +3,14 @@ import { lstatSync, readFileSync } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
-import { isDeepStrictEqual } from "node:util";
 import { executableMemberPaths, tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
 import {
-  DELIVERY_RECORDS, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, parseConfig, parseHandoff, parseInputManifest, sameSource, sameTuple,
+  SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, sameTuple,
   type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./c1/contract.ts";
 import { verifyTlsPage } from "./c1/tls-page.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./c1/loaded.ts";
-import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts, type SealedDelivery } from "./c1/delivery.ts";
+import { admitHandoffFile, readSealedDelivery, type SealedDelivery } from "./c1/delivery.ts";
 import { fileIdentity, inside, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
 import { requireStagedDonor } from "./c1/inputs.ts";
 import type { QualificationEngine } from "./tls-qualification-context.ts";
@@ -54,39 +53,14 @@ function requirePresent(paths: readonly string[], label: string): void {
   if (paths.some(path => !lstatSync(path, { throwIfNoEntry: false }))) throw new MissingTlsInput(`Missing authenticated ${label}`);
 }
 
-/** A sealed delivery record whose bytes are exactly the digest DELIVERY.json binds. */
-function sealedRecord(delivery: SealedDelivery, path: string, expectedSha256: string, label: string): { readonly identity: FileIdentity; readonly value: unknown } {
-  const bytes = readFileSync(join(delivery.root, path));
-  if (sha256(bytes) !== expectedSha256) throw new Error(`TLS delivery ${label} record differs from DELIVERY.json`);
-  return { identity: { path: join(delivery.root, path), bytes: bytes.length, sha256: expectedSha256 }, value: JSON.parse(bytes.toString("utf8")) };
-}
-/**
- * Re-derive the consumer handoff from the sealed delivery, the intake its
- * pinned bytes name, and the config and input manifest the delivery itself
- * seals. The supplied handoff must equal it exactly; none of its claims is
- * trusted alone.
- */
+/** The controller owns pinned, full handoff admission; TLS adds only its consumer policy. */
 function admitHandoff(evidence: TlsEvidence) {
-  const bytes = readFileSync(evidence.handoff);
-  if (sha256(bytes) !== evidence.handoffSha256) throw new Error("TLS handoff bytes differ from the pinned SHA-256");
-  const claimed = parseHandoff(JSON.parse(bytes.toString("utf8")));
-  const delivery = readSealedDelivery(claimed.delivery.root);
-  const { source, tuple } = delivery.manifest;
-  if (!sameSource(source, claimed.source)) throw new Error("TLS handoff source head/tree mismatch");
-  if (!sameTuple(tuple, tlsReleaseTuple)) throw new Error("TLS requires the runtime110/relay109/programs15/schema2/interface1 tuple");
-  const admitted = admitIntake(claimed.intake.path, claimed.intake.sha256, delivery);
-  const configRecord = sealedRecord(delivery, DELIVERY_RECORDS.config, delivery.manifest.configSha256, "config");
-  const inputsRecord = sealedRecord(delivery, DELIVERY_RECORDS.inputs, delivery.manifest.inputsSha256, "inputs");
-  const config = parseConfig(configRecord.value);
-  const inputs = parseInputManifest(inputsRecord.value);
-  if (join(config.roots.run.artifact, "delivery") !== delivery.root) throw new Error("TLS delivery root differs from its sealed config");
-  if (!sameBytes(config.manifest, inputsRecord.identity)) throw new Error("TLS sealed config names another input manifest");
-  if (!sameSource(inputs.source, source) || !sameTuple(inputs.tuple, tuple)) throw new Error("TLS sealed inputs select another source or tuple");
-  const handoff = buildHandoff(delivery, admitted.identity, inputs.consumers, config.fixtures, config.roots.qualify.output, config.roots.qualify.browserTmp);
-  if (!isDeepStrictEqual(handoff, claimed)) throw new Error("TLS handoff differs from the one its admitted delivery, config and inputs derive");
-  requireHandoffArtifacts(handoff);
-  const handoffFile = { path: evidence.handoff, bytes: bytes.length, sha256: evidence.handoffSha256 };
-  return { handoff, delivery, config, inputs, records: [handoffFile, admitted.identity, delivery.identity, configRecord.identity, inputsRecord.identity] };
+  const handoff = admitHandoffFile(evidence.handoff, evidence.handoffSha256);
+  const delivery = readSealedDelivery(handoff.delivery.root);
+  if (!sameTuple(delivery.manifest.tuple, tlsReleaseTuple)) throw new Error("TLS requires the runtime110/relay109/programs15/schema2/interface1 tuple");
+  const handoffFile = { ...fileIdentity(evidence.handoff), sha256: evidence.handoffSha256 };
+  return { handoff, delivery, config: delivery.config, inputs: delivery.inputs,
+    records: [handoffFile, handoff.intake, delivery.identity, handoff.artifacts.config, handoff.artifacts.inputs] };
 }
 /** The config's bound fixture choices, propagated unchanged into the handoff. */
 function fixtureOptions(handoff: ConsumerHandoff): TlsFixtureOptions {
