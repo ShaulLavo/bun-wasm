@@ -132,6 +132,17 @@ async function removeOwned(kind: "container" | "volume", name: string, removal: 
   await requireAbsent(kind, name, run);
 }
 /**
+ * `podman volume rm` takes no --ignore, so absence is asked first: a volume
+ * this run never created (partial setup) or already removed is confirmed
+ * absent and left alone. A present volume gets plain `volume rm <name>`;
+ * Podman refuses it (exit 2) while a container uses it, and that refusal
+ * keeps its exit code and stderr. Absence is checked again afterwards.
+ */
+async function removeOwnedVolume(name: string, run: PodmanRun): Promise<void> {
+  if ((await run(["volume", "exists", name])).code === 1) return;
+  await removeOwned("volume", name, ["volume", "rm", name], run);
+}
+/**
  * Each owned object is removed and proven absent on its own, so a container
  * step that fails or is not yet confirmed never skips the volume. The volume
  * is removed without --force: Podman itself refuses it while any container
@@ -140,7 +151,7 @@ async function removeOwned(kind: "container" | "volume", name: string, removal: 
 export async function removePiPostgres(plan: ReturnType<typeof piPostgresPlan>, owned: { container: boolean; volume: boolean }, run: PodmanRun): Promise<void> {
   const failures: unknown[] = [];
   if (owned.container) await removeOwned("container", plan.name, ["rm", "--force", "--ignore", plan.name], run).catch(error => { failures.push(error); });
-  if (owned.volume) await removeOwned("volume", plan.volume, ["volume", "rm", "--ignore", plan.volume], run).catch(error => { failures.push(error); });
+  if (owned.volume) await removeOwnedVolume(plan.volume, run).catch(error => { failures.push(error); });
   if (failures.length) throw new AggregateError(failures, "Pi PostgreSQL removal unconfirmed");
   // Images are prepared and owned by Engines. No pull, alias, prune or rmi here.
 }

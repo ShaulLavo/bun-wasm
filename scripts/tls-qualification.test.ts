@@ -22,7 +22,7 @@ import { PgWireAudit, piLane, stderrTail } from "../web/tests/tls-relay-services
 import { fixtureHostTools } from "./c1/contract-fixture.ts";
 import type { HostTool, HostTools } from "./c1/replay.ts";
 import { PassThrough } from "node:stream";
-import { verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
+import { GUEST_OBSERVER_BINDING, GuestObserver, TlsGuestCaseFailure, guardedToken, guestCaseFailure, installGuestObserver, verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
 import { FixtureCommandError, execute, ownerFailureLine, piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
@@ -665,6 +665,34 @@ async function acquisitionCancellation(root: string, boundary: number, during: b
 }
 
 
+/**
+ * The Pi's rootless Podman 5.4.2 as the fixture's `execute` sees it: `exists`
+ * answers 0 or 1, and `volume rm` follows podman-volume-rm(1)'s exit statuses
+ * (1 no such volume, 2 in use, 125 for an unknown flag such as --ignore).
+ */
+function fakePodman(initial: { container: boolean; volume: boolean; inUse?: boolean }) {
+  const state = { inUse: false, ...initial };
+  const commands: string[][] = [];
+  const fail = (code: number, stderr: string): never => { throw new FixtureCommandError("podman volume rm", code, null, stderr); };
+  const removeVolume = (args: readonly string[]) => {
+    const flag = args.slice(2).find(arg => arg.startsWith("-"));
+    if (flag) fail(125, `Error: unknown flag: ${flag}`);
+    if (!state.volume) fail(1, `Error: no volume with name "${args[2]}" found: no such volume`);
+    if (state.inUse) fail(2, `Error: volume ${args[2]} is being used by the following container(s): 0123: volume is being used`);
+    state.volume = false;
+    return { code: 0, stdout: "" };
+  };
+  const run: PodmanRun = async args => {
+    commands.push(Array.from(args));
+    if (args[1] === "exists") return { code: (args[0] === "volume" ? state.volume : state.container) ? 0 : 1, stdout: "" };
+    if (args[0] === "volume" && args[1] === "rm") return removeVolume(args);
+    if (args[0] !== "rm") throw new Error(`unexpected podman ${args.join(" ")}`);
+    state.container = false;
+    return { code: 0, stdout: "" };
+  };
+  return { run, commands, state };
+}
+
 describe("Pi TLS PostgreSQL ownership", () => {
   const id = "0123456789abcdef01234567";
   const plan = () => piPostgresPlan("/home/pi", id, "100.94.222.118", "100.77.94.94/32");
@@ -691,14 +719,50 @@ describe("Pi TLS PostgreSQL ownership", () => {
     for (const bad of [[], [{}], [{ ...image, Architecture: "amd64" }], [{ ...image, Digest: "sha256:" + "0".repeat(64) }], [{ ...image, Id: "sha256:" + "0".repeat(64) }]]) expect(() => assertPiPostgresImage(bad)).toThrow();
   });
   test("tears down only acquired names and confirms container absence before volume removal", async () => {
-    const commands: string[][] = [];
-    const run: PodmanRun = async args => { commands.push(Array.from(args)); return { code: args.includes("exists") ? 1 : 0, stdout: "" }; };
-    await removePiPostgres(plan(), { container: true, volume: true }, run);
-    expect(commands).toEqual([["rm", "--force", "--ignore", plan().name], ["container", "exists", plan().name], ["volume", "rm", "--ignore", plan().volume], ["volume", "exists", plan().volume]]);
-    expect(commands.flat()).not.toContain("rmi");
-    commands.length = 0;
-    await removePiPostgres(plan(), { container: false, volume: false }, run);
-    expect(commands).toEqual([]);
+    const pod = fakePodman({ container: true, volume: true });
+    await removePiPostgres(plan(), { container: true, volume: true }, pod.run);
+    expect(pod.commands).toEqual([["rm", "--force", "--ignore", plan().name], ["container", "exists", plan().name],
+      ["volume", "exists", plan().volume], ["volume", "rm", plan().volume], ["volume", "exists", plan().volume]]);
+    expect(pod.state).toEqual({ container: false, volume: false, inUse: false });
+    expect(pod.commands.flat()).not.toContain("rmi");
+    pod.commands.length = 0;
+    await removePiPostgres(plan(), { container: false, volume: false }, pod.run);
+    expect(pod.commands).toEqual([]);
+  });
+  test("the volume removal uses only arguments the Pi's Podman accepts, never --ignore or --force", async () => {
+    const pod = fakePodman({ container: false, volume: true });
+    await expect(pod.run(["volume", "rm", "--ignore", plan().volume])).rejects.toThrow("podman volume rm exited 125: Error: unknown flag: --ignore");
+    pod.commands.length = 0;
+    await removePiPostgres(plan(), { container: false, volume: true }, pod.run);
+    expect(pod.commands.filter(args => args[1] === "rm")).toEqual([["volume", "rm", plan().volume]]);
+    expect(pod.state.volume).toBe(false);
+  });
+  test("an already absent volume is confirmed absent and left alone, and a second teardown is idempotent", async () => {
+    const pod = fakePodman({ container: false, volume: false });
+    await removePiPostgres(plan(), { container: true, volume: true }, pod.run);
+    await removePiPostgres(plan(), { container: true, volume: true }, pod.run);
+    expect(pod.commands.filter(args => args[1] === "rm")).toEqual([]);
+    expect(pod.commands.filter(args => args[0] === "volume")).toEqual([["volume", "exists", plan().volume], ["volume", "exists", plan().volume]]);
+  });
+  test("partial setup removes a created volume whose container was never created, and skips a volume whose creation failed", async () => {
+    const created = fakePodman({ container: false, volume: true });
+    await removePiPostgres(plan(), { container: false, volume: true }, created.run);
+    expect(created.commands).toEqual([["volume", "exists", plan().volume], ["volume", "rm", plan().volume], ["volume", "exists", plan().volume]]);
+    expect(created.state.volume).toBe(false);
+    const failedCreate = fakePodman({ container: false, volume: false });
+    await removePiPostgres(plan(), { container: false, volume: true }, failedCreate.run);
+    expect(failedCreate.commands).toEqual([["volume", "exists", plan().volume]]);
+  });
+  test("an in-use volume is refused by Podman, kept, and its exit and stderr are recorded", async () => {
+    const pod = fakePodman({ container: false, volume: true, inUse: true });
+    const failure = await removePiPostgres(plan(), { container: false, volume: true }, pod.run).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const [refusal] = failure.errors;
+    expect(refusal).toBeInstanceOf(FixtureCommandError);
+    expect(refusal).toMatchObject({ code: 2, signal: null, stderr: `Error: volume ${plan().volume} is being used by the following container(s): 0123: volume is being used` });
+    expect(refusal.message).toBe(`podman volume rm exited 2: ${refusal.stderr}`);
+    expect(pod.state.volume).toBe(true);
+    expect(pod.commands.flat()).not.toContain("--force");
   });
   test("an unconfirmed container step still attempts the unforced volume removal and keeps both errors", async () => {
     const commands: string[][] = [];
@@ -706,7 +770,7 @@ describe("Pi TLS PostgreSQL ownership", () => {
     const failure = await removePiPostgres(plan(), { container: true, volume: true }, run).catch(error => error);
     expect(failure).toBeInstanceOf(AggregateError);
     expect(failure.errors.map((error: Error) => error.message)).toEqual(["Pi PostgreSQL container absence unconfirmed", "Pi PostgreSQL volume absence unconfirmed"]);
-    expect(commands).toContainEqual(["volume", "rm", "--ignore", plan().volume]);
+    expect(commands).toContainEqual(["volume", "rm", plan().volume]);
     expect(commands.flat().filter(arg => arg === "--force")).toEqual(["--force"]);
   });
   test("a concrete Podman failure is kept with its exit, signal and stderr, and never skips the other object", async () => {
@@ -717,13 +781,13 @@ describe("Pi TLS PostgreSQL ownership", () => {
       commands.push(Array.from(args));
       if (args[0] === "rm") throw timedOut;
       if (args[0] === "volume" && args[1] === "rm") throw inUse;
-      return { code: 1, stdout: "" };
+      return { code: args[0] === "volume" ? 0 : 1, stdout: "" };
     };
     const failure = await removePiPostgres(plan(), { container: true, volume: true }, run).catch(error => error);
     expect(failure.errors).toEqual([timedOut, inUse]);
     expect(timedOut.message).toBe("podman rm --force ended by SIGTERM");
     expect(inUse.message).toBe(`podman volume rm exited 2: ${inUse.stderr}`);
-    expect(commands.map(args => args.slice(0, 2).join(" "))).toEqual(["rm --force", "volume rm"]);
+    expect(commands.map(args => args.slice(0, 2).join(" "))).toEqual(["rm --force", "volume exists", "volume rm"]);
     const line = JSON.parse(ownerFailureLine([new AggregateError([failure], "Pi PostgreSQL fixture failed or cleanup unconfirmed")]));
     expect(line.failures[0].errors[0].errors).toEqual([
       { name: "Error", message: "podman rm --force ended by SIGTERM", code: null, signal: "SIGTERM" },
@@ -744,6 +808,118 @@ describe("Pi TLS PostgreSQL ownership", () => {
   });
 });
 
+
+/** A page-level Worker as the observer sees one: an EventTarget built from a URL. */
+class FakeWorker extends EventTarget {
+  constructor(readonly url: string | URL, readonly options?: WorkerOptions) { super(); }
+}
+/** Installs the observer from its serialized source, as Playwright's init script does, and restores the globals. */
+function withInstalledObserver(check: (rows: Record<string, unknown>[], state: () => unknown) => void): void {
+  const rows: Record<string, unknown>[] = [];
+  const nativeWorker = globalThis.Worker;
+  Reflect.set(globalThis, "Worker", FakeWorker);
+  Reflect.set(globalThis, GUEST_OBSERVER_BINDING, async (row: Record<string, unknown>) => { rows.push(row); });
+  try {
+    const install: unknown = new Function(`return (${installGuestObserver.toString()});`)();
+    if (typeof install !== "function") throw new Error("serialized observer is not a function");
+    install(GUEST_OBSERVER_BINDING);
+    check(rows, () => Reflect.get(globalThis, `${GUEST_OBSERVER_BINDING}State`));
+  } finally {
+    Reflect.set(globalThis, "Worker", nativeWorker);
+    Reflect.deleteProperty(globalThis, GUEST_OBSERVER_BINDING);
+    Reflect.deleteProperty(globalThis, `${GUEST_OBSERVER_BINDING}State`);
+  }
+}
+const guestSecret = "guest-run-secret-0123456789abcdefghijklmnopqrstuv";
+function observerRow(seq: number, row: Record<string, unknown>) { return { seq, worker: 2, path: "http://127.0.0.1:43839/worker.js", ...row }; }
+
+describe("TLS guest observer", () => {
+  test("its serialized page script forwards each worker's runtime messages in order and leaves the page's own listeners intact", () => withInstalledObserver((rows, state) => {
+    const worker = new globalThis.Worker("http://127.0.0.1:43839/worker.js", { type: "module" });
+    const seen: unknown[] = [];
+    worker.addEventListener("message", event => seen.push(event.data));
+    const euro = new TextEncoder().encode("€\n");
+    const messages = [{ type: "phase", name: "worker-start", duration: 0 }, { type: "net", req: {} }, { type: "stdout", data: euro.subarray(0, 2) }, { type: "stdout", data: euro.subarray(2) },
+      { type: "stderr", data: new TextEncoder().encode("connect ECONNREFUSED\n") }, { type: "error", code: 134, errno: "ENOEXEC", message: "bun.wasm crashed", cleanupErrors: [] }, { type: "exit", code: 1 }];
+    for (const data of messages) worker.dispatchEvent(new MessageEvent("message", { data }));
+    worker.dispatchEvent(new ErrorEvent("error", { message: "worker failed", filename: "worker.js", lineno: 3, colno: 4 }));
+    expect(worker).toBeInstanceOf(FakeWorker);
+    expect(seen).toEqual(messages);
+    expect(rows.map(row => [row.seq, row.worker, row.type])).toEqual([[1, 1, "phase"], [2, 1, "stdout"], [3, 1, "stdout"], [4, 1, "stderr"], [5, 1, "error"], [6, 1, "exit"], [7, 1, "worker-error"]]);
+    expect(rows.slice(1, 3).map(row => row.text).join("")).toBe("€\n");
+    expect(rows[4]).toEqual({ worker: 1, path: "http://127.0.0.1:43839/worker.js", type: "error", code: 134, errno: "ENOEXEC", message: "bun.wasm crashed", cleanupErrors: [], seq: 5 });
+    expect(rows[5]).toMatchObject({ type: "exit", code: 1, signal: null, cleanupErrors: [] });
+    expect(rows[6]).toMatchObject({ type: "worker-error", message: "worker failed", location: "worker.js:3:4" });
+    expect(state()).toEqual({ sent: 7, failed: 0, firstFailure: "" });
+  }));
+  test("arms only on the current case's own worker-start, and refuses the relay token until then", async () => {
+    const observer = new GuestObserver(new RunSecrets(), 20);
+    const signal = new AbortController().signal;
+    let issued = 0;
+    const token = () => guardedToken(observer, signal, async () => `token-${++issued}`, {});
+    observer.begin("verified");
+    observer.accept(observerRow(1, { type: "phase", name: "instantiate" }));
+    expect((await token()).status).toBe(403);
+    observer.accept(observerRow(2, { type: "phase", name: "worker-start" }));
+    const armed = await token();
+    expect([armed.status, await armed.text()]).toEqual([200, "token-1"]);
+    observer.begin("no-extra-ca");
+    expect((await token()).status).toBe(403);
+    expect(issued).toBe(1);
+    expect(observer.evidence("no-extra-ca", null, null).positiveControl).toEqual({ phase: "worker-start", worker: null,
+      unarmed: "no worker-start phase from a page worker within 20 ms of the no-extra-ca case: Error: TLS qualification deadline" });
+    expect(() => observer.accept(observerRow(2, { type: "phase", name: "worker-start" }))).toThrow("Invalid guest observer record");
+    expect(() => observer.accept(observerRow(3, { type: "net" }))).toThrow("Invalid guest observer record");
+  });
+  test("a failed case keeps its mode, exit, error and redacted output, with the page's error as the cause", async () => {
+    const secrets = new RunSecrets();
+    secrets.add(guestSecret);
+    const observer = new GuestObserver(secrets);
+    observer.begin("verified");
+    const stderr = `${"x".repeat(3000)}${guestSecret}${"y".repeat(2030)}`;
+    const records = [{ type: "phase", name: "worker-start" }, { type: "stdout", bytes: 3, text: "ok\n" }, { type: "stderr", bytes: stderr.length, text: stderr },
+      { type: "error", code: 1, errno: null, message: `password ${guestSecret} rejected`, cleanupErrors: [] }];
+    records.forEach((row, index) => observer.accept(observerRow(index + 1, row)));
+    const page = new Error("evaluate: Error: Guest TLS pg case failed");
+    const failure = await guestCaseFailure(observer, "verified", page, async () => ({ sent: 4, failed: 0, firstFailure: "" }), secrets);
+    expect(failure).toBeInstanceOf(TlsGuestCaseFailure);
+    expect(failure.cause).toBe(page);
+    const diagnostic = JSON.parse(formatTlsFailure(new TlsQualificationFailure("browser", failure, secrets)));
+    expect(diagnostic.phase).toBe("browser");
+    expect(diagnostic.primary).toMatchObject({ name: "TlsGuestCaseFailure", message: expect.stringContaining("TLS verified case failed"), cause: { message: page.message } });
+    const guest = JSON.parse(diagnostic.primary.guest);
+    expect(guest).toMatchObject({ mode: "verified", observed: true, positiveControl: { worker: 2, unarmed: null }, host: { received: 4, gaps: 0, unattributed: 0, delivery: null }, page: { sent: 4, failed: 0 } });
+    const [worker] = guest.workers;
+    expect(worker).toMatchObject({ worker: 2, phases: ["worker-start"], stdout: { bytes: 3, tail: "ok\n" }, terminal: [{ type: "error", code: 1, errno: null, message: "password [redacted run secret] rejected", cleanupErrors: [] }] });
+    expect(worker.stderr.bytes).toBe(stderr.length);
+    expect(worker.stderr.tail.length).toBeLessThanOrEqual(2048);
+    expect(worker.stderr.tail).toEndWith("y".repeat(2030));
+    for (let start = 0; start + 12 <= guestSecret.length; start++) expect(JSON.stringify(diagnostic)).not.toContain(guestSecret.slice(start, start + 12));
+  });
+  test("an unreadable page state or undelivered records are recorded and never replace the page's error", async () => {
+    const observer = new GuestObserver(new RunSecrets());
+    observer.begin("hostname");
+    observer.accept(observerRow(1, { type: "exit", code: 1 }));
+    observer.accept(observerRow(3, { type: "exit", code: 1 }));
+    const page = new Error("evaluate: Error: Guest TLS pg case failed");
+    const unread = await guestCaseFailure(observer, "hostname", page, async () => { throw new Error("Target page closed"); }, new RunSecrets());
+    expect(unread.cause).toBe(page);
+    expect(JSON.parse(unread.guest)).toMatchObject({ page: { readError: "Error: Target page closed" }, host: { received: 2, gaps: 1 } });
+    const short = await guestCaseFailure(observer, "hostname", page, async () => ({ sent: 5, failed: 1, firstFailure: "binding gone" }), new RunSecrets());
+    expect(JSON.parse(short.guest)).toMatchObject({ page: { sent: 5, failed: 1, firstFailure: "binding gone" }, host: { delivery: expect.stringContaining("fewer records than the page sent") } });
+    expect(JSON.parse((await guestCaseFailure(observer, "rejection", page, async () => ({ sent: 2, failed: 0, firstFailure: "" }), new RunSecrets())).guest)).toMatchObject({ mode: "rejection", observed: false, workers: [] });
+  });
+  test("the browser driver injects the observer before the page loads and issues tokens only through its control", async () => {
+    const driver = await readFile(new URL("../web/tests/tls-relay-browser.ts", import.meta.url), "utf8");
+    const order = ["page.exposeFunction(GUEST_OBSERVER_BINDING", "page.addInitScript(installGuestObserver, GUEST_OBSERVER_BINDING)", "await page.goto(origin)", "TLS guest observer was not installed", "guestCaseFailure(observer, mode, error"];
+    const positions = order.map(text => driver.indexOf(text));
+    expect(positions.every(position => position > 0)).toBe(true);
+    expect(positions.toSorted((a, b) => a - b)).toEqual(positions);
+    expect(driver).toContain('if (path === "/token") return guardedToken(observer, signal, () => services.token(), headers);');
+    expect(driver).toContain("observer.begin(mode);");
+    expect(driver.match(/services\.token\(\)/g)).toHaveLength(1);
+  });
+});
 
 describe("primary TLS host failure evidence", () => {
   const enoent = () => Object.assign(new Error("Executable not found in $PATH: \"mesh\""), { code: "ENOENT", syscall: "spawnSync mesh", path: "mesh", errno: -2 });
@@ -899,13 +1075,22 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     expect(running(lease.pid)).toBe(false);
     expect(lockFree(lock)).toBe(true);
   });
+  // The lock acknowledgement precedes exec(cat); wait for the actual control target.
+  async function catDescendant(holder: number): Promise<number> {
+    const until = performance.now() + 1000;
+    while (performance.now() < until) {
+      const members = readFileSync(`/proc/${holder}/task/${holder}/children`, "utf8").trim().split(/\s+/).map(Number);
+      expect(members).toHaveLength(1);
+      const member = members[0];
+      if (member && readFileSync(`/proc/${member}/comm`, "utf8").trim() === "cat") return member;
+      await Bun.sleep(5);
+    }
+    throw new Error("Owned lease shell did not exec cat within the control deadline");
+  }
   test.each([true, false])("a stopped lease descendant is gone and its lock released after timeout, reconciled=%s", async reconciled => {
     const { owner, lease, lock } = await lane(reconciled);
     if (!lease.pid) throw new Error("Expected an owned lease PID");
-    const members = readFileSync(`/proc/${lease.pid}/task/${lease.pid}/children`, "utf8").trim().split(/\s+/).map(Number);
-    expect(members).toHaveLength(1);
-    const member = members[0];
-    if (!member || readFileSync(`/proc/${member}/comm`, "utf8").trim() !== "cat") throw new Error("Expected the owned cat descendant");
+    const member = await catDescendant(lease.pid);
     process.kill(member, "SIGSTOP");
     const failure = await owner.close().catch(error => error);
     expect(failure).toBeInstanceOf(AggregateError);
