@@ -2,6 +2,8 @@
 // path) or in an unrelated ambient frame (native provider). `see(site, ...)` records the frame.
 
 export const CASES: Record<string, string> = {
+  "spawn stdin callback failure closes IPC": spawnFailureRetirement("stdin").join("\n"),
+  "spawn abort cleanup failure closes IPC": spawnFailureRetirement("abort").join("\n"),
   "watch change": `
     const watcher = watch("/app", function () { see("change", this === watcher); });
     state.watch.push(record);`,
@@ -219,9 +221,51 @@ export const CASES: Record<string, string> = {
     state.input.push(Buffer.from("GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n"));`,
 };
 
+function spawnFailureRetirement(fault: "stdin" | "abort"): readonly string[] {
+  const stdio = fault === "stdin" ? '["pipe", "pipe", "inherit"]' : '["inherit", "inherit", "inherit"]';
+  const trigger = fault === "stdin" ? "state.reads.push(-29);" : `
+    state.reads.push(Buffer.from('{"n":1}\\n{"unfinished":'), 0); state.exited = true;`;
+  return [
+    `const added = [];
+     const add = internal.addIoWaiter;
+     internal.addIoWaiter = waiter => { added.push(waiter); return add(waiter); };
+     const open = modules.child_ipc.open;
+     modules.child_ipc.open = (...args) => storage.run({ frame: "channel-A" }, () => {
+       globalThis.marker = new WeakRef(storage.getStore()); return open(...args);
+     });
+     const target = new modules.events();
+     target.on("disconnect", () => see("disconnect"));
+     const cleanupError = new Error("cleanup callback");
+     const controller = new AbortController();
+     const originalRemove = controller.signal.removeEventListener;
+     const child = storage.run("spawn-S", () => modules.spawn.spawn(["bun", "-e", ""], {
+       stdio: ${stdio}, _ipc: true, _ipcTarget: target, signal: controller.signal
+     }));
+     child.exited.catch(() => {});
+     const channel = target.channel;
+     ${fault === "stdin" ? 'child.stdin.write("blocked", () => { throw cleanupError; });' : 'controller.signal.removeEventListener = () => { throw cleanupError; };'}`,
+    `${trigger}
+     const waiter = added[added.length - 1];
+     storage.run("caller-C", () => {
+       try { waiter.step(); } catch (error) {
+         internal.removeIoWaiter(waiter);
+         assert.throws(() => waiter.fail(error), thrown => thrown === cleanupError);
+       }
+       see("caller restored");
+     });
+     controller.signal.removeEventListener = originalRemove;
+     internal.runTicks();
+     assert.equal(channel.connected, false);
+     assert.deepEqual(records, [["caller restored", "caller-C"], ["disconnect", "channel-A"]]);
+     assert.deepEqual(state.closed.slice().sort((a, b) => a - b), Array.from({ length: state.fd - 10 }, (_, i) => i + 10));`,
+  ];
+}
+
 // Retirement steps for io-resource-context.ts, each followed by a reachability check of the
 // `marker` frame. Every scenario retains its resource (and through it, its waiter).
 export const RETIREMENT: Record<string, readonly string[]> = {
+  "spawn stdin callback throws with IPC open": spawnFailureRetirement("stdin"),
+  "spawn abort removal throws with IPC open": spawnFailureRetirement("abort"),
   // Live, then closed by its caller with no later pump.
   "watch closed without a pump": [
     `var watcher = storage.run({ frame: "marker" }, () => { globalThis.marker = new WeakRef(storage.getStore()); return watch("/app", () => {}); });`,

@@ -17,6 +17,8 @@ function run(mode: "hooks" | "native"): Output {
 // The same frames with the host's frame slot (reset to root every turn) and with a native
 // continuation provider (left in an unrelated frame): the resource's own frame wins in both.
 const EXPECTED: Record<string, Records> = {
+  "spawn stdin callback failure closes IPC": [["caller restored", "caller-C"], ["disconnect", "channel-A"]],
+  "spawn abort cleanup failure closes IPC": [["caller restored", "caller-C"], ["disconnect", "channel-A"]],
   "watch change": [["change", "A", true]],
   "watch error": [["error", "A", "EIO"], ["close", "A"]],
   "watch close then throw": [["change", "A"], ["error", "A", true], ["close", "A"]],
@@ -74,6 +76,8 @@ test("pump-driven resource callbacks run in their resource's frame with a native
 // frame. No step pumps again after the resource retired.
 test("a retired resource does not keep its frame once its queued callbacks ran, without another pump", () => {
   expect(hooks.retirement).toEqual({
+    "spawn stdin callback throws with IPC open": [true, false],
+    "spawn abort removal throws with IPC open": [true, false],
     "watch closed without a pump": [true, false],
     "watch closed in its dispatch": [true, true, false],
     "watch close then throw": [true, false],

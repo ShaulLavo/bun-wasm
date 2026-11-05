@@ -45,6 +45,10 @@ path, as native Bun reports for a blocked send (Node reports the send's). A send
 keeps the frame its terminal path runs in; no native contract for it was established. Close releases the
 frame in a `finally`.
 
+Spawn failure cleanup always ends the IPC channel, even when a pending stdin callback or abort-listener
+removal throws. Terminal close ends the channel before destroying the sink, then releases the spawn frame.
+The throwing callback keeps its original error object.
+
 ## Classification
 
 | Patch or source | Class | Change |

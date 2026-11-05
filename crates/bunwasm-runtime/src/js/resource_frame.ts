@@ -9,6 +9,7 @@
   type Live = { readonly kind: "live"; readonly context: unknown };
   type State = Live | { readonly kind: "retired" };
   const RETIRED: State = { kind: "retired" };
+  const NO_ARGS: [] = [];
 
   function capture(): BunWasm.ResourceFrame {
     let state: State = { kind: "live", context: internal.native.getAsyncContext() };
@@ -28,7 +29,7 @@
           if (state.kind === "retired") return true;
           const invocation = state;
           try {
-            return internal.runInContext(invocation.context, step, waiter, []);
+            return internal.runInContext(invocation.context, step, waiter, NO_ARGS);
           } catch (error) {
             failing = invocation;
             throw error;

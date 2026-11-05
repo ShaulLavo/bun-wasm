@@ -765,7 +765,7 @@
       try {
         teardown(error);
       } finally {
-        frame.release();
+        close();
       }
     }
     function teardown(error: unknown) {
