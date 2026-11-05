@@ -300,8 +300,9 @@
       if (this.reading || this.closed) return;
       this.reading = true;
       const epoch = this.ownership.state.epoch;
+      const context = native.getAsyncContext();
       this.reader = addWaiter({
-        step: () => this.ownership.valid(epoch) ? this.pumpRead() : true,
+        step: () => this.ownership.valid(epoch) ? internal.runInContext(context, this.pumpRead, this, []) : true,
         fail: (err) => this.fail(err),
         ref: this.referenced !== false,
       });
