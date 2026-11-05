@@ -20,10 +20,15 @@ resource's frame. The serve root row starts its server before that, at true root
   send callback ran by a checkpoint inside the stall.
 - A row process must exit on its own. A referenced handle left behind makes the row `hung`.
 
-The driver compares records with `rows.ts`. A turn-frame row (no resource owns the callback) must be
-root on the hook path, and on native engines anything except the listed operation frames. Each row
-ends `pass`, `missing`, `hung`, `error`, `exit`, `unarmed`, `late` or `mismatch`; anything but `pass`
-fails the run. `unqualified` in the result lists the required rows no public guest route can observe.
+The driver compares records with `rows.ts`. A turn-frame row must be root on the hook path. Native
+frame exclusion is only a `limited` observation, not proof of exact turn preservation. Such a run
+is `partial`; callback errors still fail. The result lists omitted implemented rows, limited native
+rows and the public-API limits under `unqualified` separately.
+
+Callbacks stream until natural process exit. The completion marker retains the boundary needed to
+detect late callbacks. Duplicate reports, malformed fields, unexpected rows and wrong executable
+routes refuse. Host deadlines cover native spawn and the entire Chromium setup/run/readback;
+owned server and browser termination is awaited before cleanup is reported.
 
 ## Commands
 
@@ -45,10 +50,17 @@ bun scripts/io-resource-context.ts --surface node-host --guest PATH --context ho
 bun scripts/io-resource-context.ts --surface host-bun --out DIR
 ```
 
-`--qualify HEAD TREE` verifies the guest's original build receipt, its paired side and the launcher
-receipt against that source. For Chromium it records the engine registry and the hash of every
-`.wasm` and `.js` response the page loaded. Engines' closure gates bind those to the admitted
-publication. `scripts/test.sh` runs the same driver without `--qualify` for its selected engine.
+These commands are prepared source-check routes, not execution approval. `--qualify HEAD TREE`
+checks original native guest/side/launcher receipts against that source, but full input admission is
+still pending the actual controller handoff. `qualification` stays false until that integration.
+For Chromium, required selected Browser response bodies are awaited, including `.wasm.gz`, and
+both response and decompressed identities are retained. An unrelated loaded Wasm cannot arm the
+Browser observation. Matching the actual registry, source and full profiles remains an integration
+gate. `scripts/test.sh` runs without `--qualify` for its selected engine.
+
+The future handoff must validate registry-derived modes before setup: executable payloads 0555,
+other files 0444, directories 0555. Never chmod sealed inputs or accept historical modes through
+a compatibility branch. Unit 6 remains immutable and is not this fixture's executable input.
 
 Native Bun 1.4.4 passes 17 of 22 rows. The five others are measured native differences the
 runtime keeps on purpose: caller close and abort, caller IPC disconnect, the onExit receiver and

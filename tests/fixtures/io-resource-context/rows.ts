@@ -13,7 +13,7 @@ export type Expected = readonly [site: string, frame: ExpectedFrame, ...values: 
 
 export type Owner = "watch" | "ipc" | "spawn" | "stdin" | "serve";
 /** `exact`: the whole record list in order. `sites`: per-site order, plus first occurrences in this order. */
-export type Order = { readonly kind: "exact" } | { readonly kind: "sites"; readonly sequence: readonly string[] };
+export type Order = { readonly kind: "exact" } | { readonly kind: "sites"; readonly sequence: readonly string[]; readonly drainedBefore?: readonly [string, string] };
 /** Bytes the orchestrator writes to the row's stdin, one per marker line the row prints. */
 export interface StdinGate { readonly inputs: readonly string[]; readonly close: "after-inputs" | "after-exit" }
 
@@ -40,7 +40,7 @@ export const rows = {
   "watch.close-in-callback": { owner: "watch", order: exact, expect: [["change", "A"], ["close", "A"], ["queued", "A"]] },
   "watch.close-then-throw": { owner: "watch", order: exact, expect: [["change", "A"], ["error", "A", true], ["close", "A"]] },
   "ipc.message-eof": {
-    owner: "ipc", order: sites("message", "disconnect"),
+    owner: "ipc", order: { kind: "sites", sequence: ["message", "disconnect"], drainedBefore: ["message", "disconnect"] },
     expect: [["message", "A", 1], ["message", "A", 2], ["disconnect", "A"], ["exit", "A", 0]],
   },
   "ipc.caller-disconnect": {

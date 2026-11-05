@@ -5,6 +5,7 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { isRowId, RESULT_FILE, rowIds, rows, STDIN_MARKERS, type Row, type RowId, type StdinGate } from "./rows.ts";
+import { parseRowOutput } from "./protocol.ts";
 
 const ROW_TIMEOUT_MS = Number(process.env.IORC_ROW_TIMEOUT_MS ?? 30_000);
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -47,11 +48,6 @@ async function readOutput(child: Child, gate: StdinGate | undefined): Promise<st
   }
 }
 
-function parseReport(output: string): unknown {
-  const line = output.split("\n").find(value => value.startsWith("IORC_ROW "));
-  return line ? JSON.parse(line.slice("IORC_ROW ".length)) : null;
-}
-
 async function runRow(id: RowId) {
   const row: Row = rows[id];
   const gate = row.stdin;
@@ -67,11 +63,16 @@ async function runRow(id: RowId) {
   const exitCode = await child.exited;
   clearTimeout(timer);
   const stdinCloseError = gate?.close === "after-exit" ? await closeStdin(child) : null;
-  return { id, exitCode, signal: child.signalCode, timedOut, elapsedMs: Date.now() - started, report: parseReport(output), stdinCloseError, stderr: stderr.slice(-4000) };
+  try {
+    return { id, exitCode, signal: child.signalCode, timedOut, elapsedMs: Date.now() - started, report: parseRowOutput(output, id), stdinCloseError, stderr: stderr.slice(-4000) };
+  } catch (error) {
+    return { id, exitCode, timedOut, report: null, stderr: `${stderr.slice(-4000)}\n${String(error)}` };
+  }
 }
 
 const requested = process.argv.slice(2);
 for (const name of requested) if (!isRowId(name)) throw new Error(`unknown io-resource-context row: ${name}`);
+if (new Set(requested).size !== requested.length) throw new Error("duplicate requested row");
 const selected = requested.length ? requested.filter(isRowId) : rowIds;
 const results = [];
 for (const id of selected) {

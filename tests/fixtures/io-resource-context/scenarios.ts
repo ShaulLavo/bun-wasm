@@ -66,11 +66,12 @@ function firstOnly(callback: () => void): () => void {
 async function watchRegistration(context: Context): Promise<void> {
   const path = file("watch-registration.txt");
   let first = true;
-  const watcher: FSWatcher = context.storage.run("A", () => watch(path, function (this: unknown) {
+  function changed(this: unknown): void {
     if (!first) return;
     first = false;
     context.see("change", this === watcher);
-  }));
+  }
+  const watcher: FSWatcher = context.storage.run("A", () => watch(path, changed));
   context.see("caller");
   await mutate(path);
   await context.until("change");
@@ -79,7 +80,11 @@ async function watchRegistration(context: Context): Promise<void> {
 
 async function watchTwoStores(context: Context): Promise<void> {
   const paths = [file("watch-one.txt"), file("watch-two.txt")];
-  const watchers = ["one", "two"].map((name, index) => context.storage.run(name, () => watch(paths[index]!, firstOnly(() => context.see(name)))));
+  const watchNamed = (name: string, index: number) => {
+    const changed = firstOnly(() => context.see(name));
+    return context.storage.run(name, () => watch(paths[index]!, changed));
+  };
+  const watchers = ["one", "two"].map(watchNamed);
   await mutate(paths[0]!);
   await mutate(paths[1]!);
   await context.until("one");
@@ -106,9 +111,10 @@ async function watchAbort(context: Context): Promise<void> {
 
 async function watchCloseInCallback(context: Context): Promise<void> {
   const path = file("watch-dispatch.txt");
+  const queued = () => context.see("queued");
   const watcher: FSWatcher = context.storage.run("A", () => watch(path, () => {
     context.see("change");
-    setImmediate(() => context.see("queued"));
+    setImmediate(queued);
     watcher.close();
   }));
   watcher.on("close", () => context.see("close"));
@@ -159,12 +165,13 @@ async function ipcCallerDisconnect(context: Context): Promise<void> {
 async function ipcImmediateSend(context: Context): Promise<void> {
   const child = forkPayload(context, "ipc-wait");
   const done = exited(child);
+  const sent = (error: Error | null) => context.see("send", errorCode(error));
   child.on("message", message => {
     const value = messageValue(message);
     context.see("message", value);
     if (value === 1) child.send({ kind: "exit" });
     if (value !== "ready") return;
-    context.storage.run("B", () => child.send({ n: 1, ack: true }, error => context.see("send", errorCode(error))));
+    context.storage.run("B", () => child.send({ n: 1, ack: true }, sent));
   });
   await done;
 }
@@ -347,9 +354,12 @@ async function serveTwoStores(context: Context): Promise<void> {
     barrier.resolve();
   };
   const timer = setTimeout(release, 3000, false);
+  const arrive = () => {
+    if (++arrived === 2) release(true);
+  };
   const handle = (id: string) => requests.run(id, async () => {
     context.see(`start:${id}`, id);
-    if (++arrived === 2) release(true);
+    arrive();
     await barrier.promise;
     context.see(`after:${id}`, requests.getStore() ?? null);
     return new Response(id);
