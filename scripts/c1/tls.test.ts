@@ -10,7 +10,7 @@ import { requireHandoffArtifacts } from "./delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./loaded.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, UNRESOLVED_RELAY, prepareTlsPage, verifyTlsPage, type PageBuilder } from "./tls-page.ts";
-import { tlsDriver } from "./operations.ts";
+import { completedConsumerResult, fiveOwnerDriver, tlsDriver } from "./operations.ts";
 
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-c1-tls-")));
 afterAll(() => {
@@ -24,6 +24,29 @@ function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
 }
+
+test("five-owner admitted invocations use only the pinned handoff and surface selection", () => {
+  const fixture = writeContractFixture(fresh());
+  const handoff = parseHandoff(json(fixture.handoff));
+  const sourceRoot = fresh();
+  write(join(sourceRoot, "scripts/io-resource-context.ts"), "// Synthetic driver presence only.\n");
+  const handoffFile = fileIdentity(fixture.handoff);
+  const drivers = fiveOwnerDriver(handoff, { sourceRoot, env: { BUN_EXE: process.execPath }, handoffFile });
+  if (typeof drivers === "string") throw new Error(drivers);
+  expect(drivers).toHaveLength(3);
+  for (const [index, name] of ["quickjs", "jsc", "chromium"].entries()) {
+    const selection = name === "chromium" ? ["--surface", "chromium"] : ["--surface", "native", "--engine", name];
+    expect(drivers[index]?.argv).toEqual([process.execPath, "scripts/io-resource-context.ts"].concat(selection,
+      ["--handoff", handoffFile.path, "--handoff-sha256", handoffFile.sha256, "--out", join(handoff.outputs["five-owner"], name)]));
+  }
+});
+
+test.each(["partial", "pending-intake", "source-check"])("exit-zero %s evidence is preserved without declaring qualification", status => {
+  const child = { status, qualification: { status: "unqualified" }, coverage: { exactNativeTurn: false }, unqualified: ["exact native turn facts unavailable"] };
+  const outcome = completedConsumerResult("/synthetic/output", child);
+  expect(outcome.status).toBe("completed");
+  expect(outcome.result).toEqual(child);
+});
 
 test("TLS result readback uses exactly the output directory passed to the driver", () => {
   const fixture = writeContractFixture(fresh());
