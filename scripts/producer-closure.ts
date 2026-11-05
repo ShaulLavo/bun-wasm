@@ -2,6 +2,9 @@ import { accessSync, constants, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pairedEngines, programProfile, type Engine, type PairedEngine } from "../src/engine-kind.ts";
 import type { ProgramProfile } from "./src/program-profile.ts";
+import { DELIVERY_RECORDS, EXECUTABLE_ROLES, type HandoffRole } from "./c1/contract.ts";
+import waffleRelease from "./waffle-release-inputs.json";
+import webPackage from "../web/package.json";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -76,24 +79,72 @@ export function verifyPublicationBuilds(value: unknown): asserts value is Record
   }
 }
 
+/** A release archive the selected source pins, and where the delivery keeps it. */
+export interface SelectedArchive { readonly version: string; readonly url: string; readonly path: string }
+function archiveName(url: string, label: string): string {
+  const name = new URL(url).pathname.split("/").at(-1);
+  if (!name?.endsWith(".tgz")) throw new Error(`${label} pin is not a release archive URL: ${url}`);
+  return name;
+}
+/**
+ * The runtime and relay archives this source selects: runtime from its Waffle
+ * release record, relay from the Web package pin. Delivery paths follow the
+ * pinned file names, so a different release is a different member.
+ */
+export function selectedReleaseArchives(): { readonly runtime: SelectedArchive; readonly relay: SelectedArchive } {
+  const relayUrl = webPackage.dependencies["waffle-relay"];
+  const relayVersion = /\/waffle-v([0-9][^/]*)\/waffle-relay-\1\.tgz$/.exec(relayUrl)?.[1];
+  if (!relayVersion) throw new Error(`Web relay pin is not a Waffle relay release: ${relayUrl}`);
+  return {
+    runtime: { version: waffleRelease.version, url: waffleRelease.url, path: `runtime/${archiveName(waffleRelease.url, "Runtime")}` },
+    relay: { version: relayVersion, url: relayUrl, path: `relay/${archiveName(relayUrl, "Relay")}` },
+  };
+}
+
+/** Delivery members behind every consumer handoff role. */
+export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
+  const quickjs = programProfile("quickjs");
+  const jsc = programProfile("jsc");
+  const archives = selectedReleaseArchives();
+  return {
+    quickjsGuest: `split/dist/${quickjs.core}`, quickjsGuestReceipt: `split/dist/${quickjs.core}.build.json`,
+    quickjsSide: `split/dist/${quickjs.side}`, quickjsSideReceipt: `split/dist/${quickjs.side}.engine.json`,
+    jscGuest: `split/dist/${jsc.core}`, jscGuestReceipt: `split/dist/${jsc.core}.build.json`,
+    jscSide: `split/dist/${jsc.side}`, jscSideReceipt: `split/dist/${jsc.side}.engine.json`, jscEmbeddingReceipt: `split/dist/${jsc.core}.embedding.json`,
+    launcher: "split/launcher/bun-wasm", launcherReceipt: "split/launcher/bun-wasm.launcher.json",
+    shell: "split/dist/bash-web-shell.wasm", envUtility: "split/dist/bash-web-env.wasm", shellReceipt: "split/dist/bash-web-guests.json",
+    browserGuest: publicationGuestPaths.browser, browserGuestReceipt: `${publicationGuestPaths.browser}.build.json`,
+    sourceCacheBrowserGuest: publicationGuestPaths["source-cache-browser"], sourceCacheBrowserGuestReceipt: `${publicationGuestPaths["source-cache-browser"]}.build.json`,
+    toolsGuest: publicationGuestPaths.tools, toolsGuestReceipt: `${publicationGuestPaths.tools}.build.json`,
+    webIndex: "split/web/index.html", engineBuilds: "split/web/engine-builds.json", producerManifest: "split/manifest.json",
+    sourceArchive: "source.tar.gz", runtimeArchive: archives.runtime.path, relayArchive: archives.relay.path,
+    programManifest: "inputs/programs-release/program-release.json", programChecksums: "inputs/programs-release/SHA256SUMS",
+    fd3Artifact: "inputs/network/preview1-relay.fd3.wasm", fd3Receipt: "inputs/network/RECEIPT.json",
+    config: DELIVERY_RECORDS.config, inputs: DELIVERY_RECORDS.inputs, environment: DELIVERY_RECORDS.environment, stages: DELIVERY_RECORDS.stages,
+  };
+}
+
+/** The only delivery members sealed executable (0555). Everything else is sealed 0444. */
+export function executableMemberPaths(): readonly string[] {
+  const paths = handoffMemberPaths();
+  return EXECUTABLE_ROLES.map(role => paths[role]);
+}
+
 /** Required outer delivery files. Existing byte, actor, matrix and custody validators still apply. */
 export function completePublicationArtifactPaths(): string[] {
   const guests = Object.values(publicationGuestPaths).flatMap(path => [path, `${path}.build.json`]);
   const custody = ["before", "after", "preseal"].flatMap(phase => [
     `inputs/${phase}.json`, `inputs/vendor-custody-${phase}.json`, `inputs/native-custody-${phase}.json`,
   ]);
-  return producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody,
+  const handoff = Object.values(handoffMemberPaths());
+  return Array.from(new Set(producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody, handoff,
     [
-      "source.tar.gz", "inputs/ADMISSION.json", "inputs/CANONICAL-REUSE.json", "inputs/publication-matrix.json",
-      "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
-      "inputs/runtime107-release.tgz", "inputs/programs-release/program-release.json", "inputs/programs-release/SHA256SUMS",
-      "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json", "bash/ORIGIN.json", "bash/original-native.zip",
-      "bash/original-sidecars/SHA256SUMS", "bash/original-sidecars/cli-source.txt", "bash/original-sidecars/cli-sha256.txt",
-      "bash/original-sidecars/inputs", "bash/original-sidecars/THIRD_PARTY_NOTICES.txt",
+      "inputs/publication-matrix.json", "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
+      "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json",
       "native/jsc/.bunwasm-artifacts", "native/jsc/.bunwasm-inputs", "native/jsc/native-header-manifest.json",
       "native/jsc/build/jsc/CMakeCache.txt", "native/jsc/build/jsc/cmakeconfig.h", "native/jsc/build/jsc/compile_commands.json",
       "native/jsc/inputs/wasi-jsc.cmake", "native/jsc/inputs/shim/wasi-compat.h", "native/jsc/inputs/shim/wasi-compat.c", "native/jsc/inputs/shim/madvise.c",
-    ]);
+    ])));
 }
 
 export function requireCompletePublicationFiles(files: readonly { readonly path: string }[]): void {

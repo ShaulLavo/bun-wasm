@@ -214,9 +214,14 @@ Keep existing source/vendor/native before/after/preseal captures until all curre
 validators migrate together. One external input manifest does not mean deleting
 the three-phase drift gate. Reduce overlapping report/start/exit summaries to one
 authenticated input record, environment record, stage log/index, result and cleanup.
-Seal DELIVERY exactly once after full validation, with a closed payload set,
-0444 files/0555 directories and an external manifest digest. Producer status means
-awaiting independent parent byte intake, never consumer acceptance.
+Seal DELIVERY exactly once after full validation, with a closed payload set and
+an external manifest digest. Modes come from the maintained registry, never from
+input mode bits or file names: executable members (`executableMemberPaths()`,
+today only the native launcher) are 0555, every other file 0444, directories
+0555. The manifest records each member's mode; verification, intake and handoff
+checks refuse any other mode. Consumers never chmod sealed files: a new launcher
+runs from its sealed path once admitted. Producer status means awaiting
+independent parent byte intake, never consumer acceptance.
 
 Share or extract the maintained ownership in run-with-timeout.mts: subreaping,
 descendant identity and birth time, detached/setsid children and in-process-step
@@ -259,8 +264,11 @@ source. The interface binds original absolute paths and actual membership/bytes/
 hashes for guest/core/side/launcher/host/source/config/input/environment/native
 receipts, complete host dependencies/frozen locks and consumer dependencies. A
 current arbitrary install cannot be blessed merely by hashing it after the fact.
-Private executable views copy byte-identical sealed launchers and preserve original
-receipts; never chmod the 0444 sealed payload.
+New deliveries seal the launcher 0555, so the handoff names its sealed path and
+no copy. Unit 6's admitted launcher stays 0444 and is never modified, repaired or
+resealed; its PermissionError is not a guest result. Inspecting such old sealed
+artifacts needs a private byte-identical executable view under its own authority;
+that is historical inspection, not a production format fallback.
 
 Next's prepared driver at 55af5a4e is subject to its independent source review.
 It explicitly selects qjs/jsc guest+launcher+shell/env or Chromium web root, fresh
