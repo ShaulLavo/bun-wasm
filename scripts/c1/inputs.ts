@@ -150,11 +150,11 @@ function privateGit(repository: string, scratch: string) {
     GIT_ALTERNATE_OBJECT_DIRECTORIES: resolve(repository, git(repository, ["rev-parse", "--git-path", "objects"])) };
   return (args: readonly string[]) => git(repository, args, env);
 }
-function patchedTree(repository: string, base: string, patches: readonly string[], scratch: string): string {
+function patchedTree(repository: string, base: string, patches: readonly string[], scratch: string, sparse = false): string {
   const command = privateGit(repository, scratch);
   command(["read-tree", base]);
   for (const patch of patches) command(["apply", "--cached", "--whitespace=nowarn", patch]);
-  return command(["write-tree"]);
+  return command(["write-tree"].concat(sparse ? ["--missing-ok"] : []));
 }
 function admitBun(source: string, bun: string, scratch: string): void {
   const base = /^BUN_COMMIT=([a-f0-9]{40})$/m.exec(readFileSync(join(source, "scripts/sync-bun.sh"), "utf8"))?.[1];
@@ -170,7 +170,7 @@ export function admitWebkit(source: string, jsc: string, scratch: string): void 
   const pin = /^WEBKIT_COMMIT=([a-f0-9]{40})$/m.exec(readFileSync(join(source, "jsc/common.sh"), "utf8"))?.[1];
   if (!pin || git(webkit, ["rev-parse", "HEAD"]) !== pin) fail("WebKit is not the source's pinned commit");
   if (git(webkit, ["ls-files", "--others", "--exclude-standard"])) fail("WebKit has untracked files");
-  const expected = patchedTree(webkit, pin, [join(source, "jsc/webkit-wasi.patch")], join(scratch, "webkit"));
+  const expected = patchedTree(webkit, pin, [join(source, "jsc/webkit-wasi.patch")], join(scratch, "webkit"), true);
   // The original index carries the sparse-checkout bits. A private copy keeps
   // them while any stat refresh git performs lands in scratch, not the original.
   const index = join(scratch, "webkit", "original-index");
