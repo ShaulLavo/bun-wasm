@@ -133,6 +133,7 @@ a successful end callback, when `destroy()` has no error, matching Node. A destr
 error, a transport error or an earlier close passes the error to the end callback
 instead, and no finish is emitted. The existing end-completion method moved into
 the typed helper for this guard.
+The typed transport-completion adapter also settles request ownership in a `finally` block. If the end callback or a finish listener throws, it preserves that thrown value and queues response close for the next tick, so the closed transport cannot leave a busy request behind. Focused controls assert exact callback, throw and close order and the initial null `errored` state.
 Late writes return false with `ERR_STREAM_DESTROYED` without committing headers;
 accepted writes cannot emit drain after destruction.
 

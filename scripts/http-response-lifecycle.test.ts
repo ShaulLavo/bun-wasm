@@ -53,3 +53,57 @@ test("HTTP response lifecycle matches the Node reference in every case", async (
   const reference = nodeReference();
   expect(await runtimeResults()).toEqual(reference);
 });
+
+
+test("HTTP responses start with an exact null error state", () => {
+  const state = fixture();
+  const { response, connection } = state.server();
+  try {
+    expect(response.errored).toBeNull();
+  } finally {
+    connection.destroy();
+    state.flush();
+  }
+});
+
+for (const stage of ["end", "finish"]) {
+  test(`accepted end still closes and releases the request when ${stage} throws`, async () => {
+    const state = fixture();
+    const sentinel = new Error(`${stage} callback marker`);
+    const timeline: string[] = [];
+    let response: ServerResponse | undefined;
+    const onEnd = () => {
+      timeline.push("end");
+      if (stage === "end") throw sentinel;
+    };
+    const onFinish = () => {
+      timeline.push("finish");
+      if (stage === "finish") throw sentinel;
+    };
+    const server = state.http.createServer((_incoming, current) => {
+      response = current;
+      current.on("finish", onFinish);
+      current.on("close", () => timeline.push("close"));
+      current.end("complete", onEnd);
+      current.destroy();
+    });
+    const connection = state.socket();
+    try {
+      Reflect.get(server, "_onConnection").call(server, connection);
+      state.packets.push(Buffer.from(request("throwing-completion", true)));
+      await expect(state.pump()).rejects.toBe(sentinel);
+      timeline.push("threw");
+      await state.pump();
+      if (!response) throw new Error("Expected the maintained HTTP server to dispatch a response");
+      expect(timeline).toEqual(stage === "end" ? ["end", "threw", "close"] : ["end", "finish", "threw", "close"]);
+      expect(response.closed).toBe(true);
+      expect(response.writableFinished).toBe(true);
+      expect(Reflect.get(connection, "busy")).toBe(false);
+      expect(Reflect.get(server, "_connections").size).toBe(0);
+      expect(state.pending()).toBe(0);
+    } finally {
+      connection.destroy();
+      await state.pump();
+    }
+  });
+}

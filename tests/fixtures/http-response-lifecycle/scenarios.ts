@@ -21,7 +21,7 @@ function attempt(trace: Trace, name: string, call: () => unknown): void {
 
 function state(response: ServerResponse): string {
   const { destroyed, headersSent, writableEnded, writableFinished, closed, finished, writable } = response;
-  return JSON.stringify({ destroyed, headersSent, writableEnded, writableFinished, closed, finished, writable, errored: label(response.errored) });
+  return JSON.stringify({ destroyed, headersSent, writableEnded, writableFinished, closed, finished, writable, errored: response.errored === null ? null : label(response.errored) });
 }
 
 function lateCalls(response: ServerResponse, trace: Trace): void {

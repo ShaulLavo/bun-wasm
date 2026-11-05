@@ -7,6 +7,7 @@
     writableEnded: boolean;
     writableFinished: boolean;
     _completed: boolean;
+    _keepAlive: boolean;
     errored: unknown;
     _destroyError?: unknown;
     socket?: { destroy(error?: unknown): unknown; removeListener(event: string, listener: () => void): unknown };
@@ -65,11 +66,22 @@
     this._emitClose();
   }
 
+  function completeBody(this: Response, callback: Callback, connectionText: string, error?: unknown): void {
+    try {
+      callback(error);
+    } catch (failure) {
+      internal.nextTick(() => this._emitClose());
+      throw failure;
+    } finally {
+      if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
+    }
+  }
+
   function writeDestroyed(callback?: Callback): false {
     const error = Object.assign(new Error("Cannot call write after a stream was destroyed"), { code: "ERR_STREAM_DESTROYED" });
     if (typeof callback === "function") internal.nextTick(() => callback(error));
     return false;
   }
 
-  return { errored: null, writable: true, destroy, _emitClose: emitClose, _endDestroyed: endDestroyed, _completeEnd: completeEnd, _writeDestroyed: writeDestroyed };
+  return { errored: null, writable: true, destroy, _emitClose: emitClose, _endDestroyed: endDestroyed, _completeEnd: completeEnd, _completeBody: completeBody, _writeDestroyed: writeDestroyed };
 })

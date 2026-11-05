@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect } from "node:net";
 import { exchanges, normalizeWire, observe, request, type Trace } from "./scenarios.ts";
 
 // Prints the Node reference result for every shared lifecycle exchange as JSON.
@@ -13,29 +13,35 @@ const server = createServer((incoming, response) => {
 });
 server.on("clientError", error => clientErrors.push(error.message));
 await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-const port = (server.address() as AddressInfo).port;
+const address = server.address();
+if (!address || typeof address === "string") throw new Error("Expected a listening TCP address");
+const port = address.port;
 
-function exchange(paths: string[], cancelAfter?: string): Promise<{ wire: string; end: string }> {
-  return new Promise(resolve => {
-    let bytes = "";
-    let index = 0;
-    const socket = connect({ host: "127.0.0.1", port });
-    const send = () => socket.write(request(paths[index]!, index === paths.length - 1));
-    socket.once("connect", send);
-    socket.on("data", chunk => {
-      bytes += String(chunk);
-      if (cancelAfter && bytes.includes(cancelAfter)) {
-        socket.destroy();
-        resolve({ wire: normalizeWire(bytes), end: "client-cancelled" });
-        return;
-      }
-      if (index >= paths.length - 1 || !bytes.endsWith("alive")) return;
-      index++;
-      send();
-    });
-    socket.on("error", error => resolve({ wire: normalizeWire(bytes), end: `error ${"code" in error ? error.code : error.message}` }));
-    socket.on("close", () => resolve({ wire: normalizeWire(bytes), end: "server-closed" }));
+type ExchangeResult = { wire: string; end: string };
+
+function exchangeSocket(paths: string[], cancelAfter: string | undefined, resolve: (result: ExchangeResult) => void): void {
+  let bytes = "";
+  let index = 0;
+  const socket = connect({ host: "127.0.0.1", port });
+  const send = () => socket.write(request(paths[index]!, index === paths.length - 1));
+  socket.once("connect", send);
+  socket.on("data", chunk => {
+    bytes += String(chunk);
+    if (cancelAfter && bytes.includes(cancelAfter)) {
+      socket.destroy();
+      resolve({ wire: normalizeWire(bytes), end: "client-cancelled" });
+      return;
+    }
+    if (index >= paths.length - 1 || !bytes.endsWith("alive")) return;
+    index++;
+    send();
   });
+  socket.on("error", error => resolve({ wire: normalizeWire(bytes), end: `error ${"code" in error ? error.code : error.message}` }));
+  socket.on("close", () => resolve({ wire: normalizeWire(bytes), end: "server-closed" }));
+}
+
+function exchange(paths: string[], cancelAfter?: string): Promise<ExchangeResult> {
+  return new Promise(resolve => exchangeSocket(paths, cancelAfter, resolve));
 }
 
 const results: Record<string, unknown> = {};
