@@ -346,6 +346,62 @@ describe("loaded observations use the controller's type and validator", () => {
   });
 });
 
+describe("post-preflight mode and browser rechecks", () => {
+  test("a changed Chromium tree refuses the pre-launch recheck", async () => {
+    const intake = await admitted((await fixture()).evidence);
+    await recheckDependencies(intake);
+    writeFileSync(join(intake.handoff.dependencies.browsers.path, "entry"), "changed browser bytes");
+    await expect(recheckDependencies(intake)).rejects.toThrow("Playwright browsers tree changed");
+  });
+  test("a writable sealed worker refuses every delivered read without repair", async () => {
+    const f = await fixture();
+    const intake = await admitted(f.evidence);
+    const worker = intake.page.find(row => row.path.endsWith("/fs-worker.js"));
+    if (!worker) throw new Error("fixture worker missing");
+    const before = lstatSync(worker.path);
+    await readVerifiedFile(worker, f.delivery);
+    expect(lstatSync(worker.path).ctimeMs).toBe(before.ctimeMs);
+    chmodSync(worker.path, 0o644);
+    await expect(readVerifiedFile(worker, f.delivery)).rejects.toThrow("sealed file mode");
+    expect(lstatSync(worker.path).mode & 0o7777).toBe(0o644);
+  });
+  test.each(["page ancestor", "delivery root"])("a writable %s refuses delivered reads", async location => {
+    const f = await fixture();
+    const intake = await admitted(f.evidence);
+    const worker = intake.page.find(row => row.path.endsWith("/fs-worker.js"));
+    if (!worker) throw new Error("fixture worker missing");
+    const directory = location === "page ancestor" ? intake.handoff.tlsPageRoot : f.delivery;
+    chmodSync(directory, 0o755);
+    await expect(readVerifiedFile(worker, f.delivery)).rejects.toThrow("sealed directory mode");
+    expect(lstatSync(directory).mode & 0o7777).toBe(0o755);
+  });
+  test.each(["browserGuest", "tlsPgClient"] as const)("wrong %s mode refuses without byte mutation", async role => {
+    const f = await fixture();
+    const intake = await admitted(f.evidence);
+    const file = intake.handoff.artifacts[role];
+    chmodSync(file.path, 0o555);
+    await expect(readVerifiedFile(file, f.delivery)).rejects.toThrow("sealed file mode");
+    expect(lstatSync(file.path).mode & 0o7777).toBe(0o555);
+  });
+  test("registry launcher mode is accepted without changing metadata", async () => {
+    const f = await fixture();
+    const intake = await admitted(f.evidence);
+    const file = intake.handoff.artifacts.launcher;
+    const before = lstatSync(file.path);
+    expect((await readVerifiedFile(file, f.delivery)).byteLength).toBe(file.bytes);
+    const after = lstatSync(file.path);
+    expect([after.mode, after.ctimeMs, after.ino]).toEqual([before.mode, before.ctimeMs, before.ino]);
+  });
+  test("delivered reads reject special bits and paths outside their root", async () => {
+    const f = await fixture();
+    const intake = await admitted(f.evidence);
+    const file = intake.handoff.artifacts.launcher;
+    chmodSync(file.path, 0o4555);
+    await expect(readVerifiedFile(file, f.delivery)).rejects.toThrow("sealed file mode");
+    await expect(readVerifiedFile(intake.pgArchive, f.delivery)).rejects.toThrow("outside");
+  });
+});
+
 describe("after preflight", () => {
   test("mutation rejects the guest artifact before use", async () => {
     const f = await fixture();
@@ -385,7 +441,7 @@ describe("after preflight", () => {
   });
   test("the consumer serves sealed members only and never builds", async () => {
     const browser = await readFile(new URL("../web/tests/tls-relay-browser.ts", import.meta.url), "utf8");
-    for (const expected of ["hostDependencies: intake.dependencies.host", "frozenLocks: intake.dependencies.locks", "guestArtifacts(intake.handoff, engine)", "tlsLoaded(intake.handoff", "pageMembers: intake.page", "intake.handoff.artifacts.tlsPgClient"]) expect(browser).toContain(expected);
+    for (const expected of ["hostDependencies: intake.dependencies.host", "frozenLocks: intake.dependencies.locks", "guestArtifacts(intake.handoff, engine)", "tlsLoaded(intake.handoff", "pageMembers: intake.page", "intake.handoff.artifacts.tlsPgClient", "readVerifiedFile(file, sealedRoot)", "readVerifiedFile(artifact, sealedRoot)", "readVerifiedFile(member, sealedRoot)", "readVerifiedFile(intake.handoff.artifacts.tlsPgClient, sealedRoot)"]) expect(browser).toContain(expected);
     for (const forbidden of ["buildBrowserEntries", "Bun.build", "browser-build", "symlink", "fixtures/tls/pg-client.ts", "split/dist/"]) expect(browser).not.toContain(forbidden);
     const cli = await readFile(new URL("./tls-qualification.ts", import.meta.url), "utf8");
     expect(cli).toContain("256 * 1024");

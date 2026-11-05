@@ -22,13 +22,14 @@ async function observe(response: BrowserResponse): Promise<ObservedResponse> {
 export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnType<typeof startTlsServices>>, owner: TlsCleanup, engine: QualificationEngine, signal: AbortSignal) {
   signal.throwIfAborted();
   const options = intake.fixtures;
+  const sealedRoot = intake.handoff.delivery.root;
   // Only sealed, preflighted members are served; nothing is built or read from the host checkout here.
   const pageMembers = new Map(intake.page.map(row => [relative(intake.handoff.tlsPageRoot, row.path), row]));
   const seeds = new Map(intake.dependencies.pg.files.map(row => [`node_modules/${relative(intake.dependencies.pg.root, row.path)}`, row]));
   const origin = `http://127.0.0.1:${options.pagePort}`;
   const asset = guestAsset(intake, engine, origin);
   const selectedArtifacts = guestArtifacts(intake.handoff, engine);
-  for (const file of selectedArtifacts.concat(intake.page, [intake.handoff.artifacts.tlsPgClient])) await readVerifiedFile(file);
+  for (const file of selectedArtifacts.concat(intake.page, [intake.handoff.artifacts.tlsPgClient])) await readVerifiedFile(file, sealedRoot);
   const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
   await acquireOwned(owner, signal, () => Bun.serve({ hostname: "127.0.0.1", port: options.pagePort, fetch: respond }), async server => {
     await server.stop(true);
@@ -40,14 +41,14 @@ export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnT
     if (request.method === "POST") return post(request, url.pathname);
     if (request.method !== "GET") return new Response(null, { status: 405 });
     if (url.pathname === "/seed") return Response.json(Array.from(seeds.keys()), { headers });
-    if (url.pathname === "/pg-client.ts") return new Response(await readVerifiedFile(intake.handoff.artifacts.tlsPgClient), { headers });
+    if (url.pathname === "/pg-client.ts") return new Response(await readVerifiedFile(intake.handoff.artifacts.tlsPgClient, sealedRoot), { headers });
     const seed = url.pathname.startsWith("/seed/") ? seeds.get(url.pathname.slice("/seed/".length)) : undefined;
     if (seed) return new Response(await readVerifiedFile(seed), { headers });
     const artifact = selectedArtifacts.find(file => url.pathname === `/artifact/${file.sha256}`);
-    if (artifact) return new Response(await readVerifiedFile(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
+    if (artifact) return new Response(await readVerifiedFile(artifact, sealedRoot), { headers: { ...headers, "Content-Type": "application/wasm" } });
     const member = pageMembers.get(url.pathname === "/" ? "index.html" : url.pathname.slice(1));
     if (!member) return new Response(null, { status: 404 });
-    return new Response(await readVerifiedFile(member), { headers: { ...headers, "Content-Type": Bun.file(member.path).type } });
+    return new Response(await readVerifiedFile(member, sealedRoot), { headers: { ...headers, "Content-Type": Bun.file(member.path).type } });
   }
   async function post(request: Request, path: string): Promise<Response> {
     if (request.headers.get("origin") !== origin || signal.aborted) return new Response(null, { status: 403 });

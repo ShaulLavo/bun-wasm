@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
-import { tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
+import { executableMemberPaths, tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
 import {
-  DELIVERY_RECORDS, parseConfig, parseHandoff, parseInputManifest, sameSource, sameTuple,
+  DELIVERY_RECORDS, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, parseConfig, parseHandoff, parseInputManifest, sameSource, sameTuple,
   type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./c1/contract.ts";
 import { verifyTlsPage } from "./c1/tls-page.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./c1/loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts, type SealedDelivery } from "./c1/delivery.ts";
-import { fileIdentity, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
+import { fileIdentity, inside, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
 import { requireStagedDonor } from "./c1/inputs.ts";
 import type { QualificationEngine } from "./tls-qualification-context.ts";
 
@@ -261,13 +261,35 @@ export async function preflightTls(evidence: TlsEvidence) {
 }
 export type TlsIntake = Awaited<ReturnType<typeof preflightTls>>;
 
-export async function readVerifiedFile(row: FileIdentity): Promise<Uint8Array<ArrayBuffer>> {
-  if (!(await lstat(row.path)).isFile()) throw new Error("Dependency must remain an ordinary file");
+async function requireSealedPath(root: string, path: string, mode: number): Promise<void> {
+  const member = relative(root, path);
+  if (!inside(root, path) || !member) throw new Error("Delivered file is outside its sealed root");
+  const expected = executableMemberPaths().includes(member) ? SEALED_EXECUTABLE_MODE : SEALED_FILE_MODE;
+  if ((mode & 0o7777) !== Number.parseInt(expected, 8)) throw new Error("TLS sealed file mode changed immediately before use");
+  let directory = dirname(path);
+  for (;;) {
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || (stat.mode & 0o7777) !== SEALED_DIRECTORY_MODE) throw new Error("TLS sealed directory mode changed immediately before use");
+    if (directory === root) return;
+    directory = dirname(directory);
+  }
+}
+/** Sealed delivery reads also check registry modes and ancestors before and after the byte read. */
+export async function readVerifiedFile(row: FileIdentity, sealedRoot?: string): Promise<Uint8Array<ArrayBuffer>> {
+  const before = await lstat(row.path);
+  if (!before.isFile()) throw new Error("Dependency must remain an ordinary file");
+  if (sealedRoot !== undefined) await requireSealedPath(sealedRoot, row.path, before.mode);
   const bytes = await readFile(row.path);
   if (bytes.length !== row.bytes || createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new Error("Dependency byte/custody mismatch immediately before use");
+  if (sealedRoot !== undefined) {
+    const after = await lstat(row.path);
+    if (!after.isFile()) throw new Error("Delivered file must remain an ordinary file");
+    await requireSealedPath(sealedRoot, row.path, after.mode);
+  }
   return bytes;
 }
 export async function recheckDependencies(intake: TlsIntake): Promise<void> {
+  requireTree(intake.handoff.dependencies.browsers, "Playwright browsers");
   requireTree(intake.dependencies.pg.identity, "preflighted pg dependency");
   for (const tree of intake.dependencies.host) requireTree(tree, "preflighted host dependency");
   for (const lock of intake.dependencies.locks.concat([intake.pgArchive])) requireFile(lock, "preflighted frozen input");
