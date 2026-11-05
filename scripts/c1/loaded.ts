@@ -97,6 +97,6 @@ export function bindLoaded(handoff: ConsumerHandoff, surface: LoadedSurface, row
     const { pathname } = new URL(row.url);
     return surface === "web" ? bindFile(handoff.webRoot, pathname, row, "web") : bindTls(handoff, pathname, row);
   });
-  if (!rows.some(row => /\.wasm$|^\/artifact\//.test(new URL(row.url).pathname))) fail("the Browser consumer loaded no WebAssembly");
+  if (!rows.some(row => /\.wasm(?:\.gz)?$|^\/artifact\//.test(new URL(row.url).pathname))) fail("the Browser consumer loaded no WebAssembly");
   return bound;
 }

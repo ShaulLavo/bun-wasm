@@ -57,14 +57,16 @@ test("TLS result readback uses exactly the output directory passed to the driver
     pgTarball: fileIdentity(join(pgRoot, "pg.tgz")), pgPackageJson: fileIdentity(join(pgRoot, "package.json")),
     pgLock: fileIdentity(join(pgRoot, "bun.lock")), pgModules: treeIdentity(join(pgRoot, "modules")),
   } } } };
-  const invocations = tlsDriver(handoff, { sourceRoot: FIXTURE_SOURCE, env: { BUN_EXE: process.execPath }, handoffFile: fileIdentity(fixture.handoff) });
+  const invocations = tlsDriver(handoff, { sourceRoot: scratch, env: { BUN_EXE: process.execPath }, handoffFile: fileIdentity(fixture.handoff) });
   if (typeof invocations === "string") throw new Error(invocations);
   expect(invocations).toHaveLength(1);
   const driver = invocations[0];
   if (!driver) throw new Error("missing TLS driver");
   const option = driver.argv.indexOf("--output");
   expect(option).toBeGreaterThanOrEqual(0);
-  expect(driver.out).toBe(driver.argv[option + 1]);
+  const output = driver.argv[option + 1];
+  if (option < 0 || output === undefined) throw new Error("missing TLS output argument");
+  expect(driver.out).toBe(output);
   expect(driver.out).toBe(join(handoff.outputs.tls, "pg-early"));
 });
 
@@ -181,6 +183,17 @@ test("observed web and TLS responses bind to admitted members, including decoded
   const { handoff, web, tls } = fixtureHandoff();
   expect(bindLoaded(handoff, "web", web).map(binding => binding.route)).toEqual(["web", "web"]);
   expect(bindLoaded(handoff, "tls", tls).map(binding => binding.route)).toEqual(["tls-page", "tls-page", "tls-fixture", "guest-artifact", "control"]);
+});
+
+test("a selected gzip-only Browser response binds without an unrelated Wasm row", () => {
+  const { handoff, web } = fixtureHandoff();
+  const bytes = readFileSync(join(handoff.webRoot, "bun.wasm.gz"));
+  const row: LoadedObservation = { url: "http://127.0.0.1:43839/bun.wasm.gz", method: "GET", status: 200,
+    encoding: "identity", bytes: bytes.byteLength, sha256: sha256(bytes) };
+  const html = web[0];
+  if (!html) throw new Error("missing Browser page observation");
+  expect(bindLoaded(handoff, "web", [html, row]).map(binding => binding.member)).toContain(join(handoff.webRoot, "bun.wasm.gz"));
+  expect(() => bindLoaded(handoff, "web", [html, { ...row, sha256: sha256("changed") }])).toThrow("differ from the admitted member");
 });
 
 test.each([
