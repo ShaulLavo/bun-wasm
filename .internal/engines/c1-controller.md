@@ -63,8 +63,12 @@ separate control cohort or per-unit paperwork remains in A.
 bun scripts/c1-controller.ts check CONFIG
 bun scripts/c1-controller.ts rehearse CONFIG --from RETAINED [--stage NAME]
 bun scripts/c1-controller.ts run CONFIG --execute CONFIG_SHA256
-bun scripts/c1-controller.ts qualify CONFIG --intake RECEIPT --intake-sha256 SHA256
+bun scripts/c1-controller.ts replay REPLAY.json --execute REPLAY_SHA256
 ~~~
+
+Consumers run only through `replay`, which keeps the product and the consumer
+harness as two identities. `docs/bun-patches/c1-consumer-replay.md` records the
+contract, the harness guard and its trust chain.
 
 The config digest binds exact raw bytes, not a reserialized copy. The run flag is
 explicit execution intent; the approved combined execution decision still comes

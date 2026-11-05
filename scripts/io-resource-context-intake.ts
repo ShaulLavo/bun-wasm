@@ -1,16 +1,17 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { HANDOFF_ROLES, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, parseConfig, parseHandoff, parseInputManifest, sameSource, sameTuple, sha256Text, type ConsumerHandoff, type FileIdentity } from "./c1/contract.ts";
-import { admitIntake, readSealedDelivery, requireHandoffArtifacts, type SealedDelivery } from "./c1/delivery.ts";
-import { fileIdentity, inside, requireFile, requireTree, sameBytes, sha256 } from "./c1/identity.ts";
-import { cleanSource } from "./c1/inputs.ts";
+import { HANDOFF_ROLES, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE, parseConfig, parseInputManifest, sameSource, sameTuple, type ConsumerHandoff, type FileIdentity } from "./c1/contract.ts";
+import type { SealedDelivery } from "./c1/delivery.ts";
+import { inside, requireFile, requireTree, sameBytes, sha256 } from "./c1/identity.ts";
+import { admitReplayHandoffFile, requireHarnessCheckout, requireReplayHandoff, type ReplayHandoff } from "./c1/replay.ts";
 import { executableMemberPaths, handoffMemberPaths, selectedReleaseArchives, verifyPublicationBuilds } from "./producer-closure.ts";
 import { expectedBrowserPayload } from "./io-resource-context-assets.ts";
 import { requiredGuestCompanions, verifyGuestBuildReceipt, verifyGuestCompanions, type GuestBuildReceipt } from "./guest-build-receipt.ts";
 import release from "./waffle-release-inputs.json";
 
-export interface PinnedHandoff { readonly kind: "handoff"; readonly handoff: ConsumerHandoff; readonly reference: FileIdentity; readonly delivery: SealedDelivery }
+/** `handoff` is the product view of the sealed delivery; `replay` carries the separate harness identity and host tools. */
+export interface PinnedHandoff { readonly kind: "handoff"; readonly handoff: ConsumerHandoff; readonly reference: FileIdentity; readonly delivery: SealedDelivery; readonly replay: ReplayHandoff }
 
 /** Check registry mode and every sealed ancestor at each actual delivery read boundary. */
 export function requireFiveOwnerMember(pinned: PinnedHandoff, path: string): FileIdentity {
@@ -48,52 +49,45 @@ export function requireFiveOwnerResponse(pinned: PinnedHandoff, url: string): vo
   for (const member of members) readFiveOwnerMember(pinned, join(pinned.delivery.root, member.path));
 }
 
-/** Whole sealed closure and pinned external anchors are rechecked at prelaunch and after teardown. */
+/** Whole sealed closure, the replay contract and pinned external anchors are rechecked at prelaunch and after teardown. */
 export function recheckFiveOwnerHandoff(pinned: PinnedHandoff): void {
   requireFile(pinned.reference, "five-owner handoff");
-  const delivery = readSealedDelivery(pinned.delivery.root);
-  if (!sameBytes(delivery.identity, pinned.delivery.identity)) throw new Error("Five-owner delivery manifest changed");
-  const intake = admitIntake(pinned.handoff.intake.path, pinned.handoff.intake.sha256, delivery);
-  if (!sameBytes(intake.identity, pinned.handoff.intake)) throw new Error("Five-owner intake changed");
+  const product = requireReplayHandoff(pinned.replay);
+  if (!sameBytes(product.delivery.identity, pinned.delivery.identity)) throw new Error("Five-owner delivery manifest changed");
 }
 
-/** Only the current exported contract; no historical admission or mode translation. */
+/** Only the current replay contract; no historical admission or mode translation. */
 export function readFiveOwnerHandoff(path: string, expectedSha256: string): PinnedHandoff {
-  sha256Text(expectedSha256, "handoff SHA-256");
-  const reference = fileIdentity(resolve(path));
-  if (reference.sha256 !== expectedSha256) throw new Error("Handoff differs from its pinned bytes");
-  const handoff = parseHandoff(JSON.parse(readFileSync(reference.path, "utf8")));
-  const delivery = readSealedDelivery(handoff.delivery.root);
-  if (handoff.delivery.manifest.path !== delivery.identity.path || !sameBytes(handoff.delivery.manifest, delivery.identity)) throw new Error("Handoff delivery manifest mismatch");
-  const admitted = admitIntake(handoff.intake.path, handoff.intake.sha256, delivery);
-  if (!sameBytes(admitted.identity, handoff.intake)) throw new Error("Handoff intake identity mismatch");
-  if (!sameSource(handoff.source, delivery.manifest.source) || !sameTuple(handoff.tuple, delivery.manifest.tuple)) throw new Error("Handoff source or tuple differs from delivery");
+  const admitted = admitReplayHandoffFile(path, expectedSha256);
+  const handoff = admitted.handoff.product;
+  const { delivery } = admitted.product;
   const paths = handoffMemberPaths();
   for (const role of HANDOFF_ROLES) {
     if (handoff.artifacts[role].path !== join(delivery.root, paths[role])) throw new Error(`Handoff ${role} leaves its registry member`);
   }
   if (handoff.webRoot !== dirname(handoff.artifacts.webIndex.path)) throw new Error("Handoff Web root differs from its registry");
-  requireHandoffArtifacts(handoff);
   const archives = selectedReleaseArchives();
   const expected = { runtime: archives.runtime.version, relay: archives.relay.version, programs: release.programs.tag,
     programManifestSchema: release.programs.schema, hostInterface: release.hostInterface };
   if (!sameTuple(handoff.tuple, expected)) throw new Error("Handoff tuple is not the selected source tuple");
-  return { kind: "handoff", handoff, reference, delivery };
+  return { kind: "handoff", handoff, reference: admitted.reference, delivery, replay: admitted.handoff };
 }
 
-/** Source and input records are bound separately from syntactic or synthetic fixture validation. */
+/**
+ * The consumer runs from the merged harness checkout named by the replay, a
+ * separate identity from the product source; the product's sealed config and
+ * inputs are bound to the delivery that seals them.
+ */
 export function bindFiveOwnerSource(pinned: PinnedHandoff, sourceRoot: string): void {
   const { handoff, delivery } = pinned;
-  if (!sameSource(cleanSource(sourceRoot), handoff.source)) throw new Error("Consumer source differs from the delivered source");
+  requireHarnessCheckout(pinned.replay.harness, sourceRoot);
   const config = parseConfig(JSON.parse(readFiveOwnerMember(pinned, handoff.artifacts.config.path).toString("utf8")));
   const inputs = parseInputManifest(JSON.parse(readFiveOwnerMember(pinned, handoff.artifacts.inputs.path).toString("utf8")));
-  if (realpathSync(config.sourceRoot) !== realpathSync(sourceRoot)) throw new Error("Consumer is not running from the selected config source");
   if (handoff.artifacts.config.sha256 !== delivery.manifest.configSha256 || handoff.artifacts.inputs.sha256 !== delivery.manifest.inputsSha256
     || !sameBytes(config.manifest, handoff.artifacts.inputs)) throw new Error("Delivered config/input binding mismatch");
   requireFile(config.manifest, "five-owner original input manifest");
   if (!sameSource(inputs.source, handoff.source) || !sameTuple(inputs.tuple, handoff.tuple)) throw new Error("Delivered input source/tuple mismatch");
   if (!isDeepStrictEqual(handoff.dependencies, inputs.consumers) || !isDeepStrictEqual(handoff.fixtures, config.fixtures)) throw new Error("Handoff dependencies or fixtures differ from selected inputs/config");
-  if (handoff.outputs["five-owner"] !== join(config.roots.qualify.output, "five-owner") || handoff.browserTmp !== config.roots.qualify.browserTmp) throw new Error("Handoff output or browser scratch differs from config");
   requireTree({ ...inputs.donors.rootDependencies, path: join(sourceRoot, "node_modules") }, "five-owner root dependency view");
 }
 

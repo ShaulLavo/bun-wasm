@@ -1,10 +1,9 @@
 import { chmodSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { executableMemberPaths, handoffMemberPaths, requireCompletePublicationFiles, tlsPagePaths } from "../producer-closure.ts";
 import {
   CONSUMERS, DELIVERY_RECORDS, DELIVERY_STATUS, EXECUTABLE_ROLES, HANDOFF_ROLES, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE,
-  parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, sameSource, sameTuple,
+  parseConfig, parseDelivery, parseInputManifest, parseIntake, sameSource, sameTuple,
   type C1Config, type ConsumerDependencies, type ConsumerFixtures, type ConsumerHandoff, type ConsumerName, type DeliveryManifest, type FileIdentity, type HandoffRole,
   type InputManifest, type MemberIdentity, type ParentIntake, type ReleaseTuple, type SealedMode, type SourceIdentity,
 } from "./contract.ts";
@@ -157,19 +156,12 @@ export function buildHandoff(delivery: SealedDelivery, intake: FileIdentity, dep
 }
 
 /**
- * What every consumer checks before using a handoff: it is exactly the one
- * its sealed delivery, that delivery's own config and inputs, and the intake
- * it names derive (roles, members, dependencies, fixtures, outputs), and
- * every artifact still has its bytes and sealed mode. A consumer never chmods
- * a sealed file; a 0444 executable is a refusal, not something to repair.
+ * Every handoff artifact still has its bytes and sealed mode. A consumer
+ * never chmods a sealed file; a 0444 executable is a refusal, not something
+ * to repair. Which handoff is the admitted one is the replay contract's
+ * check (replay.ts), not the original config's qualification roots.
  */
-export function requireHandoffArtifacts(handoff: ConsumerHandoff): void {
-  const delivery = readSealedDelivery(handoff.delivery.root);
-  if (delivery.identity.path !== handoff.delivery.manifest.path || !sameBytes(delivery.identity, handoff.delivery.manifest)) throw new DeliveryError("handoff names another DELIVERY.json");
-  const admitted = admitIntake(handoff.intake.path, handoff.intake.sha256, delivery);
-  const { config, inputs } = delivery;
-  const derived = buildHandoff(delivery, admitted.identity, inputs.consumers, config.fixtures, config.roots.qualify.output, config.roots.qualify.browserTmp);
-  if (!isDeepStrictEqual(derived, handoff)) throw new DeliveryError("handoff differs from the one its sealed delivery, config, inputs and intake derive");
+export function requireSealedArtifacts(handoff: ConsumerHandoff): void {
   for (const role of HANDOFF_ROLES) {
     const artifact = handoff.artifacts[role];
     if (!sameBytes(fileIdentity(artifact.path), artifact)) throw new DeliveryError(`handoff ${role} changed: ${artifact.path}`);
@@ -177,12 +169,4 @@ export function requireHandoffArtifacts(handoff: ConsumerHandoff): void {
     const expected = EXECUTABLE_ROLES.includes(role) ? SEALED_EXECUTABLE_MODE : SEALED_FILE_MODE;
     if (mode !== expected) throw new DeliveryError(`handoff ${role} has mode ${mode}, expected sealed ${expected}`);
   }
-}
-/** A consumer's whole handoff admission from its pinned file: bytes, then the full re-derivation above. */
-export function admitHandoffFile(path: string, expectedSha256: string): ConsumerHandoff {
-  const bytes = readFileSync(path);
-  if (sha256(bytes) !== expectedSha256) throw new DeliveryError("handoff bytes differ from the pinned SHA-256");
-  const handoff = parseHandoff(JSON.parse(bytes.toString("utf8")));
-  requireHandoffArtifacts(handoff);
-  return handoff;
 }

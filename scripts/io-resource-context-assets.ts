@@ -72,5 +72,8 @@ export function loadedObserver(browserUrl: string, expected: BytesIdentity, guar
     if (mismatch) throw new Error("Selected Browser guest bytes differ from supplied web root");
     return { loaded, payloads: assets };
   }
-  return { capture, flush, finish };
+  function snapshot() {
+    return { loaded: loaded.slice(), payloads: assets.slice() };
+  }
+  return { capture, flush, finish, snapshot };
 }

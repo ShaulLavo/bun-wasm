@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { parseTlsArguments } from "./tls-qualification.ts";
+import { FirstFailure, TlsQualificationFailure, formatTlsFailure, parseTlsArguments, runTlsCli } from "./tls-qualification.ts";
 import {
   TLS_STAGE, guestArtifacts, preflightTls, readVerifiedFile, recheckDependencies, requireInstalledRuntimePackage, tlsLoaded, tlsReleaseTuple, verifyReviewedHostSource,
   type ObservedResponse, type TlsEvidence, type TlsIntake,
@@ -18,6 +18,7 @@ import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
 import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
 import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
+import { verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
 import { piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
@@ -85,8 +86,10 @@ describe("strict controller intake before setup", () => {
     expect(intake.hostSource).toBe(f.host);
     expect(intake.fixtures).toEqual(FIXTURE_TLS_OPTIONS);
     expect(intake.page.map(row => relative(intake.handoff.tlsPageRoot, row.path)).toSorted()).toEqual(["chunks/shared.js", "fs-worker.js", "index.html", "notification-worker.js", "tls-relay-page.js", "worker.js"]);
-    expect(intake.references).toHaveLength(17);
-    expect(intake.references.map(row => row.path)).toEqual(expect.arrayContaining([f.handoff, f.intake, join(f.delivery, tlsPagePaths.receipt), join(f.delivery, "inputs/native-custody-preseal.json")]));
+    expect(intake.references).toHaveLength(18);
+    expect(intake.references.map(row => row.path)).toEqual(expect.arrayContaining([f.handoff, f.replay, f.intake, join(f.delivery, tlsPagePaths.receipt), join(f.delivery, "inputs/native-custody-preseal.json")]));
+    expect(intake.harness).toMatchObject({ sourceRoot: f.host, source: f.source, pullRequest: 1 });
+    expect(Object.keys(intake.hostTools)).toEqual(["mesh", "flock", "sh", "cat", "findmnt", "ps", "tar", "gzip"]);
     expect(intake.dependencies.pg.files.map(row => relative(intake.dependencies.pg.root, row.path))).toEqual(["pg-protocol/index.ts", "pg/lib/index.ts", "pg/package.json"]);
     expect(intake.dependencies.host.map(tree => tree.path)).toEqual([join(f.host, "node_modules"), join(f.host, "web/node_modules")]);
     expect(intake.dependencies.locks).toHaveLength(6);
@@ -106,6 +109,20 @@ describe("strict controller intake before setup", () => {
   });
 });
 
+test("browser prelaunch binds the distinct harness while preserving product identity", async () => {
+  const f = await fixture();
+  const intake = await admitted(f.evidence);
+  writeFileSync(join(f.host, "consumer-checkpoint.txt"), "consumer-only source checkpoint\n");
+  execFileSync("git", ["-C", f.host, "add", "consumer-checkpoint.txt"]);
+  execFileSync("git", ["-C", f.host, "-c", "user.email=tls@test.invalid", "-c", "user.name=TLS fixture", "commit", "-qm", "consumer-only checkpoint"]);
+  const git = (ref: string) => execFileSync("git", ["-C", f.host, "rev-parse", ref], { encoding: "utf8" }).trim();
+  const harness = { ...intake.harness, source: { head: git("HEAD"), tree: git("HEAD^{tree}") } };
+  expect(harness.source).not.toEqual(intake.source);
+  await expect(verifyTlsBrowserHost({ ...intake, harness })).resolves.toBeUndefined();
+  expect(intake.source).toEqual(f.source);
+  await expect(verifyTlsBrowserHost(intake)).rejects.toThrow("Host checkout differs from reviewed TLS source");
+});
+
 describe("pinned handoff and output", () => {
   test("handoff bytes differ from the caller's pin", async () => {
     const f = await fixture();
@@ -113,7 +130,25 @@ describe("pinned handoff and output", () => {
     await refused(f.evidence, /handoff bytes differ from the pinned SHA-256/);
   });
   test("pinned but edited handoff differs from the derived one", () => refusedWith({ handoff: handoff => ({ ...handoff, webRoot: join(handoff.webRoot, "other") }) }, /handoff differs/));
-  test("missing handoff", async () => { const f = await fixture(); rmSync(f.handoff); await refused(f.evidence, /ENOENT/); });
+  test("missing handoff", async () => { const f = await fixture(); rmSync(f.handoff); await refused(f.evidence, /expected an absolute regular file/); });
+  test("replay contract changed after the handoff pinned it", async () => {
+    const f = await fixture();
+    rewriteJson(f.replay, value => value);
+    await refused(f.evidence, /replay contract bytes differ from the pinned SHA-256/);
+  });
+  test("harness checkout is not at the replay's merged commit", async () => {
+    const f = await fixture();
+    writeFileSync(join(f.host, "web/src/runner.ts"), "export const changed = 1;\n");
+    execFileSync("git", ["-C", f.host, "-c", "user.email=tls@test.invalid", "-c", "user.name=TLS fixture", "commit", "-qam", "unreviewed harness change"]);
+    await refused(f.evidence, /Host checkout differs from reviewed TLS source/);
+  });
+  test("a declared host tool changed after the replay pinned it", async () => {
+    const f = await fixture();
+    const replay = JSON.parse(readFileSync(f.replay, "utf8")) as { hostTools: { mesh: { path: string } } };
+    chmodSync(replay.hostTools.mesh.path, 0o700);
+    appendFileSync(replay.hostTools.mesh.path, "# replaced\n");
+    await refused(f.evidence, /host tool mesh changed/);
+  });
   test("intake bytes changed after the handoff pinned them", async () => {
     const f = await fixture();
     rewriteJson(f.intake, value => value);
@@ -678,5 +713,60 @@ describe("Pi TLS PostgreSQL ownership", () => {
     expect(fixture).not.toMatch(/execute\("(initdb|pg_isready)"|spawn\("postgres"|findmnt|pod\(\["pull"/);
     expect(fixture).toContain("await armStartupGuard(");
     expect(fixture).toContain('process.once("SIGTERM", stop)');
+  });
+});
+
+
+describe("primary TLS host failure evidence", () => {
+  const enoent = () => Object.assign(new Error("Executable not found in $PATH: \"mesh\""), { code: "ENOENT", syscall: "spawnSync mesh", path: "mesh", errno: -2 });
+  test("the sealed lifecycle alone lets a cleanup error replace the setup error", async () => {
+    const primary = enoent();
+    const failure = await qualifiedRun(async () => undefined, async (_input, owner) => {
+      owner.add(() => { throw new Error("cleanup witness failed"); });
+      throw primary;
+    }, async () => {}).catch(error => error);
+    expect(failure).not.toBe(primary);
+  });
+  test("a setup error remains the primary cause when cleanup also fails", async () => {
+    const primary = enoent();
+    const cleanup = new Error("cleanup witness failed");
+    const first = new FirstFailure();
+    let exercised = false;
+    const caught = await qualifiedRun(async () => undefined, first.guard(async (_input: undefined, owner: TlsCleanup) => {
+      owner.add(() => { throw cleanup; });
+      throw primary;
+    }), first.guard(async () => { exercised = true; })).catch(error => error);
+    const failure = first.resolve(caught) as AggregateError;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.cause).toBe(primary);
+    expect(failure.errors[0]).toBe(primary);
+    expect(failure.errors[1]).toBe(caught);
+    expect(exercised).toBe(false);
+    const diagnostic = JSON.parse(formatTlsFailure(new TlsQualificationFailure("pre-ledger-remote-inventory", failure)));
+    expect(diagnostic.primary).toEqual({ name: "Error", message: primary.message, code: "ENOENT", errno: -2, syscall: "spawnSync mesh", path: "mesh" });
+    expect(diagnostic.relatedErrors).toHaveLength(2);
+    expect(diagnostic.relatedErrors.map((row: Record<string, unknown>) => row.message)).toEqual([undefined, undefined]);
+  });
+  test("an error with no later cleanup failure is reported unchanged", async () => {
+    const primary = enoent();
+    const first = new FirstFailure();
+    const caught = await qualifiedRun(async () => undefined, first.guard(async () => { throw primary; }), async () => {}).catch(error => error);
+    expect(first.resolve(caught)).toBe(primary);
+  });
+  test("post-setup messages, captured output, argv and environment never reach the diagnostic", async () => {
+    const secret = "sentinel-password-0123456789";
+    const child = Object.assign(new Error(`Command failed: mesh ssh pi -- psql ${secret}`), { code: "EPIPE", stdout: secret, stderr: secret, spawnargs: [secret], env: { PGPASSWORD: secret } });
+    const text = formatTlsFailure(new TlsQualificationFailure("services", child));
+    expect(text).not.toContain(secret);
+    expect(JSON.parse(text).primary).toEqual({ name: "Error", code: "EPIPE" });
+    const messages: string[] = [];
+    expect(await runTlsCli(async () => { throw new TlsQualificationFailure("browser", child); }, message => { messages.push(message); })).toBe(1);
+    expect(messages.join("")).not.toContain(secret);
+    expect(messages.at(-1)).toBe("TLS qualification failed. No application TLS acceptance is claimed.\n");
+  });
+  test("a successful run writes nothing and claims nothing", async () => {
+    const messages: string[] = [];
+    expect(await runTlsCli(async () => {}, message => { messages.push(message); })).toBe(0);
+    expect(messages).toEqual([]);
   });
 });

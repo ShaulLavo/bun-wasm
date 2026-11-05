@@ -1,13 +1,15 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths } from "../producer-closure.ts";
 import {
-  DELIVERY_RECORDS, DONOR_NAMES, TOOL_NAMES, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type FileIdentity, type InputManifest, type ParentIntake, type ReleaseTuple,
-  type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
+  DELIVERY_RECORDS, DONOR_NAMES, TOOL_NAMES, parseDelivery, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type FileIdentity, type InputManifest, type ParentIntake,
+  type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./contract.ts";
 import type { LoadedObservation } from "./loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, sealDelivery } from "./delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
+import { HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type HarnessIdentity, type ReplayContract, type ReplayRoots } from "./replay.ts";
 
 /**
  * Executable schema fixture: a synthetic sealed delivery with every registry
@@ -89,10 +91,76 @@ function fixtureLoaded(handoff: ConsumerHandoff) {
   return { web: { loaded: web }, tls: { loaded: tls } };
 }
 
+/** A stub host tool that only prints its name. */
+function stubTool(root: string, name: HostToolName): HostTool {
+  const path = join(root, name);
+  write(path, `#!/bin/sh\necho fixture ${name}\n`);
+  chmodSync(path, 0o755);
+  return { ...fileIdentity(path), version: { args: ["--version"], line: `fixture ${name}` } };
+}
+/** This machine's own tool, for fixtures that really read a .tgz. */
+function localTool(name: HostToolName): HostTool {
+  const found = Bun.which(name);
+  if (!found) throw new Error(`fixture needs a local ${name}`);
+  const path = realpathSync(found);
+  const line = spawnSync(path, ["--version"], { encoding: "utf8" }).stdout.split("\n")[0] ?? "";
+  return { ...fileIdentity(path), version: { args: ["--version"], line } };
+}
+/** Declared host tools for synthetic fixtures: tar and gzip are this machine's own, every other tool a stub. */
+export function fixtureHostTools(root: string): HostTools {
+  return Object.fromEntries(HOST_TOOL_NAMES.map(name => [name, name === "tar" || name === "gzip" ? localTool(name) : stubTool(root, name)])) as Record<HostToolName, HostTool>;
+}
+/** Byte-pinned synthetic independent review and finding-free coordinator disposition. */
+export function fixtureReview(root: string, candidate: SourceIdentity): HarnessIdentity["review"] {
+  const directory = join(root, `review-${candidate.head.slice(0, 8)}`);
+  const artifact = join(directory, "RESULT.json");
+  write(artifact, JSON.stringify({ schema: "bun-wasm.independent-consumer-replay-review/1", sourceReviewComplete: true, verdict: "PASS", approved: true, candidate, findings: [] }) + "\n");
+  const reconciliation = join(directory, "RECONCILIATION.json");
+  write(reconciliation, JSON.stringify({ schema: "bun-wasm.c1-review-reconciliation/1", review: fileIdentity(artifact), reviewed: candidate, candidate, changedPaths: [], resolvedFindings: [], evidence: [] }) + "\n");
+  return { artifact: fileIdentity(artifact), candidate, reconciliation: fileIdentity(reconciliation) };
+}
+
+export interface ReplayFixtureParts {
+  /** New directory for the contract, review artifact, stub tools and original output. */
+  readonly root: string;
+  readonly config: string;
+  readonly intake: string;
+  readonly delivery: string;
+  readonly harness: { readonly sourceRoot: string; readonly source: SourceIdentity };
+  readonly roots: ReplayRoots;
+}
+/**
+ * A replay contract over a sealed fixture delivery, with a synthetic review
+ * artifact and original output, and the replay handoff whose product view
+ * is `product` (normally the one buildHandoff derives; tests may edit it).
+ */
+export function writeReplayFixture(parts: ReplayFixtureParts, product: unknown): { readonly replay: string; readonly handoff: string } {
+  const { root, harness } = parts;
+  const sealed = parseDelivery(JSON.parse(readFileSync(parts.delivery, "utf8")));
+  const review = fixtureReview(root, harness.source);
+  const original = join(root, "original");
+  write(join(original, "handoff.json"), "{}\n");
+  write(join(original, "QUALIFICATION.json"), "{}\n");
+  for (const engine of NOT_RERUN) write(join(original, "five-owner", engine, "result.json"), `${JSON.stringify({ fixture: engine })}\n`);
+  const contract: ReplayContract = { schema: "bun-wasm.c1-replay/1",
+    product: { config: fileIdentity(parts.config), intake: fileIdentity(parts.intake), delivery: fileIdentity(parts.delivery), source: sealed.source, tuple: sealed.tuple, members: sealed.files.length },
+    harness: { ...harness, repository: "fixture/bun-wasm", pullRequest: 1, review },
+    original: { output: original, handoff: fileIdentity(join(original, "handoff.json")), qualification: fileIdentity(join(original, "QUALIFICATION.json")),
+      native: { quickjs: fileIdentity(join(original, "five-owner/quickjs/result.json")), jsc: fileIdentity(join(original, "five-owner/jsc/result.json")) } },
+    hostTools: fixtureHostTools(join(root, "host-tools")), roots: parts.roots };
+  const replay = join(root, "REPLAY.json");
+  write(replay, JSON.stringify(contract, null, 2) + "\n");
+  const handoff = join(parts.roots.output, "handoff.json");
+  write(handoff, JSON.stringify({ schema: "bun-wasm.c1-replay-handoff/1", replay: fileIdentity(replay), harness: contract.harness, hostTools: contract.hostTools, product }, null, 2) + "\n");
+  return { replay, handoff };
+}
+
 export interface ContractFixture {
   readonly delivery: string;
   readonly intake: string;
+  /** The replay handoff consumers receive. */
   readonly handoff: string;
+  readonly replay: string;
   readonly inputs: string;
   readonly config: string;
   readonly loadedWeb: string;
@@ -139,14 +207,15 @@ export function writeContractFixture(root: string): ContractFixture {
   const intakePath = join(root, "INTAKE.json");
   write(intakePath, JSON.stringify(intake, null, 2) + "\n");
   const admitted = admitIntake(intakePath, fileIdentity(intakePath).sha256, delivery);
-  const handoffPath = join(config.roots.qualify.output, "handoff.json");
-  const handoff = buildHandoff(delivery, admitted.identity, delivery.inputs.consumers, delivery.config.fixtures, config.roots.qualify.output, config.roots.qualify.browserTmp);
-  write(handoffPath, JSON.stringify(handoff, null, 2) + "\n");
+  const roots = config.roots.qualify;
+  const handoff = buildHandoff(delivery, admitted.identity, delivery.inputs.consumers, delivery.config.fixtures, roots.output, roots.browserTmp);
+  const replay = writeReplayFixture({ root: join(root, "replay"), config: configPath, intake: intakePath, delivery: identity.path,
+    harness: { sourceRoot: config.sourceRoot, source: FIXTURE_SOURCE }, roots }, handoff);
   const loaded = fixtureLoaded(handoff);
-  const loadedWeb = join(config.roots.qualify.output, "five-owner-loaded.json"), loadedTls = join(config.roots.qualify.output, "tls-loaded.json");
+  const loadedWeb = join(roots.output, "five-owner-loaded.json"), loadedTls = join(roots.output, "tls-loaded.json");
   write(loadedWeb, JSON.stringify(loaded.web, null, 2) + "\n");
   write(loadedTls, JSON.stringify(loaded.tls, null, 2) + "\n");
-  return { delivery: deliveryRoot, intake: intakePath, handoff: handoffPath, inputs: inputsPath, config: configPath, loadedWeb, loadedTls };
+  return { delivery: deliveryRoot, intake: intakePath, handoff: replay.handoff, replay: replay.replay, inputs: inputsPath, config: configPath, loadedWeb, loadedTls };
 }
 
 if (import.meta.main) {
