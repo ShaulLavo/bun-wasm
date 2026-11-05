@@ -8,15 +8,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireOwned, deadline, type TlsCleanup } from "../../scripts/tls-qualification-lifecycle.ts";
 import { object, text, recheckDependencies, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
+import type { TlsFixtureOptions as ServiceOptions } from "../../scripts/c1/contract.ts";
 
 import { type QualificationCase as PgCase } from "../../scripts/tls-qualification-context.ts";
-export interface ServiceOptions {
-  readonly databaseMachine: string;
-  readonly databaseAddress: string;
-  readonly relayAddress: string;
-  readonly pagePort: number;
-  readonly relayPort: number;
-}
 export class PgWireAudit {
   private header = Buffer.alloc(0);
   private remaining = 0;

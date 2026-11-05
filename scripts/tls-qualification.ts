@@ -1,42 +1,37 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { hostname, tmpdir } from "node:os";
-import { digest, preflightTls, recheckDependencies, MissingTlsInput, type TlsEvidence } from "./tls-qualification-inputs.ts";
-import { acquireOwned, qualifiedRun } from "./tls-qualification-lifecycle.ts";
+import { hostname } from "node:os";
+import { TLS_STAGE, digest, preflightTls, recheckDependencies, MissingTlsInput, type TlsEvidence } from "./tls-qualification-inputs.ts";
+import { qualifiedRun } from "./tls-qualification-lifecycle.ts";
 import { isEngine } from "./tls-qualification-context.ts";
-import { startTlsServices, type ServiceOptions } from "../web/tests/tls-relay-services.ts";
-import { removeTlsScratch, runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
+import { startTlsServices } from "../web/tests/tls-relay-services.ts";
+import { runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
 
+function canonicalAbsolute(value: string, label: string): string {
+  if (!isAbsolute(value) || resolve(value) !== value) throw new Error(`${label} must be a canonical absolute path`);
+  return value;
+}
+/**
+ * The controller's invocation: the pinned handoff carries every other input
+ * (intake, source, dependencies, fixture options, sealed page), and the
+ * output is that handoff's stage directory beneath its TLS output.
+ */
 export function parseTlsArguments(args: readonly string[]) {
   const values = new Map<string, string>();
-  const allowed = ["stage", "handoff", "intake-sha256", "reviewed-head", "reviewed-tree", "browser", "engine", "database-machine", "database-address", "relay-address", "page-port", "relay-port"];
+  const allowed = ["stage", "browser", "engine", "handoff", "handoff-sha256", "output"];
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index], value = args[index + 1];
     if (!flag?.startsWith("--") || !value || !allowed.includes(flag.slice(2)) || values.has(flag.slice(2))) throw new Error("Unknown, repeated or incomplete TLS qualification option");
     values.set(flag.slice(2), value);
   }
   const required = (name: string): string => { const value = values.get(name); if (!value) throw new Error(`--${name} is required; no TLS application tuple is admitted by default`); return value; };
-  if (required("stage") !== "pg-early" || required("browser") !== "chromium") throw new Error("This source unit supports only pg-early on Chromium with forced WebSocket");
+  if (required("stage") !== TLS_STAGE || required("browser") !== "chromium") throw new Error("This source unit supports only pg-early on Chromium with forced WebSocket");
   const engine = values.get("engine") ?? "browser";
   if (!isEngine(engine)) throw new Error("Select an exact supported engine");
-  const handoff = required("handoff");
-  if (!isAbsolute(handoff) || resolve(handoff) !== handoff) throw new Error("TLS handoff must be a canonical absolute path");
-  const evidence: TlsEvidence = {
-    handoff, intakeSha256: digest(required("intake-sha256"), "parent intake SHA-256"),
-    reviewedSource: { head: digest(required("reviewed-head"), "reviewed TLS head", 40), tree: digest(required("reviewed-tree"), "reviewed TLS tree", 40) },
-  };
-  const databaseMachine = required("database-machine");
-  const ipv4 = (value: string): string => { if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || value.split(".").some(part => Number(part) > 255)) throw new Error("Exact private IPv4 required"); return value; };
-  const databaseAddress = ipv4(required("database-address"));
-  const relayAddress = ipv4(required("relay-address"));
-  const privateAddress = (address: string) => address.startsWith("10.") || address.startsWith("192.168.") || address.startsWith("172.") && Number(address.split(".")[1]) >= 16 && Number(address.split(".")[1]) <= 31 || address.startsWith("100.") && Number(address.split(".")[1]) >= 64 && Number(address.split(".")[1]) <= 127;
-  if (!privateAddress(databaseAddress) || !privateAddress(relayAddress) || databaseAddress === relayAddress) throw new Error("TLS requires distinct approved private database and relay addresses");
-  if (!/^[a-zA-Z0-9_-]+$/.test(databaseMachine) || ["pc", "localhost"].includes(databaseMachine) || databaseAddress.startsWith("127.")) throw new Error("PostgreSQL must use a separately approved fleet host, not the page host");
-  const port = (name: string, fallback: number) => { const value = Number(values.get(name) ?? fallback); if (!Number.isInteger(value) || value < 1025 || value > 65535) throw new Error("Unprivileged exact TLS ports required"); return value; };
-  const services: ServiceOptions = { databaseMachine, databaseAddress, relayAddress, pagePort: port("page-port", 43839), relayPort: port("relay-port", 43840) };
-  if (services.pagePort === services.relayPort) throw new Error("TLS page and relay ports must differ");
-  return { evidence, services, engine };
+  const evidence: TlsEvidence = { handoff: canonicalAbsolute(required("handoff"), "TLS handoff"), handoffSha256: digest(required("handoff-sha256"), "handoff SHA-256"),
+    output: canonicalAbsolute(required("output"), "TLS output") };
+  return { evidence, engine };
 }
 export async function tlsQualification(args: readonly string[]): Promise<void> {
   const options = parseTlsArguments(args);
@@ -45,7 +40,6 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
   const timer = setTimeout(stop, 10 * 60_000);
   try {
-    let scratchObservation: Awaited<ReturnType<typeof removeTlsScratch>> | undefined;
     let serviceObservation: (() => unknown) | undefined;
     let output: string | undefined;
     const result = await qualifiedRun(() => preflightTls(options.evidence), async (intake, owner) => {
@@ -55,25 +49,25 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       const mount = execFileSync("findmnt", ["-T", "/work/tmp", "-n", "-o", "TARGET"], { encoding: "utf8", timeout: 5000 }).trim();
       if (!mount.startsWith("/work")) throw new Error("TLS qualification requires the mounted data drive");
       abort.signal.throwIfAborted();
-      // The controller's own writable TLS output beneath its claimed qualification root.
+      // A fresh stage directory inside the controller's own TLS output; a leftover result refuses.
       const owned = intake.output;
+      await mkdir(owned);
       output = owned;
-      await mkdir(owned, { recursive: true });
       abort.signal.throwIfAborted();
-      const remoteBefore = execFileSync("mesh", ["ssh", options.services.databaseMachine, "--", "sh", "-c", "ps -eo pid,comm; command -v bun; command -v initdb; command -v postgres; command -v pg_isready; command -v openssl; df -Pk /work/tmp"], { encoding: "utf8", timeout: 15_000 });
+      const machine = intake.fixtures.databaseMachine;
+      const remoteBefore = execFileSync("mesh", ["ssh", machine, "--", "sh", "-c", "ps -eo pid,comm; command -v bun; command -v initdb; command -v postgres; command -v pg_isready; command -v openssl; df -Pk /work/tmp"], { encoding: "utf8", timeout: 15_000 });
       abort.signal.throwIfAborted();
-      await writeFile(join(owned, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: options.services.databaseMachine, remoteBefore, creates: ["private remote PostgreSQL scratch and processes", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context", "private local build scratch"], frozenDelivery: intake.handoff.delivery.root }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-      const scratch = await acquireOwned(owner, abort.signal, () => mkdtemp(join(tmpdir(), "bun-wasm-tls-browser-")), async scratch => { scratchObservation = await removeTlsScratch(scratch); });
+      await writeFile(join(owned, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: machine, remoteBefore, creates: ["private remote PostgreSQL scratch and processes", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context"], frozenDelivery: intake.handoff.delivery.root }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
       const created: object[] = [];
       const record = async (resource: object) => { created.push(resource); await writeFile(join(owned, "resources.created.json"), JSON.stringify(created, null, 2) + "\n", { mode: 0o600 }); };
-      const services = await startTlsServices(intake, owner, options.services, abort.signal, record);
+      const services = await startTlsServices(intake, owner, intake.fixtures, abort.signal, record);
       serviceObservation = services.lifecycle;
       await record(services.resources);
-      return { intake, services, owner, scratch };
-    }, async ({ intake, services, owner, scratch }) => runTlsBrowser(intake, services, owner, options.services, options.engine, scratch, abort.signal), abort.signal);
+      return { intake, services, owner };
+    }, async ({ intake, services, owner }) => runTlsBrowser(intake, services, owner, options.engine, abort.signal), abort.signal);
     abort.signal.throwIfAborted();
     if (!output) throw new Error("TLS output was never claimed");
-    await writeFile(join(output, "cleanup.json"), JSON.stringify({ scratch: scratchObservation, services: serviceObservation?.() }) + "\n");
+    await writeFile(join(output, "cleanup.json"), JSON.stringify({ services: serviceObservation?.() }) + "\n");
     const serialized = JSON.stringify(result, null, 2) + "\n";
     if (Buffer.byteLength(serialized) > 256 * 1024) throw new Error("TLS result exceeds the bounded evidence size; no result may be truncated");
     await writeFile(join(output, "result.json"), serialized, { mode: 0o600 });

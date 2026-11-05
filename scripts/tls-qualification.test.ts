@@ -5,24 +5,28 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { parseTlsArguments } from "./tls-qualification.ts";
-import { guestArtifacts, preflightTls, readVerifiedFile, recheckDependencies, requireInstalledRuntimePackage, tlsReleaseTuple, verifyReviewedHostSource, type TlsEvidence, type TlsIntake } from "./tls-qualification-inputs.ts";
+import {
+  TLS_STAGE, guestArtifacts, preflightTls, readVerifiedFile, recheckDependencies, requireInstalledRuntimePackage, tlsLoaded, tlsReleaseTuple, verifyReviewedHostSource,
+  type ObservedResponse, type TlsEvidence, type TlsIntake,
+} from "./tls-qualification-inputs.ts";
 import { qualifiedRun, TlsCleanup, acquireOwned, closeObservedCase } from "./tls-qualification-lifecycle.ts";
 import { qualificationCases, assertCaseContext, assertPgResult } from "./tls-qualification-context.ts";
 import { qualificationFixture, type FixtureOverrides, type TlsFixture } from "./tls-qualification-fixture.ts";
-import { handoffMemberPaths } from "./producer-closure.ts";
+import { handoffMemberPaths, tlsPagePaths } from "./producer-closure.ts";
 import { DELIVERY_RECORDS, type InputManifest } from "./c1/contract.ts";
-import { FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
+import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
+import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
 import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
 
 /**
  * Every fixture here is synthetic parser data built from the controller's
- * exported contract, fixture and seal functions. None of it is product evidence.
+ * exported contract, fixture, page and seal functions. None of it is product evidence.
  */
 const fixtures: TlsFixture[] = [];
 afterEach(() => { for (const fixture of fixtures.splice(0)) fixture.close(); });
-function fixture(overrides?: FixtureOverrides): TlsFixture {
-  const created = qualificationFixture(overrides);
+async function fixture(overrides?: FixtureOverrides): Promise<TlsFixture> {
+  const created = await qualificationFixture(overrides);
   fixtures.push(created);
   return created;
 }
@@ -31,6 +35,9 @@ async function refused(evidence: TlsEvidence, expected: RegExp | string): Promis
   let setups = 0;
   await expect(qualifiedRun(() => preflightTls(evidence), async () => { setups++; }, async () => {})).rejects.toThrow(expected);
   expect(setups).toBe(0);
+}
+async function refusedWith(overrides: FixtureOverrides, expected: RegExp | string): Promise<void> {
+  await refused((await fixture(overrides)).evidence, expected);
 }
 async function admitted(evidence: TlsEvidence): Promise<TlsIntake> {
   let reached: TlsIntake | undefined;
@@ -59,19 +66,20 @@ const paths = handoffMemberPaths();
 const other = { head: "c".repeat(40), tree: "d".repeat(40) };
 
 describe("strict controller intake before setup", () => {
-  test("an exact synthetic handoff reaches setup with registry identities, modes and dependencies", async () => {
-    const f = fixture();
+  test("an exact pinned handoff reaches setup with registry identities, modes, fixture options, page and dependencies", async () => {
+    const f = await fixture();
     const launcher = join(f.delivery, paths.launcher);
     const before = lstatSync(launcher);
     const intake = await admitted(f.evidence);
     expect(intake.tuple).toEqual(tlsReleaseTuple);
     expect(intake.source).toEqual(f.source);
     expect(intake.handoff.artifacts.launcher.path).toBe(launcher);
-    expect(intake.output).toBe(join(f.root, "qualification/tls"));
+    expect(intake.output).toBe(join(f.root, "qualification/tls", TLS_STAGE));
     expect(intake.hostSource).toBe(f.host);
-    expect(intake.references).toHaveLength(15);
-    expect(intake.references.map(row => row.path)).toContain(f.intake);
-    expect(intake.references.map(row => row.path)).toContain(join(f.delivery, "inputs/native-custody-preseal.json"));
+    expect(intake.fixtures).toEqual(FIXTURE_TLS_OPTIONS);
+    expect(intake.page.map(row => relative(intake.handoff.tlsPageRoot, row.path)).toSorted()).toEqual(["chunks/shared.js", "fs-worker.js", "index.html", "notification-worker.js", "tls-relay-page.js", "worker.js"]);
+    expect(intake.references).toHaveLength(17);
+    expect(intake.references.map(row => row.path)).toEqual(expect.arrayContaining([f.handoff, f.intake, join(f.delivery, tlsPagePaths.receipt), join(f.delivery, "inputs/native-custody-preseal.json")]));
     expect(intake.dependencies.pg.files.map(row => relative(intake.dependencies.pg.root, row.path))).toEqual(["pg-protocol/index.ts", "pg/lib/index.ts", "pg/package.json"]);
     expect(intake.dependencies.host.map(tree => tree.path)).toEqual([join(f.host, "node_modules"), join(f.host, "web/node_modules")]);
     expect(intake.dependencies.locks).toHaveLength(6);
@@ -79,7 +87,7 @@ describe("strict controller intake before setup", () => {
     expect([after.mode & 0o7777, after.ctimeMs, after.ino]).toEqual([0o555, before.ctimeMs, before.ino]);
   });
   test("guest roles come from the controller registry, not copied paths", async () => {
-    const { handoff } = await admitted(fixture().evidence);
+    const { handoff } = await admitted((await fixture()).evidence);
     expect(guestArtifacts(handoff, "browser")).toEqual([handoff.artifacts.browserGuest]);
     expect(guestArtifacts(handoff, "quickjs")).toEqual([handoff.artifacts.quickjsGuest, handoff.artifacts.quickjsSide]);
     expect(guestArtifacts(handoff, "jsc")).toEqual([handoff.artifacts.jscGuest, handoff.artifacts.jscSide]);
@@ -91,52 +99,94 @@ describe("strict controller intake before setup", () => {
   });
 });
 
+describe("pinned handoff and output", () => {
+  test("handoff bytes differ from the caller's pin", async () => {
+    const f = await fixture();
+    rewriteJson(f.handoff, value => ({ ...value, source: other }));
+    await refused(f.evidence, /handoff bytes differ from the pinned SHA-256/);
+  });
+  test("pinned but edited handoff differs from the derived one", () => refusedWith({ handoff: handoff => ({ ...handoff, webRoot: join(handoff.webRoot, "other") }) }, /handoff differs/));
+  test("missing handoff", async () => { const f = await fixture(); rmSync(f.handoff); await refused(f.evidence, /ENOENT/); });
+  test("intake bytes changed after the handoff pinned them", async () => {
+    const f = await fixture();
+    rewriteJson(f.intake, value => value);
+    await refused(f.evidence, /intake record bytes differ from the pinned SHA-256/);
+  });
+  test("output outside the handoff's stage directory", async () => { const f = await fixture(); await refused({ ...f.evidence, output: "/work/tmp/tls-foreign/pg-early" }, /pg-early directory beneath outputs\.tls/); });
+  test("output at outputs.tls itself, where the controller's DriverRun.out reads result.json", async () => {
+    const f = await fixture();
+    await refused({ ...f.evidence, output: dirname(f.evidence.output) }, /pg-early directory beneath outputs\.tls/);
+  });
+});
+
 describe("wrong schema", () => {
-  test("handoff schema", () => refused(fixture({ handoff: handoff => ({ ...handoff, schema: "bun-wasm.c1-handoff/0" }) }).evidence, /handoff\.schema/));
-  test("intake schema", () => refused(fixture({ intake: intake => ({ ...intake, schema: "bun-wasm.c1-intake/0" }) }).evidence, /intake\.schema/));
-  test("old parent byte admission shape", () => refused(fixture({ intake: intake => ({ kind: intake.kind, owner: intake.owner, parentByteIntakePassed: true, packetBytesAdmitted: true, source: intake.source, deliveryRoot: intake.deliveryRoot, tuple: { ...intake.tuple, engines: ["quickjs", "jsc", "browser"] } }) }).evidence, /intake: unknown field/));
+  test("handoff schema", () => refusedWith({ handoff: handoff => ({ ...handoff, schema: "bun-wasm.c1-handoff/0" }) }, /handoff\.schema/));
+  test("intake schema", () => refusedWith({ intake: intake => ({ ...intake, schema: "bun-wasm.c1-intake/0" }) }, /intake\.schema/));
+  test("old parent byte admission shape", () => refusedWith({ intake: intake => ({ kind: intake.kind, owner: intake.owner, parentByteIntakePassed: true, packetBytesAdmitted: true, source: intake.source, deliveryRoot: intake.deliveryRoot, tuple: { ...intake.tuple, engines: ["quickjs", "jsc", "browser"] } }) }, /intake: unknown field/));
   test("old ADMISSION.json added after sealing", async () => {
-    const f = fixture();
+    const f = await fixture();
     tamper(f, "inputs/ADMISSION.json", path => writeFileSync(path, "{}"));
     await refused(f.evidence, /missing or extra files/);
   });
-  test("engine build registry shape", () => refused(fixture({ members: { [paths.engineBuilds]: "{}" } }).evidence, /Publication asset registry/));
+  test("engine build registry shape", () => refusedWith({ members: { [paths.engineBuilds]: "{}" } }, /Publication asset registry/));
+});
+
+describe("fixture options", () => {
+  test("unresolved options are a missing contract input", async () => {
+    const f = await fixture({ config: config => ({ ...config, fixtures: { tls: { status: "unresolved", missing: "database host not admitted" } } }) });
+    await refused(f.evidence, /TLS fixture options unresolved: database host not admitted/);
+    await expect(preflightTls(f.evidence)).rejects.toHaveProperty("code", "TLS_EXISTING_INPUT_CONTRACT_MISSING");
+  });
+  test("handoff options other than the sealed config's", () => refusedWith({ handoff: handoff => ({ ...handoff, fixtures: { tls: { status: "resolved", value: { ...FIXTURE_TLS_OPTIONS, pagePort: 43841 } } } }) }, /handoff differs/));
+  test("handoff options with a secret field", () => refusedWith({ handoff: handoff => ({ ...handoff, fixtures: { tls: { status: "resolved", value: { ...FIXTURE_TLS_OPTIONS, password: "x" } } } }) }, /unknown field password/));
+  test("handoff options with a public database address", () => refusedWith({ handoff: handoff => ({ ...handoff, fixtures: { tls: { status: "resolved", value: { ...FIXTURE_TLS_OPTIONS, databaseAddress: "8.8.8.8" } } } }) }, /private fleet address/));
+});
+
+describe("sealed TLS page", () => {
+  test("a page member that differs from its receipt", () => refusedWith({ members: { [tlsPagePaths.entry]: `const entry = "${UNRESOLVED_RELAY}"; await import(entry);\n` } }, /TLS page files differ from its receipt/));
+  test("a changed page byte after sealing", async () => {
+    const f = await fixture();
+    tamper(f, tlsPagePaths.workers[0] ?? "", path => { chmodSync(path, 0o644); writeFileSync(path, "changed worker"); chmodSync(path, 0o444); });
+    await refused(f.evidence, /delivery member changed: tls\/page\/worker\.js/);
+  });
+  test("a bundled host input changed after the page was built", async () => {
+    const f = await fixture();
+    for (const root of [join(f.root, "donors/webDependencies/node_modules"), join(f.host, "web/node_modules")]) writeFileSync(join(root, "waffle/package.json"), JSON.stringify({ version: "0.0.110", changed: true }));
+    await refused(f.evidence, /donor tree changed/);
+  });
 });
 
 describe("wrong root", () => {
-  test("intake names another delivery root", () => refused(fixture({ intake: intake => ({ ...intake, deliveryRoot: join(dirname(intake.deliveryRoot), "other") }) }).evidence, /intake names a different delivery/));
-  test("sealed config places the delivery elsewhere", () => refused(fixture({ config: config => ({ ...config, roots: { ...config.roots, run: { ...config.roots.run, artifact: join(config.roots.run.artifact, "elsewhere") } } }) }).evidence, /delivery root differs from its sealed config/));
-  test("handoff web root", () => refused(fixture({ handoff: handoff => ({ ...handoff, webRoot: join(handoff.webRoot, "other") }) }).evidence, /handoff differs/));
-  test("handoff TLS output outside the sealed qualification root", () => refused(fixture({ handoff: handoff => ({ ...handoff, outputs: { ...handoff.outputs, tls: "/work/tmp/foreign-tls" } }) }).evidence, /handoff differs/));
-  test("handoff browser scratch", () => refused(fixture({ handoff: handoff => ({ ...handoff, browserTmp: "/work/tmp/other" }) }).evidence, /handoff differs/));
+  test("intake names another delivery root", () => refusedWith({ intake: intake => ({ ...intake, deliveryRoot: join(dirname(intake.deliveryRoot), "other") }) }, /intake names a different delivery/));
+  test("sealed config places the delivery elsewhere", () => refusedWith({ config: config => ({ ...config, roots: { ...config.roots, run: { ...config.roots.run, artifact: join(config.roots.run.artifact, "elsewhere") } } }) }, /delivery root differs from its sealed config/));
+  test("handoff TLS page root", () => refusedWith({ handoff: handoff => ({ ...handoff, tlsPageRoot: join(handoff.tlsPageRoot, "other") }) }, /handoff differs/));
+  test("handoff TLS output outside the sealed qualification root", () => refusedWith({ handoff: handoff => ({ ...handoff, outputs: { ...handoff.outputs, tls: "/work/tmp/foreign-tls" } }) }, /handoff differs/));
+  test("handoff browser scratch", () => refusedWith({ handoff: handoff => ({ ...handoff, browserTmp: "/work/tmp/other" }) }, /handoff differs/));
 });
 
 describe("wrong source", () => {
-  test("reviewed pin", async () => { const f = fixture(); await refused({ ...f.evidence, reviewedSource: other }, /reviewed source head\/tree/); });
-  test("intake source", () => refused(fixture({ intake: intake => ({ ...intake, source: other }) }).evidence, /intake source or tuple differs/));
-  test("sealed inputs select another source", () => refused(fixture({ inputs: inputs => ({ ...inputs, source: other }) }).evidence, /sealed inputs select another source or tuple/));
-  test("delivery of another source than the reviewed host", async () => {
-    const f = fixture({ deliverySource: other });
-    await refused({ ...f.evidence, reviewedSource: other }, /sealed inputs select another source/);
-  });
+  test("handoff claims another source", () => refusedWith({ handoff: handoff => ({ ...handoff, source: other }) }, /handoff source head\/tree mismatch/));
+  test("intake source", () => refusedWith({ intake: intake => ({ ...intake, source: other }) }, /intake source or tuple differs/));
+  test("sealed inputs select another source", () => refusedWith({ inputs: inputs => ({ ...inputs, source: other }) }, /sealed inputs select another source or tuple/));
+  test("delivery of another source than the host", () => refusedWith({ deliverySource: other }, /sealed inputs select another source/));
   test("dirty host checkout", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.host, "untracked.ts"), "export {};\n");
     await refused(f.evidence, /clean reviewed source/);
   });
   test("host checkout at another commit", async () => {
-    const f = fixture();
+    const f = await fixture();
     execFileSync("git", ["-C", f.host, "-c", "user.email=tls@test.invalid", "-c", "user.name=TLS fixture", "commit", "-q", "--allow-empty", "-m", "moved"]);
     await refused(f.evidence, /differs from reviewed TLS source/);
   });
 });
 
 describe("wrong tuple", () => {
-  test("runtime109 delivery", () => refused(fixture({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.109" } }).evidence, /runtime110\/relay109/));
-  test("runtime107 delivery", () => refused(fixture({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.107" } }).evidence, /runtime110\/relay109/));
-  test("other programs release", () => refused(fixture({ tuple: { ...FIXTURE_TUPLE, programs: "programs-v0.0.14" } }).evidence, /programs15/));
-  test("other program manifest schema", () => refused(fixture({ tuple: { ...FIXTURE_TUPLE, programManifestSchema: "waffle-program-release/1" } }).evidence, /schema2/));
-  test("intake tuple", () => refused(fixture({ intake: intake => ({ ...intake, tuple: { ...intake.tuple, hostInterface: 2 } }) }).evidence, /intake source or tuple differs/));
+  test("runtime109 delivery", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.109" } }, /runtime110\/relay109/));
+  test("runtime107 delivery", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, runtime: "0.0.107" } }, /runtime110\/relay109/));
+  test("other programs release", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, programs: "programs-v0.0.14" } }, /programs15/));
+  test("other program manifest schema", () => refusedWith({ tuple: { ...FIXTURE_TUPLE, programManifestSchema: "waffle-program-release/1" } }, /schema2/));
+  test("intake tuple", () => refusedWith({ intake: intake => ({ ...intake, tuple: { ...intake.tuple, hostInterface: 2 } }) }, /intake source or tuple differs/));
   test("installed runtime and relay packages", () => {
     expect(() => requireInstalledRuntimePackage("waffle", { version: "0.0.110" })).not.toThrow();
     expect(() => requireInstalledRuntimePackage("waffle-relay", { version: "0.0.109" })).not.toThrow();
@@ -146,124 +196,159 @@ describe("wrong tuple", () => {
 });
 
 describe("wrong manifest and count", () => {
-  test("intake bytes differ from the pin", async () => { const f = fixture(); await refused({ ...f.evidence, intakeSha256: "0".repeat(64) }, /pinned SHA-256/); });
-  test("intake names other DELIVERY.json bytes", () => refused(fixture({ intake: intake => ({ ...intake, delivery: { ...intake.delivery, sha256: "e".repeat(64) } }) }).evidence, /different DELIVERY\.json/));
-  test("sealed config names another input manifest", () => refused(fixture({ config: config => ({ ...config, manifest: { ...config.manifest, sha256: "a".repeat(64) } }) }).evidence, /names another input manifest/));
-  test("sealed config record differs from its digest", () => refused(fixture({ members: { [DELIVERY_RECORDS.config]: "{}" } }).evidence, /config record differs from DELIVERY\.json/));
-  test("sealed inputs record differs from its digest", () => refused(fixture({ members: { [DELIVERY_RECORDS.inputs]: "{}" } }).evidence, /inputs record differs from DELIVERY\.json/));
-  test("intake member count", () => refused(fixture({ intake: intake => ({ ...intake, members: intake.members - 1 }) }).evidence, /member count/));
+  test("intake names other DELIVERY.json bytes", () => refusedWith({ intake: intake => ({ ...intake, delivery: { ...intake.delivery, sha256: "e".repeat(64) } }) }, /different DELIVERY\.json/));
+  test("sealed config names another input manifest", () => refusedWith({ config: config => ({ ...config, manifest: { ...config.manifest, sha256: "a".repeat(64) } }) }, /names another input manifest/));
+  test("sealed config record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.config]: "{}" } }, /config record differs from DELIVERY\.json/));
+  test("sealed inputs record differs from its digest", () => refusedWith({ members: { [DELIVERY_RECORDS.inputs]: "{}" } }, /inputs record differs from DELIVERY\.json/));
+  test("intake member count", () => refusedWith({ intake: intake => ({ ...intake, members: intake.members - 1 }) }, /member count/));
 });
 
 describe("wrong role and path", () => {
-  test("swapped guest role", () => refused(fixture({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, browserGuest: handoff.artifacts.sourceCacheBrowserGuest } }) }).evidence, /handoff differs/));
-  test("missing role", () => refused(fixture({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, launcher: undefined } }) }).evidence, /missing launcher/));
-  test("extra role", () => refused(fixture({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, tlsPage: handoff.artifacts.webIndex } }) }).evidence, /unknown field tlsPage/));
-  test("same bytes at another path", () => refused(fixture({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, browserGuest: { ...handoff.artifacts.browserGuest, path: "/work/tmp/copy/bun-browser.wasm" } } }) }).evidence, /handoff differs/));
-  test("relative role path", () => refused(fixture({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, launcher: { ...handoff.artifacts.launcher, path: paths.launcher } } }) }).evidence, /canonical absolute path/));
+  test("swapped guest role", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, browserGuest: handoff.artifacts.sourceCacheBrowserGuest } }) }, /handoff differs/));
+  test("swapped TLS page role", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, tlsPageEntry: handoff.artifacts.tlsPageIndex } }) }, /handoff differs/));
+  test("missing role", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, launcher: undefined } }) }, /missing launcher/));
+  test("extra role", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, tlsHostPage: handoff.artifacts.webIndex } }) }, /unknown field tlsHostPage/));
+  test("same bytes at another path", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, browserGuest: { ...handoff.artifacts.browserGuest, path: "/work/tmp/copy/bun-browser.wasm" } } }) }, /handoff differs/));
+  test("relative role path", () => refusedWith({ handoff: handoff => ({ ...handoff, artifacts: { ...handoff.artifacts, launcher: { ...handoff.artifacts.launcher, path: paths.launcher } } }) }, /canonical absolute path/));
 });
 
 describe("wrong sealed mode", () => {
-  test("launcher sealed 0444", async () => { const f = fixture(); chmodSync(join(f.delivery, paths.launcher), 0o444); await refused(f.evidence, /bun-wasm is 0444, expected 0555/); });
-  test("payload sealed executable", async () => { const f = fixture(); chmodSync(join(f.delivery, paths.browserGuest), 0o555); await refused(f.evidence, /is 0555, expected 0444/); });
-  test("payload with an added write bit", async () => { const f = fixture(); chmodSync(join(f.delivery, paths.sourceArchive), 0o644); await refused(f.evidence, /is 0644, expected 0444/); });
-  test("payload with a special bit", async () => { const f = fixture(); chmodSync(join(f.delivery, paths.launcher), 0o4555); await refused(f.evidence, /is 04555, expected 0555/); });
-  test("writable directory", async () => { const f = fixture(); chmodSync(join(f.delivery, "split/dist"), 0o755); await refused(f.evidence, /sealed directory split\/dist has mode 0755/); });
-  test("writable delivery root", async () => { const f = fixture(); chmodSync(f.delivery, 0o755); await refused(f.evidence, /sealed directory \. has mode 0755/); });
-  test("writable DELIVERY.json", async () => { const f = fixture(); chmodSync(join(f.delivery, "DELIVERY.json"), 0o644); await refused(f.evidence, /DELIVERY\.json is not sealed 0444/); });
+  test("launcher sealed 0444", async () => { const f = await fixture(); chmodSync(join(f.delivery, paths.launcher), 0o444); await refused(f.evidence, /bun-wasm is 0444, expected 0555/); });
+  test("payload sealed executable", async () => { const f = await fixture(); chmodSync(join(f.delivery, paths.browserGuest), 0o555); await refused(f.evidence, /is 0555, expected 0444/); });
+  test("page script sealed executable", async () => { const f = await fixture(); chmodSync(join(f.delivery, tlsPagePaths.entry), 0o555); await refused(f.evidence, /tls-relay-page\.js is 0555, expected 0444/); });
+  test("payload with an added write bit", async () => { const f = await fixture(); chmodSync(join(f.delivery, paths.sourceArchive), 0o644); await refused(f.evidence, /is 0644, expected 0444/); });
+  test("payload with a special bit", async () => { const f = await fixture(); chmodSync(join(f.delivery, paths.launcher), 0o4555); await refused(f.evidence, /is 04555, expected 0555/); });
+  test("writable directory", async () => { const f = await fixture(); chmodSync(join(f.delivery, "split/dist"), 0o755); await refused(f.evidence, /sealed directory split\/dist has mode 0755/); });
+  test("writable page directory", async () => { const f = await fixture(); chmodSync(join(f.delivery, tlsPagePaths.root), 0o755); await refused(f.evidence, /sealed directory tls\/page has mode 0755/); });
+  test("writable delivery root", async () => { const f = await fixture(); chmodSync(f.delivery, 0o755); await refused(f.evidence, /sealed directory \. has mode 0755/); });
+  test("writable DELIVERY.json", async () => { const f = await fixture(); chmodSync(join(f.delivery, "DELIVERY.json"), 0o644); await refused(f.evidence, /DELIVERY\.json is not sealed 0444/); });
 });
 
-describe("wrong hash and tampered handoff", () => {
+describe("wrong hash", () => {
   test("changed member bytes", async () => {
-    const f = fixture();
+    const f = await fixture();
     tamper(f, paths.sourceArchive, path => { chmodSync(path, 0o644); writeFileSync(path, "tampered"); chmodSync(path, 0o444); });
     await refused(f.evidence, /delivery member changed: source\.tar\.gz/);
   });
   test("symlink in the delivery", async () => {
-    const f = fixture();
+    const f = await fixture();
     tamper(f, "extra", path => symlinkSync(paths.sourceArchive, path));
     await refused(f.evidence, /symlink or special file/);
   });
-  test("custody snapshots differ", () => refused(fixture({ members: { "inputs/vendor-custody-after.json": "changed custody" } }).evidence, /custody mismatch/));
-  test("delivered runtime archive is not the authenticated input", () => refused(fixture({ members: { [paths.runtimeArchive]: "other runtime bytes" } }).evidence, /runtime or relay archive differs/));
-  test("handoff edited after the controller wrote it", async () => {
-    const f = fixture();
-    rewriteJson(f.handoff, value => ({ ...value, source: other }));
-    await refused(f.evidence, /handoff differs/);
-  });
-  test("handoff dependency claims differ from the sealed inputs", () => refused(fixture({ handoff: handoff => ({ ...handoff, dependencies: { ...handoff.dependencies, tls: { status: "unresolved", missing: "claimed" } } }) }).evidence, /handoff differs/));
-  test("missing handoff", async () => { const f = fixture(); rmSync(f.handoff); await refused(f.evidence, /expected an absolute regular file/); });
+  test("custody snapshots differ", () => refusedWith({ members: { "inputs/vendor-custody-after.json": "changed custody" } }, /custody mismatch/));
+  test("delivered runtime archive is not the authenticated input", () => refusedWith({ members: { [paths.runtimeArchive]: "other runtime bytes" } }, /runtime or relay archive differs/));
+  test("handoff dependency claims differ from the sealed inputs", () => refusedWith({ handoff: handoff => ({ ...handoff, dependencies: { ...handoff.dependencies, tls: { status: "unresolved", missing: "claimed" } } }) }, /handoff differs/));
 });
 
 describe("wrong dependency and missing requirements", () => {
   test("unresolved TLS dependencies", async () => {
-    const f = fixture({ inputs: inputs => ({ ...inputs, consumers: { ...inputs.consumers, tls: { status: "unresolved", missing: "pg not authenticated" } } }) });
+    const f = await fixture({ inputs: inputs => ({ ...inputs, consumers: { ...inputs.consumers, tls: { status: "unresolved", missing: "pg not authenticated" } } }) });
     await refused(f.evidence, /TLS dependencies unresolved: pg not authenticated/);
     await expect(preflightTls(f.evidence)).rejects.toHaveProperty("code", "TLS_EXISTING_INPUT_CONTRACT_MISSING");
   });
-  test("pg project files not beside node_modules", () => refused(fixture({ inputs: withTls(tls => ({ pgLock: tls.pgPackageJson })) }).evidence, /beside its node_modules/));
+  test("pg project files not beside node_modules", () => refusedWith({ inputs: withTls(tls => ({ pgLock: tls.pgPackageJson })) }, /beside its node_modules/));
   test("changed pg tarball", async () => {
-    const f = fixture();
+    const f = await fixture();
     const tls = f.inputs.consumers.tls;
     if (tls.status !== "resolved") throw new Error("fixture TLS dependencies are resolved");
     appendFileSync(tls.value.pgTarball.path, "x");
     await refused(f.evidence, /pg public tarball changed/);
   });
-  test("pg tarball that is not the installed pg", () => refused(fixture({ inputs: withTls((_, root) => {
+  test("pg tarball that is not the installed pg", () => refusedWith({ inputs: withTls((_, root) => {
     mkdirSync(join(root, "pg-other/package"), { recursive: true });
     writeFileSync(join(root, "pg-other/package/package.json"), JSON.stringify({ name: "pg", version: "8.16.3", modified: true }));
     execFileSync("tar", ["-czf", join(root, "pg-other.tgz"), "-C", join(root, "pg-other"), "package"]);
     return { pgTarball: fileIdentity(join(root, "pg-other.tgz")) };
-  }) }).evidence, /Staged pg differs from the pinned public tarball/));
+  }) }, /Staged pg differs from the pinned public tarball/));
   test("extra unauthenticated pg file", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.root, "pg-project/node_modules/pg-protocol/extra.ts"), "not authenticated");
     await refused(f.evidence, /pg dependency tree changed/);
   });
   test("changed transitive pg bytes", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.root, "pg-project/node_modules/pg-protocol/index.ts"), "changed transitive bytes");
     await refused(f.evidence, /pg dependency tree changed/);
   });
   test("link inside the pg tree", async () => {
-    const f = fixture();
+    const f = await fixture();
     symlinkSync("../pg/package.json", join(f.root, "pg-project/node_modules/pg-protocol/link"));
     await refused(f.evidence, /symlink or special file/);
   });
   test("missing pg tree", async () => {
-    const f = fixture();
+    const f = await fixture();
     rmSync(join(f.root, "pg-project/node_modules"), { recursive: true });
     await refused(f.evidence, /Missing authenticated pg dependency tree/);
   });
   test("staged host tree differs from its donor", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.host, "web/node_modules/waffle-relay/node.ts"), "changed ignored host code");
     await refused(f.evidence, /staged webDependencies differs from its donor/);
   });
   test("missing staged host tree", async () => {
-    const f = fixture();
+    const f = await fixture();
     rmSync(join(f.host, "node_modules"), { recursive: true });
     await refused(f.evidence, /Missing authenticated host rootDependencies dependency tree/);
   });
   test("changed original donor", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.root, "donors/rootDependencies/node_modules/playwright/package.json"), "{}");
     await refused(f.evidence, /donor tree changed/);
   });
   test("donor not installed from the reviewed frozen lock", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.root, "donors/webDependencies/bun.lock"), "another lock");
     await refused(f.evidence, /webDependencies was not installed from the reviewed frozen bun\.lock/);
   });
   test("changed Playwright browsers", async () => {
-    const f = fixture();
+    const f = await fixture();
     writeFileSync(join(f.root, "dependencies/browsers/entry"), "changed");
     await refused(f.evidence, /Playwright browsers tree changed/);
   });
 });
 
+/** What the real page would observe for admitted members: decoded bodies from their sealed or authenticated files. */
+function responses(intake: TlsIntake): ObservedResponse[] {
+  const origin = `http://127.0.0.1:${intake.fixtures.pagePort}`;
+  const get = (path: string, file: string): ObservedResponse => ({ url: `${origin}${path}`, method: "GET", status: 200, contentEncoding: undefined, body: readFileSync(file) });
+  const guest = intake.handoff.artifacts.browserGuest;
+  const pg = intake.dependencies.pg.files.find(row => row.path.endsWith("pg/package.json"));
+  if (!pg) throw new Error("fixture pg package missing");
+  return intake.page.map(row => get(row.path.endsWith("/index.html") ? "/" : `/${relative(intake.handoff.tlsPageRoot, row.path)}`, row.path)).concat([
+    get("/pg-client.ts", intake.handoff.artifacts.tlsPgClient.path), get(`/artifact/${guest.sha256}`, guest.path), get("/seed/node_modules/pg/package.json", pg.path),
+    { url: `${origin}/seed`, method: "GET", status: 200, contentEncoding: undefined, body: new TextEncoder().encode("[]") },
+    { url: `${origin}/favicon.ico`, method: "GET", status: 404, contentEncoding: undefined, body: new Uint8Array() },
+    { url: `${origin}/case/verified`, method: "POST", status: 200, contentEncoding: undefined, body: new TextEncoder().encode('{"password":"never loaded"}') },
+  ]);
+}
+describe("loaded observations use the controller's type and validator", () => {
+  test("real successful GET responses become bound loaded rows; failures and POST controls do not", async () => {
+    const intake = await admitted((await fixture()).evidence);
+    const { loaded, unloaded } = tlsLoaded(intake.handoff, responses(intake));
+    expect(loaded).toHaveLength(intake.page.length + 4);
+    expect(loaded.every(row => row.method === "GET" && row.status === 200 && row.encoding === "identity")).toBe(true);
+    expect(loaded.map(row => new URL(row.url).pathname)).toEqual(expect.arrayContaining(["/", "/tls-relay-page.js", "/worker.js", "/pg-client.ts", "/seed"]));
+    expect(unloaded).toEqual([{ url: `http://127.0.0.1:${FIXTURE_TLS_OPTIONS.pagePort}/favicon.ico`, status: 404 }]);
+    expect(JSON.stringify(loaded)).not.toContain("never loaded");
+  });
+  const change = (rows: ObservedResponse[], path: string, edit: Partial<ObservedResponse>) => rows.map(row => new URL(row.url).pathname === path ? { ...row, ...edit } : row);
+  test.each([
+    ["changed page bytes", (rows: ObservedResponse[]) => change(rows, "/tls-relay-page.js", { body: new TextEncoder().encode("other") }), "differ from the admitted member"],
+    ["a claimed gzip page without that representation", (rows: ObservedResponse[]) => change(rows, "/worker.js", { contentEncoding: "gzip" }), "no admitted gzip representation"],
+    ["an unknown encoding", (rows: ObservedResponse[]) => change(rows, "/worker.js", { contentEncoding: "zstd" }), "successful GET"],
+    ["an unadmitted script", (rows: ObservedResponse[]) => rows.concat([{ ...rows[0]!, url: rows[0]!.url.replace(/\/[^/]*$/, "/evil.js") }]), "not an admitted member"],
+    ["a foreign origin", (rows: ObservedResponse[]) => rows.map(row => ({ ...row, url: row.url.replace("127.0.0.1", "cdn.example.com") })), "loopback"],
+    ["a seed outside the admitted pg tree", (rows: ObservedResponse[]) => change(rows, "/seed/node_modules/pg/package.json", { url: rows[0]!.url.replace(/\/[^/]*$/, "/seed/node_modules/other/package.json") }), "not an admitted member"],
+    ["no WebAssembly", (rows: ObservedResponse[]) => rows.filter(row => !row.url.includes("/artifact/")), "no WebAssembly"],
+  ])("observations with %s refuse", async (_name, edit, message) => {
+    const intake = await admitted((await fixture()).evidence);
+    expect(() => tlsLoaded(intake.handoff, edit(responses(intake)))).toThrow(message);
+  });
+});
+
 describe("after preflight", () => {
   test("mutation rejects the guest artifact before use", async () => {
-    const f = fixture();
+    const f = await fixture();
     const intake = await admitted(f.evidence);
     const [guest] = guestArtifacts(intake.handoff, "browser");
     if (!guest) throw new Error("browser guest role missing");
@@ -272,8 +357,7 @@ describe("after preflight", () => {
     await expect(readVerifiedFile(guest)).rejects.toThrow("byte/custody mismatch");
   });
   test("dependency mutation is caught by the recheck and before seeding", async () => {
-    const f = fixture();
-    const intake = await admitted(f.evidence);
+    const intake = await admitted((await fixture()).evidence);
     const dependency = intake.dependencies.pg.files.find(row => row.path.endsWith("pg-protocol/index.ts"));
     if (!dependency) throw new Error("Parser control dependency missing");
     await recheckDependencies(intake);
@@ -281,8 +365,8 @@ describe("after preflight", () => {
     await expect(recheckDependencies(intake)).rejects.toThrow("tree changed");
     await expect(readVerifiedFile(dependency)).rejects.toThrow("before use");
   });
-  test("host lock mutation is caught by the recheck", async () => {
-    const f = fixture();
+  test("frozen lock mutation is caught by the recheck", async () => {
+    const f = await fixture();
     const intake = await admitted(f.evidence);
     writeFileSync(join(f.root, "pg-project/bun.lock"), "changed lock");
     await expect(recheckDependencies(intake)).rejects.toThrow("pg-project/bun.lock");
@@ -299,14 +383,19 @@ describe("after preflight", () => {
       await expect(verifyReviewedHostSource(root, expected)).rejects.toThrow("clean reviewed source");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
-  test("result source includes exact host dependency projections and bound", async () => {
-    const page = await readFile(new URL("../web/tests/tls-relay-browser.ts", import.meta.url), "utf8");
-    expect(page).toContain("hostDependencies: intake.dependencies.host");
-    expect(page).toContain("frozenLocks: intake.dependencies.locks");
-    expect(page).toContain("guestArtifacts(intake.handoff, engine)");
-    expect(page).not.toContain("split/dist/");
+  test("the consumer serves sealed members only and never builds", async () => {
+    const browser = await readFile(new URL("../web/tests/tls-relay-browser.ts", import.meta.url), "utf8");
+    for (const expected of ["hostDependencies: intake.dependencies.host", "frozenLocks: intake.dependencies.locks", "guestArtifacts(intake.handoff, engine)", "tlsLoaded(intake.handoff", "pageMembers: intake.page", "intake.handoff.artifacts.tlsPgClient"]) expect(browser).toContain(expected);
+    for (const forbidden of ["buildBrowserEntries", "Bun.build", "browser-build", "symlink", "fixtures/tls/pg-client.ts", "split/dist/"]) expect(browser).not.toContain(forbidden);
     const cli = await readFile(new URL("./tls-qualification.ts", import.meta.url), "utf8");
     expect(cli).toContain("256 * 1024");
+    expect(cli).not.toContain("mkdtemp");
+  });
+  test("the page imports the selected relay statically", async () => {
+    const page = await readFile(new URL("../web/tests/tls-relay-page.ts", import.meta.url), "utf8");
+    expect(page).toContain('import { runtimeRelay } from "../src/net/relay.ts";');
+    expect(page).not.toContain(UNRESOLVED_RELAY);
+    expect(page).not.toMatch(/await import\(/);
   });
 });
 
@@ -381,16 +470,21 @@ describe("wire witnesses and cleanup", () => {
     expect(() => parseTlsArguments(["--stage", "pg-early", "--browser", "firefox"])).toThrow("only pg-early");
     expect(() => parseTlsArguments(["--stage", "pg-early", "--stage", "pg-early"])).toThrow("repeated");
   });
-  test("CLI takes only the handoff, pinned intake and reviewed source as trust inputs", () => {
-    const base = ["--stage", "pg-early", "--browser", "chromium", "--intake-sha256", "a".repeat(64), "--reviewed-head", "b".repeat(40), "--reviewed-tree", "c".repeat(40),
-      "--database-machine", "pi", "--database-address", "100.64.0.2", "--relay-address", "100.64.0.3"];
-    const parsed = parseTlsArguments(base.concat(["--handoff", "/work/tmp/q/handoff.json"]));
-    expect(parsed.evidence).toEqual({ handoff: "/work/tmp/q/handoff.json", intakeSha256: "a".repeat(64), reviewedSource: { head: "b".repeat(40), tree: "c".repeat(40) } });
-    expect(() => parseTlsArguments(base)).toThrow("--handoff");
-    expect(() => parseTlsArguments(base.concat(["--handoff", "q/handoff.json"]))).toThrow("canonical absolute");
-    expect(() => parseTlsArguments(base.concat(["--handoff", "/work/tmp/q/../handoff.json"]))).toThrow("canonical absolute");
-    for (const old of ["--delivery", "--admission", "--source-release-sha256", "--host-source", "--pg-node-modules", "--pg-tarball", "--output"]) {
-      expect(() => parseTlsArguments(base.concat(["--handoff", "/work/tmp/q/handoff.json", old, "/work/tmp/x"]))).toThrow("Unknown");
+  test("CLI takes exactly the controller's pinned handoff and stage output", () => {
+    const handoff = "/work/tmp/q/handoff.json", output = "/work/tmp/q/tls/pg-early";
+    const argv = ["--stage", "pg-early", "--browser", "chromium", "--engine", "browser", "--handoff", handoff, "--handoff-sha256", "a".repeat(64), "--output", output];
+    const parsed = parseTlsArguments(argv);
+    expect(parsed.evidence).toEqual({ handoff, handoffSha256: "a".repeat(64), output });
+    expect(parsed.engine).toBe("browser");
+    for (const name of ["--handoff", "--handoff-sha256", "--output"]) {
+      const index = argv.indexOf(name);
+      expect(() => parseTlsArguments(argv.slice(0, index).concat(argv.slice(index + 2)))).toThrow(name);
+    }
+    expect(() => parseTlsArguments(argv.map(value => value === handoff ? "q/handoff.json" : value))).toThrow("canonical absolute");
+    expect(() => parseTlsArguments(argv.map(value => value === output ? "/work/tmp/q/../tls/pg-early" : value))).toThrow("canonical absolute");
+    expect(() => parseTlsArguments(argv.map(value => value === "a".repeat(64) ? "A".repeat(64) : value))).toThrow("Invalid handoff SHA-256");
+    for (const old of ["--intake-sha256", "--reviewed-head", "--reviewed-tree", "--database-machine", "--database-address", "--relay-address", "--page-port", "--relay-port", "--delivery", "--admission", "--source-release-sha256", "--host-source", "--pg-node-modules", "--pg-tarball"]) {
+      expect(() => parseTlsArguments(argv.concat([old, "1"]))).toThrow("Unknown");
     }
   });
 });

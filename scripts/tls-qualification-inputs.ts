@@ -4,11 +4,13 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
-import { verifyPublicationBuilds } from "./producer-closure.ts";
+import { tlsPagePaths, verifyPublicationBuilds } from "./producer-closure.ts";
 import {
   DELIVERY_RECORDS, parseConfig, parseHandoff, parseInputManifest, sameSource, sameTuple,
-  type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TreeIdentity,
+  type C1Config, type ConsumerHandoff, type FileIdentity, type InputManifest, type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./c1/contract.ts";
+import { verifyTlsPage } from "./c1/tls-page.ts";
+import { bindLoaded, parseLoaded, type LoadedObservation } from "./c1/loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts, type SealedDelivery } from "./c1/delivery.ts";
 import { fileIdentity, requireFile, requireTree, sameBytes, sha256, treeIdentity } from "./c1/identity.ts";
 import { requireStagedDonor } from "./c1/inputs.ts";
@@ -22,14 +24,17 @@ export function requireInstalledRuntimePackage(name: string, metadata: Record<st
   const expected = installedRuntimePackages.get(name);
   if (!expected || metadata.version !== expected) throw new Error("Reviewed host requires exact installed runtime110/relay109");
 }
+/** The only stage this source unit runs; its output is that stage's directory beneath the handoff's TLS output. */
+export const TLS_STAGE = "pg-early";
 /**
- * Trust inputs supplied independently of every record: the controller's
- * handoff is only a locator; the intake bytes and reviewed source are pinned.
+ * What the caller pins: the exact handoff bytes, which bind the parent
+ * intake hash and the selected source, and the output it assigns. Every
+ * handoff claim is then re-derived from sealed bytes before use.
  */
 export interface TlsEvidence {
   readonly handoff: string;
-  readonly intakeSha256: string;
-  readonly reviewedSource: SourceIdentity;
+  readonly handoffSha256: string;
+  readonly output: string;
 }
 export function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}`);
@@ -56,17 +61,20 @@ function sealedRecord(delivery: SealedDelivery, path: string, expectedSha256: st
   return { identity: { path: join(delivery.root, path), bytes: bytes.length, sha256: expectedSha256 }, value: JSON.parse(bytes.toString("utf8")) };
 }
 /**
- * Re-derive the consumer handoff from the sealed delivery, its pinned intake
- * and the config and input manifest the delivery itself seals. The supplied
- * handoff must equal it exactly; none of its claims is trusted alone.
+ * Re-derive the consumer handoff from the sealed delivery, the intake its
+ * pinned bytes name, and the config and input manifest the delivery itself
+ * seals. The supplied handoff must equal it exactly; none of its claims is
+ * trusted alone.
  */
 function admitHandoff(evidence: TlsEvidence) {
-  const claimed = parseHandoff(JSON.parse(readFileSync(evidence.handoff, "utf8")));
+  const bytes = readFileSync(evidence.handoff);
+  if (sha256(bytes) !== evidence.handoffSha256) throw new Error("TLS handoff bytes differ from the pinned SHA-256");
+  const claimed = parseHandoff(JSON.parse(bytes.toString("utf8")));
   const delivery = readSealedDelivery(claimed.delivery.root);
   const { source, tuple } = delivery.manifest;
-  if (!sameSource(source, evidence.reviewedSource)) throw new Error("TLS reviewed source head/tree mismatch");
+  if (!sameSource(source, claimed.source)) throw new Error("TLS handoff source head/tree mismatch");
   if (!sameTuple(tuple, tlsReleaseTuple)) throw new Error("TLS requires the runtime110/relay109/programs15/schema2/interface1 tuple");
-  const admitted = admitIntake(claimed.intake.path, evidence.intakeSha256, delivery);
+  const admitted = admitIntake(claimed.intake.path, claimed.intake.sha256, delivery);
   const configRecord = sealedRecord(delivery, DELIVERY_RECORDS.config, delivery.manifest.configSha256, "config");
   const inputsRecord = sealedRecord(delivery, DELIVERY_RECORDS.inputs, delivery.manifest.inputsSha256, "inputs");
   const config = parseConfig(configRecord.value);
@@ -74,10 +82,27 @@ function admitHandoff(evidence: TlsEvidence) {
   if (join(config.roots.run.artifact, "delivery") !== delivery.root) throw new Error("TLS delivery root differs from its sealed config");
   if (!sameBytes(config.manifest, inputsRecord.identity)) throw new Error("TLS sealed config names another input manifest");
   if (!sameSource(inputs.source, source) || !sameTuple(inputs.tuple, tuple)) throw new Error("TLS sealed inputs select another source or tuple");
-  const handoff = buildHandoff(delivery, admitted.identity, inputs.consumers, config.roots.qualify.output, config.roots.qualify.browserTmp);
+  const handoff = buildHandoff(delivery, admitted.identity, inputs.consumers, config.fixtures, config.roots.qualify.output, config.roots.qualify.browserTmp);
   if (!isDeepStrictEqual(handoff, claimed)) throw new Error("TLS handoff differs from the one its admitted delivery, config and inputs derive");
   requireHandoffArtifacts(handoff);
-  return { handoff, delivery, config, inputs, records: [admitted.identity, delivery.identity, configRecord.identity, inputsRecord.identity] };
+  const handoffFile = { path: evidence.handoff, bytes: bytes.length, sha256: evidence.handoffSha256 };
+  return { handoff, delivery, config, inputs, records: [handoffFile, admitted.identity, delivery.identity, configRecord.identity, inputsRecord.identity] };
+}
+/** The config's bound fixture choices, propagated unchanged into the handoff. */
+function fixtureOptions(handoff: ConsumerHandoff): TlsFixtureOptions {
+  const tls = handoff.fixtures.tls;
+  if (tls.status === "unresolved") throw new MissingTlsInput(`TLS fixture options unresolved: ${tls.missing}`);
+  return tls.value;
+}
+/**
+ * The sealed TLS page, built from this source before sealing. Its receipt,
+ * outputs, bundled source inputs and resolved relay import are checked by the
+ * controller's own verifier; the page is served only from these members.
+ */
+function sealedPage(delivery: SealedDelivery, sourceRoot: string): FileIdentity[] {
+  verifyTlsPage(delivery.root, sourceRoot, delivery.manifest.source);
+  return delivery.manifest.files.filter(file => file.path.startsWith(`${tlsPagePaths.root}/`))
+    .map(file => ({ path: join(delivery.root, file.path), bytes: file.bytes, sha256: file.sha256 }));
 }
 
 const custodyFamilies = ["", "native-custody-", "vendor-custody-"];
@@ -192,20 +217,45 @@ export function guestArtifacts(handoff: ConsumerHandoff, engine: QualificationEn
   return [handoff.artifacts.jscGuest, handoff.artifacts.jscSide];
 }
 
+/** One real response as the page received it: its request method, status, Content-Encoding and decoded body. */
+export interface ObservedResponse {
+  readonly url: string;
+  readonly method: string;
+  readonly status: number;
+  readonly contentEncoding: string | undefined;
+  readonly body: Uint8Array;
+}
+/**
+ * The result's `loaded` rows: every successful GET the page or its workers
+ * received, typed and bound by the controller's own parser and validator
+ * before any result is written. Other GET responses loaded nothing; they are
+ * kept for the record. POST control requests are not loaded objects.
+ */
+export function tlsLoaded(handoff: ConsumerHandoff, responses: readonly ObservedResponse[]) {
+  const gets = responses.filter(response => response.method === "GET");
+  const rows: unknown[] = gets.filter(response => response.status === 200).map(response => ({ url: response.url, method: response.method, status: response.status,
+    encoding: response.contentEncoding ?? "identity", bytes: response.body.byteLength, sha256: sha256(response.body) }));
+  const loaded: LoadedObservation[] = parseLoaded(rows);
+  bindLoaded(handoff, "tls", loaded);
+  return { loaded, unloaded: gets.filter(response => response.status !== 200).map(response => ({ url: response.url, status: response.status })) };
+}
+
 export async function preflightTls(evidence: TlsEvidence) {
-  const handoffFile = fileIdentity(evidence.handoff);
   const { handoff, delivery, config, inputs, records } = admitHandoff(evidence);
+  if (evidence.output !== join(handoff.outputs.tls, TLS_STAGE)) throw new Error(`TLS output must be the handoff's ${TLS_STAGE} directory beneath outputs.tls`);
+  const fixtures = fixtureOptions(handoff);
   const custody = custodyReferences(delivery);
   requireRetainedArchives(handoff, inputs);
   verifyPublicationBuilds(JSON.parse(readFileSync(handoff.artifacts.engineBuilds.path, "utf8")));
   requirePresent([handoff.dependencies.browsers.path], "Playwright browsers");
   requireTree(handoff.dependencies.browsers, "Playwright browsers");
   const pg = await preflightPg(inputs);
-  const host = preflightHost(config, inputs, evidence.reviewedSource);
-  const references = [handoffFile].concat(records, [handoff.artifacts.sourceArchive], custody);
+  const host = preflightHost(config, inputs, handoff.source);
+  const page = sealedPage(delivery, host.root);
+  const references = records.concat([handoff.artifacts.sourceArchive, handoff.artifacts.tlsPageReceipt, handoff.artifacts.tlsPgClient], custody);
   for (const reference of references) requireFile(reference, "TLS preflight reference");
   return {
-    handoff, hostSource: host.root, output: handoff.outputs.tls, source: handoff.source, tuple: handoff.tuple,
+    handoff, fixtures, page, hostSource: host.root, output: evidence.output, source: handoff.source, tuple: handoff.tuple,
     dependencies: { pg: pg.pg, host: host.host, locks: pg.locks.concat(host.locks) }, pgArchive: pg.pgArchive, references,
   };
 }
