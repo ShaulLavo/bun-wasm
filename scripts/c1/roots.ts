@@ -22,7 +22,7 @@ export interface RootPlan {
 /** machine-fleet: Chromium appends about 45 bytes for its singleton socket. */
 export const BROWSER_TMPDIR_LIMIT = 48;
 /** The longest scratch suffix a maintained Chromium runner nests under TMPDIR (the publication matrix). */
-const BROWSER_SCRATCH_SUFFIX ="/bun-wasm-engine-interruption-XXXXXX";
+const BROWSER_SCRATCH_SUFFIX = "/bun-wasm-engine-interruption-XXXXXX";
 
 export class RootError extends Error {}
 /** The claim stopped at `refused`; only `created` belong to this invocation. */

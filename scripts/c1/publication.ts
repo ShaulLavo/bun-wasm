@@ -17,6 +17,7 @@ import { fileIdentity, requireFile, sameBytes } from "./identity.ts";
 import { cleanSource, git } from "./inputs.ts";
 import { runOwned } from "./process.ts";
 import { BROWSER_TMPDIR_LIMIT } from "./roots.ts";
+import { verifyTlsPage } from "./tls-page.ts";
 
 class PublicationError extends Error {}
 function fail(message: string): never { throw new PublicationError(message); }
@@ -41,7 +42,7 @@ const NATIVE_COPIES = [".bunwasm-artifacts", "build/jsc/.bunwasm-inputs", "build
   "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "inputs/shim/wasi-compat.c", "inputs/shim/madvise.c"];
 const NATIVE_GROUPS = ["jsc-prebuild", "sdk", "sysroot", "jsc-helper-sdk-headers", "jsc-helper-sysroot-headers"];
 /** Recipe logs that must exist with exit 0 before a delivery is complete. */
-const REQUIRED_GATES =["native-before.log", "browser-producer.log", "source-cache-browser-producer.log", "tools-producer.log", "split-producer.log", "jsc-embedding.log",
+const REQUIRED_GATES = ["native-before.log", "browser-producer.log", "source-cache-browser-producer.log", "tools-producer.log", "tls-page-producer.log", "split-producer.log", "jsc-embedding.log",
   "web-guests.log", "source-cache-web-guests.log", "publication-inputs.log", "publication-matrix.log", "split-verify.log", "native-after.log", "native-preseal.log"];
 
 const publication = (context: PublicationContext, ...parts: string[]) => join(context.artifact, "publication", ...parts);
@@ -299,6 +300,7 @@ export async function verifyDelivery(context: PublicationContext, delivery: stri
   verifyGates(delivery);
   await verifyGuests(context, delivery);
   verifyShell(context, delivery);
+  verifyTlsPage(delivery, context.sourceRoot, context.source);
   const paths = handoffMemberPaths();
   const retained: [FileIdentity, string][] = [[context.manifest.runtime.archive, paths.runtimeArchive], [context.manifest.relay.archive, paths.relayArchive],
     [context.manifest.programs.manifest, paths.programManifest], [context.manifest.fd3.artifact, paths.fd3Artifact], [context.manifest.fd3.receipt, paths.fd3Receipt]];

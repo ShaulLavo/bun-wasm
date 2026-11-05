@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProcessOwner, describe, type ProcessIdentity } from "../process-owner.mts";
-import { CONSUMERS, type ConsumerHandoff, type ConsumerName, type SourceIdentity } from "./contract.ts";
+import { CONSUMERS, type ConsumerHandoff, type ConsumerName, type FileIdentity, type SourceIdentity } from "./contract.ts";
+import { bindLoaded, parseLoaded, type LoadedSurface } from "./loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts } from "./delivery.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 import { AdmissionError, authenticate, cleanSource, protectedPaths, type Authenticated, type ParsedRun } from "./inputs.ts";
@@ -11,7 +12,7 @@ import { Claimed, ClaimRefused, checkPlan, qualifyPlan, rehearsePlan, runPlan, v
 import { STAGES, runStages, type StageContext, type StageIndex } from "./stages.ts";
 
 /** Source root of this controller: it must be the configured, selected source. */
-const CONTROLLER_ROOT =resolve(import.meta.dir, "../..");
+const CONTROLLER_ROOT = resolve(import.meta.dir, "../..");
 
 export interface Cleanup {
   readonly drained: boolean;
@@ -178,25 +179,13 @@ export async function rehearse(run: ParsedRun, retained: string, startStage: str
   return outcome;
 }
 
-/** Every Browser byte a Chromium consumer loaded must be a delivered web member. */
-export function verifyLoaded(handoff: ConsumerHandoff, result: unknown): void {
-  const loaded = result && typeof result === "object" && "loaded" in result && Array.isArray(result.loaded) ? result.loaded as unknown[] : [];
-  const delivered = new Map<string, string>();
-  const walk = (root: string, prefix: string): void => {
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      const path = join(root, entry.name);
-      if (entry.isDirectory()) walk(path, `${prefix}${entry.name}/`);
-      else delivered.set(fileIdentity(path).sha256, `${prefix}${entry.name}`);
-    }
-  };
-  walk(handoff.webRoot, "");
-  const code = loaded.filter(row => /\.(?:wasm|js)(?:$|\?)/.test(String((row as { url?: unknown }).url)));
-  if (!code.some(row => /\.wasm(?:$|\?)/.test(String((row as { url?: unknown }).url)))) throw new AdmissionError("the Browser consumer loaded no WebAssembly");
-  const foreign = code.filter(row => !delivered.has(String((row as { sha256?: unknown }).sha256)));
-  if (foreign.length) throw new AdmissionError(`the Browser consumer loaded bytes outside the admitted web root: ${foreign.map(row => String((row as { url?: unknown }).url)).join(", ")}`);
+/** Chromium consumers report real response observations; every one must bind to an admitted object. */
+function requireLoaded(handoff: ConsumerHandoff, surface: LoadedSurface, result: unknown): void {
+  bindLoaded(handoff, surface, parseLoaded(result && typeof result === "object" && "loaded" in result ? result.loaded : undefined));
 }
-
-type Driver = (handoff: ConsumerHandoff, context: { sourceRoot: string; env: Readonly<Record<string, string>> }) => { argv: string[]; env?: Record<string, string>; out: string; chromium?: boolean }[] | string;
+interface DriverRun { argv: string[]; env?: Record<string, string>; out: string; surface?: LoadedSurface }
+type Driver = (handoff: ConsumerHandoff, context: { sourceRoot: string; env: Readonly<Record<string, string>>; handoffFile: FileIdentity }) => DriverRun[] | string;
+const browserEnv = (handoff: ConsumerHandoff) => ({ TMPDIR: handoff.browserTmp, TMP: handoff.browserTmp, TEMP: handoff.browserTmp });
 /** Each consumer's driver, or why it cannot run yet. Consumers only read the handoff. */
 const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
   "five-owner": (handoff, context) => {
@@ -207,10 +196,17 @@ const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
     const native = (engine: "quickjs" | "jsc") => ({ out: out(engine), argv: [bun, "scripts/io-resource-context.ts", "--surface", "native", "--engine", engine,
       "--guest", handoff.artifacts[engine === "quickjs" ? "quickjsGuest" : "jscGuest"].path, "--launcher", handoff.artifacts.launcher.path,
       "--shell", handoff.artifacts.shell.path, "--env-utility", handoff.artifacts.envUtility.path, "--out", out(engine)].concat(qualify) });
-    return [native("quickjs"), native("jsc"), { out: out("chromium"), chromium: true, env: { TMPDIR: handoff.browserTmp, TMP: handoff.browserTmp, TEMP: handoff.browserTmp },
+    return [native("quickjs"), native("jsc"), { out: out("chromium"), surface: "web", env: browserEnv(handoff),
       argv: [bun, "scripts/io-resource-context.ts", "--surface", "chromium", "--web-root", handoff.webRoot, "--out", out("chromium")].concat(qualify) }];
   },
-  tls: handoff => handoff.dependencies.tls.status === "unresolved" ? `TLS dependencies unresolved: ${handoff.dependencies.tls.missing}` : "the TLS driver has not adopted bun-wasm.c1-handoff/1",
+  // TLS reads everything (delivery, intake, dependencies, fixture options, its sealed page) from the one pinned handoff.
+  tls: (handoff, context) => {
+    if (handoff.dependencies.tls.status === "unresolved") return `TLS dependencies unresolved: ${handoff.dependencies.tls.missing}`;
+    if (handoff.fixtures.tls.status === "unresolved") return `TLS fixture options unresolved: ${handoff.fixtures.tls.missing}`;
+    const out = handoff.outputs.tls;
+    return [{ out, surface: "tls", env: browserEnv(handoff), argv: [context.env.BUN_EXE ?? "bun", "scripts/tls-qualification.ts", "--stage", "pg-early", "--browser", "chromium", "--engine", "browser",
+      "--handoff", context.handoffFile.path, "--handoff-sha256", context.handoffFile.sha256, "--output", join(out, "pg-early")] }];
+  },
   relay: handoff => handoff.dependencies.relay.status === "unresolved" ? `relay requirements unresolved: ${handoff.dependencies.relay.missing}` : "relay has no driver",
 };
 
@@ -234,18 +230,19 @@ export async function qualify(run: ParsedRun, intakePath: string, intakeSha256: 
     const environment = await establishEnvironment(authenticated, staging, baseEnvironment(authenticated, staging), invocation.owner, signal);
     invocation.claimed.claim(plan.durable);
     const output = invocation.claimed.path("output");
-    const handoff = buildHandoff(delivery, admitted.identity, run.manifest.consumers, output, invocation.claimed.path("browserTmp"));
+    const handoff = buildHandoff(delivery, admitted.identity, run.manifest.consumers, run.config.fixtures, output, invocation.claimed.path("browserTmp"));
     requireHandoffArtifacts(handoff);
     write(join(output, "handoff.json"), handoff);
+    const handoffFile = fileIdentity(join(output, "handoff.json"));
     const results: Partial<Record<ConsumerName, unknown>> = {};
-    for (const name of CONSUMERS) results[name] = await runConsumer(name, handoff, run, environment, invocation, signal);
+    for (const name of CONSUMERS) results[name] = await runConsumer(name, handoff, handoffFile, run, environment, invocation, signal);
     requireHandoffArtifacts(handoff);
     write(join(output, "QUALIFICATION.json"), { delivery: handoff.delivery.manifest, intake: handoff.intake, source: handoff.source, results });
     return results;
   }, [deliveryRoot, intakePath]);
 }
-async function runConsumer(name: ConsumerName, handoff: ConsumerHandoff, run: ParsedRun, environment: ProductEnvironment, invocation: Invocation, signal: AbortSignal) {
-  const invocations = DRIVERS[name](handoff, { sourceRoot: run.config.sourceRoot, env: environment.env });
+async function runConsumer(name: ConsumerName, handoff: ConsumerHandoff, handoffFile: FileIdentity, run: ParsedRun, environment: ProductEnvironment, invocation: Invocation, signal: AbortSignal) {
+  const invocations = DRIVERS[name](handoff, { sourceRoot: run.config.sourceRoot, env: environment.env, handoffFile });
   if (typeof invocations === "string") return { status: "not-run", reason: invocations };
   mkdirSync(handoff.outputs[name]);
   const outcomes = [];
@@ -253,7 +250,8 @@ async function runConsumer(name: ConsumerName, handoff: ConsumerHandoff, run: Pa
     try {
       await runOwned(invocation.owner, { argv: driver.argv, cwd: run.config.sourceRoot, env: { ...environment.env, ...driver.env } }, signal);
       const result: unknown = JSON.parse(readFileSync(join(driver.out, "result.json"), "utf8"));
-      if (driver.chromium) verifyLoaded(handoff, result);
+      if (driver.surface) requireLoaded(handoff, driver.surface, result);
+      if (driver.surface && readdirSync(handoff.browserTmp).length) throw new AdmissionError(`${name} left browser scratch in ${handoff.browserTmp}`);
       outcomes.push({ out: driver.out, status: "pass" });
     } catch (error) { outcomes.push({ out: driver.out, status: "fail", error: message(error) }); }
   }

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { pinnedBashWeb, verifiedGuests } from "../bash-web-guests.ts";
 import { selectedReleaseArchives } from "../producer-closure.ts";
 import {
-  draftEntries, parseConfig, parseInputManifest, sameSource,
+  draftEntries, fixtureDrafts, parseConfig, parseInputManifest, sameSource,
   type C1Config, type DonorName, type FileIdentity, type InputManifest, type NativeRoot, type SourceIdentity, type TreeIdentity,
 } from "./contract.ts";
 import { fileIdentity, inside, physicalPath, requireFile, requireTree, sha256, treeIdentity } from "./identity.ts";
@@ -21,7 +21,7 @@ const DONOR_DESTINATIONS: Readonly<Record<DonorName, { readonly root: "source" |
   tools: { root: "private", path: "setup/wasm-tools" }, bunCache: { root: "private", path: "setup/bun-cache" },
 };
 /** The original sysroot receipt pins these at their canonical paths; staging a copy would shadow them. */
-const RECEIPT_CANONICAL_TOOLS =["cmake", "ninja"];
+const RECEIPT_CANONICAL_TOOLS = ["cmake", "ninja"];
 const JSC_PATHS = ["build/jsc/.bunwasm-inputs", ".bunwasm-artifacts", "build/jsc/compile_commands.json", "build/jsc/CMakeCache.txt", "build/jsc/cmakeconfig.h",
   "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "inputs/shim/wasi-compat.c", "inputs/shim/madvise.c", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a",
   "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a", "jsc.wasm", "webkit/.git"];
@@ -278,7 +278,7 @@ export function authenticate(run: ParsedRun, controllerRoot: string, scratch: st
   if (m.native.sysroot.provenance.status === "verified") admitSysroot(sourceRoot, m.native.sysroot, m.native.sdk, donors);
   if (m.native.shell.provenance.status === "verified") admitShell(sourceRoot, m.native.shell);
   requireTree(m.consumers.browsers, "Playwright browsers");
-  return { run, source, drafts: draftEntries(m) };
+  return { run, source, drafts: draftEntries(m).concat(fixtureDrafts(run.config.fixtures)) };
 }
 
 /** Staged destination of a donor, from its owning root. */

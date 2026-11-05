@@ -87,7 +87,8 @@ test("verification refuses a launcher sealed 0444 and never repairs it", () => {
   const root = join(fresh(), "delivery");
   const sealed = sealedFixture(root);
   const launcher = join(root, handoffMemberPaths().launcher);
-  const handoff = buildHandoff(sealed, fileIdentity(join(root, "DELIVERY.json")), parseInputManifest(json(writeContractFixture(fresh()).inputs)).consumers, join(root, "..", "q"), "/work/tmp/c1");
+  const handoff = buildHandoff(sealed, fileIdentity(join(root, "DELIVERY.json")), parseInputManifest(json(writeContractFixture(fresh()).inputs)).consumers,
+    { tls: { status: "unresolved", missing: "not chosen" } }, join(root, "..", "q"), "/work/tmp/c1");
   chmodSync(launcher, 0o444);
   const before = statSync(launcher, { bigint: true });
   expect(() => readSealedDelivery(root)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
@@ -176,7 +177,7 @@ test("parsers reject unknown fields, unauthenticated verified labels and undefin
   const { bun: _bun, ...partial } = inputs.donors ?? {};
   expect(() => parseInputManifest({ ...inputs, donors: partial })).toThrow("missing bun");
   expect(() => parseInputManifest({ ...inputs, tools: { ...inputs.tools, rustfmt: inputs.tools?.cargo } })).toThrow("unknown field rustfmt");
-  expect(() => parseConfig({ schema: "bun-wasm.c1-config/1", sourceRoot: "/a/../b", manifest: {}, roots: {}, jobs: 2 })).toThrow("canonical absolute path");
+  expect(() => parseConfig({ schema: "bun-wasm.c1-config/1", sourceRoot: "/a/../b", manifest: {}, roots: {}, jobs: 2, fixtures: {} })).toThrow("canonical absolute path");
 });
 
 test("the delivery keeps the runtime and relay archives this source pins, not a historical name", () => {

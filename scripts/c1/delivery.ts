@@ -1,10 +1,10 @@
 import { chmodSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { executableMemberPaths, handoffMemberPaths, requireCompletePublicationFiles } from "../producer-closure.ts";
+import { executableMemberPaths, handoffMemberPaths, requireCompletePublicationFiles, tlsPagePaths } from "../producer-closure.ts";
 import {
   CONSUMERS, DELIVERY_STATUS, EXECUTABLE_ROLES, HANDOFF_ROLES, SEALED_DIRECTORY_MODE, SEALED_EXECUTABLE_MODE, SEALED_FILE_MODE,
   parseDelivery, parseIntake, sameSource, sameTuple,
-  type ConsumerDependencies, type ConsumerHandoff, type ConsumerName, type DeliveryManifest, type FileIdentity, type HandoffRole, type MemberIdentity,
+  type ConsumerDependencies, type ConsumerFixtures, type ConsumerHandoff, type ConsumerName, type DeliveryManifest, type FileIdentity, type HandoffRole, type MemberIdentity,
   type ParentIntake, type ReleaseTuple, type SealedMode, type SourceIdentity,
 } from "./contract.ts";
 import { fileIdentity, sameBytes, sha256 } from "./identity.ts";
@@ -117,7 +117,7 @@ export function admitIntake(path: string, expectedSha256: string, delivery: Seal
 }
 
 /** The read-only consumer view of an admitted delivery. Executables are used from their sealed paths. */
-export function buildHandoff(delivery: SealedDelivery, intake: FileIdentity, dependencies: ConsumerDependencies, outputRoot: string, browserTmp: string): ConsumerHandoff {
+export function buildHandoff(delivery: SealedDelivery, intake: FileIdentity, dependencies: ConsumerDependencies, fixtures: ConsumerFixtures, outputRoot: string, browserTmp: string): ConsumerHandoff {
   const paths = handoffMemberPaths();
   const members = new Map(delivery.manifest.files.map(file => [file.path, file]));
   const artifact = (role: HandoffRole): FileIdentity => {
@@ -129,7 +129,7 @@ export function buildHandoff(delivery: SealedDelivery, intake: FileIdentity, dep
   return { schema: "bun-wasm.c1-handoff/1", source: delivery.manifest.source, tuple: delivery.manifest.tuple,
     delivery: { root: delivery.root, manifest: delivery.identity }, intake,
     artifacts: Object.fromEntries(HANDOFF_ROLES.map(role => [role, artifact(role)])) as Record<HandoffRole, FileIdentity>,
-    webRoot: join(delivery.root, "split/web"), dependencies, outputs, browserTmp };
+    webRoot: join(delivery.root, "split/web"), tlsPageRoot: join(delivery.root, tlsPagePaths.root), dependencies, fixtures, outputs, browserTmp };
 }
 
 /**

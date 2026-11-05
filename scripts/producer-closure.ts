@@ -101,6 +101,19 @@ export function selectedReleaseArchives(): { readonly runtime: SelectedArchive; 
   };
 }
 
+/**
+ * The TLS consumer's page, built before sealing from the selected source:
+ * its entry, the maintained worker realms beside it, and the guest-side pg
+ * client fixture it serves. Chunks and maps under the page root vary by build
+ * and are bound by the page receipt.
+ */
+export const tlsPagePaths: {
+  readonly root: string; readonly index: string; readonly entry: string; readonly receipt: string; readonly pgClient: string; readonly workers: readonly string[];
+} = {
+  root: "tls/page", index: "tls/page/index.html", entry: "tls/page/tls-relay-page.js", receipt: "tls/page.build.json", pgClient: "tls/fixture/pg-client.ts",
+  workers: ["tls/page/worker.js", "tls/page/fs-worker.js", "tls/page/notification-worker.js"],
+};
+
 /** Delivery members behind every consumer handoff role. */
 export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
   const quickjs = programProfile("quickjs");
@@ -121,6 +134,7 @@ export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
     programManifest: "inputs/programs-release/program-release.json", programChecksums: "inputs/programs-release/SHA256SUMS",
     fd3Artifact: "inputs/network/preview1-relay.fd3.wasm", fd3Receipt: "inputs/network/RECEIPT.json",
     config: DELIVERY_RECORDS.config, inputs: DELIVERY_RECORDS.inputs, environment: DELIVERY_RECORDS.environment, stages: DELIVERY_RECORDS.stages,
+    tlsPageIndex: tlsPagePaths.index, tlsPageEntry: tlsPagePaths.entry, tlsPageReceipt: tlsPagePaths.receipt, tlsPgClient: tlsPagePaths.pgClient,
   };
 }
 
@@ -137,7 +151,7 @@ export function completePublicationArtifactPaths(): string[] {
     `inputs/${phase}.json`, `inputs/vendor-custody-${phase}.json`, `inputs/native-custody-${phase}.json`,
   ]);
   const handoff = Object.values(handoffMemberPaths());
-  return Array.from(new Set(producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody, handoff,
+  return Array.from(new Set(producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody, handoff, tlsPagePaths.workers,
     [
       "inputs/publication-matrix.json", "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
       "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json",

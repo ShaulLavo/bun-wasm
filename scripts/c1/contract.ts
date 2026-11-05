@@ -60,6 +60,23 @@ interface TlsDependencies {
   readonly pgPackageJson: FileIdentity;
   readonly pgLock: FileIdentity;
 }
+/**
+ * Run-local, nonsecret TLS fixture choices, distinct from dependency bytes.
+ * They mirror what scripts/tls-qualification.ts accepts: a separately
+ * approved fleet database host (never the page host), distinct private
+ * database and relay addresses, and unprivileged loopback page and relay
+ * ports. No password, key, token or certificate belongs here.
+ */
+export interface TlsFixtureOptions {
+  readonly databaseMachine: string;
+  readonly databaseAddress: string;
+  readonly relayAddress: string;
+  readonly pagePort: number;
+  readonly relayPort: number;
+}
+/** Ports the TLS fixture already owns on its hosts: private PostgreSQL and the native trust observer. */
+export const TLS_RESERVED_PORTS: readonly number[] = [45433, 45434];
+export interface ConsumerFixtures { readonly tls: Requirement<TlsFixtureOptions> }
 export interface ConsumerDependencies {
   /** Installed Playwright browsers the Chromium consumers launch. */
   readonly browsers: TreeIdentity;
@@ -91,6 +108,8 @@ export interface C1Config {
   readonly manifest: FileIdentity;
   readonly roots: { readonly run: RunRoots; readonly qualify: QualifyRoots; readonly rehearse?: RehearseRoots };
   readonly jobs: number;
+  /** Consumer fixture choices, bound by the config digest like everything else here. */
+  readonly fixtures: ConsumerFixtures;
 }
 
 export const DELIVERY_STATUS = "producer-complete; awaiting-independent-parent-byte-intake";
@@ -133,6 +152,7 @@ export const HANDOFF_ROLES = [
   "toolsGuest", "toolsGuestReceipt", "webIndex", "engineBuilds", "producerManifest",
   "sourceArchive", "runtimeArchive", "relayArchive", "programManifest", "programChecksums",
   "fd3Artifact", "fd3Receipt", "config", "inputs", "environment", "stages",
+  "tlsPageIndex", "tlsPageEntry", "tlsPageReceipt", "tlsPgClient",
 ] as const;
 export type HandoffRole = typeof HANDOFF_ROLES[number];
 /** Handoff roles sealed 0555 and executed from their sealed path. Every other role is 0444. */
@@ -147,7 +167,10 @@ export interface ConsumerHandoff {
   readonly artifacts: Readonly<Record<HandoffRole, FileIdentity>>;
   /** Delivered web root; every file under it is a delivery member. */
   readonly webRoot: string;
+  /** Delivered TLS page and its workers, built from the selected source before sealing. */
+  readonly tlsPageRoot: string;
   readonly dependencies: ConsumerDependencies;
+  readonly fixtures: ConsumerFixtures;
   /** Each consumer's own writable output directory, beneath the claimed qualification root. */
   readonly outputs: Readonly<Record<ConsumerName, string>>;
   /** Physical browser scratch root; derived TMPDIRs stay within 48 bytes. */
@@ -262,6 +285,41 @@ function parseConsumerDependencies(value: unknown, label = "consumers"): Consume
     relay: parseRequirement<never>(fields.relay, `${label}.relay`, undefined) };
 }
 
+const PRIVATE_IPV4 = [[10, 0, 255], [172, 16, 31], [192, 168, 168], [100, 64, 127]] as const;
+function privateIpv4(value: unknown, label: string): string {
+  const address = text(value, label);
+  const octets = address.split(".").map(Number);
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address) || octets.some(octet => octet > 255)) fail(label, "expected an exact IPv4 address");
+  const [first, second] = octets;
+  if (!PRIVATE_IPV4.some(([leading, low, high]) => first === leading && second !== undefined && second >= low && second <= high)) fail(label, "expected a private fleet address (10/8, 172.16/12, 192.168/16 or 100.64/10)");
+  return address;
+}
+function port(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1025 || value > 65535) fail(label, "expected an unprivileged port from 1025 to 65535");
+  if (TLS_RESERVED_PORTS.includes(value)) fail(label, `port ${value} is reserved by the TLS fixture`);
+  return value;
+}
+function parseTlsFixture(value: unknown, label: string): TlsFixtureOptions {
+  const fields = row(value, label, ["databaseMachine", "databaseAddress", "relayAddress", "pagePort", "relayPort"]);
+  const databaseMachine = text(fields.databaseMachine, `${label}.databaseMachine`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(databaseMachine) || ["pc", "localhost"].includes(databaseMachine)) fail(`${label}.databaseMachine`, "expected a separately approved fleet host name, not the page host");
+  const databaseAddress = privateIpv4(fields.databaseAddress, `${label}.databaseAddress`);
+  const relayAddress = privateIpv4(fields.relayAddress, `${label}.relayAddress`);
+  if (databaseAddress === relayAddress) fail(label, "database and relay addresses must differ");
+  const pagePort = port(fields.pagePort, `${label}.pagePort`);
+  const relayPort = port(fields.relayPort, `${label}.relayPort`);
+  if (pagePort === relayPort) fail(label, "page and relay ports must differ");
+  return { databaseMachine, databaseAddress, relayAddress, pagePort, relayPort };
+}
+function parseFixtures(value: unknown, label: string): ConsumerFixtures {
+  const fields = row(value, label, ["tls"]);
+  return { tls: parseRequirement(fields.tls, `${label}.tls`, parseTlsFixture) };
+}
+/** Fixture choices that are still open; production refuses until none remain. */
+export function fixtureDrafts(fixtures: ConsumerFixtures): string[] {
+  return fixtures.tls.status === "unresolved" ? [`fixtures.tls: ${fixtures.tls.missing}`] : [];
+}
+
 export function parseInputManifest(value: unknown): InputManifest {
   const fields = row(value, "inputs", ["schema", "source", "tuple", "runtime", "relay", "programs", "fd3", "native", "donors", "tools", "consumers"]);
   const runtime = row(fields.runtime, "inputs.runtime", ["archive", "authentication"]);
@@ -300,7 +358,7 @@ function parseRoots<K extends string>(value: unknown, names: readonly K[], label
   return exactRecord(value, names, label, absolutePath);
 }
 export function parseConfig(value: unknown): C1Config {
-  const fields = row(value, "config", ["schema", "sourceRoot", "manifest", "roots", "jobs"]);
+  const fields = row(value, "config", ["schema", "sourceRoot", "manifest", "roots", "jobs", "fixtures"]);
   const sourceRoot = absolutePath(fields.sourceRoot, "config.sourceRoot");
   const roots = row(fields.roots, "config.roots", ["run", "qualify"], ["rehearse"]);
   const jobs = count(fields.jobs, "config.jobs", 1);
@@ -315,6 +373,7 @@ export function parseConfig(value: unknown): C1Config {
       ...(roots.rehearse === undefined ? {} : { rehearse: parseRoots(roots.rehearse, ["report", "private", "browserTmp"], "config.roots.rehearse") }),
     },
     jobs,
+    fixtures: parseFixtures(fields.fixtures, "config.fixtures"),
   };
 }
 
@@ -342,12 +401,12 @@ export function parseIntake(value: unknown): ParentIntake {
 }
 
 export function parseHandoff(value: unknown): ConsumerHandoff {
-  const fields = row(value, "handoff", ["schema", "source", "tuple", "delivery", "intake", "artifacts", "webRoot", "dependencies", "outputs", "browserTmp"]);
+  const fields = row(value, "handoff", ["schema", "source", "tuple", "delivery", "intake", "artifacts", "webRoot", "tlsPageRoot", "dependencies", "fixtures", "outputs", "browserTmp"]);
   const delivery = row(fields.delivery, "handoff.delivery", ["root", "manifest"]);
   return { schema: literal(fields.schema, "bun-wasm.c1-handoff/1", "handoff.schema"), source: parseSource(fields.source, "handoff.source"), tuple: parseTuple(fields.tuple, "handoff.tuple"),
     delivery: { root: absolutePath(delivery.root, "handoff.delivery.root"), manifest: parseFile(delivery.manifest, "handoff.delivery.manifest") },
     intake: parseFile(fields.intake, "handoff.intake"), artifacts: exactRecord(fields.artifacts, HANDOFF_ROLES, "handoff.artifacts", parseFile),
-    webRoot: absolutePath(fields.webRoot, "handoff.webRoot"),
-    dependencies: parseConsumerDependencies(fields.dependencies, "handoff.dependencies"), outputs: exactRecord(fields.outputs, CONSUMERS, "handoff.outputs", absolutePath),
+    webRoot: absolutePath(fields.webRoot, "handoff.webRoot"), tlsPageRoot: absolutePath(fields.tlsPageRoot, "handoff.tlsPageRoot"),
+    dependencies: parseConsumerDependencies(fields.dependencies, "handoff.dependencies"), fixtures: parseFixtures(fields.fixtures, "handoff.fixtures"), outputs: exactRecord(fields.outputs, CONSUMERS, "handoff.outputs", absolutePath),
     browserTmp: absolutePath(fields.browserTmp, "handoff.browserTmp") };
 }

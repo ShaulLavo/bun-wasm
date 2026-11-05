@@ -8,6 +8,7 @@
         "scripts/engine-producer.ts",
         "scripts/c1-controller.ts",
         "scripts/c1/contract-fixture.ts",
+        "scripts/c1/tls-page.ts",
         "scripts/replay-engine-lineage.ts",
         "scripts/verify-engine-memory-browser.ts",
         "scripts/app-matrix/vinext-probe.ts",

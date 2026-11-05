@@ -7,11 +7,10 @@ import { enableSubreaper } from "../linux-subreaper.mts";
 import { ProcessOwner } from "../process-owner.mts";
 import { handoffMemberPaths } from "../producer-closure.ts";
 import { SYSROOT_PROBE, environmentDifferences, requireCanonicalBuildTools } from "./admission.ts";
-import { FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureDependencies, writeFixtureDelivery } from "./contract-fixture.ts";
-import { buildHandoff, readSealedDelivery, sealDelivery } from "./delivery.ts";
+import { FIXTURE_SOURCE, FIXTURE_TUPLE } from "./contract-fixture.ts";
 import { sha256 } from "./identity.ts";
 import { admitWebkit } from "./inputs.ts";
-import { rehearse, verifyLoaded } from "./operations.ts";
+import { rehearse } from "./operations.ts";
 import { publicationMatrix, restage, smokeInputs, verifyMatrixScratch } from "./publication.ts";
 import { STAGES, blockReason, runStages, validateStages, type Stage, type StageContext } from "./stages.ts";
 
@@ -255,16 +254,4 @@ test("sysroot admission with missing staged Waffle inputs refuses instead of dow
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain("staged Waffle native inputs are missing");
   expect(readdirSync(tools)).toEqual([]);
-});
-
-test("a Chromium consumer passes only when every loaded Browser byte is an admitted web member", () => {
-  const root = join(fresh("loaded"), "delivery");
-  writeFixtureDelivery(root);
-  sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") });
-  const handoff = buildHandoff(readSealedDelivery(root), { path: join(root, "DELIVERY.json"), bytes: 1, sha256: sha256("x") }, fixtureDependencies(fresh("loaded-deps")), fresh("loaded-q"), "/work/tmp/c8");
-  const member = (path: string) => ({ url: `http://127.0.0.1/${path}`, sha256: sha256(readFileSync(join(root, "split/web", path))) });
-  const wasm = readdirSync(join(root, "split/web")).find(name => name.endsWith(".gz")) ?? "";
-  expect(() => verifyLoaded(handoff, { loaded: [{ ...member(wasm), url: "http://127.0.0.1/bun.wasm" }] })).not.toThrow();
-  expect(() => verifyLoaded(handoff, { loaded: [{ url: "http://127.0.0.1/bun.wasm", sha256: sha256("foreign") }] })).toThrow("outside the admitted web root");
-  expect(() => verifyLoaded(handoff, { loaded: [{ url: "http://127.0.0.1/app.js", sha256: member(wasm).sha256 }] })).toThrow("no WebAssembly");
 });

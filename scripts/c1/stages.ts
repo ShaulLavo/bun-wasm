@@ -97,6 +97,9 @@ export const STAGES: readonly Stage[] = [
     join(context.privateRoot, "targets/source-cache-browser"), join(context.privateRoot, "source-cache-browser-inputs.json"), join(context.artifact, "publication", publicationGuestPaths["source-cache-browser"])] })) },
   { name: "tools-producer.log", eligibility: "production-only", needs: [], action: command(() => ({ argv: ["/usr/bin/bash", "scripts/build-bun-tools.sh"] })) },
   { name: "tools-stage.log", eligibility: "production-only", needs: [], action: step(context => stageGuest(context, "tools")) },
+  // Producer work for the TLS consumer, before sealing: the page is bundled once from this source.
+  { name: "tls-page-producer.log", eligibility: "production-only", needs: [],
+    action: command(context => ({ argv: [bun(context), "scripts/c1/tls-page.ts", join(context.artifact, "publication/tls")] })) },
   { name: "split-producer.log", eligibility: "production-only", needs: [], browser: true,
     action: command(context => ({ argv: [bun(context), "scripts/engine-producer.ts", "build", "split"], overlay: { BUN_WASM_ENGINE_ROOT: engineRoot(context) } })) },
   // Stage-local: the launcher the split producer built and receipted. A global binding

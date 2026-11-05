@@ -9,7 +9,7 @@ import { runOwned } from "./process.ts";
 function fail(message: string): never { throw new AdmissionError(message); }
 
 /** Shell bookkeeping that differs between shells; nothing else is ignored when comparing environments. */
-const SHELL_BOOKKEEPING =["_", "SHLVL", "PWD", "OLDPWD"];
+const SHELL_BOOKKEEPING = ["_", "SHLVL", "PWD", "OLDPWD"];
 const AMBIENT = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM"];
 const SOURCE_ENV = "set -euo pipefail\nsource ./env.sh\nenv -0\n";
 const SOURCE_TWICE = "set -euo pipefail\nsource ./env.sh\nsource ./env.sh\nenv -0\n";
