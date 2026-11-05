@@ -11,28 +11,64 @@ import { runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
 
 type TlsPhase = "arguments" | "preflight" | "dependencies" | "mount" | "output-directory"
   | "pre-ledger-remote-inventory" | "pre-ledger-local-inventory" | "resource-ledger" | "services" | "browser" | "cleanup-receipt" | "result";
-export class TlsQualificationFailure extends Error {
-  constructor(readonly phase: TlsPhase, cause: unknown) { super(`TLS qualification failed during ${phase}`, { cause }); }
+/**
+ * The secret values this run created or received, registered where each first
+ * exists: the database password, the relay credential, the relay token-signing
+ * key and every minted token. Diagnostics redact exactly these values and the
+ * escaped forms a message can carry them in (JSON string escapes, URL
+ * encoding, and hex, base64 and decimal-list renderings of key bytes). No
+ * other text is hidden: phase, message, stack, errno and command lines stay.
+ */
+export class RunSecrets {
+  private readonly forms = new Set<string>();
+  add(value: string | Uint8Array): void {
+    const renderings = typeof value === "string" ? [value] : byteRenderings(value);
+    for (const rendering of renderings) {
+      if (rendering.length < 16) throw new Error("A run secret is too short to redact without hiding ordinary text");
+      for (const form of [rendering, JSON.stringify(rendering).slice(1, -1), encodeURIComponent(rendering)]) this.forms.add(form);
+    }
+  }
+  redact(text: string): string {
+    const longestFirst = Array.from(this.forms).sort((a, b) => b.length - a.length);
+    return longestFirst.reduce((redacted, form) => redacted.split(form).join("[redacted run secret]"), text);
+  }
 }
-function errorDetails(error: unknown, includeMessage: boolean) {
-  const details: Record<string, string | number | null> = { name: error instanceof Error ? error.name : "NonErrorThrow" };
-  if (!(error instanceof Error)) return details;
-  if (includeMessage) details.message = error.message;
+function byteRenderings(bytes: Uint8Array): string[] {
+  const buffer = Buffer.from(bytes);
+  return [buffer.toString("hex"), buffer.toString("base64"), buffer.toString("base64url"), Array.from(bytes).join(","), Array.from(bytes).join(", ")];
+}
+export class TlsQualificationFailure extends Error {
+  constructor(readonly phase: TlsPhase, cause: unknown, readonly secrets: RunSecrets = new RunSecrets()) { super(`TLS qualification failed during ${phase}`, { cause }); }
+}
+const DIAGNOSTIC_TEXT_LIMIT = 16 * 1024;
+/** Redacted before it is bounded, so a cut can never leave part of a secret. */
+function safeText(text: string, secrets: RunSecrets): string {
+  const redacted = secrets.redact(text);
+  if (redacted.length <= DIAGNOSTIC_TEXT_LIMIT) return redacted;
+  return `${redacted.slice(0, DIAGNOSTIC_TEXT_LIMIT)}... [${redacted.length - DIAGNOSTIC_TEXT_LIMIT} more characters]`;
+}
+type Details = { [key: string]: string | number | null | Details | Details[] };
+function errorDetails(error: unknown, secrets: RunSecrets, depth = 0): Details {
+  if (!(error instanceof Error)) return { name: "NonErrorThrow", value: safeText(String(error), secrets) };
+  const details: Details = { name: error.name, message: safeText(error.message, secrets) };
+  if (error.stack) details.stack = safeText(error.stack, secrets);
   for (const key of ["code", "errno", "syscall", "path", "status", "signal"]) {
     const value: unknown = Reflect.get(error, key);
-    if (typeof value === "string" || typeof value === "number" || value === null) details[key] = value;
+    if (typeof value === "string") details[key] = safeText(value, secrets);
+    if (typeof value === "number" || value === null) details[key] = value;
   }
+  if (depth >= 3) return details;
+  if (error instanceof AggregateError) details.errors = error.errors.map(inner => errorDetails(inner, secrets, depth + 1));
+  else if (error.cause !== undefined) details.cause = errorDetails(error.cause, secrets, depth + 1);
   return details;
 }
 export function formatTlsFailure(error: unknown): string {
   const phase = error instanceof TlsQualificationFailure ? error.phase : "arguments";
+  const secrets = error instanceof TlsQualificationFailure ? error.secrets : new RunSecrets();
   const failure = error instanceof TlsQualificationFailure ? error.cause : error;
   const primary = failure instanceof AggregateError && "cause" in failure ? failure.cause : failure;
   const related: unknown[] = failure instanceof AggregateError ? failure.errors : [];
-  // Only credential-free admission/inventory phases may retain the original message.
-  // Captured stdout/stderr, argv, environment, stacks and post-setup messages never leave this boundary.
-  const includeMessage = ["arguments", "preflight", "dependencies", "mount", "output-directory", "pre-ledger-remote-inventory", "pre-ledger-local-inventory", "resource-ledger"].includes(phase);
-  return JSON.stringify({ kind: "tls-qualification-failure", phase, primary: errorDetails(primary, includeMessage), relatedErrors: related.map(error => errorDetails(error, false)), qualification: false });
+  return JSON.stringify({ kind: "tls-qualification-failure", phase, primary: errorDetails(primary, secrets), relatedErrors: related.map(error => errorDetails(error, secrets)), qualification: false });
 }
 /**
  * The first setup or exercise error, recorded before the lifecycle's cleanup
@@ -90,6 +126,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
   const options = parseTlsArguments(args);
   let phase: TlsPhase = "preflight";
   const first = new FirstFailure();
+  const secrets = new RunSecrets();
   const abort = new AbortController();
   const stop = () => abort.abort(new Error("TLS qualification interrupted"));
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
@@ -123,7 +160,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       const created: object[] = [];
       const record = async (resource: object) => { created.push(resource); await writeFile(join(owned, "resources.created.json"), JSON.stringify(created, null, 2) + "\n", { mode: 0o600 }); };
       phase = "services";
-      const services = await startTlsServices(intake, owner, intake.fixtures, abort.signal, record);
+      const services = await startTlsServices(intake, owner, intake.fixtures, abort.signal, record, secrets);
       serviceObservation = services.lifecycle;
       await record(services.resources);
       return { intake, services, owner };
@@ -136,7 +173,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
     const serialized = JSON.stringify(result, null, 2) + "\n";
     if (Buffer.byteLength(serialized) > 256 * 1024) throw new Error("TLS result exceeds the bounded evidence size; no result may be truncated");
     await writeFile(join(output, "result.json"), serialized, { mode: 0o600 });
-  } catch (error) { throw new TlsQualificationFailure(phase, first.resolve(error)); } finally {
+  } catch (error) { throw new TlsQualificationFailure(phase, first.resolve(error), secrets); } finally {
     clearTimeout(timer);
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.removeListener(signal, stop);
   }

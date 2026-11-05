@@ -42,10 +42,10 @@ export function readFiveOwnerMember(pinned: PinnedHandoff, path: string): Buffer
 export function requireFiveOwnerResponse(pinned: PinnedHandoff, url: string): void {
   const pathname = decodeURIComponent(new URL(url).pathname);
   const path = resolve(pinned.handoff.webRoot, `.${pathname.endsWith("/") ? `${pathname}index.html` : pathname}`);
-  if (!inside(pinned.handoff.webRoot, path)) throw new Error("Loaded response leaves the admitted Web root");
+  if (!inside(pinned.handoff.webRoot, path)) throw new Error(`Loaded response leaves the admitted Web root: ${url}`);
   const paths = [path].concat([`${path}.gz`, `${path}.br`]);
   const members = pinned.delivery.manifest.files.filter(member => paths.includes(join(pinned.delivery.root, member.path)));
-  if (!members.length) throw new Error("Loaded response has no admitted representation");
+  if (!members.length) throw new Error(`Loaded response has no admitted representation: ${url}`);
   for (const member of members) readFiveOwnerMember(pinned, join(pinned.delivery.root, member.path));
 }
 

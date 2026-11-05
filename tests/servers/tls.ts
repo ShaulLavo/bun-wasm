@@ -41,12 +41,19 @@ export function assertPiPostgresImage(value: unknown) {
     || row.Digest !== PI_POSTGRES_IMAGE.split("@")[1]) throw new Error("Prepared Pi PostgreSQL image identity mismatch");
   return { id: row.Id, digest: row.Digest, architecture: row.Architecture, os: row.Os };
 }
+/** A failed fixture command keeps what it was and how it ended: subcommand, exit code or signal, and its stderr tail. */
+export class FixtureCommandError extends Error {
+  constructor(readonly command: string, readonly code: number | string | null, readonly signal: string | null, readonly stderr: string) {
+    super(`${command} ${signal ? `ended by ${signal}` : `exited ${code}`}${stderr ? `: ${stderr}` : ""}`);
+  }
+}
 async function execute(executable: string, args: readonly string[], options: ExecFileOptions, allowed: readonly number[] = [0]) {
   const result = Promise.withResolvers<{ code: number; stdout: string }>();
-  const child = execFile(executable, args, { ...options, encoding: "utf8" }, (error, stdout) => {
+  const child = execFile(executable, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
     const code = error ? error.code : 0;
-    if (typeof code !== "number" || !allowed.includes(code)) { result.reject(new Error(`${executable} fixture command failed`)); return; }
-    result.resolve({ code, stdout });
+    if (typeof code === "number" && allowed.includes(code)) { result.resolve({ code, stdout }); return; }
+    const command = [executable].concat(args.slice(0, 2)).join(" ");
+    result.reject(new FixtureCommandError(command, code ?? null, error?.signal ?? null, String(stderr).trim().slice(-4096)));
   });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   try { return await result.promise; } finally { await closed; }
@@ -54,16 +61,31 @@ async function execute(executable: string, args: readonly string[], options: Exe
 async function requireAbsent(kind: "container" | "volume", name: string, run: PodmanRun): Promise<void> {
   if ((await run([kind, "exists", name])).code !== 1) throw new Error(`Pi PostgreSQL ${kind} absence unconfirmed`);
 }
+async function removeOwned(kind: "container" | "volume", name: string, removal: readonly string[], run: PodmanRun): Promise<void> {
+  if ((await run(removal)).code !== 0) throw new Error(`Pi PostgreSQL ${kind} removal failed`);
+  await requireAbsent(kind, name, run);
+}
+/**
+ * Each owned object is removed and proven absent on its own, so a container
+ * step that fails or is not yet confirmed never skips the volume. The volume
+ * is removed without --force: Podman itself refuses it while any container
+ * still uses it, so nothing in use is released. Every concrete error is kept.
+ */
 export async function removePiPostgres(plan: ReturnType<typeof piPostgresPlan>, owned: { container: boolean; volume: boolean }, run: PodmanRun): Promise<void> {
-  if (owned.container) {
-    if ((await run(["rm", "--force", "--ignore", plan.name])).code !== 0) throw new Error("Pi PostgreSQL container removal failed");
-    await requireAbsent("container", plan.name, run);
-  }
-  if (owned.volume) {
-    if ((await run(["volume", "rm", "--ignore", plan.volume])).code !== 0) throw new Error("Pi PostgreSQL volume removal failed");
-    await requireAbsent("volume", plan.volume, run);
-  }
+  const failures: unknown[] = [];
+  if (owned.container) await removeOwned("container", plan.name, ["rm", "--force", "--ignore", plan.name], run).catch(error => { failures.push(error); });
+  if (owned.volume) await removeOwned("volume", plan.volume, ["volume", "rm", "--ignore", plan.volume], run).catch(error => { failures.push(error); });
+  if (failures.length) throw new AggregateError(failures, "Pi PostgreSQL removal unconfirmed");
   // Images are prepared and owned by Engines. No pull, alias, prune or rmi here.
+}
+/** One stderr line naming every failure the owner saw, so the PC driver can record the concrete cause. */
+export function ownerFailureLine(failures: readonly unknown[]): string {
+  const describe = (error: unknown): unknown => {
+    if (!(error instanceof Error)) return { value: String(error) };
+    const inner = error instanceof AggregateError ? { errors: error.errors.map(describe) } : {};
+    return { name: error.name, message: error.message, code: Reflect.get(error, "code") ?? null, signal: Reflect.get(error, "signal") ?? null, ...inner };
+  };
+  return JSON.stringify({ kind: "pi-postgres-owner-failures", failures: failures.map(describe) }) + "\n";
 }
 export async function postgresOwner(root: string, bind: string, relayCidr: string): Promise<void> {
   const id = root.slice(root.lastIndexOf("bun-wasm-tls-") + "bun-wasm-tls-".length);
@@ -139,7 +161,9 @@ export async function postgresOwner(root: string, bind: string, relayCidr: strin
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGHUP", stop);
   }
-  if (failures.length) throw new AggregateError(failures, "Pi PostgreSQL fixture failed or cleanup unconfirmed");
+  if (!failures.length) return;
+  process.stderr.write(ownerFailureLine(failures));
+  throw new AggregateError(failures, "Pi PostgreSQL fixture failed or cleanup unconfirmed");
 }
 async function checkPiHost(bind: string, signal: AbortSignal): Promise<void> {
   const busy = join(homedir(), ".local/state/machine-fleet/owner-busy");
