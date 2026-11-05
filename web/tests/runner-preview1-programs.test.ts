@@ -20,6 +20,12 @@ class RootWorker {
   terminate() { this.terminated++; }
 }
 
+function trackPortClosure(port: Transferable, closed: Set<unknown>): void {
+  if (!(port instanceof MessagePort)) return;
+  const close = port.close.bind(port);
+  port.close = () => { closed.add(port); close(); };
+}
+
 /** Runs one root against the real runner, page network owner and process service, observing the
  * request exactly as the page hands it to Worker.postMessage. */
 async function observeRoot(options: Omit<RunOptions, "runtime" | "moduleScope">, end: (posted: Posted, run: ReturnType<typeof startRun>) => void) {
@@ -55,11 +61,7 @@ async function observeRoot(options: Omit<RunOptions, "runtime" | "moduleScope">,
     expect(RootWorker.posts).toHaveLength(1);
     const posted = RootWorker.posts[0]!;
     const closed = new Set<unknown>();
-    for (const port of posted.transfer) {
-      if (!(port instanceof MessagePort)) continue;
-      const close = port.close.bind(port);
-      port.close = () => { closed.add(port); close(); };
-    }
+    for (const port of posted.transfer) trackPortClosure(port, closed);
     end(posted, run);
     const result: RunResult = await run.done;
     return { posted, result, closed, helpers };
