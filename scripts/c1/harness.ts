@@ -23,10 +23,12 @@ export const CONSUMER_HARNESS_PATHS: readonly string[] = [
   // Controller tests and their synthetic fixture.
   "scripts/c1/contract-fixture.ts", "scripts/c1/contract.test.ts", "scripts/c1/controller.test.ts", "scripts/c1/tls.test.ts", "scripts/c1/replay.test.ts",
   // Five-owner Chromium driver.
-  "scripts/io-resource-context.ts", "scripts/io-resource-context-intake.ts", "scripts/io-resource-context-assets.ts", "scripts/io-resource-context.test.ts",
+  "scripts/consumer-process-groups.ts", "scripts/io-resource-context.ts", "scripts/io-resource-context-intake.ts", "scripts/io-resource-context-assets.ts", "scripts/io-resource-context.test.ts",
   // TLS driver and its host-side services, without the modules the sealed page bundles.
   "scripts/tls-qualification.ts", "scripts/tls-qualification-inputs.ts", "scripts/tls-qualification-fixture.ts", "scripts/tls-qualification.test.ts",
   "web/tests/tls-relay-services.ts", "web/tests/tls-relay-browser.ts",
+  // The Pi PostgreSQL owner the TLS driver sends to the Pi; no producer stage or sealed page reads it.
+  "tests/servers/tls.ts",
   // The check manifest and records that describe this harness.
   "checks/web-c1-replay.json", "docs/bun-patches/c1-consumer-replay.md", ".internal/engines/c1-controller.md",
   // Unused-code configuration: host tools are no longer called by name.
@@ -46,7 +48,7 @@ export interface HarnessEvidence {
   readonly harness: HarnessIdentity;
   readonly product: SourceIdentity;
   readonly changedPaths: readonly string[];
-  readonly pullRequest: { readonly url: string; readonly mergedAt: string; readonly mergeCommit: string; readonly head: string; readonly base: string };
+  readonly pullRequest: { readonly url: string; readonly mergedAt: string; readonly mergeCommit: string; readonly head: string; readonly base: HarnessIdentity["targetBranch"]; readonly branchHead: string };
   readonly review: ReturnType<typeof requireReview>;
 }
 
@@ -85,21 +87,27 @@ export function requireUnbundled(product: AdmittedProduct, paths: readonly strin
 }
 
 /**
- * The public merge facts: the pull request merged into the default branch at
- * exactly the harness commit, from exactly the reviewed candidate, and the
- * candidate's tree is the merged tree.
+ * The public merge facts: the pull request merged into the harness target
+ * branch of this repository at exactly the harness commit, from exactly the
+ * reviewed candidate, the candidate's tree is the merged tree, and that
+ * branch's head is still the harness commit. Main is never consulted, so its
+ * later commits can neither admit nor enter a replay.
  */
 async function requireMerged(harness: HarnessIdentity, read: GitHubRead): Promise<HarnessEvidence["pullRequest"]> {
   const pull = await read(`repos/${harness.repository}/pulls/${harness.pullRequest}`);
   if (field(pull, "merged") !== true || typeof field(pull, "merged_at") !== "string") fail(`pull request #${harness.pullRequest} is not merged`);
   if (field(pull, "merge_commit_sha") !== harness.source.head) fail(`pull request #${harness.pullRequest} merged as ${String(field(pull, "merge_commit_sha"))}, not the harness ${harness.source.head}`);
-  if (field(pull, "base.ref") !== "main" || field(pull, "base.repo.full_name") !== harness.repository) fail(`pull request #${harness.pullRequest} did not merge into ${harness.repository} main`);
+  if (field(pull, "base.ref") !== harness.targetBranch || field(pull, "base.repo.full_name") !== harness.repository) fail(`pull request #${harness.pullRequest} did not merge into ${harness.repository} ${harness.targetBranch}`);
   if (field(pull, "head.sha") !== harness.review.candidate.head) fail(`pull request #${harness.pullRequest} head ${String(field(pull, "head.sha"))} is not the reviewed candidate`);
   const tree = async (commit: string) => field(await read(`repos/${harness.repository}/git/commits/${commit}`), "tree.sha");
   if (await tree(harness.review.candidate.head) !== harness.review.candidate.tree) fail("reviewed candidate tree differs from GitHub's");
   if (await tree(harness.source.head) !== harness.source.tree) fail("merged commit tree differs from GitHub's");
   if (harness.review.candidate.tree !== harness.source.tree) fail("the merged tree is not the reviewed candidate tree");
-  return { url: String(field(pull, "html_url")), mergedAt: String(field(pull, "merged_at")), mergeCommit: harness.source.head, head: harness.review.candidate.head, base: "main" };
+  const branch = await read(`repos/${harness.repository}/git/ref/heads/${harness.targetBranch}`);
+  if (field(branch, "ref") !== `refs/heads/${harness.targetBranch}` || field(branch, "object.type") !== "commit") fail(`${harness.targetBranch} is not a branch of ${harness.repository}`);
+  if (field(branch, "object.sha") !== harness.source.head) fail(`${harness.targetBranch} head ${String(field(branch, "object.sha"))} is not the harness ${harness.source.head}`);
+  return { url: String(field(pull, "html_url")), mergedAt: String(field(pull, "merged_at")), mergeCommit: harness.source.head, head: harness.review.candidate.head,
+    base: harness.targetBranch, branchHead: harness.source.head };
 }
 /** The untouched independent review and a separate, byte-pinned coordinator correction record. */
 export function requireReview(harness: HarnessIdentity) {

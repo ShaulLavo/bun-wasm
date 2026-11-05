@@ -10,14 +10,14 @@
 // Individual artifact paths remain source checks only. Controls never qualify.
 // docs: .internal/io-resource-context-qualification.md
 import { spawn, type ChildProcess } from "node:child_process";
-import type { Browser, BrowserServer } from "playwright";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { withConsumerGroups } from "./consumer-process-groups.ts";
 import { verifyLauncher } from "./producer-closure.ts";
-import { expectedBrowserPayload, loadedObserver, type LoadedAsset } from "./io-resource-context-assets.ts";
+import { expectedBrowserPayload, loadedObserver, type BrowserMade, type LoadedAsset } from "./io-resource-context-assets.ts";
 import { bindFiveOwnerBrowser, bindFiveOwnerOutput, bindFiveOwnerSource, readFiveOwnerHandoff, readFiveOwnerMember, recheckFiveOwnerBrowser, recheckFiveOwnerHandoff, requireFiveOwnerMember, requireFiveOwnerResponse, verifyFiveOwnerGuest, type PinnedHandoff } from "./io-resource-context-intake.ts";
 import { bindLoaded, type LoadedObservation } from "./c1/loaded.ts";
 import { RESULT_FILE, isRowId, rowIds, rows, unqualified, type Expected, type ExpectedFrame, type Frame, type Observation, type RowId } from "../tests/fixtures/io-resource-context/rows.ts";
@@ -224,7 +224,10 @@ export function parseGuestResult(text: string, requested?: readonly RowId[], per
 
 // ---- execution -----------------------------------------------------------------------------
 
-interface Execution { readonly code: number | null; readonly timedOut: boolean; readonly resultText: string | null; readonly loaded: readonly LoadedObservation[]; readonly payloadEvidence?: readonly LoadedAsset[]; readonly cleanup: Record<string, unknown>; readonly error?: string | null }
+interface Execution {
+  readonly code: number | null; readonly timedOut: boolean; readonly resultText: string | null; readonly loaded: readonly LoadedObservation[];
+  readonly payloadEvidence?: readonly LoadedAsset[]; readonly browserMade?: Readonly<Record<BrowserMade, number>>; readonly cleanup: Record<string, unknown>; readonly error?: string | null;
+}
 
 function stageFixture(work: string): FileIdentity[] {
   mkdirSync(work, { recursive: true });
@@ -326,26 +329,44 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-interface ChromiumResources {
+/** What cleanup needs of Playwright's launched server and connection; the real objects satisfy it. */
+interface OwnedBrowserServer { kill(): Promise<void>; process(): ChildProcess }
+export interface ChromiumResources {
   server: ChildProcess | null;
-  browserServer: Promise<BrowserServer> | null;
-  browser: Promise<Browser> | null;
+  browserServer: Promise<OwnedBrowserServer> | null;
+  browser: Promise<{ close(): Promise<void> }> | null;
   serverGone: boolean;
   browserGone: boolean;
 }
 
-async function stopChromium(resources: ChromiumResources): Promise<void> {
+/** A leader that has exited and left no process in its group. Never-started resources are gone. */
+function groupGone(child: ChildProcess | null | undefined): boolean {
+  if (!child || child.pid === undefined) return true;
+  return (child.exitCode !== null || child.signalCode !== null) && !groupAlive(child.pid);
+}
+
+/**
+ * Stops both owned process groups and reports each only after it is awaited.
+ * Playwright's kill() sends one SIGKILL to the browser's group and waits only
+ * for the leader, so Chromium helpers in that group can still exist (or be
+ * unreaped) when it returns. The group is therefore stopped again with the
+ * same owner utility as the web server, which waits for it to empty.
+ */
+export async function stopChromium(resources: ChromiumResources): Promise<void> {
   const { stopProcessGroup } = await import("../web/tests/next-framework-process.ts");
-  const browserServer = await resources.browserServer?.catch(() => null);
-  const serverStop = resources.server ? stopProcessGroup(resources.server) : Promise.resolve();
-  const stopped = await Promise.allSettled([serverStop, browserServer?.kill()]);
-  resources.serverGone = resources.server === null || resources.server.pid === undefined || !groupAlive(resources.server.pid);
+  const browserServer = await resources.browserServer?.catch(() => null) ?? null;
   const child = browserServer?.process();
-  resources.browserGone = !child || ((child.exitCode !== null || child.signalCode !== null) && (child.pid === undefined || !groupAlive(child.pid)));
-  const browser = await resources.browser?.catch(() => null);
-  await browser?.close();
-  await browserServer?.close();
-  const failure = stopped.find(result => result.status === "rejected");
+  const groups = [resources.server, child].filter((value): value is ChildProcess => value != null);
+  const failures = await withConsumerGroups(groups, async () => {
+    const killed = await Promise.allSettled([resources.server ? stopProcessGroup(resources.server) : undefined, browserServer?.kill()]);
+    const drained = await Promise.allSettled([child ? stopProcessGroup(child) : undefined]);
+    const browser = await resources.browser?.catch(() => null) ?? null;
+    const disconnected = await Promise.allSettled([browser?.close()]);
+    return killed.concat(drained, disconnected);
+  });
+  resources.serverGone = groupGone(resources.server);
+  resources.browserGone = groupGone(child);
+  const failure = failures.find(result => result.status === "rejected");
   if (failure?.status === "rejected") throw failure.reason;
   if (!resources.serverGone || !resources.browserGone) throw new Error("Chromium execution left an owned process group");
 }
@@ -374,11 +395,13 @@ async function chromiumBody(webRoot: string, invocation: Invocation, work: strin
     recheckFiveOwnerHandoff(invocation.evidence);
     recheckFiveOwnerBrowser(invocation.evidence, playwright.chromium.executablePath());
   }
-  resources.browserServer = playwright.chromium.launchServer({ timeout: 30_000, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
-  const browserServer = await abortable(resources.browserServer, signal);
+  const launching = playwright.chromium.launchServer({ timeout: 30_000, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
+  resources.browserServer = launching;
+  const browserServer = await abortable(launching, signal);
   signal.throwIfAborted();
-  resources.browser = playwright.chromium.connect(browserServer.wsEndpoint(), { timeout: 30_000 });
-  const browser = await abortable(resources.browser, signal);
+  const connecting = playwright.chromium.connect(browserServer.wsEndpoint(), { timeout: 30_000 });
+  resources.browser = connecting;
+  const browser = await abortable(connecting, signal);
   const url = await abortable(startWeb(resources, webRoot), signal);
   const context = await abortable(browser.newContext(), signal);
   const pinned = invocation.evidence.kind === "handoff" ? invocation.evidence : null;
@@ -434,7 +457,7 @@ export async function captureChromiumExecution(options: {
   }
   const observations = progress.observer?.snapshot();
   return { code: progress.code, timedOut: progress.timedOut, resultText: progress.resultText,
-    loaded: observations?.loaded ?? [], payloadEvidence: observations?.payloads ?? [], cleanup: options.cleanupStatus(), error };
+    loaded: observations?.loaded ?? [], payloadEvidence: observations?.payloads ?? [], browserMade: observations?.browserMade, cleanup: options.cleanupStatus(), error };
 }
 
 async function runChromium(webRoot: string, invocation: Invocation, work: string): Promise<Execution> {
@@ -519,7 +542,8 @@ export function buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execu
     acceptanceScope: "Observed public-API rows only; named unqualified lifetime/fault limits remain",
     admission: { kind: admissionKind },
     coverage: { requested: invocation.rows, omittedImplemented: omitted, limitedNativeRows: verdicts.filter(verdict => verdict.status === "limited").map(verdict => verdict.id) },
-    artifacts: admitted.artifacts, receipts: admitted.receipts, loaded: execution.loaded, payloadEvidence: execution.payloadEvidence ?? [], fixture: fixtureFiles,
+    artifacts: admitted.artifacts, receipts: admitted.receipts, loaded: execution.loaded, payloadEvidence: execution.payloadEvidence ?? [],
+    browserMade: execution.browserMade ?? null, fixture: fixtureFiles,
     guest: { exitCode: execution.code, timedOut: execution.timedOut, execPath: parsed?.execPath ?? null, rowExecPaths: parsed?.rows.map(run => run.report?.execPath ?? null) ?? [] },
     rows: verdicts, unqualified,
     cleanup: { ...execution.cleanup, workRemoved },

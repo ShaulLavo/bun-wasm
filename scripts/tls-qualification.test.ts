@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { FirstFailure, TlsQualificationFailure, formatTlsFailure, parseTlsArguments, runTlsCli } from "./tls-qualification.ts";
+import { inspect } from "node:util";
+import { FirstFailure, RunSecrets, TlsQualificationFailure, formatTlsFailure, parseTlsArguments, runTlsCli } from "./tls-qualification.ts";
 import {
   TLS_STAGE, guestArtifacts, preflightTls, readVerifiedFile, recheckDependencies, requireInstalledRuntimePackage, tlsLoaded, tlsReleaseTuple, verifyReviewedHostSource,
   type ObservedResponse, type TlsEvidence, type TlsIntake,
@@ -17,9 +18,12 @@ import { DELIVERY_RECORDS, type InputManifest } from "./c1/contract.ts";
 import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
 import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
-import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
+import { PgWireAudit, piLane, stderrTail } from "../web/tests/tls-relay-services.ts";
+import { fixtureHostTools } from "./c1/contract-fixture.ts";
+import type { HostTool, HostTools } from "./c1/replay.ts";
+import { PassThrough } from "node:stream";
 import { verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
-import { piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
+import { FixtureCommandError, execute, ownerFailureLine, piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
 
 /**
  * Every fixture here is synthetic parser data built from the controller's
@@ -696,11 +700,35 @@ describe("Pi TLS PostgreSQL ownership", () => {
     await removePiPostgres(plan(), { container: false, volume: false }, run);
     expect(commands).toEqual([]);
   });
-  test("does not remove the volume after uncertain physical container stop", async () => {
+  test("an unconfirmed container step still attempts the unforced volume removal and keeps both errors", async () => {
     const commands: string[][] = [];
     const run: PodmanRun = async args => { commands.push(Array.from(args)); return { code: 0, stdout: "" }; };
-    await expect(removePiPostgres(plan(), { container: true, volume: true }, run)).rejects.toThrow("container absence");
-    expect(commands.some(args => args[0] === "volume")).toBe(false);
+    const failure = await removePiPostgres(plan(), { container: true, volume: true }, run).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors.map((error: Error) => error.message)).toEqual(["Pi PostgreSQL container absence unconfirmed", "Pi PostgreSQL volume absence unconfirmed"]);
+    expect(commands).toContainEqual(["volume", "rm", "--ignore", plan().volume]);
+    expect(commands.flat().filter(arg => arg === "--force")).toEqual(["--force"]);
+  });
+  test("a concrete Podman failure is kept with its exit, signal and stderr, and never skips the other object", async () => {
+    const commands: string[][] = [];
+    const timedOut = new FixtureCommandError("podman rm --force", null, "SIGTERM", "");
+    const inUse = new FixtureCommandError("podman volume rm", 2, null, "Error: volume bun-wasm-tls-x-data is being used by the following container(s): 0123: volume is being used");
+    const run: PodmanRun = async args => {
+      commands.push(Array.from(args));
+      if (args[0] === "rm") throw timedOut;
+      if (args[0] === "volume" && args[1] === "rm") throw inUse;
+      return { code: 1, stdout: "" };
+    };
+    const failure = await removePiPostgres(plan(), { container: true, volume: true }, run).catch(error => error);
+    expect(failure.errors).toEqual([timedOut, inUse]);
+    expect(timedOut.message).toBe("podman rm --force ended by SIGTERM");
+    expect(inUse.message).toBe(`podman volume rm exited 2: ${inUse.stderr}`);
+    expect(commands.map(args => args.slice(0, 2).join(" "))).toEqual(["rm --force", "volume rm"]);
+    const line = JSON.parse(ownerFailureLine([new AggregateError([failure], "Pi PostgreSQL fixture failed or cleanup unconfirmed")]));
+    expect(line.failures[0].errors[0].errors).toEqual([
+      { name: "Error", message: "podman rm --force ended by SIGTERM", code: null, signal: "SIGTERM" },
+      { name: "Error", message: inUse.message, code: 2, signal: null },
+    ]);
   });
   test("preflight and orchestration require Podman, not host PostgreSQL or Pi /work", async () => {
     const cli = await readFile(new URL("./tls-qualification.ts", import.meta.url), "utf8");
@@ -743,9 +771,11 @@ describe("primary TLS host failure evidence", () => {
     expect(failure.errors[1]).toBe(caught);
     expect(exercised).toBe(false);
     const diagnostic = JSON.parse(formatTlsFailure(new TlsQualificationFailure("pre-ledger-remote-inventory", failure)));
-    expect(diagnostic.primary).toEqual({ name: "Error", message: primary.message, code: "ENOENT", errno: -2, syscall: "spawnSync mesh", path: "mesh" });
+    expect(diagnostic.primary).toMatchObject({ name: "Error", message: primary.message, code: "ENOENT", errno: -2, syscall: "spawnSync mesh", path: "mesh" });
+    expect(diagnostic.primary.stack).toContain(primary.message);
     expect(diagnostic.relatedErrors).toHaveLength(2);
-    expect(diagnostic.relatedErrors.map((row: Record<string, unknown>) => row.message)).toEqual([undefined, undefined]);
+    expect(diagnostic.relatedErrors[0].message).toBe(primary.message);
+    expect(diagnostic.relatedErrors[1]).toMatchObject({ name: "AggregateError", message: "TLS cleanup unconfirmed", errors: [{ name: "Error", message: "cleanup witness failed" }] });
   });
   test("an error with no later cleanup failure is reported unchanged", async () => {
     const primary = enoent();
@@ -753,20 +783,182 @@ describe("primary TLS host failure evidence", () => {
     const caught = await qualifiedRun(async () => undefined, first.guard(async () => { throw primary; }), async () => {}).catch(error => error);
     expect(first.resolve(caught)).toBe(primary);
   });
-  test("post-setup messages, captured output, argv and environment never reach the diagnostic", async () => {
-    const secret = "sentinel-password-0123456789";
-    const child = Object.assign(new Error(`Command failed: mesh ssh pi -- psql ${secret}`), { code: "EPIPE", stdout: secret, stderr: secret, spawnargs: [secret], env: { PGPASSWORD: secret } });
-    const text = formatTlsFailure(new TlsQualificationFailure("services", child));
-    expect(text).not.toContain(secret);
-    expect(JSON.parse(text).primary).toEqual({ name: "Error", code: "EPIPE" });
+  /** Synthetic run secrets with characters whose JSON and URL forms differ from the raw value. */
+  function knownSecrets() {
+    const secrets = new RunSecrets();
+    const password = 'p@ss/w"o+rd=sentinel-0123456789';
+    const key = Buffer.from(Array.from({ length: 32 }, (_, index) => (index * 37 + 251) % 256));
+    const token = "v1.sentinel-relay-token.0123456789abcdef";
+    secrets.add(password);
+    secrets.add(key);
+    secrets.add(token);
+    const forms = [password, JSON.stringify(password).slice(1, -1), encodeURIComponent(password), key.toString("hex"), key.toString("base64"), key.toString("base64url"),
+      encodeURIComponent(key.toString("base64")), Array.from(key).join(","), token];
+    return { secrets, password, key, token, forms };
+  }
+  test("only registered run secrets are redacted; phase, message, stack and errno stay", async () => {
+    const { secrets, password, key, token, forms } = knownSecrets();
+    const browser = Object.assign(new Error(`page.evaluate: connect postgres://postgres:${encodeURIComponent(password)}@pg.tls.test:5432 failed; case body {"password":${JSON.stringify(password)}}; key ${key.toString("hex")} ${key.toString("base64")} [${Array.from(key).join(",")}]; token ${token}`), { code: "ECONNRESET", errno: -104 });
+    browser.stack = `Error: ${browser.message}\n    at runCase (web/tests/tls-relay-page.ts:10:5)\n    at token=${encodeURIComponent(key.toString("base64"))}`;
+    const unsecret = new Error("relay listener closed before the case finished");
+    const failure = new AggregateError([browser, new AggregateError([unsecret], "TLS cleanup unconfirmed")], "TLS operation and cleanup failed", { cause: browser });
+    const text = formatTlsFailure(new TlsQualificationFailure("browser", failure, secrets));
+    for (const form of forms) expect(text).not.toContain(form);
+    const diagnostic = JSON.parse(text);
+    expect(diagnostic.phase).toBe("browser");
+    expect(diagnostic.primary).toMatchObject({ name: "Error", code: "ECONNRESET", errno: -104 });
+    expect(diagnostic.primary.message).toStartWith("page.evaluate: connect postgres://postgres:[redacted run secret]@pg.tls.test:5432 failed; case body {\"password\":\"[redacted run secret]\"}");
+    expect(diagnostic.primary.stack).toContain("at runCase (web/tests/tls-relay-page.ts:10:5)");
+    expect(diagnostic.relatedErrors[1].errors[0]).toMatchObject({ name: "Error", message: "relay listener closed before the case finished" });
+    expect(diagnostic.relatedErrors[1].errors[0].stack).toContain("relay listener closed before the case finished");
+  });
+  test("unsecret messages, captured command lines and stacks are retained, and the CLI writes only redacted text", async () => {
+    const { secrets, password, forms } = knownSecrets();
+    const child = Object.assign(new Error(`Command failed: mesh ssh pi -- psql\nERROR: password authentication failed for ${password}`), { code: "EPIPE", stdout: password, stderr: password, spawnargs: [password], env: { PGPASSWORD: password } });
+    const text = formatTlsFailure(new TlsQualificationFailure("services", child, secrets));
+    for (const form of forms) expect(text).not.toContain(form);
+    expect(JSON.parse(text).primary).toMatchObject({ name: "Error", code: "EPIPE", message: "Command failed: mesh ssh pi -- psql\nERROR: password authentication failed for [redacted run secret]" });
+    const control = JSON.parse(formatTlsFailure(new TlsQualificationFailure("browser", new Error("page did not answer within 90000 ms"))));
+    expect(control.primary).toMatchObject({ name: "Error", message: "page did not answer within 90000 ms" });
+    expect(control.primary.stack).toContain("page did not answer within 90000 ms");
     const messages: string[] = [];
-    expect(await runTlsCli(async () => { throw new TlsQualificationFailure("browser", child); }, message => { messages.push(message); })).toBe(1);
-    expect(messages.join("")).not.toContain(secret);
+    expect(await runTlsCli(async () => { throw new TlsQualificationFailure("browser", child, secrets); }, message => { messages.push(message); })).toBe(1);
+    for (const form of forms) expect(messages.join("")).not.toContain(form);
+    expect(messages.join("")).toContain("password authentication failed for [redacted run secret]");
     expect(messages.at(-1)).toBe("TLS qualification failed. No application TLS acceptance is claimed.\n");
+  });
+  test("a secret is redacted before diagnostics are bounded, and short secrets are refused", () => {
+    const { secrets, password } = knownSecrets();
+    const long = new Error(`${"x".repeat(16 * 1024 - 5)}${password}`);
+    const text = formatTlsFailure(new TlsQualificationFailure("browser", long, secrets));
+    expect(text).not.toContain(password.slice(0, 5));
+    expect(JSON.parse(text).primary.message).toContain("more characters]");
+    expect(() => new RunSecrets().add("short")).toThrow("too short");
+  });
+  test("actual byte-key inspection values are removed from messages and stacks", () => {
+    const secrets = new RunSecrets();
+    const key = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 33));
+    secrets.add(key);
+    const forms = [inspect(key), inspect(new Uint8Array(key))];
+    const error = new Error(`relay key rejected: ${forms.join("; ")}`);
+    const diagnostic = JSON.parse(formatTlsFailure(new TlsQualificationFailure("browser", error, secrets)));
+    expect(diagnostic.primary.message).toContain("relay key rejected:");
+    for (const form of forms) { expect(diagnostic.primary.message).not.toContain(form); expect(diagnostic.primary.stack).not.toContain(form); }
+    expect(diagnostic.primary.message).not.toContain("21 22 23 24");
+    expect(diagnostic.primary.stack).toContain("relay key rejected:");
   });
   test("a successful run writes nothing and claims nothing", async () => {
     const messages: string[] = [];
     expect(await runTlsCli(async () => {}, message => { messages.push(message); })).toBe(0);
     expect(messages).toEqual([]);
+  });
+});
+
+describe("Pi lane lease and remote owner evidence (host-only, a scratch lock file, no Pi)", () => {
+  const scratch: string[] = [];
+  const leases: TlsCleanup[] = [];
+  afterEach(async () => {
+    await Promise.allSettled(leases.splice(0).map(owner => owner.close()));
+    for (const root of scratch.splice(0)) await rm(root, { recursive: true, force: true });
+  });
+  function localTool(name: "flock" | "sh" | "cat"): HostTool {
+    const found = Bun.which(name);
+    if (!found) throw new Error(`test needs a local ${name}`);
+    return { ...fileIdentity(realpathSync(found)), version: { args: ["--version"], line: "" } };
+  }
+  async function lane(reconciled: boolean) {
+    const root = await mkdtemp(join(tmpdir(), "bun-wasm-pi-lane-"));
+    scratch.push(root);
+    const tools: HostTools = { ...fixtureHostTools(join(root, "tools")), flock: localTool("flock"), sh: localTool("sh"), cat: localTool("cat") };
+    const lock = join(root, "pi.lock");
+    const owner = new TlsCleanup();
+    leases.push(owner);
+    const lease = await piLane(owner, new AbortController().signal, () => reconciled, tools, lock);
+    return { owner, lease, lock: { path: lock, flock: tools.flock.path } };
+  }
+  /** Whether another holder could take the lock now, without waiting. */
+  function lockFree(lock: { path: string; flock: string }): boolean {
+    try { execFileSync(lock.flock, ["--nonblock", lock.path, "true"]); return true; } catch { return false; }
+  }
+  function running(pid: number | undefined): boolean {
+    if (pid === undefined) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+  test("a reconciled remote fixture ends the lease cleanly", async () => {
+    const { owner, lease, lock } = await lane(true);
+    expect(lockFree(lock)).toBe(false);
+    await owner.close();
+    expect(running(lease.pid)).toBe(false);
+    expect(lockFree(lock)).toBe(true);
+  });
+  test("an unreconciled remote fixture still ends the lease holder, then fails the run naming what stays", async () => {
+    const { owner, lease, lock } = await lane(false);
+    const failure = await owner.close().catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(String(failure.errors[0])).toContain("Pi lane released with the remote PostgreSQL fixture unreconciled");
+    expect(running(lease.pid)).toBe(false);
+    expect(lockFree(lock)).toBe(true);
+  });
+  // The lock acknowledgement precedes exec(cat); wait for the actual control target.
+  async function catDescendant(holder: number): Promise<number> {
+    const until = performance.now() + 1000;
+    while (performance.now() < until) {
+      const members = readFileSync(`/proc/${holder}/task/${holder}/children`, "utf8").trim().split(/\s+/).map(Number);
+      expect(members).toHaveLength(1);
+      const member = members[0];
+      if (member && readFileSync(`/proc/${member}/comm`, "utf8").trim() === "cat") return member;
+      await Bun.sleep(5);
+    }
+    throw new Error("Owned lease shell did not exec cat within the control deadline");
+  }
+  test.each([true, false])("a stopped lease descendant is gone and its lock released after timeout, reconciled=%s", async reconciled => {
+    const { owner, lease, lock } = await lane(reconciled);
+    if (!lease.pid) throw new Error("Expected an owned lease PID");
+    const member = await catDescendant(lease.pid);
+    process.kill(member, "SIGSTOP");
+    const failure = await owner.close().catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(String(failure.errors[0])).toContain(reconciled ? "deadline" : "unreconciled");
+    if (!reconciled) expect(String(failure.errors[0].cause)).toContain("deadline");
+    expect(running(lease.pid)).toBe(false);
+    expect(running(member)).toBe(false);
+    expect(lockFree(lock)).toBe(true);
+  }, 20_000);
+  test.each(["raw", "json", "url"] as const)("remote command stderr redacts before its bound and owner ledger: %s", async form => {
+    const secret = 'synthetic-remote-password-0123456789abcdef\n"';
+    const secrets = new RunSecrets();
+    secrets.add(secret);
+    const value = form === "json" ? JSON.stringify(secret).slice(1, -1) : form === "url" ? encodeURIComponent(secret) : secret;
+    const code = `const value = process.env.SYNTHETIC_RUN_SECRET; const cut = Math.floor(value.length / 2); process.stderr.write(value.slice(0, cut)); setTimeout(() => { process.stderr.write(value.slice(cut) + "x".repeat(4096 - 10)); process.exitCode = 23; }, 5);`;
+    const failure = await execute(process.execPath, ["--eval", code], { timeout: 5000, secrets, env: { ...process.env, SYNTHETIC_RUN_SECRET: value } }).catch(error => error);
+    expect(failure).toBeInstanceOf(FixtureCommandError);
+    expect(failure.code).toBe(23);
+    expect(failure.stderr.length).toBeLessThanOrEqual(4096);
+    expect(failure.stderr).not.toContain(value.slice(-10));
+    const ledger = ownerFailureLine([failure], secrets);
+    expect(ledger).not.toContain(value.slice(-10));
+    expect(JSON.parse(ledger).failures[0].message).toContain("exited 23");
+  });
+  test.each(["raw", "json", "url"] as const)("stderr secrets are redacted before the tail boundary and across chunks: %s", async form => {
+    const secret = "synthetic-password-0123456789abcdef\n\"";
+    const secrets = new RunSecrets();
+    secrets.add(secret);
+    const value = form === "json" ? JSON.stringify(secret).slice(1, -1) : form === "url" ? encodeURIComponent(secret) : secret;
+    const stream = new PassThrough();
+    const tail = stderrTail(stream, secrets);
+    const cut = Math.floor(value.length / 2);
+    stream.write("safe prefix " + value.slice(0, cut));
+    stream.end(value.slice(cut) + "x".repeat(64 * 1024 - 10));
+    await new Promise(resolve => stream.once("end", resolve));
+    expect(tail()).not.toContain(value.slice(-10));
+    expect(tail().length).toBeLessThanOrEqual(64 * 1024);
+  });
+  test("a remote owner's stderr is kept as a bounded tail", async () => {
+    const stream = new PassThrough();
+    const tail = stderrTail(stream, new RunSecrets(), 8);
+    stream.write("first line\n");
+    stream.end("podman exited 2\n");
+    await new Promise(resolve => stream.once("end", resolve));
+    expect(tail()).toBe("xited 2\n");
   });
 });

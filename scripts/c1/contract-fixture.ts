@@ -9,7 +9,7 @@ import {
 import type { LoadedObservation } from "./loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, sealDelivery } from "./delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
-import { HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type HarnessIdentity, type ReplayContract, type ReplayRoots } from "./replay.ts";
+import { HARNESS_TARGET_BRANCH, HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type HarnessIdentity, type ReplayContract, type ReplayRoots } from "./replay.ts";
 
 /**
  * Executable schema fixture: a synthetic sealed delivery with every registry
@@ -144,7 +144,7 @@ export function writeReplayFixture(parts: ReplayFixtureParts, product: unknown):
   for (const engine of NOT_RERUN) write(join(original, "five-owner", engine, "result.json"), `${JSON.stringify({ fixture: engine })}\n`);
   const contract: ReplayContract = { schema: "bun-wasm.c1-replay/1",
     product: { config: fileIdentity(parts.config), intake: fileIdentity(parts.intake), delivery: fileIdentity(parts.delivery), source: sealed.source, tuple: sealed.tuple, members: sealed.files.length },
-    harness: { ...harness, repository: "fixture/bun-wasm", pullRequest: 1, review },
+    harness: { ...harness, repository: "fixture/bun-wasm", targetBranch: HARNESS_TARGET_BRANCH, pullRequest: 1, review },
     original: { output: original, handoff: fileIdentity(join(original, "handoff.json")), qualification: fileIdentity(join(original, "QUALIFICATION.json")),
       native: { quickjs: fileIdentity(join(original, "five-owner/quickjs/result.json")), jsc: fileIdentity(join(original, "five-owner/jsc/result.json")) } },
     hostTools: fixtureHostTools(join(root, "host-tools")), roots: parts.roots };

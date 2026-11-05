@@ -12,7 +12,8 @@ upstream. It changes no vendored source and no product build input.
   every member with its sealed mode. Nothing is relabeled, rebuilt or resealed.
 - **Consumer harness**: the merged, reviewed checkout whose controller and
   drivers run the consumers. The contract names its checkout, merged commit and
-  tree, repository, pull request number, and the unchanged independent review.
+  tree, repository, target branch, pull request number, and the unchanged
+  independent review.
   A separate correction record binds the reviewed source, the final candidate,
   every resolved finding, the exact correction diff, and its test evidence.
 
@@ -40,9 +41,16 @@ the sealed delivery and the intake. A bare product handoff is refused.
    the exact consumer-only diff to the final candidate, and pin the test logs.
    A finding-free review permits no subsequent source changes.
 5. GitHub's public REST answers, read unauthenticated, show the pull request
-   merged into `main` of the named repository at exactly the harness commit,
-   from exactly the reviewed candidate head, and GitHub's commit objects give the
-   candidate and merged trees, which must be equal.
+   merged into the harness target branch `consumer/runtime110` of the named
+   repository at exactly the harness commit, from exactly the reviewed
+   candidate head; GitHub's commit objects give the candidate and merged
+   trees, which must be equal; and that branch's head is still the harness
+   commit. The contract records the target branch as its own strict field
+   (`harness.targetBranch`), and no other value parses. Main is never read:
+   it keeps moving (installer, locks, product), and those commits can neither
+   admit a harness nor enter a replay, because the diff from the product
+   source must still touch consumer files only. The same harness changes
+   reach main later through an ordinary pull request.
 
 The reconciled candidate tree must equal the merged tree. The merge is public,
 and both the correction diff and the diff from the product touch consumer
@@ -77,9 +85,45 @@ whole `result.json`, or why none is readable.
 - `scripts/io-resource-context.ts` keeps Chromium observations captured before
   a failure and reports the first execution error; later cleanup or empty
   loaded validation errors are diagnostics.
-- `scripts/tls-qualification.ts` tags failures by phase, keeps the first setup
-  or exercise error when cleanup also fails, and prints messages only for
-  credential-free pre-ledger phases. The browser prelaunch check binds the
-  running harness identity separately from the delivered product identity.
-  `scripts/tls-qualification-lifecycle.ts`
-  is a bundled input of the sealed TLS page and is unchanged.
+- Every successful GET the page makes is checked against the sealed web root
+  and named by URL when it is refused. Two kinds of response are made by the
+  page itself rather than loaded from the server, and are counted in
+  `browserMade` instead: the `blob:` content URLs the browser engine gives each
+  guest module, and the `/__bunwasm/m/<run>/<key>` cycle modules the service
+  worker answers from Cache Storage (only when the response really came from
+  the service worker, at the page origin). They never become `loaded` rows,
+  never bind to a member and never satisfy coverage. Server answers, including
+  `.gz`/`.br` representations, are unchanged.
+- Chromium cleanup stops the web server's and the browser's process groups
+  with the shared `stopProcessGroup` utility and reads `browserClosed` only
+  after the browser group is empty. Playwright's own kill waits only for the
+  browser leader, so helpers of that group could still exist when it
+  returned. `scripts/consumer-process-groups.ts` enables Linux child
+  subreaping before cleanup and reaps only adopted zombie grandchildren in
+  the owned detached groups. PID birth identities prevent reuse; direct-child
+  exit events remain Bun's, and unrelated groups are never reaped.
+- `scripts/tls-qualification.ts` tags failures by phase and keeps the first
+  setup or exercise error when cleanup also fails. Every phase keeps its
+  message, stack, errno fields and nested errors. Only registered run secrets
+  are redacted: the database password, the relay credential, the relay
+  token-signing key and each minted token, registered where the driver creates
+  or receives them, in their raw, JSON-escaped, URL-encoded and byte-rendered
+  forms, including Buffer and typed-array inspection. Both the PC stderr
+  observer and remote command owner redact complete values across chunk
+  boundaries before retaining a bounded tail. TLS private keys stay on the
+  Pi, where their redaction is registered locally. The browser prelaunch check
+  binds the running harness identity separately from the delivered product
+  identity. `scripts/tls-qualification-lifecycle.ts` and
+  `scripts/tls-qualification-context.ts` are bundled inputs of the sealed TLS
+  page and are unchanged.
+- `tests/servers/tls.ts` (the Pi PostgreSQL owner the driver sends to the Pi,
+  outside every producer stage and the sealed page) keeps each Podman
+  failure's subcommand, exit code or signal and stderr, removes the container
+  and the volume independently (the volume without `--force`, so Podman
+  itself refuses one still in use), and prints its failures on stderr. The
+  driver records that stderr, redacted, in the remote cleanup ledger row. The
+  Pi lane lease has its own detached process group. Cleanup closes stdin,
+  then ends and reaps the entire group even if a stopped descendant prevents
+  normal EOF handling. The original timeout or unreconciled-resource error
+  remains a failure after local termination. An unreconciled remote fixture
+  is left as it is, named in the ledger.

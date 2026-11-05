@@ -37,11 +37,19 @@ export interface ProductIdentity {
   readonly tuple: ReleaseTuple;
   readonly members: number;
 }
-/** The consumer harness: a merged pull request's commit, and the independent review of the candidate it merged. */
+/**
+ * The one branch consumer harness pull requests merge into. It starts at the
+ * consumer-only replay source, so main can keep moving (installer, lock and
+ * product changes) without entering a replay; the same harness changes reach
+ * main later by an ordinary pull request.
+ */
+export const HARNESS_TARGET_BRANCH = "consumer/runtime110";
+/** The consumer harness: a merged pull request's commit on the harness branch, and the independent review of the candidate it merged. */
 export interface HarnessIdentity {
   readonly sourceRoot: string;
   readonly source: SourceIdentity;
   readonly repository: string;
+  readonly targetBranch: typeof HARNESS_TARGET_BRANCH;
   readonly pullRequest: number;
   readonly review: { readonly artifact: FileIdentity; readonly candidate: SourceIdentity; readonly reconciliation: FileIdentity };
 }
@@ -130,12 +138,13 @@ function hostTools(value: unknown, label: string): HostTools {
   return Object.fromEntries(HOST_TOOL_NAMES.map(name => [name, hostTool(fields[name], `${label}.${name}`)])) as Record<HostToolName, HostTool>;
 }
 function harness(value: unknown, label: string): HarnessIdentity {
-  const fields = row(value, label, ["sourceRoot", "source", "repository", "pullRequest", "review"]);
+  const fields = row(value, label, ["sourceRoot", "source", "repository", "targetBranch", "pullRequest", "review"]);
   const review = row(fields.review, `${label}.review`, ["artifact", "candidate", "reconciliation"]);
   const repository = text(fields.repository, `${label}.repository`);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) fail(`${label}.repository: expected owner/name`);
+  if (fields.targetBranch !== HARNESS_TARGET_BRANCH) fail(`${label}.targetBranch: expected ${HARNESS_TARGET_BRANCH}`);
   return { sourceRoot: absolute(fields.sourceRoot, `${label}.sourceRoot`), source: source(fields.source, `${label}.source`), repository,
-    pullRequest: integer(fields.pullRequest, `${label}.pullRequest`),
+    targetBranch: HARNESS_TARGET_BRANCH, pullRequest: integer(fields.pullRequest, `${label}.pullRequest`),
     review: { artifact: file(review.artifact, `${label}.review.artifact`), candidate: source(review.candidate, `${label}.review.candidate`),
       reconciliation: file(review.reconciliation, `${label}.review.reconciliation`) } };
 }
