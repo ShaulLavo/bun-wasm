@@ -356,6 +356,33 @@ facts exist. Source landing, shared build and consumer execution are separate
 checkpoints. Final combined execution-ready plan goes to managing once these are
 resolved; no per-unit documents or another design competition.
 
+## Implementation map
+
+- `scripts/c1-controller.ts`: the CLI above.
+- `scripts/c1/contract.ts`: config, input manifest, delivery, intake and handoff
+  types and strict parsers. `contract-fixture.ts` writes an executable sample.
+- `scripts/c1/inputs.ts`: read-only byte and receipt admission. WebKit and Bun
+  patch checks use a private index copy and object directory, originals as
+  alternates, `GIT_NO_LAZY_FETCH=1`.
+- `scripts/c1/admission.ts`: donor staging, E from the allowlisted base, the
+  fixed-point check, tool, sysroot, JSC stamp and offline Cargo facts.
+- `scripts/c1/roots.ts`: admission and durable root phases, exclusive claim.
+- `scripts/process-owner.mts` (shared with `run-with-timeout.mts`) and
+  `scripts/c1/process.ts`: subreaped process ownership; unproved drain retains
+  dependencies.
+- `scripts/c1/publication.ts`, `stages.ts`, `operations.ts`: publication steps,
+  the one stage table, check/run/rehearse/qualify.
+- `scripts/c1/delivery.ts`: single-write seal with registry modes, sealed
+  delivery reader, intake admission, handoff.
+
+Known gaps at this checkpoint: the JSC stamp mismatch has no host test of its
+own (missing Git objects and missing Waffle inputs do); in-process captures
+call synchronous product helpers that cannot be cancelled mid-call, their
+children are still owned and drained; TLS and relay consumers report
+`not-run` until their drivers adopt `bun-wasm.c1-handoff/1`; main's TLS
+preflight tests fail against the new registry until TLS migrates in the same
+landing.
+
 ## Independent review reconciliation
 
 Original review at b6398db3 remains CHANGES REQUESTED. Parent incorporated R1
