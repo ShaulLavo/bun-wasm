@@ -16,12 +16,15 @@ Without it browser-engine `AsyncLocalStorage` loses its frame across suspension 
 
 The hook globals (`__bunwasm_capture`, `__bunwasm_resume`, `__bunwasm_resumed`, `__bunwasm_caught`, `__bunwasm_id`, `__bunwasm_iterate`, `__bunwasm_entered`, `__bunwasm_exited`), the `for await` iterator record (`forAwaitRecord`, an original implementation of `GetIterator`'s reads and calls) and the `%AsyncGeneratorPrototype%.throw` wrapper live in `web/src/engine-host.js`. They are original bun-wasm adapters, inert when the host supplies a native continuation (`EngineHostOptions.asyncContext`).
 
+`EngineHost.enterRoot`, also in `web/src/engine-host.js` and also an original adapter, starts every event-loop turn (`pump`) in the root frame on the hook path. A resumed continuation's restore microtask can leave an earlier request's frame current after the checkpoint drains: request A resumes, request C resumes before A's restore runs, and C's restore puts A's frame back. The scheduler's MessageChannel and timers, network readiness, process-wake notifications and the idle `beforeExit` turn all run guest code from `pump`, so a request handler there used to see A's frame, and its `run` copied A's other stores. `web/tests/host-entry-context.test.ts` compares those four entries with Node's `AsyncLocalStorage` and keeps a control with the root entry disabled. Guest listeners on native MessagePort, Worker and WebSocket events run outside `pump` and still see whatever frame is current.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [0008](#0008-await-context-hooks) | Host feature | Add optional printer hooks to preserve browser async context across awaits, rejected awaits, async generators and `for await`. |
 | `web/src/engine-host.js` `installContextHooks`, `forAwaitRecord` | Host feature | Original adapter: the hook globals, the `for await` iterator record and the async generator `throw` wrapper. |
+| `web/src/engine-host.js` `EngineHost.enterRoot` | Host feature | Original adapter: each event-loop turn enters the root frame, so a host-originated entry never inherits a request's leftover frame. |
 
 [Parent context](bun-patch-series.md).
 

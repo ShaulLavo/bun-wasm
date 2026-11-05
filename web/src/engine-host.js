@@ -1052,6 +1052,7 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    this.enterRoot();
     // Read before stepping I/O, so a change published meanwhile still ends the next wait.
     const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
     this.guard(() => this.internal.pumpSignals(), false);
@@ -1077,6 +1078,17 @@ class EngineHost {
       return undefined;
     }
     return this.finish();
+  }
+
+  // Every turn is a host task with an empty stack: the scheduler's MessageChannel and
+  // timers, network readiness and process-wake notifications all arrive here. No request's
+  // frame applies to it. Without a native continuation provider the frame is the host's own
+  // slot, and a resumed continuation's restore microtask can leave an earlier request's
+  // frame there (installContextHooks). The request handler, signal handler or beforeExit
+  // listener this turn runs would then see it, and its `run` would copy that request's other
+  // stores.
+  enterRoot() {
+    if (!this.o.asyncContext) this.asyncContext = undefined;
   }
 
   // Pipe and child changes publish on the process wake word: run the loop for them rather than
