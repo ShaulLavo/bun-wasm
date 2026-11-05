@@ -126,16 +126,28 @@ It delegates cancellation to the existing Socket and Connection lifecycle, which
 closes the host handle, removes I/O waiters and timers, and settles queued writes.
 The first error reaches the socket and HTTP server's `clientError` event, not a
 response `error` event. Socket close emits response close once. Destruction settles
-the adapter's request completion without reusing the connection. End completion
-already queued before cancellation cannot emit a successful finish afterward.
-The existing end-completion method moved into the typed helper for this guard.
+the adapter's request completion without reusing the connection. `errored` starts
+as null and holds the first destroy argument, as Node's `ServerResponse` does, and
+`writable` stays true. An end the transport already accepted still finishes, with
+a successful end callback, when `destroy()` has no error, matching Node. A destroy
+error, a transport error or an earlier close passes the error to the end callback
+instead, and no finish is emitted. The existing end-completion method moved into
+the typed helper for this guard.
 Late writes return false with `ERR_STREAM_DESTROYED` without committing headers;
 accepted writes cannot emit drain after destruction.
 
 `scripts/net-http-flow.test.ts` covers blocked write/end cancellation, exact error
 and return identities, repeated destruction, falsy optional errors, queued end
-completion, and the actual HTTP server connection cleanup. Node and Bun differ
-when native writes have already completed: Bun can finish a small response
-synchronously before a later destroy. The queued-cancellation guard follows Node;
-it does not undo a finish already delivered. These source tests are not a rebuilt
+completion, and the actual HTTP server connection cleanup.
+`scripts/http-response-lifecycle.test.ts` runs the shared cases in
+`tests/fixtures/http-response-lifecycle/scenarios.ts` on a real Node server and on
+the runtime's `net.js` server over the modeled host ABI, then requires equal wire
+bytes, events, response state, callbacks, `clientError` reports, keep-alive reuse
+and recovery on a new connection. It covers destruction before and after headers,
+while streaming and twice, late `writeHead`, `setHeader`, `write` and `end`, errors
+after output, destruction around an accepted end, and client cancellation. Node
+corks the socket during a write and uncorks it on the next tick, so a `write()`
+followed by a synchronous `destroy()` sends nothing there, while this adapter has
+already handed those bytes to the transport and reports a successful write. The
+matrix leaves that buffering difference out. These source tests are not a rebuilt
 guest or a Next.js application acceptance result.
