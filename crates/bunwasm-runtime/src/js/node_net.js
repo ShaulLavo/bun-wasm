@@ -6,6 +6,10 @@
     const EventEmitter = internal.require("events");
     const { Buffer } = internal.require("buffer");
     const { _normalizeArgs, isTcpListenOptions, port, error } = internal.require("net_address");
+    // A socket or server resource runs its I/O steps in the frame current where it registered
+    // them, as Node's resources do; the host enters each I/O turn at the root frame.
+    const { inContext } = internal.require("net_listener");
+    const bindResource = waiter => inContext(native.getAsyncContext(), waiter);
 
     class Socket extends Duplex {
       constructor(options = {}) {
@@ -112,7 +116,7 @@
           return this;
         }
         if (path === undefined) this._dial(options, targetPort);
-        else internal.require("net_path").connect(this, path, options.path, { Connection, addWaiter, hostError });
+        else internal.require("net_path").connect(this, path, options.path, { Connection, addWaiter: waiter => addWaiter(bindResource(waiter)), hostError });
         return this;
       }
       _lookupResult(options, targetPort, err, addresses, family) {
@@ -143,7 +147,7 @@
         this._attempt = { address: target, port: targetPort, family: family || 4 };
         this.emit("connectionAttempt", target, targetPort, family || 4);
         if (this.destroyed) return this;
-        this._connecting = addWaiter({ ref: this._referenced, step: () => this._connectStep(target, targetPort), fail: err => this.destroy(err) });
+        this._connecting = addWaiter(bindResource({ ref: this._referenced, step: () => this._connectStep(target, targetPort), fail: err => this.destroy(err) }));
         return this;
       }
       _connectStep(target, targetPort) {
@@ -328,14 +332,15 @@
             this._starting = null;
             const err = hostError(this._listener, "listen failed");
             waiters.delete(this._accepting);
+            this._accepting = null;
             native.hostClose(this._listener);
             this.listening = false;
             this.emit("error", err);
           }
           return true;
         } };
-        this._starting = addWaiter(startup);
-        this._accepting = acceptLoop(this._listener, conn => this._accept(conn));
+        this._starting = addWaiter(bindResource(startup));
+        this._accepting = bindResource(acceptLoop(this._listener, conn => this._accept(conn)));
         this._accepting.ref = this._referenced;
         if (options.signal) {
           const abort = () => this.close();

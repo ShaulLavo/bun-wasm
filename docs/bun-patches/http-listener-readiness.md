@@ -30,16 +30,21 @@ before it, a scoped `run` around it, and not a frame entered after it. The
 `listening` and bind `error` events and accepted connections see that frame,
 and the caller's frame is restored after each step. The host enters every I/O
 turn in the root frame ([0008](0008-await-context-hooks.md)), so without this
-they would see none. `web/tests/listen-context.test.ts` compares the maintained
-listener, scheduler and HTTP request path with Node's own server on the hook
-path and with a native continuation provider.
+they would see none. A raw `node:net` server binds its startup and accept
+waiters to the same frame through `net_listener`'s `inContext`, and a late bind
+error drops its accept waiter with the frame it carries.
+`web/tests/listen-context.test.ts` compares the maintained listener, scheduler
+and HTTP request path, and the raw TCP listener, with Node's own servers on the
+hook path and with a native continuation provider. Node gives an accepted raw
+socket its own frame; the maintained socket reads in the listen-time frame, as
+the HTTP request path does, so that one observation is not compared.
 
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. Startup and acceptance run in the listen-time async-context frame. |
+| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. Startup and acceptance, HTTP and raw TCP, run in the listen-time async-context frame. |
 
 [Ledger scope and pinned revisions](scope.md).
 

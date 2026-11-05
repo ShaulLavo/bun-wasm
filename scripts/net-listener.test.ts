@@ -134,7 +134,7 @@ test("an unreferenced server keeps its bind request alive until completion", () 
 function httpFixture(protocol: "http" | "tcp" = "http") {
   let listener = 6;
   let accepts = 0;
-  const listeners = new Map<number, { ready: boolean; open: boolean; connections: number[] }>();
+  const listeners = new Map<number, { ready: boolean; failed?: boolean; open: boolean; connections: number[] }>();
   const delivered: number[] = [];
   const ticks: (() => void)[] = [];
   const events: string[] = [];
@@ -148,7 +148,8 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     getAsyncContext: frames.getAsyncContext,
     hostListen() { listeners.set(++listener, { ready: false, open: true, connections: [] }); return listener; },
     hostLocalPort: () => 1234,
-    hostLocalAddr(handle: number) { return listeners.get(handle)?.ready ? "{}" : -2; },
+    hostLocalAddr(handle: number) { const state = listeners.get(handle); return state?.failed ? -1 : state?.ready ? "{}" : -2; },
+    hostError: () => '{"message":"bind failed","code":"EADDRINUSE"}',
     hostAccept(handle: number) {
       accepts++;
       const state = listeners.get(handle);
@@ -189,12 +190,17 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     state.ready = true;
     state.connections = connections;
   }
+  function fail() {
+    const state = listeners.get(listener);
+    if (!state) throw new Error("Missing host listener");
+    state.failed = true;
+  }
   function pump() {
     while (ticks.length) ticks.shift()?.();
     internal.pumpIo();
     while (ticks.length) ticks.shift()?.();
   }
-  return { server, events, internal, delivered, accepts: () => accepts, ready, pump };
+  return { server, events, internal, frames, delivered, accepts: () => accepts, ready, fail, pump };
 
 }
 
@@ -405,3 +411,27 @@ for (const [protocol, bound] of closeCases) {
     }
   });
 }
+
+test("TCP readiness and a late bind error run in the listen-time frame and retire acceptance", () => {
+  for (const failed of [false, true]) {
+    const state = httpFixture("tcp");
+    const seen: unknown[][] = [];
+    state.server.on("listening", () => seen.push(["listening", state.frames.slot.current]));
+    state.server.on("error", () => seen.push(["error", state.frames.slot.current]));
+    state.frames.slot.current = "listen-frame";
+    state.server.listen(1234);
+    state.frames.slot.current = "caller";
+    if (failed) state.fail();
+    else state.ready([]);
+    state.pump();
+    expect(seen).toEqual([[failed ? "error" : "listening", "listen-frame"]]);
+    expect(state.frames.slot.current).toBe("caller");
+    expect(state.server._starting).toBeNull();
+    // A failed bind drops its acceptance waiter and the frame it carries.
+    if (failed) expect(state.server._accepting).toBeNull();
+    expect(state.internal.ioPending()).toBe(failed ? 0 : 1);
+    state.server.close();
+    state.pump();
+    expect(state.internal.ioPending()).toBe(0);
+  }
+});

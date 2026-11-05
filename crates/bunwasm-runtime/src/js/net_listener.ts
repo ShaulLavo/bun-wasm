@@ -16,7 +16,8 @@
   };
   // The listener's callbacks run in the frame current at listen(), as a Node server resource's
   // do. The host enters every I/O turn at the root frame, so without this the listening and
-  // error events and accepted connections would see none.
+  // error events and accepted connections would see none. Raw TCP listeners and outbound
+  // connections (node_net) bind their waiters the same way.
   function inContext<T extends Waiter>(context: unknown, waiter: T): T {
     const step = waiter.step;
     waiter.step = () => internal.runInContext(context, step, waiter, []) as boolean | "progress";
@@ -57,5 +58,5 @@
     server._starting = startup;
     options.addWaiter(startup);
   }
-  return { start };
+  return { start, inContext };
 })
