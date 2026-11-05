@@ -109,6 +109,7 @@ function fixture() {
     native: {
       hostLocalPort(handle: number) { expect(handle).toBe(7); return 4321; },
       hostClose(handle: number) { closed.push(handle); return 0; },
+      getAsyncContext() { return undefined; },
     },
     nextTick(callback: () => void) { callback(); },
     builtin(name: string) {
@@ -118,6 +119,8 @@ function fixture() {
     require(name: string) {
       if (name === "net_address") return address;
       if (name === "net_hostname") return hostname;
+      // Frame binding is covered by web/tests/bun-listen-context.test.ts.
+      if (name === "net_listener") return { inContext: (_context: unknown, waiter: object) => waiter };
       throw new Error(`Unexpected module ${name}`);
     },
   };

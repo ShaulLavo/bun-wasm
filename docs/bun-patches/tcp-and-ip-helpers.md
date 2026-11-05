@@ -29,6 +29,19 @@ operation or consuming an accepted socket, preserving the separate process/pipe
 handle range and returning EAGAIN without partial resource creation.
 No additional upstream implementation was copied for these corrections.
 
+`Bun.listen` (`bun_tcp.ts`) binds its accept waiter to the async-context frame
+current at `listen`, through `net_listener`'s `inContext`, as native Bun does:
+`enterWith` before it, a scoped `run` around it, and not a frame entered after
+it. The host enters every I/O turn in the root frame
+([0008](0008-await-context-hooks.md)), so without this an accepted socket's
+`open`, `data` and `close` callbacks saw none. Accepted sockets start reading in
+that frame and hold it until they close; `stop` drops the accept waiter, so a
+stopped listener that stays reachable no longer holds it. `Bun.connect` already
+kept its connect-time frame through `node:net`. `web/tests/bun-listen-context.test.ts`
+compares the maintained adapter, on the hook path and with a native continuation
+provider, with native Bun over loopback sockets, and checks the caller's frame
+around a synchronous pump and each stop path's retirement.
+
 Bun's `src/js/node/net.ts` depends on native Bun sockets, private stream modules,
 and runtime intrinsics. Its BlockList and SocketAddress use native bindings.
 These adapters implement the public contracts over our host handles while those
@@ -41,6 +54,6 @@ The upstream comparisons are recorded in [TCP support](../tcp.md).
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/net_address.ts`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
-| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. `Bun.listen` accepts in its listen-time async-context frame. |
 
 [Ledger scope and pinned revisions](scope.md).
