@@ -143,7 +143,7 @@ test("preview1 root requests preserve their environment without Bun defaults", a
   const environments: Record<string, string>[] = [{}, { NEXT_TELEMETRY_DISABLED: "0" }, { NEXT_TELEMETRY_DISABLED: "" }];
   for (const env of environments) {
     const caller = Object.freeze({ PATH: "/tools", PWD: "/project", CUSTOM: "kept", ...env });
-    expect(await rootEnvironment(caller, "preview1")).toEqual({ ...caller, PATH: "/bin:/tools", BUNWASM_EXEC_PATH: "/bin/bun" });
+    expect(await rootEnvironment(caller, "preview1")).toEqual(caller);
     expect(caller).toEqual({ PATH: "/tools", PWD: "/project", CUSTOM: "kept", ...env });
   }
 });
