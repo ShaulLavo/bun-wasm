@@ -159,6 +159,17 @@ for name in "${names[@]}"; do
     fi
     continue
   fi
+  if [[ $update == 0 && "$name" == io-resource-context ]]; then
+    iorc=(--surface native --engine "$engine" --guest "$wasm" --launcher "$launcher" --shell "$shell_wasm" --env-utility "$env_wasm")
+    [[ $engine == browser ]] && iorc=(--surface node-host --guest "$wasm" --context "$context")
+    if bun "$root/scripts/io-resource-context.ts" "${iorc[@]}" --out "$scratch/io-resource-context"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == worker-review ]]; then
     if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))
