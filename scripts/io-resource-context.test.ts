@@ -7,10 +7,10 @@ import { join } from "node:path";
 import { RESULT_SCHEMA, buildFiveOwnerResult, evaluateRow, main, parseGuestResult, parseInvocation, type FiveOwnerResult, type Invocation, type RowRun } from "./io-resource-context.ts";
 import { rowIds, rows, type Observation, type RowId } from "../tests/fixtures/io-resource-context/rows.ts";
 import { parseRowOutput } from "../tests/fixtures/io-resource-context/protocol.ts";
-import { isLoadedAsset, loadedObserver } from "./io-resource-context-assets.ts";
-import { captureChromiumExecution, hostDeadline, inspectExecution, runGroup } from "./io-resource-context.ts";
+import { browserMade, isLoadedAsset, loadedObserver } from "./io-resource-context-assets.ts";
+import { captureChromiumExecution, hostDeadline, inspectExecution, runGroup, stopChromium, type ChromiumResources } from "./io-resource-context.ts";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { writeContractFixture } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
@@ -197,8 +197,9 @@ test("review R6/R7: a live host-only timeout stops its owned process group", asy
   } finally { rmSync(out, { recursive: true, force: true }); }
 });
 
-function response(url: string, body: () => Promise<Uint8Array>, encoding?: string) {
-  return { url: () => url, status: () => 200, headers: (): Record<string, string> => encoding ? { "content-encoding": encoding } : {}, request: () => ({ method: () => "GET" }), body };
+function response(url: string, body: () => Promise<Uint8Array>, encoding?: string, fromServiceWorker = false) {
+  return { url: () => url, status: () => 200, headers: (): Record<string, string> => encoding ? { "content-encoding": encoding } : {}, request: () => ({ method: () => "GET" }), body,
+    fromServiceWorker: () => fromServiceWorker };
 }
 
 // Synthetic fixture authority is deliberately insufficient to launch a real guest.
@@ -533,4 +534,179 @@ test("cleanup-only and timeout-plus-cleanup failures remain nonqualifying", asyn
   expect(timeout.timedOut).toBe(true);
   expect(timeout.error).toContain("deadline expired");
   expect(timeout.error).toContain("cleanup after timeout");
+});
+
+// ---- runtime110 replay correction: browser-made responses and Chromium process cleanup ----
+
+const PAGE = "http://127.0.0.1:43839";
+function selectedGuest(f: ReturnType<typeof syntheticHandoff>) {
+  const compressed = readFileSync(join(f.pinned.handoff.webRoot, "bun-browser.wasm.gz"));
+  const bytes = Bun.gunzipSync(compressed);
+  return { compressed, expected: { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") } };
+}
+const unread = async (): Promise<Uint8Array> => { throw new Error("browser-made bodies are never read as delivery evidence"); };
+
+test("guest blob modules and service-worker cycle modules are counted, never guarded or loaded", async () => {
+  const f = syntheticHandoff();
+  const guest = selectedGuest(f);
+  const guarded: string[] = [];
+  const observer = loadedObserver(`${PAGE}/bun-browser.wasm`, guest.expected, url => { guarded.push(url); requireFiveOwnerResponse(f.pinned, url); });
+  observer.capture(response(`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`, async () => guest.compressed));
+  observer.capture(response(`blob:${PAGE}/1b4e28ba-2fa1-41d2-883f-0016d3cca427`, unread));
+  observer.capture(response(`blob:${PAGE}/6f1c2d3e-0000-4000-8000-000000000000`, unread));
+  observer.capture(response(`${PAGE}/__bunwasm/m/1/2f696f2f696e6465782e7473`, unread, undefined, true));
+  const observed = await observer.finish();
+  expect(observed.browserMade).toEqual({ "blob": 2, "service-worker-module": 1 });
+  expect(observed.loaded.map(row => row.url)).toEqual([`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`]);
+  expect(observed.payloads).toHaveLength(1);
+  expect(new Set(guarded)).toEqual(new Set([`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`]));
+});
+
+test.each([
+  ["a server answer at the service-worker module path", `${PAGE}/__bunwasm/m/1/0`, false, `no admitted representation: ${PAGE}/__bunwasm/m/1/0`],
+  ["a service-worker preview response", `${PAGE}/__preview/49152/`, true, `no admitted representation: ${PAGE}/__preview/49152/`],
+  ["an unlisted page-origin file", `${PAGE}/favicon.ico`, false, `no admitted representation: ${PAGE}/favicon.ico`],
+  ["a blob URL minted by another origin", "blob:http://127.0.0.1:1/6f1c2d3e-0000-4000-8000-000000000000", false, "Browser-made response from another origin"],
+  ["a service-worker module on another origin", "http://127.0.0.1:1/__bunwasm/m/1/0", true, "no admitted representation: http://127.0.0.1:1/__bunwasm/m/1/0"],
+] as const)("%s still refuses and names its URL", async (_name, url, fromServiceWorker, message) => {
+  const f = syntheticHandoff();
+  const guest = selectedGuest(f);
+  const observer = loadedObserver(`${PAGE}/bun-browser.wasm`, guest.expected, path => requireFiveOwnerResponse(f.pinned, path));
+  observer.capture(response(`${PAGE}/bun-browser.wasm.gz`, async () => guest.compressed));
+  observer.capture(response(url, async () => new Uint8Array([1]), undefined, fromServiceWorker));
+  await expect(observer.finish()).rejects.toThrow(message);
+  expect(observer.snapshot().loaded.map(row => row.url)).toEqual([`${PAGE}/bun-browser.wasm.gz`]);
+});
+
+test("service-worker copies of admitted files stay delivery loads with their byte binding", async () => {
+  const f = syntheticHandoff();
+  const guest = selectedGuest(f);
+  const observer = loadedObserver(`${PAGE}/bun-browser.wasm`, guest.expected, path => requireFiveOwnerResponse(f.pinned, path));
+  observer.capture(response(`${PAGE}/bun-browser.wasm.gz`, async () => guest.compressed));
+  for (const name of ["index.html", "worker.js"]) observer.capture(response(`${PAGE}/${name}`, async () => readFileSync(join(f.pinned.handoff.webRoot, name)), undefined, true));
+  const observed = await observer.finish();
+  expect(observed.browserMade).toEqual({ "blob": 0, "service-worker-module": 0 });
+  expect(bindLoaded(f.pinned.handoff, "web", parseLoaded(observed.loaded)).map(row => row.route)).toEqual(["web", "web", "web"]);
+  const altered = loadedObserver(`${PAGE}/bun-browser.wasm`, guest.expected, path => requireFiveOwnerResponse(f.pinned, path));
+  altered.capture(response(`${PAGE}/bun-browser.wasm.gz`, async () => guest.compressed));
+  for (const name of ["index.html", "worker.js"]) altered.capture(response(`${PAGE}/${name}`, async () => new Uint8Array([0]), undefined, true));
+  await altered.finish();
+  expect(() => bindLoaded(f.pinned.handoff, "web", parseLoaded(altered.snapshot().loaded))).toThrow("bytes differ from the admitted member");
+});
+
+test("browser-made classification is exact about scheme, origin and the module prefix", () => {
+  expect(browserMade(`blob:${PAGE}/x`, `${PAGE}/bun-browser.wasm`, false)).toBe("blob");
+  expect(browserMade(`${PAGE}/__bunwasm/m/1/0`, `${PAGE}/bun-browser.wasm`, true)).toBe("service-worker-module");
+  expect(browserMade(`${PAGE}/__bunwasm/m/1/0`, `${PAGE}/bun-browser.wasm`, false)).toBeNull();
+  expect(browserMade(`${PAGE}/__bunwasm/worker.js`, `${PAGE}/bun-browser.wasm`, true)).toBeNull();
+  expect(browserMade(`${PAGE}/__bunwasm/mx/1`, `${PAGE}/bun-browser.wasm`, true)).toBeNull();
+  expect(() => browserMade("blob:null/x", `${PAGE}/bun-browser.wasm`, false)).toThrow("another origin");
+});
+
+// Real detached process groups stand in for the web server and Playwright's browser server.
+const owned: ChildProcess[] = [];
+afterEach(() => {
+  for (const child of owned.splice(0)) {
+    if (child.pid === undefined) continue;
+    try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+});
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+/** A detached group whose leader prints the PID of a background member it started. */
+async function group(script: string): Promise<{ child: ChildProcess; member: number }> {
+  const child = spawn("sh", ["-c", script], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+  owned.push(child);
+  const line = await new Promise<string>((resolve, reject) => {
+    child.stdout?.once("data", chunk => resolve(String(chunk).trim()));
+    child.once("error", reject);
+  });
+  return { child, member: Number(line) };
+}
+function exited(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise(resolve => child.once("exit", () => resolve()));
+}
+/** Playwright's kill(): one SIGKILL to the group, then wait for the leader only. */
+function playwrightKill(child: ChildProcess) {
+  return async () => {
+    if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+    await exited(child);
+  };
+}
+/** The race the replay hit: the leader is gone but another member of its group is still there. */
+function leaderOnlyKill(child: ChildProcess) {
+  return async () => { child.kill("SIGKILL"); await exited(child); };
+}
+function resources(server: ChildProcess | null, browserServer: ChromiumResources["browserServer"], browser: ChromiumResources["browser"] = Promise.resolve({ close: async () => {} })): ChromiumResources {
+  return { server, browserServer, browser, serverGone: false, browserGone: false };
+}
+/** A failed acquisition, already observed by its acquirer as in chromiumBody. */
+function rejected(message: string): Promise<never> {
+  const failed = Promise.reject(new Error(message));
+  failed.catch(() => {});
+  return failed;
+}
+const MEMBER = "sleep 30 & echo $!; wait";
+const TERM_IGNORING_MEMBER = "(trap '' TERM; exec sleep 30) & echo $!; wait";
+
+test("ordinary Chromium cleanup reports both owned groups gone after they are awaited", async () => {
+  const server = await group(MEMBER);
+  const browser = await group(MEMBER);
+  const state = resources(server.child, Promise.resolve({ kill: playwrightKill(browser.child), process: () => browser.child }));
+  await stopChromium(state);
+  expect(state).toMatchObject({ serverGone: true, browserGone: true });
+  expect([server.member, browser.member].some(alive)).toBe(false);
+});
+
+test.each([
+  ["a member that outlived the browser leader", MEMBER],
+  ["a member that ignores SIGTERM", TERM_IGNORING_MEMBER],
+] as const)("Chromium cleanup ends %s before reporting browserClosed", async (_name, script) => {
+  const browser = await group(script);
+  const state = resources(null, Promise.resolve({ kill: leaderOnlyKill(browser.child), process: () => browser.child }));
+  await stopChromium(state);
+  expect(state).toMatchObject({ serverGone: true, browserGone: true });
+  expect(alive(browser.member)).toBe(false);
+}, 20_000);
+
+test("a failed launch or connection still stops every acquired group truthfully", async () => {
+  const server = await group(MEMBER);
+  const launchFailed = resources(server.child, rejected("launch failed"), null);
+  await stopChromium(launchFailed);
+  expect(launchFailed).toMatchObject({ serverGone: true, browserGone: true });
+  expect(alive(server.member)).toBe(false);
+  const browser = await group(MEMBER);
+  const connectFailed = resources(null, Promise.resolve({ kill: playwrightKill(browser.child), process: () => browser.child }), rejected("connect failed"));
+  await stopChromium(connectFailed);
+  expect(connectFailed).toMatchObject({ serverGone: true, browserGone: true });
+  expect(alive(browser.member)).toBe(false);
+});
+
+test("a failed kill or disconnect is reported after the groups are really gone", async () => {
+  const browser = await group(MEMBER);
+  const killFailed = resources(null, Promise.resolve({ kill: async () => { throw new Error("kill failed"); }, process: () => browser.child }));
+  await expect(stopChromium(killFailed)).rejects.toThrow("kill failed");
+  expect(killFailed).toMatchObject({ serverGone: true, browserGone: true });
+  expect(alive(browser.member)).toBe(false);
+  const server = await group(MEMBER);
+  const second = await group(MEMBER);
+  const closeFailed = resources(server.child, Promise.resolve({ kill: playwrightKill(second.child), process: () => second.child }),
+    Promise.resolve({ close: async () => { throw new Error("disconnect failed"); } }));
+  await expect(stopChromium(closeFailed)).rejects.toThrow("disconnect failed");
+  expect(closeFailed).toMatchObject({ serverGone: true, browserGone: true });
+  expect([server.member, second.member].some(alive)).toBe(false);
+});
+
+test("never-started resources are gone, and a kill that stopped nothing still leaves no group", async () => {
+  const never = resources(null, null, null);
+  await stopChromium(never);
+  expect(never).toMatchObject({ serverGone: true, browserGone: true });
+  const browser = await group(MEMBER);
+  const leaderAlive = resources(null, Promise.resolve({ kill: async () => {}, process: () => browser.child }));
+  await stopChromium(leaderAlive);
+  expect(leaderAlive).toMatchObject({ browserGone: true });
+  expect(alive(browser.member)).toBe(false);
+  expect(browser.child.exitCode !== null || browser.child.signalCode !== null).toBe(true);
 });

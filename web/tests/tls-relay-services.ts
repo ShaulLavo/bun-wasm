@@ -10,6 +10,7 @@ import { acquireOwned, deadline, type TlsCleanup } from "../../scripts/tls-quali
 import { object, text, recheckDependencies, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
 import type { TlsFixtureOptions as ServiceOptions } from "../../scripts/c1/contract.ts";
 import { hostToolPath, type HostTools } from "../../scripts/c1/replay.ts";
+import type { RunSecrets } from "../../scripts/tls-qualification.ts";
 
 import { piPostgresPlan } from "../../tests/servers/tls.ts";
 
@@ -82,9 +83,13 @@ function track(sockets: Set<Socket>, socket: Socket): void {
   socket.once("close", () => sockets.delete(socket));
   socket.on("error", () => socket.destroy());
 }
-/** The lease holder: flock runs the declared shell, which reports the lock and then waits in the declared cat until stdin closes. */
-async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools) {
-  const argv = ["--nonblock", "/work/tmp/wave-heavy/pi.lock", hostToolPath(tools, "sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", hostToolPath(tools, "cat")];
+/**
+ * The lease holder: flock runs the declared shell, which reports the lock and then waits in the declared cat until stdin closes.
+ * The lease always ends with its cleanup, so a refused remote cleanup can never keep the driver's event loop alive.
+ * An unreconciled remote fixture is left exactly as it is, named in the ledger, and still fails the run.
+ */
+export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock") {
+  const argv = ["--nonblock", lock, hostToolPath(tools, "sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", hostToolPath(tools, "cat")];
   const lease = await acquireOwned(owner, signal, () => {
     const child = spawn(hostToolPath(tools, "flock"), argv, { stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.resume();
@@ -92,9 +97,11 @@ async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => bool
     void exited.catch(() => {});
     return { child, exited };
   }, async ({ child, exited }) => {
-    if (!closed()) throw new Error("Pi lane lock retained until remote fixture cleanup is reconciled");
+    const reconciled = closed();
     child.stdin.end();
-    await deadline(exited, new AbortController().signal, 5000);
+    try { await deadline(exited, new AbortController().signal, 5000); }
+    catch (error) { child.kill("SIGKILL"); throw error; }
+    if (!reconciled) throw new Error("Pi lane released with the remote PostgreSQL fixture unreconciled; its named container, volume and scratch stay for reconciliation under a fresh pi.lock");
   });
   const lines = createInterface({ input: lease.child.stdout });
   try {
@@ -103,7 +110,14 @@ async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => bool
     return { pid: lease.child.pid };
   } finally { lines.close(); }
 }
-async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, tools: HostTools) {
+/** The last bytes a child wrote to stderr, for its failure record. Redacted where it is recorded. */
+export function stderrTail(stream: NodeJS.ReadableStream, limit = 64 * 1024): () => string {
+  let tail = "";
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk: string) => { tail = (tail + chunk).slice(-limit); });
+  return () => tail;
+}
+async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, tools: HostTools, secrets: RunSecrets) {
   const mesh = hostToolPath(tools, "mesh");
   signal.throwIfAborted();
   if (options.databaseMachine !== "pi") throw new Error("TLS PostgreSQL fixture requires the approved Pi host");
@@ -119,11 +133,14 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   const spawned = await acquireOwned(owner, signal, () => {
     remoteClosed = false;
     const child = spawn(mesh, ["ssh", options.databaseMachine, "--", "bun", "--eval", program], { stdio: ["pipe", "pipe", "pipe"] });
-    const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", code => code === 0 ? resolve() : reject(new Error("Remote PostgreSQL owner failed"))); });
+    const stderr = stderrTail(child.stderr);
+    const exited = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, closedBy) => code === 0 ? resolve() : reject(new Error(`Remote PostgreSQL owner exited ${code ?? closedBy}: ${secrets.redact(stderr()).trim()}`)));
+    });
     void exited.catch(() => {});
-    child.stderr.resume();
-    return { child, exited };
-  }, async ({ child, exited }) => {
+    return { child, exited, stderr };
+  }, async ({ child, exited, stderr }) => {
     child.stdin.end("stop\n");
     const kill = setTimeout(() => child.kill("SIGTERM"), 150_000);
     let failure: unknown;
@@ -140,7 +157,8 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
       process.stdout.write(JSON.stringify({ ...row, portsAbsent: ports.every(Boolean) }));
       if (!Object.values(row).every(value => value === true) || !ports.every(Boolean)) process.exitCode = 1;`;
     const absence = spawnSync(mesh, ["ssh", options.databaseMachine, "--", "bun", "--eval", verifier], { timeout: 45_000, encoding: "utf8" });
-    await record({ host: options.databaseMachine, root, container: plan.name, volume: plan.volume, absenceCommandExit: absence.status, absenceSignal: absence.signal, observation: absence.stdout, childExitCode: child.exitCode, childSignal: child.signalCode });
+    await record({ host: options.databaseMachine, root, container: plan.name, volume: plan.volume, absenceCommandExit: absence.status, absenceSignal: absence.signal, observation: absence.stdout,
+      absenceStderr: secrets.redact(absence.stderr ?? ""), childExitCode: child.exitCode, childSignal: child.signalCode, ownerStderr: secrets.redact(stderr()) });
     if (absence.error || absence.status !== 0) throw new Error("Remote Pi PostgreSQL container/volume/scratch absence unconfirmed");
     remoteClosed = true;
     if (failure) throw failure;
@@ -150,6 +168,7 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   const responses = lines[Symbol.asyncIterator]();
   const first = responses.next().then(row => row.done ? undefined : JSON.parse(row.value));
   const row = object(await deadline(Promise.race([first, exited]), signal, 180_000), "private database response");
+  secrets.add(text(row.password, "generated password"));
   if (row.guardObservedBytes !== Buffer.byteLength("TLS_STARTUP_OBSERVER_CONTROL") || row.guardPort !== 45434) throw new Error("Real TLS startup observer did not arm");
   if (row.port !== 45433 || row.root !== root || row.container !== plan.name || row.volume !== plan.volume || row.publication !== `5432/tcp -> ${options.databaseAddress}:45433` || row.tlsScramObserved !== true) throw new Error("Unexpected Pi PostgreSQL fixture identity");
   await record({ kind: "remote-postgres-ready", host: options.databaseMachine, container: plan.name, volume: plan.volume, image: row.image, publication: row.publication, tlsScramObserved: true });
@@ -164,11 +183,11 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
     },
   };
 }
-export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>) {
+export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, secrets: RunSecrets) {
   signal.throwIfAborted();
   await recheckDependencies(intake);
   signal.throwIfAborted();
-  const db = await database(owner, options, signal, record, intake.hostTools);
+  const db = await database(owner, options, signal, record, intake.hostTools, secrets);
   let selected: PgCase = "verified";
   const audits = new Map<PgCase, PgWireAudit[]>();
   const sockets = new Set<Socket>();
@@ -191,6 +210,7 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   await record({ kind: "raw-proxy", port: proxyPort });
   signal.throwIfAborted();
   const secret = randomBytes(32);
+  secrets.add(secret);
   owner.add(() => { secret.fill(0); });
   const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(intake.hostSource, "web"))).href;
   signal.throwIfAborted();
@@ -201,7 +221,9 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   if (typeof module.createNodeRelayServer !== "function") throw new Error("Missing reviewed relay109 raw TCP entry");
   const createRelay = module.createNodeRelayServer;
   const destinations = ["pg.tls.test", "wrong.tls.test", "reject.tls.test"].map(host => ({ host, port: 5432, connect: { host: "127.0.0.1", port: proxyPort } }));
-  const relay = object(await acquireOwned(owner, signal, () => createRelay({ credential: randomBytes(32).toString("hex"), allowedOrigins: [`http://127.0.0.1:${options.pagePort}`], tcp: { tokenSecret: secret, destinations, log() {} } }), async value => { const row = object(value, "relay owner"); if (typeof row.close !== "function") throw new Error("Missing reviewed relay close operation"); await row.close(); }), "relay owner");
+  const credential = randomBytes(32).toString("hex");
+  secrets.add(credential);
+  const relay = object(await acquireOwned(owner, signal, () => createRelay({ credential, allowedOrigins: [`http://127.0.0.1:${options.pagePort}`], tcp: { tokenSecret: secret, destinations, log() {} } }), async value => { const row = object(value, "relay owner"); if (typeof row.close !== "function") throw new Error("Missing reviewed relay close operation"); await row.close(); }), "relay owner");
   if (!(relay.server instanceof HttpServer) || typeof relay.close !== "function") throw new Error("Invalid relay109 lifecycle");
   const server = relay.server;
   const close = relay.close.bind(relay);
@@ -218,7 +240,11 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
     lifecycle: () => ({ relayActive: object(relay.tcp, "relay TCP owner").active, relayListening: server.listening, proxyListening: proxy.listening, proxySockets: sockets.size }),
     ca: db.ca, password: db.password,
     select(mode: PgCase) { selected = mode; },
-    token: async () => text(await mint(secret, { exp: Math.floor(Date.now() / 1000) + 300, sub: "tls-qualification", dst: destinations.map(({ host, port }) => ({ host, port })) }), "relay token"),
+    async token() {
+      const token = text(await mint(secret, { exp: Math.floor(Date.now() / 1000) + 300, sub: "tls-qualification", dst: destinations.map(({ host, port }) => ({ host, port })) }), "relay token");
+      secrets.add(token);
+      return token;
+    },
     async audit(mode: PgCase) {
       const rows = audits.get(mode);
       if (!rows || rows.length !== 1) throw new Error("TLS pg must use exactly one underlying TCP connection per case");
