@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -37,7 +37,7 @@ function fixture(run: (root: string, output: string, invoke: (command: string, p
   const root = join(scratch, "source"); const output = join(scratch, "out");
   const put = (path: string, text: string, mode = 0o600) => { mkdirSync(join(root, path, ".."), { recursive: true }); writeFileSync(join(root, path), text, { mode }); };
   try {
-    for (const path of ["scripts/engine-producer.ts", "scripts/producer-closure.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts"]) { mkdirSync(join(root, path, ".."), { recursive: true }); copyFileSync(join(repository, path), join(root, path)); }
+    for (const path of ["scripts/engine-producer.ts", "scripts/producer-closure.ts", "scripts/c1/contract.ts", "scripts/waffle-release-inputs.json", "web/package.json", "scripts/src/program-profile.ts", "src/engine-kind.ts"]) { mkdirSync(join(root, path, ".."), { recursive: true }); copyFileSync(join(repository, path), join(root, path)); }
     put("scripts/guest-source-manifest.ts", source); put("scripts/guest-core-receipt.ts", coreReceipt); put("scripts/guest-build-receipt.ts", guestReceipt); put("scripts/stub-recipe.ts", recipe);
     const strip = (core: Uint8Array) => Buffer.from(core.subarray(0, core.length - 3 - ENGINE_SECTION.length - "quickjs".length)).toString("base64");
     const group = sharedQuickjsPair();
@@ -94,6 +94,27 @@ test("canonical split producer routes one core then two sides and records tested
     writeFileSync(join(output, "dist/jsc-engine.wasm"), "corrupt");
     expect(invoke("verify").exitCode).not.toBe(0);
     expect(readFileSync(join(output, "state.json"), "utf8")).toBe(state);
+  });
+});
+
+test("the producer records its launcher and web root relative to itself, so a moved copy verifies unchanged", () => {
+  fixture((_root, output, invoke) => {
+    expect(invoke("build").exitCode).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(output, "manifest.json"), "utf8"));
+    expect([manifest.launcher.path, manifest.launcher.receipt, manifest.webRoot]).toEqual(["launcher/bun-wasm", "launcher/bun-wasm.launcher.json", "web"]);
+    const moved = `${output}-moved`;
+    cpSync(output, moved, { recursive: true });
+    const receipt = readFileSync(join(moved, "launcher/bun-wasm.launcher.json"), "utf8");
+    expect(invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).exitCode).toBe(0);
+    expect(readFileSync(join(moved, "launcher/bun-wasm.launcher.json"), "utf8")).toBe(receipt);
+    const save = (value: unknown) => writeFileSync(join(moved, "manifest.json"), JSON.stringify(value));
+    save({ ...manifest, launcher: { ...manifest.launcher, path: join(output, "launcher/bun-wasm") } });
+    const refusal = () => invoke("verify", "split", { BUN_WASM_ENGINE_ROOT: moved }).stderr?.toString();
+    expect(refusal()).toContain("relative launcher");
+    save({ ...manifest, webRoot: join(output, "web") });
+    expect(refusal()).toContain("relative web directory");
+    save({ ...manifest, launcher: { ...manifest.launcher, receipt: "../out/launcher/bun-wasm.launcher.json" } });
+    expect(refusal()).toContain("relative launcher");
   });
 });
 

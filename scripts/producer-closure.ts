@@ -2,6 +2,9 @@ import { accessSync, constants, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { pairedEngines, programProfile, type Engine, type PairedEngine } from "../src/engine-kind.ts";
 import type { ProgramProfile } from "./src/program-profile.ts";
+import { DELIVERY_RECORDS, EXECUTABLE_ROLES, type HandoffRole } from "./c1/contract.ts";
+import waffleRelease from "./waffle-release-inputs.json";
+import webPackage from "../web/package.json";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
@@ -76,24 +79,86 @@ export function verifyPublicationBuilds(value: unknown): asserts value is Record
   }
 }
 
+/** A release archive the selected source pins, and where the delivery keeps it. */
+export interface SelectedArchive { readonly version: string; readonly url: string; readonly path: string }
+function archiveName(url: string, label: string): string {
+  const name = new URL(url).pathname.split("/").at(-1);
+  if (!name?.endsWith(".tgz")) throw new Error(`${label} pin is not a release archive URL: ${url}`);
+  return name;
+}
+/**
+ * The runtime and relay archives this source selects: runtime from its Waffle
+ * release record, relay from the Web package pin. Delivery paths follow the
+ * pinned file names, so a different release is a different member.
+ */
+export function selectedReleaseArchives(): { readonly runtime: SelectedArchive; readonly relay: SelectedArchive } {
+  const relayUrl = webPackage.dependencies["waffle-relay"];
+  const relayVersion = /\/waffle-v([0-9][^/]*)\/waffle-relay-\1\.tgz$/.exec(relayUrl)?.[1];
+  if (!relayVersion) throw new Error(`Web relay pin is not a Waffle relay release: ${relayUrl}`);
+  return {
+    runtime: { version: waffleRelease.version, url: waffleRelease.url, path: `runtime/${archiveName(waffleRelease.url, "Runtime")}` },
+    relay: { version: relayVersion, url: relayUrl, path: `relay/${archiveName(relayUrl, "Relay")}` },
+  };
+}
+
+/**
+ * The TLS consumer's page, built before sealing from the selected source:
+ * its entry, the maintained worker realms beside it, and the guest-side pg
+ * client fixture it serves. Chunks and maps under the page root vary by build
+ * and are bound by the page receipt.
+ */
+export const tlsPagePaths: {
+  readonly root: string; readonly index: string; readonly entry: string; readonly receipt: string; readonly pgClient: string; readonly workers: readonly string[];
+} = {
+  root: "tls/page", index: "tls/page/index.html", entry: "tls/page/tls-relay-page.js", receipt: "tls/page.build.json", pgClient: "tls/fixture/pg-client.ts",
+  workers: ["tls/page/worker.js", "tls/page/fs-worker.js", "tls/page/notification-worker.js"],
+};
+
+/** Delivery members behind every consumer handoff role. */
+export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
+  const quickjs = programProfile("quickjs");
+  const jsc = programProfile("jsc");
+  const archives = selectedReleaseArchives();
+  return {
+    quickjsGuest: `split/dist/${quickjs.core}`, quickjsGuestReceipt: `split/dist/${quickjs.core}.build.json`,
+    quickjsSide: `split/dist/${quickjs.side}`, quickjsSideReceipt: `split/dist/${quickjs.side}.engine.json`,
+    jscGuest: `split/dist/${jsc.core}`, jscGuestReceipt: `split/dist/${jsc.core}.build.json`,
+    jscSide: `split/dist/${jsc.side}`, jscSideReceipt: `split/dist/${jsc.side}.engine.json`, jscEmbeddingReceipt: `split/dist/${jsc.core}.embedding.json`,
+    launcher: "split/launcher/bun-wasm", launcherReceipt: "split/launcher/bun-wasm.launcher.json",
+    shell: "split/dist/bash-web-shell.wasm", envUtility: "split/dist/bash-web-env.wasm", shellReceipt: "split/dist/bash-web-guests.json",
+    browserGuest: publicationGuestPaths.browser, browserGuestReceipt: `${publicationGuestPaths.browser}.build.json`,
+    sourceCacheBrowserGuest: publicationGuestPaths["source-cache-browser"], sourceCacheBrowserGuestReceipt: `${publicationGuestPaths["source-cache-browser"]}.build.json`,
+    toolsGuest: publicationGuestPaths.tools, toolsGuestReceipt: `${publicationGuestPaths.tools}.build.json`,
+    webIndex: "split/web/index.html", engineBuilds: "split/web/engine-builds.json", producerManifest: "split/manifest.json",
+    sourceArchive: "source.tar.gz", runtimeArchive: archives.runtime.path, relayArchive: archives.relay.path,
+    programManifest: "inputs/programs-release/program-release.json", programChecksums: "inputs/programs-release/SHA256SUMS",
+    fd3Artifact: "inputs/network/preview1-relay.fd3.wasm", fd3Receipt: "inputs/network/RECEIPT.json",
+    config: DELIVERY_RECORDS.config, inputs: DELIVERY_RECORDS.inputs, environment: DELIVERY_RECORDS.environment, stages: DELIVERY_RECORDS.stages,
+    tlsPageIndex: tlsPagePaths.index, tlsPageEntry: tlsPagePaths.entry, tlsPageReceipt: tlsPagePaths.receipt, tlsPgClient: tlsPagePaths.pgClient,
+  };
+}
+
+/** The only delivery members sealed executable (0555). Everything else is sealed 0444. */
+export function executableMemberPaths(): readonly string[] {
+  const paths = handoffMemberPaths();
+  return EXECUTABLE_ROLES.map(role => paths[role]);
+}
+
 /** Required outer delivery files. Existing byte, actor, matrix and custody validators still apply. */
 export function completePublicationArtifactPaths(): string[] {
   const guests = Object.values(publicationGuestPaths).flatMap(path => [path, `${path}.build.json`]);
   const custody = ["before", "after", "preseal"].flatMap(phase => [
     `inputs/${phase}.json`, `inputs/vendor-custody-${phase}.json`, `inputs/native-custody-${phase}.json`,
   ]);
-  return producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody,
+  const handoff = Object.values(handoffMemberPaths());
+  return Array.from(new Set(producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody, handoff, tlsPagePaths.workers,
     [
-      "source.tar.gz", "inputs/ADMISSION.json", "inputs/CANONICAL-REUSE.json", "inputs/publication-matrix.json",
-      "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
-      "inputs/runtime107-release.tgz", "inputs/programs-release/program-release.json", "inputs/programs-release/SHA256SUMS",
-      "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json", "bash/ORIGIN.json", "bash/original-native.zip",
-      "bash/original-sidecars/SHA256SUMS", "bash/original-sidecars/cli-source.txt", "bash/original-sidecars/cli-sha256.txt",
-      "bash/original-sidecars/inputs", "bash/original-sidecars/THIRD_PARTY_NOTICES.txt",
+      "inputs/publication-matrix.json", "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
+      "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json",
       "native/jsc/.bunwasm-artifacts", "native/jsc/.bunwasm-inputs", "native/jsc/native-header-manifest.json",
       "native/jsc/build/jsc/CMakeCache.txt", "native/jsc/build/jsc/cmakeconfig.h", "native/jsc/build/jsc/compile_commands.json",
       "native/jsc/inputs/wasi-jsc.cmake", "native/jsc/inputs/shim/wasi-compat.h", "native/jsc/inputs/shim/wasi-compat.c", "native/jsc/inputs/shim/madvise.c",
-    ]);
+    ])));
 }
 
 export function requireCompletePublicationFiles(files: readonly { readonly path: string }[]): void {
@@ -118,6 +183,29 @@ export function verifyWorkerProof(output: string, status: number | null): void {
   if (status !== 0 || /^FAIL /m.test(output) || lines.length !== workerProofLabels.length
     || workerProofLabels.some((label, index) => lines[index] !== `PASS ${label}` && !lines[index]?.startsWith(`PASS ${label} `))) throw new Error("Shared-group worker proof failed");
 }
+/** Producer members a manifest names, relative to the engine root so a copy verifies where it lies. */
+export const producerLauncherPath = "launcher/bun-wasm";
+export const producerLauncherReceiptPath = "launcher/bun-wasm.launcher.json";
+export const producerWebRoot = "web";
+/** Resolve a manifest-recorded member under `root`. Absolute, traversing or empty segments are refused. */
+export function producerMember(root: string, value: unknown, label: string): string {
+  if (typeof value !== "string" || value === "" || value.startsWith("/") || value.includes("\\")
+    || value.split("/").some(part => part === "" || part === "." || part === "..")) throw new Error(`Producer manifest ${label} must be a relative member path`);
+  return `${root}/${value}`;
+}
+/**
+ * The manifest's launcher record must name the producer's own launcher and
+ * receipt by relative path and match that original receipt and these bytes.
+ */
+export function verifyManifestLauncher(root: string, value: unknown, source: ProducerSource): LauncherReceipt {
+  if (!value || typeof value !== "object" || !("path" in value) || !("receipt" in value)) throw new Error("Manifest launcher record is missing");
+  if (value.path !== producerLauncherPath || value.receipt !== producerLauncherReceiptPath) throw new Error("Manifest launcher must name the producer's own relative launcher and receipt");
+  const launcher = producerMember(root, value.path, "launcher");
+  const verified = verifyLauncher(launcher, JSON.parse(readFileSync(producerMember(root, value.receipt, "launcher receipt"), "utf8")), source);
+  if (JSON.stringify(value) !== JSON.stringify({ path: producerLauncherPath, receipt: producerLauncherReceiptPath, ...verified })) throw new Error("Manifest launcher differs from its original receipt");
+  return verified;
+}
+
 export function launcherReceipt(path: string, source: ProducerSource): LauncherReceipt {
   accessSync(path, constants.X_OK);
   const bytes = readFileSync(path);

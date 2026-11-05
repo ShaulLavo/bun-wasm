@@ -7,7 +7,7 @@ import { hash, sourceOptions } from "./guest-source-manifest.ts";
 import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind.ts";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests.ts";
 import { parseProgramProfile, sharedGroupEnvironment } from "./src/program-profile.ts";
-import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, requireClosureFiles, rejectWithdrawnPublicationPath, verifyPublicationBuilds, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
+import { launcherReceipt, producerArtifactPaths, producerEngines, producerLauncherPath, producerLauncherReceiptPath, producerScopes, producerSelection, producerWebRoot, requireClosureFiles, rejectWithdrawnPublicationPath, verifyManifestLauncher, verifyPublicationBuilds, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const [command, selectedProfile, ...extra] = process.argv.slice(2);
@@ -198,8 +198,8 @@ async function build(): Promise<void> {
   const files = await identities(paths); requireClosureFiles(profile, files);
   writeFileSync(join(output, "manifest.json"), JSON.stringify({ schema: 1, status: "reusable", profile, engines, source, nativePrebuild: profile === "split" ? prebuild : null,
     inputs: current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })), inputOrigins: JSON.parse(readFileSync(join(output, "inputs/programs.json"), "utf8")), files,
-    launcher: { path: launcher, receipt: launcherProof, ...verifyLauncher(launcher, JSON.parse(readFileSync(launcherProof, "utf8")), source) },
-    webRoot: profile === "split" ? join(output, "web") : null, hook: join(repository, "scripts/app-matrix/engine-memory-hook.ts"),
+    launcher: { path: producerLauncherPath, receipt: producerLauncherReceiptPath, ...verifyLauncher(launcher, JSON.parse(readFileSync(launcherProof, "utf8")), source) },
+    webRoot: profile === "split" ? producerWebRoot : null, hook: "scripts/app-matrix/engine-memory-hook.ts",
     engineBuilds: profile === "split" ? JSON.parse(readFileSync(join(output, "web/engine-builds.json"), "utf8")) : null }, null, 2) + "\n");
   rmSync(join(output, "smoke-tmp"), { recursive: true, force: true }); state("reusable");
 }
@@ -222,8 +222,8 @@ async function verify(): Promise<void> {
     if (hash(bytes) !== file.sha256 || bytes.byteLength !== file.bytes) throw new Error(`Changed artifact ${file.path}`);
   }
   requireClosureFiles(profile, value.files);
-  const recordedLauncher = { path: launcher, receipt: launcherProof, ...verifyLauncher(launcher, JSON.parse(readFileSync(launcherProof, "utf8")), sourceIdentity()) };
-  if (!("launcher" in value) || JSON.stringify(value.launcher) !== JSON.stringify(recordedLauncher)) throw new Error("Manifest launcher identity differs from its original receipt");
+  verifyManifestLauncher(output, "launcher" in value ? value.launcher : undefined, sourceIdentity());
+  if (!("webRoot" in value) || value.webRoot !== (profile === "split" ? producerWebRoot : null)) throw new Error("Manifest web root must be the producer's own relative web directory");
   const current = await inputs(); lockedInputs(current); await verifyPrograms(current);
   if (!("inputs" in value) || JSON.stringify(value.inputs) !== JSON.stringify(current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })))) throw new Error("Manifest input registry differs from current inputs");
   if (!("inputOrigins" in value) || JSON.stringify(value.inputOrigins) !== JSON.stringify(JSON.parse(readFileSync(join(output, "inputs/programs.json"), "utf8")))) throw new Error("Manifest original input snapshots differ");
