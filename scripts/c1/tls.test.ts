@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { completePublicationArtifactPaths, tlsPagePaths } from "../producer-closure.ts";
@@ -85,7 +85,10 @@ test.each([
   ["an unknown secret field", { password: "x" }, "unknown field password"],
   ["a public database address", { databaseAddress: "8.8.8.8" }, "private fleet address"],
   ["a loopback relay address", { relayAddress: "127.0.0.1" }, "private fleet address"],
-  ["a malformed address", { databaseAddress: "10.0.0.256" }, "exact IPv4"],
+  ["a malformed address", { databaseAddress: "10.0.0.256" }, "exact canonical IPv4"],
+  // URL parsing reads 010.0.0.1 as octal, the public 8.0.0.1: only canonical spellings are private claims.
+  ["a leading-zero octet", { databaseAddress: "010.0.0.1" }, "exact canonical IPv4"],
+  ["a padded spelling of the relay address", { databaseAddress: "10.255.0.2", relayAddress: "10.255.00.2" }, "exact canonical IPv4"],
   ["one address for both", { relayAddress: FIXTURE_TLS_OPTIONS.databaseAddress }, "must differ"],
   ["the page host as database", { databaseMachine: "localhost" }, "not the page host"],
   ["the PC as database", { databaseMachine: "pc" }, "not the page host"],
@@ -167,6 +170,29 @@ test.each([
   expect(() => verifyTlsPage(delivery, root, FIXTURE_SOURCE)).toThrow();
 });
 
+test.each([
+  ["an empty input inventory", (receipt: Record<string, unknown>) => ({ ...receipt, inputs: [] }), "non-empty list"],
+  ["an inventory without the entry", (receipt: Record<string, unknown>) => ({ ...receipt, inputs: (receipt.inputs as { path: string }[]).filter(input => input.path !== TLS_PAGE_ENTRY) }), `omit ${TLS_PAGE_ENTRY}`],
+  ["a traversing input", (receipt: Record<string, unknown>) => ({ ...receipt, inputs: (receipt.inputs as object[]).concat([{ path: "../outside.ts", bytes: 1, sha256: sha256("x") }]) }), "malformed"],
+  ["a repeated input", (receipt: Record<string, unknown>) => ({ ...receipt, inputs: (receipt.inputs as object[]).concat([(receipt.inputs as object[])[0]!]) }), "repeats a path"],
+  ["an unknown field", (receipt: Record<string, unknown>) => ({ ...receipt, extra: true }), "invalid TLS page receipt"],
+])("a TLS page receipt with %s refuses, even after its source changed", async (_name, change, message) => {
+  const { root, delivery } = await deliveredPage();
+  const path = join(delivery, tlsPagePaths.receipt);
+  writeFileSync(path, JSON.stringify(change(JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)));
+  writeFileSync(join(root, TLS_PAGE_ENTRY), "changed after build\n");
+  expect(() => verifyTlsPage(delivery, root, FIXTURE_SOURCE)).toThrow(message);
+});
+
+test("a TLS page input reached through a link out of the source refuses", async () => {
+  const { root, delivery } = await deliveredPage();
+  const outside = join(fresh(), "outside.ts");
+  write(outside, readFileSync(join(root, "web/node_modules/waffle/index.ts"), "utf8"));
+  rmSync(join(root, "web/node_modules/waffle/index.ts"));
+  symlinkSync(outside, join(root, "web/node_modules/waffle/index.ts"));
+  expect(() => verifyTlsPage(delivery, root, FIXTURE_SOURCE)).toThrow("outside the selected source");
+});
+
 test("a TLS page receipt from another source, or a changed bundled input, refuses", async () => {
   const { root, delivery } = await deliveredPage();
   expect(() => verifyTlsPage(delivery, root, { head: "f".repeat(40), tree: "e".repeat(40) })).toThrow("another source");
@@ -181,41 +207,68 @@ function fixtureHandoff(): { handoff: ConsumerHandoff; web: LoadedObservation[];
 
 test("observed web and TLS responses bind to admitted members, including decoded gzip", () => {
   const { handoff, web, tls } = fixtureHandoff();
-  expect(bindLoaded(handoff, "web", web).map(binding => binding.route)).toEqual(["web", "web"]);
-  expect(bindLoaded(handoff, "tls", tls).map(binding => binding.route)).toEqual(["tls-page", "tls-page", "tls-fixture", "guest-artifact", "control"]);
+  expect(bindLoaded(handoff, "web", web).map(binding => binding.route)).toEqual(["web", "web", "web"]);
+  expect(bindLoaded(handoff, "tls", tls).map(binding => binding.route)).toEqual(["tls-page", "tls-page", "tls-page", "tls-fixture", "guest-artifact", "control"]);
 });
 
-test("a selected gzip-only Browser response binds without an unrelated Wasm row", () => {
+test("the selected gzip-only Browser guest binds by its raw compressed body without an unrelated Wasm row", () => {
   const { handoff, web } = fixtureHandoff();
-  const bytes = readFileSync(join(handoff.webRoot, "bun.wasm.gz"));
-  const row: LoadedObservation = { url: "http://127.0.0.1:43839/bun.wasm.gz", method: "GET", status: 200,
+  const bytes = readFileSync(join(handoff.webRoot, "bun-browser.wasm.gz"));
+  const row: LoadedObservation = { url: "http://127.0.0.1:43839/bun-browser.wasm.gz", method: "GET", status: 200,
     encoding: "identity", bytes: bytes.byteLength, sha256: sha256(bytes) };
   const html = web[0];
   if (!html) throw new Error("missing Browser page observation");
-  expect(bindLoaded(handoff, "web", [html, row]).map(binding => binding.member)).toContain(join(handoff.webRoot, "bun.wasm.gz"));
+  expect(bindLoaded(handoff, "web", [html, row]).map(binding => binding.member)).toContain(join(handoff.webRoot, "bun-browser.wasm.gz"));
   expect(() => bindLoaded(handoff, "web", [html, { ...row, sha256: sha256("changed") }])).toThrow("differ from the admitted member");
+  // The compressed bytes are never a decoded observation of the .wasm path.
+  expect(() => bindLoaded(handoff, "web", [html, { ...row, url: "http://127.0.0.1:43839/bun-browser.wasm" }])).toThrow("differ from the admitted member");
 });
 
 test.each([
   ["a byte mismatch", (rows: LoadedObservation[]) => rows.map((row, index) => index === 1 ? { ...row, sha256: sha256("other") } : row), "differ from the admitted member"],
   ["an unadmitted script", (rows: LoadedObservation[]) => rows.concat([{ ...rows[0]!, url: "http://127.0.0.1:43839/evil.js" }]), "not an admitted member"],
-  ["an external origin", (rows: LoadedObservation[]) => rows.map(row => ({ ...row, url: row.url.replace("127.0.0.1", "cdn.example.com") })), "loopback"],
+  ["an external origin", (rows: LoadedObservation[]) => rows.map(row => ({ ...row, url: row.url.replace("127.0.0.1", "cdn.example.com") })), "loopback HTTP"],
+  ["an FTP origin", (rows: LoadedObservation[]) => rows.map(row => ({ ...row, url: row.url.replace("http://127.0.0.1:43839", "ftp://127.0.0.1") })), "loopback HTTP"],
   ["two origins", (rows: LoadedObservation[]) => rows.concat([{ ...rows[0]!, url: "http://127.0.0.1:1234/" }]), "one loopback page origin"],
-  ["a claimed encoding without that representation", (rows: LoadedObservation[]) => rows.map((row, index) => index === 0 ? { ...row, encoding: "br" as const } : row), "no admitted br representation"],
-  // URL parsing resolves dot segments, so an escaping path lands on a non-member of the web root.
-  ["a path leaving its root", (rows: LoadedObservation[]) => rows.concat([{ ...rows[0]!, url: "http://127.0.0.1:43839/%2e%2e/%2e%2e/DELIVERY.json" }]), "not an admitted member"],
-  ["no WebAssembly", (rows: LoadedObservation[]) => rows.slice(0, 1), "no WebAssembly"],
+  ["a compressed encoding on a raw route", (rows: LoadedObservation[]) => rows.map((row, index) => index === 0 ? { ...row, encoding: "br" as const } : row), "only serves raw admitted bytes"],
+  ["a Wasm encoding without that representation", (rows: LoadedObservation[]) => rows.map((row, index) => index === 1 ? { ...row, encoding: "br" as const } : row), "no admitted br representation"],
+  ["an encoded dot segment", (rows: LoadedObservation[]) => rows.concat([{ ...rows[0]!, url: "http://127.0.0.1:43839/%2e%2e/%2e%2e/DELIVERY.json" }]), "encoded dot"],
+  ["no Browser guest", (rows: LoadedObservation[]) => rows.filter(row => !row.url.includes("bun-browser")), "no WebAssembly Browser guest"],
+  ["no page", (rows: LoadedObservation[]) => rows.slice(1), "did not load"],
 ])("five-owner observations with %s refuse", (_name, change, message) => {
   const { handoff, web } = fixtureHandoff();
   expect(() => bindLoaded(handoff, "web", change(web))).toThrow(message);
 });
 
-test("TLS observations bind guests by role and pg seeds only through admitted dependencies", () => {
+test("TLS observations bind guests by role, raw only, and need the page, worker and Browser guest", () => {
   const { handoff, tls } = fixtureHandoff();
   const artifact = tls.find(row => row.url.includes("/artifact/"));
   if (!artifact) throw new Error("fixture lacks the guest row");
   expect(() => bindLoaded(handoff, "tls", tls.map(row => row === artifact ? { ...row, url: row.url.replace(/[a-f0-9]{64}$/, handoff.artifacts.config.sha256), sha256: handoff.artifacts.config.sha256 } : row))).toThrow("not the admitted guest");
+  expect(() => bindLoaded(handoff, "tls", tls.map(row => row === artifact ? { ...row, encoding: "gzip" as const } : row))).toThrow("only serves raw admitted bytes");
+  const side = handoff.artifacts.quickjsSide;
+  const sideRow: LoadedObservation = { url: `http://127.0.0.1:43839/artifact/${side.sha256}`, method: "GET", status: 200, encoding: "identity", bytes: side.bytes, sha256: side.sha256 };
+  expect(() => bindLoaded(handoff, "tls", [sideRow])).toThrow("no WebAssembly Browser guest");
+  expect(() => bindLoaded(handoff, "tls", tls.filter(row => !row.url.endsWith("/fs-worker.js")))).toThrow("did not load");
+  expect(() => bindLoaded(handoff, "tls", tls.map(row => ({ ...row, url: row.url.replace(":43839", ":43999") })))).toThrow("configured TLS page port");
   expect(() => bindLoaded(handoff, "tls", tls.concat([{ ...artifact, url: "http://127.0.0.1:43839/seed/node_modules/pg/package.json" }]))).toThrow("never admitted");
+});
+
+test("pg seed rows bind to the admitted tree inventory, not to whatever bytes are there now", () => {
+  const { handoff, tls } = fixtureHandoff();
+  const pg = join(fresh(), "pg-project");
+  write(join(pg, "node_modules/pg/index.js"), "original pg");
+  write(join(pg, "outside/outside.js"), "outside script");
+  const pgModules = treeIdentity(join(pg, "node_modules"));
+  const file = { path: join(pg, "package.json"), bytes: 1, sha256: sha256("x") };
+  const resolved = { ...handoff, dependencies: { ...handoff.dependencies, tls: { status: "resolved" as const, value: { pgTarball: file, pgModules, pgPackageJson: file, pgLock: file } } } };
+  const seed = (path: string, content: string): LoadedObservation => ({ url: `http://127.0.0.1:43839/seed/node_modules/${path}`, method: "GET", status: 200, encoding: "identity", bytes: Buffer.byteLength(content), sha256: sha256(content) });
+  expect(bindLoaded(resolved, "tls", tls.concat([seed("pg/index.js", "original pg")])).at(-1)?.route).toBe("pg-seed");
+  writeFileSync(join(pg, "node_modules/pg/index.js"), "substituted pg");
+  expect(() => bindLoaded(resolved, "tls", tls.concat([seed("pg/index.js", "substituted pg")]))).toThrow("changed since admission");
+  writeFileSync(join(pg, "node_modules/pg/index.js"), "original pg");
+  symlinkSync(join(pg, "outside"), join(pg, "node_modules/outside-link"));
+  expect(() => bindLoaded(resolved, "tls", tls.concat([seed("outside-link/outside.js", "outside script")]))).toThrow();
 });
 
 test("loaded rows must be real successful GET observations, not partial claims", () => {
@@ -225,7 +278,8 @@ test("loaded rows must be real successful GET observations, not partial claims",
   expect(() => parseLoaded([{ url: row.url, sha256: row.sha256 }])).toThrow("exactly url, method");
   expect(() => parseLoaded([{ ...row, status: 304 }])).toThrow("successful GET");
   expect(() => parseLoaded([{ ...row, method: "POST" }])).toThrow("successful GET");
-  expect(() => parseLoaded([{ ...row, sha256: "x" }])).toThrow("decoded identity");
+  expect(() => parseLoaded([{ ...row, encoding: ["identity"] }])).toThrow("successful GET");
+  expect(() => parseLoaded([{ ...row, sha256: "x" }])).toThrow("body identity");
 });
 
 test("delivered TLS members are sealed read-only and checked by the handoff, never repaired", () => {

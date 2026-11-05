@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { enableSubreaper } from "../linux-subreaper.mts";
 import { ProcessOwner } from "../process-owner.mts";
 import { handoffMemberPaths } from "../producer-closure.ts";
-import { SYSROOT_PROBE, environmentDifferences, requireCanonicalBuildTools } from "./admission.ts";
+import { SYSROOT_PROBE, Staging, environmentDifferences, nativeWitness, requireCanonicalBuildTools, requireNativeEntry, requireStagedWaffle } from "./admission.ts";
 import { FIXTURE_SOURCE, FIXTURE_TUPLE } from "./contract-fixture.ts";
 import { sha256 } from "./identity.ts";
 import { admitWebkit } from "./inputs.ts";
-import { rehearse } from "./operations.ts";
+import { Invocation, rehearse, treeWitness } from "./operations.ts";
 import { publicationMatrix, restage, smokeInputs, verifyMatrixScratch } from "./publication.ts";
 import { STAGES, blockReason, runStages, validateStages, type Stage, type StageContext } from "./stages.ts";
 
@@ -82,10 +82,22 @@ test("captures and builds read the same target flags only when both start from E
 
 const shortRoots: string[] = [];
 afterAll(() => { for (const path of shortRoots) rmSync(path, { recursive: true, force: true }); });
-/** A physical browser root short enough for the matrix suffix: `/tmp/c` plus six characters is 12 bytes. */
+const ROOT_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
+const ROOT_NAMES = Array.from(ROOT_CHARACTERS).flatMap(first => Array.from(ROOT_CHARACTERS, second => `${first}${second}`));
+/**
+ * A physical browser root short enough for the matrix suffix, as production
+ * configures one: an exclusively created two-character directory under the
+ * system temporary directory (12 bytes under /work/tmp).
+ */
 function shortRoot(): string {
-  const path = mkdtempSync("/tmp/c");
+  const parent = realpathSync(tmpdir());
+  const name = ROOT_NAMES.find(candidate => {
+    try { mkdirSync(join(parent, candidate)); return true; } catch { return false; }
+  });
+  if (!name) throw new Error(`no free short browser root under ${parent}`);
+  const path = join(parent, name);
   shortRoots.push(path);
+  if (Buffer.byteLength(`${path}/bun-wasm-engine-interruption-XXXXXX`) > 48) throw new Error(`${parent} is too long for a Chromium browser root`);
   return path;
 }
 function context(root: string, overrides: Partial<StageContext> = {}): StageContext {
@@ -127,10 +139,12 @@ test("every command runs in E plus only its declared overlay, so source-cache ke
 });
 
 test("malformed stage tables are rejected before anything runs", () => {
-  const step = { kind: "step", step: () => {} } as const;
+  const step = { kind: "step", module: "/abs/steps.ts", name: "seal" } as const;
   expect(() => validateStages(STAGES)).not.toThrow();
   expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [], action: { ...step, command: () => ({ argv: [] }) } } as unknown as Stage])).toThrow("exactly one");
   expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [], action: { kind: "command" } } as unknown as Stage])).toThrow("exactly one");
+  expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [], action: { kind: "step", step: () => {} } } as unknown as Stage])).toThrow("exactly one");
+  expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [], action: { ...step, module: "relative.ts" } }])).toThrow("exactly one");
   expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [{ path: "x", from: "b" }], action: step }, { name: "b", eligibility: "generic-rehearsal", needs: [], action: step }])).toThrow("does not run before");
   expect(() => validateStages([{ name: "a", eligibility: "generic-rehearsal", needs: [], action: step }, { name: "a", eligibility: "generic-rehearsal", needs: [], action: step }])).toThrow("repeated");
 });
@@ -156,7 +170,23 @@ test("a matching source with a stale receipt or a blocked prerequisite stays blo
   for (const need of byName("jsc-embedding.log").needs) write(join(value.artifact, need.path), "bytes without a valid receipt");
   write(join(value.artifact, "split/dist/bun.wasm.build.json"), "{}");
   expect(blockReason(value, byName("jsc-embedding.log"), {})).toContain("does not validate");
-  expect(blockReason(value, byName("web-guests.log"), { "web-guest-inputs.log": { status: "blocked", reason: "x" } })).toBe("prerequisite web-guest-inputs.log blocked");
+  const prerequisite: Stage = { name: "consumer.log", eligibility: "validated-retained", needs: [{ path: "split/dist/bun.wasm", from: "web-guest-inputs.log" }], action: { kind: "command", command: () => ({ argv: [] }) } };
+  expect(blockReason(value, prerequisite, { "web-guest-inputs.log": { status: "blocked", reason: "x" } })).toBe("prerequisite web-guest-inputs.log blocked");
+});
+
+test("a generic copy, or plain file presence, never validates bytes for a consumer stage", () => {
+  const value = context(fresh("rehearse-launder"), { mode: "rehearse" });
+  for (const need of byName("web-guest-inputs.log").needs) write(join(value.artifact, need.path), "stale invalid bytes");
+  expect(blockReason(value, byName("web-guest-inputs.log"), {})).toBeUndefined();
+  // After the generic restage ran, and when the consumer suffix is selected directly.
+  expect(blockReason(value, byName("web-guests.log"), { "web-guest-inputs.log": { status: "ran", exit: 0 } })).toContain("does not validate");
+  expect(blockReason(value, byName("web-guests.log"), {})).toContain("does not validate");
+  for (const name of ["source-cache-web-guests.log", "publication-inputs.log", "publication-matrix.log", "split-verify.log"]) {
+    for (const need of byName(name).needs) write(join(value.artifact, need.path), "stale invalid bytes");
+    expect(blockReason(value, byName(name), {})).toContain("does not validate");
+  }
+  const unvalidated: Stage = { name: "consumer.log", eligibility: "validated-retained", needs: [{ path: "split/dist/bun.wasm", from: "web-guest-inputs.log" }], action: { kind: "command", command: () => ({ argv: [] }) } };
+  expect(blockReason(value, unvalidated, { "web-guest-inputs.log": { status: "ran", exit: 0 } })).toContain("no validator");
 });
 
 test("an explicitly requested production-only rehearsal stage refuses before any write", async () => {
@@ -185,7 +215,7 @@ test("the observed matrix scratch must be a physical direct child within 48 byte
   const short = shortRoot();
   const scratchDir = join(short, "bun-wasm-engine-interruption-AbC123");
   mkdirSync(scratchDir);
-  expect(verifyMatrixScratch(short, scratchDir).bytes).toBe(48);
+  expect(verifyMatrixScratch(short, scratchDir).bytes).toBe(Buffer.byteLength(scratchDir));
   mkdirSync(join(root, "bun-wasm-engine-interruption-AbC123"));
   expect(() => verifyMatrixScratch(root, join(root, "bun-wasm-engine-interruption-AbC123"))).toThrow("bytes");
   expect(() => verifyMatrixScratch(short, join(short, "other"))).toThrow("unexpected matrix TMPDIR");
@@ -254,4 +284,130 @@ test("sysroot admission with missing staged Waffle inputs refuses instead of dow
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain("staged Waffle native inputs are missing");
   expect(readdirSync(tools)).toEqual([]);
+});
+
+test("the controller refuses missing staged Waffle inputs before the sysroot builder's downloader is reachable", () => {
+  const tools = fresh("waffle-staged-missing");
+  expect(() => requireStagedWaffle({ WASM_TOOLS: tools }, repository)).toThrow("staged Waffle native input is missing");
+  expect(readdirSync(tools)).toEqual([]);
+});
+
+/** Exactly the maintained helper, sourced from this checkout, against an owned tiny WebKit and native root. */
+function maintainedWebkitCheck(fixture: ReturnType<typeof webkitFixture>, native: string) {
+  const script = 'source "$1/jsc/common.sh"\nWEBKIT_DIR="$2"\nJSC_SRC="$3"\nWEBKIT_COMMIT="$4"\ncheck_jsc_webkit_tree\n';
+  const pin = fixture.git("rev-parse", "HEAD~0");
+  return spawnSync("/usr/bin/bash", ["-c", script, "webkit-check", repository, fixture.webkit, join(fixture.source, "jsc"), pin],
+    { encoding: "utf8", env: { ...process.env, JSC_BUILD_DIR: native, TMPDIR: fresh(`webkit-tmp-${Math.random().toString(36).slice(2)}`) } });
+}
+test("the maintained WebKit check writes neither the native root nor the repository, at every caller", () => {
+  const root = fresh("maintained-webkit");
+  const fixture = webkitFixture(root);
+  fixture.git("checkout", "-q", "--", "a.txt");
+  fixture.git("apply", join(fixture.source, "jsc/webkit-wasi.patch"));
+  const native = fixture.jsc;
+  const before = gitWitness(native);
+  const rootBefore = lstatSync(native, { bigint: true }).mtimeNs;
+  const result = maintainedWebkitCheck(fixture, native);
+  expect(result.status, result.stderr).toBe(0);
+  expect(gitWitness(native)).toEqual(before);
+  expect(lstatSync(native, { bigint: true }).mtimeNs).toBe(rootBefore);
+});
+test("the maintained WebKit check refuses a missing object without fetching or adding any", () => {
+  const root = fresh("maintained-webkit-missing");
+  const fixture = webkitFixture(root);
+  const blob = fixture.git("rev-parse", "HEAD:a.txt");
+  const object = join(fixture.webkit, ".git/objects", blob.slice(0, 2), blob.slice(2));
+  chmodSync(object, 0o644);
+  rmSync(object);
+  const before = gitWitness(fixture.jsc);
+  expect(maintainedWebkitCheck(fixture, fixture.jsc).status).not.toBe(0);
+  expect(gitWitness(fixture.jsc)).toEqual(before);
+});
+
+/** A tiny synthetic SDK, sysroot and tool PATH, enough for the maintained jsc_inputs_hash to run. */
+function stampFixture(root: string, stamp: string) {
+  const bin = join(root, "bin");
+  for (const name of ["cmake", "ninja", "wasm-opt"]) write(join(bin, name), `#!/bin/sh\necho "${name} version 1"\n`, 0o755);
+  for (const name of ["clang", "clang++"]) write(join(root, "sdk/bin", name), `#!/bin/sh\necho "${name} version 1"\n`, 0o755);
+  write(join(root, "sdk/VERSION"), "1\n");
+  write(join(root, "sysroot/bun-wasm-sysroot.json"), "{}");
+  write(join(root, "jsc/build/jsc/.bunwasm-inputs"), stamp);
+  for (const file of ["wasi-jsc.cmake", "shim/wasi-compat.h", "shim/wasi-compat.c", "shim/madvise.c"]) write(join(root, "jsc/inputs", file), `${file}\n`);
+  const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: root, WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: join(root, "sdk"), BUN_WASM_SYSROOT: join(root, "sysroot"),
+    JSC_BUILD_DIR: join(root, "jsc"), CARGO_HOME: join(root, "cargo"), RUSTUP_HOME: join(root, "rustup"), CARGO_TARGET_DIR: join(root, "t"), TMPDIR: join(root, "tmp"), BUN_EXE: process.execPath };
+  mkdirSync(env.TMPDIR, { recursive: true });
+  return env;
+}
+test("a wrong JSC stamp refuses in preclaim native admission, before Waffle inputs or any claim, and is never restamped", async () => {
+  const root = fresh("wrong-stamp");
+  const env = stampFixture(root, "not-the-current-inputs\n");
+  const before = nativeWitness([join(root, "jsc"), join(root, "sysroot")]);
+  const staging = new Staging(repository, fresh("wrong-stamp-private"));
+  const error = await requireNativeEntry(repository, { jsc: join(root, "jsc"), sysroot: join(root, "sysroot") }, env, staging, new ProcessOwner(), new AbortController().signal).catch((reason: unknown) => reason);
+  expect(String(error)).toContain("different JSC inputs");
+  expect(String(error)).not.toContain("Waffle");
+  expect(readFileSync(join(root, "jsc/build/jsc/.bunwasm-inputs"), "utf8")).toBe("not-the-current-inputs\n");
+  expect(nativeWitness([join(root, "jsc"), join(root, "sysroot")])).toBe(before);
+});
+
+test("every step runs as an owned child: abort drains a step stuck in a maintained synchronous helper", async () => {
+  const value = context(fresh("step-abort"));
+  const pidFile = join(value.privateRoot, "sleep.pid");
+  const module = join(value.privateRoot, "hang-steps.ts");
+  write(module, `import { run } from ${JSON.stringify(join(repository, "scripts/guest-source-manifest.ts"))};
+export const steps = { hang: () => { run(["/usr/bin/bash", "-c", "echo $$ > ${pidFile}; exec /usr/bin/sleep 30"], "/"); } };\n`);
+  const stage: Stage = { name: "hang.log", eligibility: "generic-rehearsal", needs: [], action: { kind: "step", module, name: "hang" } };
+  const abort = new AbortController();
+  const running = runStages(value, [stage], abort.signal, { graceMs: 200, forceMs: 3000 });
+  for (let tries = 0; tries < 200 && !existsSync(pidFile); tries++) await Bun.sleep(25);
+  const started = performance.now();
+  abort.abort(new Error("controller cancelled"));
+  await expect(running).rejects.toThrow("controller cancelled");
+  expect(performance.now() - started).toBeLessThan(10000);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  const alive = existsSync(`/proc/${pid}`) && !readFileSync(`/proc/${pid}/stat`, "utf8").includes(") Z ");
+  expect(alive).toBe(false);
+});
+
+test("a step receives its context, including records, and runs in E", async () => {
+  const value = context(fresh("step-context"));
+  const module = join(value.privateRoot, "echo-steps.ts");
+  const out = join(value.privateRoot, "seen.json");
+  write(module, `import { writeFileSync } from "node:fs";
+export const steps = { echo: (context: { mode: string; records: { config: Uint8Array } }) => writeFileSync(${JSON.stringify(out)}, JSON.stringify({ mode: context.mode, config: new TextDecoder().decode(context.records.config), mark: process.env.MARK })) };\n`);
+  await runStages(value, [{ name: "echo.log", eligibility: "generic-rehearsal", needs: [], action: { kind: "step", module, name: "echo" } }], new AbortController().signal);
+  expect(JSON.parse(readFileSync(out, "utf8"))).toEqual({ mode: "run", config: "c", mark: "E" });
+});
+
+test("teardown removes sealed owned copies after drain, and records a removal it cannot make instead of losing the receipt", async () => {
+  const root = fresh("teardown");
+  const plan = { operation: "rehearse" as const, admission: [{ name: "private", path: join(root, "private"), retained: false }], durable: [] };
+  const invocation = new Invocation(plan, repository);
+  invocation.claimed.claim(plan.admission);
+  const sealed = join(root, "private/retained-copy/delivery/split");
+  write(join(sealed, "member"), "sealed copy", 0o444);
+  chmodSync(sealed, 0o555);
+  chmodSync(dirname(sealed), 0o555);
+  const cleanup = await invocation.teardown({ graceMs: 100, forceMs: 1000 });
+  expect(cleanup).toMatchObject({ drained: true, removalFailed: [] });
+  expect(existsSync(join(root, "private"))).toBe(false);
+  const locked = fresh("teardown-locked");
+  const stuck = { operation: "rehearse" as const, admission: [{ name: "private", path: join(locked, "private"), retained: false }], durable: [] };
+  const other = new Invocation(stuck, repository);
+  other.claimed.claim(stuck.admission);
+  chmodSync(locked, 0o555);
+  const failed = await other.teardown({ graceMs: 100, forceMs: 1000 });
+  chmodSync(locked, 0o755);
+  expect(failed.drained).toBe(true);
+  expect(failed.removalFailed.map(entry => entry.path)).toEqual([join(locked, "private")]);
+});
+
+test("the rehearsal witness covers content, not just metadata", () => {
+  const root = fresh("witness");
+  write(join(root, "a/file"), "one");
+  const before = treeWitness(root).join("\n");
+  const stat = statSync(join(root, "a/file"));
+  writeFileSync(join(root, "a/file"), "two");
+  utimesSync(join(root, "a/file"), stat.atime, stat.mtime);
+  expect(treeWitness(root).join("\n")).not.toBe(before);
 });

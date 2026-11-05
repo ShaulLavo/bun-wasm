@@ -57,7 +57,7 @@ setsid bash -c '${scenario === "stubborn-descendant" ? 'trap "" TERM; ' : ""}ech
 while [[ ! -f "$RUNNER_TEMP/release" ]]; do sleep 0.01; done
 exit "${scenario === "build-failure" ? 7 : 0}"
 `);
-  for (const file of ["ci-jsc-worker.ts", "run-with-timeout.mts", "linux-subreaper.mts"]) {
+  for (const file of ["ci-jsc-worker.ts", "run-with-timeout.mts", "process-owner.mts", "linux-subreaper.mts"]) {
     const source = readFileSync(join(root, "scripts", file), "utf8");
     writeFileSync(join(scratch, "scripts", file), source);
   }

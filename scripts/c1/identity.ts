@@ -67,15 +67,34 @@ function linkLine(root: string, path: string, full: string): string {
  * hash, in sorted order. Git metadata is excluded. `selection` limits the walk
  * to named top-level entries.
  */
-export function treeIdentity(path: string, selection?: readonly string[]): TreeIdentity {
+function treeWalk(path: string, selection?: readonly string[]): string[] {
   if (!isAbsolute(path) || !lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) throw new IdentityError(`expected an absolute directory: ${path}`);
-  const lines = selection ? selection.flatMap(entry => treeLines(path, entry)) : readdirSync(path).sort().flatMap(name => treeLines(path, name));
+  return selection ? selection.flatMap(entry => treeLines(path, entry)) : readdirSync(path).sort().flatMap(name => treeLines(path, name));
+}
+function identityOf(path: string, lines: readonly string[]): TreeIdentity {
   const files = lines.filter(line => line.startsWith("file\0") || line.startsWith("link\0")).length;
   const bytes = lines.reduce((total, line) => total + (line.startsWith("file\0") ? Number(line.split("\0")[3]) : 0), 0);
   return { path, files, bytes, sha256: sha256(lines.join("")) };
+}
+export function treeIdentity(path: string, selection?: readonly string[]): TreeIdentity {
+  return identityOf(path, treeWalk(path, selection));
 }
 export function requireTree(expected: TreeIdentity, label: string, selection?: readonly string[]): TreeIdentity {
   const actual = treeIdentity(expected.path, selection);
   if (!sameBytes(actual, expected) || actual.files !== expected.files) throw new IdentityError(`${label} tree changed: ${expected.path}`);
   return actual;
+}
+/**
+ * The regular files of an admitted tree, by relative path, read in the same
+ * walk that proves the tree still has its admitted identity. Links are not
+ * files: a path through a link is never a member.
+ */
+export function requireTreeInventory(expected: TreeIdentity, label: string): ReadonlyMap<string, { readonly bytes: number; readonly sha256: string }> {
+  const lines = treeWalk(expected.path);
+  const actual = identityOf(expected.path, lines);
+  if (!sameBytes(actual, expected) || actual.files !== expected.files) throw new IdentityError(`${label} tree changed since admission: ${expected.path}`);
+  return new Map(lines.filter(line => line.startsWith("file\0")).map(line => {
+    const [, path = "", , bytes = "0", digest = ""] = line.trimEnd().split("\0");
+    return [path, { bytes: Number(bytes), sha256: digest }];
+  }));
 }

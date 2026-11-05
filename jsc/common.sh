@@ -103,19 +103,27 @@ copy_jsc_config_inputs() {
   done
 }
 
+# Read-only: the prebuild and its WebKit repository are never written. The patched index,
+# any new objects and the worktree comparison's index refresh all live in a private
+# scratch directory; the original objects are read through alternates and nothing is
+# fetched, so a missing object fails instead of downloading.
 check_jsc_webkit_tree() (
   [[ "$(git -C "$WEBKIT_DIR" rev-parse HEAD)" == "$WEBKIT_COMMIT" ]] || return 1
   [[ -z "$(git -C "$WEBKIT_DIR" ls-files --others --exclude-standard)" ]] || return 1
-  local index expected
-  index=$(mktemp "$JSC_BUILD_DIR/.webkit-index-XXXXXX") || return 1
-  trap 'rm -f -- "$index"' EXIT
-  rm -f -- "$index" || return 1
-  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
-  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
+  local scratch expected git_dir common_dir
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/bun-wasm-webkit-check-XXXXXX") || return 1
+  trap 'rm -rf -- "$scratch"' EXIT
+  git_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-dir) || return 1
+  common_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-common-dir) || return 1
+  mkdir "$scratch/objects" || return 1
+  cp -- "$git_dir/index" "$scratch/worktree-index" || return 1
+  export GIT_OBJECT_DIRECTORY="$scratch/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$common_dir/objects" GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0
+  GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
+  GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
   # --missing-ok gives the same tree id without checking that every blob exists: in this
   # blobless clone that check fetched all of WebKit (~1.8 GB) into .git, which CI then shipped.
-  expected=$(GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" write-tree --missing-ok) || return 1
-  git -C "$WEBKIT_DIR" diff --quiet "$expected" --
+  expected=$(GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" write-tree --missing-ok) || return 1
+  GIT_INDEX_FILE="$scratch/worktree-index" git -C "$WEBKIT_DIR" diff --quiet "$expected" --
 )
 
 write_jsc_inputs_stamp() {

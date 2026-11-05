@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { tlsPagePaths } from "../producer-closure.ts";
 import { sameSource, type SourceIdentity } from "./contract.ts";
@@ -58,7 +58,7 @@ function requireResolvedRelay(tls: string, rows: readonly Identity[]): void {
 function inputIdentities(sourceRoot: string, inputs: Record<string, unknown>): Identity[] {
   return Object.keys(inputs).sort().map(input => {
     const path = resolve(sourceRoot, input);
-    if (!inside(sourceRoot, path)) fail(`TLS page bundled an input outside the selected source: ${input}`);
+    if (!inside(sourceRoot, path) || !inside(realpathSync(sourceRoot), realpathSync(path))) fail(`TLS page bundled an input outside the selected source: ${input}`);
     return identity(sourceRoot, relative(sourceRoot, path));
   });
 }
@@ -78,15 +78,40 @@ export async function prepareTlsPage(sourceRoot: string, source: SourceIdentity,
   requireResolvedRelay(tls, rows);
   const receipt: TlsPageReceipt = { schema: "bun-wasm.c1-tls-page/1", source, entry: TLS_PAGE_ENTRY, workers: TLS_PAGE_WORKERS, inputs: inputIdentities(sourceRoot, result.metafile.inputs), outputs: rows };
   writeFileSync(join(tls, receiptName), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
-  return receipt;
+  // The written receipt must itself be complete: entry and every maintained worker among its inputs.
+  return parseReceipt(join(tls, receiptName));
 }
 
+function identityRows(value: unknown, label: string): Identity[] {
+  if (!Array.isArray(value) || value.length === 0) fail(`TLS page receipt ${label} must be a non-empty list`);
+  const rows = value.map((row: unknown) => {
+    const fields = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : fail(`TLS page receipt ${label} row is not an object`);
+    const { path, bytes, sha256: digest } = fields;
+    if (Object.keys(fields).sort().join(",") !== "bytes,path,sha256" || typeof path !== "string" || path === "" || path.startsWith("/") || path.includes("\\")
+      || path.split("/").some(part => part === "" || part === "." || part === "..") || typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0
+      || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) fail(`TLS page receipt ${label} row is malformed`);
+    return { path, bytes, sha256: digest };
+  });
+  if (new Set(rows.map(row => row.path)).size !== rows.length) fail(`TLS page receipt ${label} repeats a path`);
+  return rows;
+}
 function parseReceipt(path: string): TlsPageReceipt {
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-  const receipt = value as TlsPageReceipt;
-  if (!value || typeof value !== "object" || receipt.schema !== "bun-wasm.c1-tls-page/1" || !Array.isArray(receipt.inputs) || !Array.isArray(receipt.outputs)
-    || receipt.entry !== TLS_PAGE_ENTRY || JSON.stringify(receipt.workers) !== JSON.stringify(TLS_PAGE_WORKERS)) fail("invalid TLS page receipt");
-  return receipt;
+  const fields = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : fail("TLS page receipt is not an object");
+  if (Object.keys(fields).sort().join(",") !== "entry,inputs,outputs,schema,source,workers" || fields.schema !== "bun-wasm.c1-tls-page/1"
+    || fields.entry !== TLS_PAGE_ENTRY || JSON.stringify(fields.workers) !== JSON.stringify(TLS_PAGE_WORKERS)) fail("invalid TLS page receipt");
+  const source = fields.source as SourceIdentity;
+  if (!source || typeof source.head !== "string" || typeof source.tree !== "string") fail("TLS page receipt has no source");
+  const inputs = identityRows(fields.inputs, "inputs");
+  const listed = new Set(inputs.map(input => input.path));
+  for (const required of [TLS_PAGE_ENTRY].concat(TLS_PAGE_WORKERS)) if (!listed.has(required)) fail(`TLS page receipt inputs omit ${required}`);
+  return { schema: "bun-wasm.c1-tls-page/1", source: { head: source.head, tree: source.tree }, entry: TLS_PAGE_ENTRY, workers: TLS_PAGE_WORKERS, inputs, outputs: identityRows(fields.outputs, "outputs") };
+}
+/** A bundled input read back through no link outside the selected source checkout. */
+function requireInput(sourceRoot: string, input: Identity): void {
+  const path = join(sourceRoot, input.path);
+  if (!inside(realpathSync(sourceRoot), realpathSync(path))) fail(`TLS page input resolves outside the selected source: ${input.path}`);
+  if (!sameBytes(fileIdentity(path), input)) fail(`TLS page input changed: ${input.path}`);
 }
 /**
  * The delivered page is exactly what its receipt lists, built from this
@@ -101,7 +126,7 @@ export function verifyTlsPage(delivery: string, sourceRoot: string, source: Sour
   const listed = new Set(actual.map(row => `tls/${row.path}`));
   for (const path of [tlsPagePaths.index, tlsPagePaths.entry, tlsPagePaths.pgClient].concat(tlsPagePaths.workers)) if (!listed.has(path)) fail(`TLS page lacks ${path}`);
   if (!sameBytes(fileIdentity(join(tls, relative("tls", tlsPagePaths.pgClient))), fileIdentity(join(sourceRoot, TLS_PG_CLIENT)))) fail("delivered pg client differs from the selected source");
-  for (const input of receipt.inputs) if (!sameBytes(fileIdentity(join(sourceRoot, input.path)), input)) fail(`TLS page input changed: ${input.path}`);
+  for (const input of receipt.inputs) requireInput(sourceRoot, input);
   requireResolvedRelay(tls, actual);
   return receipt;
 }

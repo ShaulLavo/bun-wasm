@@ -121,6 +121,26 @@ function admitFd3(manifest: InputManifest): void {
     || field(contract, "stdoutBytes") !== 12 || field(contract, "observesEof") !== true || field(contract, "exitCode") !== 0) fail("fd3 contract differs");
   if (field(artifact, "path") !== manifest.fd3.artifact.path || field(artifact, "bytes") !== manifest.fd3.artifact.bytes || field(artifact, "sha256") !== manifest.fd3.artifact.sha256
     || field(artifact, "validWebAssembly") !== true || field(artifact, "embeddedContractBytes") !== 12) fail("fd3 receipt names a different artifact");
+  admitFd3Origin(receipt);
+  admitFd3Module(manifest.fd3.artifact.path, artifact);
+}
+/** The receipt's own original source and compiler, kept as they are: never reassigned to the current runtime. */
+function admitFd3Origin(receipt: unknown): void {
+  const source = field(receipt, "source");
+  const compiler = field(receipt, "compiler");
+  const hex = (value: unknown, length: number) => typeof value === "string" && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
+  if (field(source, "repository") !== "Waffle" || !hex(field(source, "commit"), 40) || !hex(field(source, "tree"), 40) || typeof field(source, "path") !== "string"
+    || typeof field(source, "bytes") !== "number" || !hex(field(source, "sha256"), 64)) fail("fd3 receipt lacks its original Waffle source provenance");
+  if (field(compiler, "package") !== "wabt" || typeof field(compiler, "version") !== "string") fail("fd3 receipt lacks its original compiler provenance");
+}
+/** The receipt's import and export lists are the actual module's, parsed (never instantiated) from the admitted bytes. */
+function admitFd3Module(path: string, artifact: unknown): void {
+  let module: WebAssembly.Module;
+  try { module = new WebAssembly.Module(readFileSync(path)); }
+  catch { fail("fd3 artifact is not valid WebAssembly"); }
+  const imports = WebAssembly.Module.imports(module).map(entry => ({ module: entry.module, name: entry.name, kind: entry.kind }));
+  const exports = WebAssembly.Module.exports(module).map(entry => ({ name: entry.name, kind: entry.kind }));
+  if (JSON.stringify(imports) !== JSON.stringify(field(artifact, "imports")) || JSON.stringify(exports) !== JSON.stringify(field(artifact, "exports"))) fail("fd3 receipt imports or exports differ from the module");
 }
 
 /** Read-only Git work: a private index and object directory, originals as alternates, no lazy fetch. */
@@ -246,7 +266,27 @@ export function protectedPaths(run: ParsedRun): string[] {
   const files: FileIdentity[] = [m.runtime.archive, m.runtime.authentication, m.relay.archive, m.programs.manifest, m.programs.checksums, m.fd3.artifact, m.fd3.receipt, run.config.manifest]
     .concat(m.programs.archives, Object.values(m.tools), Object.values(m.native).flatMap(root => root.files));
   const roots = Object.values(m.native).map(root => root.root).concat(Object.values(m.donors).map(tree => tree.path), [m.consumers.browsers.path]);
-  return [run.config.sourceRoot, run.configPath].concat(roots, files.map(file => file.path));
+  return [run.config.sourceRoot, run.configPath].concat(roots, files.map(file => file.path), tlsDependencyPaths(m));
+}
+function tlsDependencyPaths(manifest: InputManifest): string[] {
+  const tls = manifest.consumers.tls;
+  if (tls.status !== "resolved") return [];
+  return [tls.value.pgModules.path, tls.value.pgTarball.path, tls.value.pgPackageJson.path, tls.value.pgLock.path];
+}
+/**
+ * A resolved TLS dependency closure is admitted like every other input: the
+ * pinned public tarball, the complete installed tree (no link may leave it)
+ * and the frozen package manifest and lock it was installed from.
+ */
+function admitTlsDependencies(manifest: InputManifest): void {
+  const tls = manifest.consumers.tls;
+  if (tls.status !== "resolved") return;
+  const { pgTarball, pgModules, pgPackageJson, pgLock } = tls.value;
+  requireFile(pgTarball, "pg tarball");
+  requireFile(pgPackageJson, "pg frozen package manifest");
+  requireFile(pgLock, "pg frozen lock");
+  requireTree(pgModules, "pg installed dependency tree");
+  if (pgPackageJson.path !== join(dirname(pgModules.path), "package.json") || pgLock.path !== join(dirname(pgModules.path), "bun.lock")) fail("pg tree was not installed beside its frozen package manifest and lock");
 }
 
 export interface Authenticated {
@@ -278,6 +318,7 @@ export function authenticate(run: ParsedRun, controllerRoot: string, scratch: st
   if (m.native.sysroot.provenance.status === "verified") admitSysroot(sourceRoot, m.native.sysroot, m.native.sdk, donors);
   if (m.native.shell.provenance.status === "verified") admitShell(sourceRoot, m.native.shell);
   requireTree(m.consumers.browsers, "Playwright browsers");
+  admitTlsDependencies(m);
   return { run, source, drafts: draftEntries(m).concat(fixtureDrafts(run.config.fixtures)) };
 }
 

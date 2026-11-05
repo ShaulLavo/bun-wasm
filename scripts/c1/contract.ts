@@ -81,9 +81,20 @@ export interface ConsumerDependencies {
   /** Installed Playwright browsers the Chromium consumers launch. */
   readonly browsers: TreeIdentity;
   readonly tls: Requirement<TlsDependencies>;
-  /** Relay's remaining needs are not defined yet; only "unresolved" parses. */
-  readonly relay: Requirement<never>;
 }
+/**
+ * The Relay consumer contract (RELAY-CONSUMER-CONTRACT.json, 2026-11-05):
+ * no additional producer gate, profile or build. Its runtime110 WebSocket
+ * consumer uses the delivered default Browser guest, runs only after
+ * independent intake, and only if the final demo or host consumes this
+ * delivery. Relay owns that driver, its fixture inputs and its policy, so
+ * nothing about it can block production here.
+ */
+export const RELAY_DECISION = {
+  producerGate: false,
+  additionalProfiles: [],
+  consumer: "conditional post-intake Browser-default WebSocket consumer, owned by Relay",
+} as const;
 
 export interface InputManifest {
   readonly schema: "bun-wasm.c1-inputs/1";
@@ -280,16 +291,17 @@ function parseTls(value: unknown, label: string): TlsDependencies {
     pgPackageJson: parseFile(fields.pgPackageJson, `${label}.pgPackageJson`), pgLock: parseFile(fields.pgLock, `${label}.pgLock`) };
 }
 function parseConsumerDependencies(value: unknown, label = "consumers"): ConsumerDependencies {
-  const fields = row(value, label, ["browsers", "tls", "relay"]);
-  return { browsers: parseTree(fields.browsers, `${label}.browsers`), tls: parseRequirement(fields.tls, `${label}.tls`, parseTls),
-    relay: parseRequirement<never>(fields.relay, `${label}.relay`, undefined) };
+  const fields = row(value, label, ["browsers", "tls"]);
+  return { browsers: parseTree(fields.browsers, `${label}.browsers`), tls: parseRequirement(fields.tls, `${label}.tls`, parseTls) };
 }
 
 const PRIVATE_IPV4 = [[10, 0, 255], [172, 16, 31], [192, 168, 168], [100, 64, 127]] as const;
+/** Dotted decimal with no leading zeros, so every spelling of an address is its one canonical form. */
+const CANONICAL_IPV4 = /^(?:(?:0|[1-9]\d{0,2})\.){3}(?:0|[1-9]\d{0,2})$/;
 function privateIpv4(value: unknown, label: string): string {
   const address = text(value, label);
   const octets = address.split(".").map(Number);
-  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address) || octets.some(octet => octet > 255)) fail(label, "expected an exact IPv4 address");
+  if (!CANONICAL_IPV4.test(address) || octets.some(octet => octet > 255)) fail(label, "expected an exact canonical IPv4 address");
   const [first, second] = octets;
   if (!PRIVATE_IPV4.some(([leading, low, high]) => first === leading && second !== undefined && second >= low && second <= high)) fail(label, "expected a private fleet address (10/8, 172.16/12, 192.168/16 or 100.64/10)");
   return address;
@@ -347,11 +359,8 @@ export function draftEntries(manifest: InputManifest): string[] {
   const native = Object.entries(manifest.native).filter(([, root]) => root.provenance.status === "draft")
     .map(([name, root]) => `native.${name}: ${root.provenance.status === "draft" ? root.provenance.missing : ""}`);
   const relay = manifest.relay.provenance.status === "draft" ? [`relay: ${manifest.relay.provenance.missing}`] : [];
-  const consumers = (["tls", "relay"] as const).flatMap(name => {
-    const requirement = manifest.consumers[name];
-    return requirement.status === "unresolved" ? [`consumers.${name}: ${requirement.missing}`] : [];
-  });
-  return native.concat(relay, consumers);
+  const tls = manifest.consumers.tls.status === "unresolved" ? [`consumers.tls: ${manifest.consumers.tls.missing}`] : [];
+  return native.concat(relay, tls);
 }
 
 function parseRoots<K extends string>(value: unknown, names: readonly K[], label: string): Record<K, string> {

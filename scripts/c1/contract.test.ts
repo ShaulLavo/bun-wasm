@@ -1,13 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { accessSync, chmodSync, constants, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths, handoffMemberPaths, selectedReleaseArchives } from "../producer-closure.ts";
 import waffleRelease from "../waffle-release-inputs.json";
-import { EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake } from "./contract.ts";
-import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, writeContractFixture, writeFixtureDelivery } from "./contract-fixture.ts";
-import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts, sealDelivery, type SealedDelivery } from "./delivery.ts";
+import { DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake } from "./contract.ts";
+import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
+import { admitHandoffFile, admitIntake, readSealedDelivery, requireHandoffArtifacts, sealDelivery } from "./delivery.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 
 const scratch: string[] = [];
@@ -27,11 +27,8 @@ function fresh(): string {
   return join(root, "fixture");
 }
 function json(path: string): unknown { return JSON.parse(readFileSync(path, "utf8")); }
-function sealedFixture(root: string): SealedDelivery {
-  writeFixtureDelivery(root);
-  sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") });
-  return readSealedDelivery(root);
-}
+/** A sealed synthetic delivery with consistent records; returns its root. */
+function sealedFixture(beforeSeal?: (root: string) => void): string { return writeSealedFixture(fresh(), beforeSeal).deliveryRoot; }
 function modeOf(path: string): number { return lstatSync(path).mode & 0o7777; }
 /** Writable copy of a delivery member, replacing the sealed one through its (test-unsealed) directory. */
 function tamper(root: string, member: string, change: (path: string) => void): void {
@@ -39,6 +36,9 @@ function tamper(root: string, member: string, change: (path: string) => void): v
   chmodSync(directory, 0o700);
   change(join(root, member));
   chmodSync(directory, 0o555);
+}
+function replaceJson(root: string, member: string, change: (value: Record<string, unknown>) => Record<string, unknown>): void {
+  tamper(root, member, path => { chmodSync(path, 0o600); writeFileSync(path, JSON.stringify(change(json(path) as Record<string, unknown>))); chmodSync(path, 0o444); });
 }
 
 test("the executable fixture writes every contract file and each parses strictly", () => {
@@ -50,8 +50,27 @@ test("the executable fixture writes every contract file and each parses strictly
   expect(Object.keys(handoff.artifacts).sort()).toEqual(HANDOFF_ROLES.toSorted());
   expect(Object.keys(handoff.outputs).sort()).toEqual(["five-owner", "relay", "tls"]);
   requireHandoffArtifacts(handoff);
+  expect(admitHandoffFile(fixture.handoff, fileIdentity(fixture.handoff).sha256)).toEqual(handoff);
   const inputs = parseInputManifest(json(fixture.inputs));
-  expect(draftEntries(inputs).map(entry => entry.split(":")[0])).toEqual(["native.jsc", "native.sdk", "native.sysroot", "native.shell", "relay", "consumers.tls", "consumers.relay"]);
+  expect(draftEntries(inputs).map(entry => entry.split(":")[0])).toEqual(["native.jsc", "native.sdk", "native.sysroot", "native.shell", "relay", "consumers.tls"]);
+});
+
+test("the sealed CONFIG and INPUTS records are the bytes DELIVERY.json binds", () => {
+  const fixture = writeContractFixture(fresh());
+  const sealed = readSealedDelivery(fixture.delivery);
+  expect(fileIdentity(join(fixture.delivery, DELIVERY_RECORDS.config)).sha256).toBe(sealed.manifest.configSha256);
+  expect(fileIdentity(join(fixture.delivery, DELIVERY_RECORDS.inputs)).sha256).toBe(sealed.manifest.inputsSha256);
+  expect(sealed.config.manifest.sha256).toBe(sealed.manifest.inputsSha256);
+});
+
+test("filler or foreign sealed records refuse even when every member hash is listed", () => {
+  const filler = writeSealedFixture(fresh(), root => writeFileSync(join(root, DELIVERY_RECORDS.config), "filler"));
+  expect(() => readSealedDelivery(filler.deliveryRoot)).toThrow("sealed config record differs");
+  const otherInputs = writeSealedFixture(fresh(), root => {
+    const config = json(join(root, DELIVERY_RECORDS.config)) as Record<string, unknown>;
+    writeFileSync(join(root, DELIVERY_RECORDS.config), JSON.stringify({ ...config, manifest: { ...config.manifest as object, sha256: sha256("other") } }));
+  });
+  expect(() => readSealedDelivery(otherInputs.deliveryRoot)).toThrow();
 });
 
 test("the sealed launcher runs from its sealed path without any chmod", () => {
@@ -69,11 +88,8 @@ test("the sealed launcher runs from its sealed path without any chmod", () => {
 });
 
 test("ordinary payloads are sealed read-only and non-executable regardless of their input mode", () => {
-  const root = join(fresh(), "delivery");
-  writeFixtureDelivery(root);
   const guest = handoffMemberPaths().jscGuest;
-  chmodSync(join(root, guest), 0o755);
-  sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") });
+  const root = sealedFixture(delivery => chmodSync(join(delivery, guest), 0o755));
   const sealed = readSealedDelivery(root);
   for (const member of sealed.manifest.files) expect(modeOf(join(root, member.path))).toBe(executableMemberPaths().includes(member.path) ? 0o555 : 0o444);
   expect(modeOf(join(root, "DELIVERY.json"))).toBe(0o444);
@@ -84,18 +100,31 @@ test("ordinary payloads are sealed read-only and non-executable regardless of th
 });
 
 test("verification refuses a launcher sealed 0444 and never repairs it", () => {
-  const root = join(fresh(), "delivery");
-  const sealed = sealedFixture(root);
-  const launcher = join(root, handoffMemberPaths().launcher);
-  const handoff = buildHandoff(sealed, fileIdentity(join(root, "DELIVERY.json")), parseInputManifest(json(writeContractFixture(fresh()).inputs)).consumers,
-    { tls: { status: "unresolved", missing: "not chosen" } }, join(root, "..", "q"), "/work/tmp/c1");
+  const fixture = writeContractFixture(fresh());
+  const handoff = parseHandoff(json(fixture.handoff));
+  const launcher = handoff.artifacts.launcher.path;
   chmodSync(launcher, 0o444);
   const before = statSync(launcher, { bigint: true });
-  expect(() => readSealedDelivery(root)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
-  expect(() => requireHandoffArtifacts(handoff)).toThrow("handoff launcher has mode 0444, expected sealed 0555");
+  expect(() => readSealedDelivery(fixture.delivery)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
+  expect(() => requireHandoffArtifacts(handoff)).toThrow("sealed mode of split/launcher/bun-wasm is 0444, expected 0555");
   const after = statSync(launcher, { bigint: true });
   expect([after.mode, after.ctimeNs]).toEqual([before.mode, before.ctimeNs]);
   expect(spawnSync(launcher).error?.message).toContain("EACCES");
+});
+
+test("a handoff is only the one its sealed delivery, records and intake derive", () => {
+  const fixture = writeContractFixture(fresh());
+  const handoff = parseHandoff(json(fixture.handoff));
+  const outside = join(fixture.delivery, "..", "..", "outside-guest.wasm");
+  copyFileSync(handoff.artifacts.quickjsGuest.path, outside);
+  chmodSync(outside, 0o444);
+  expect(() => requireHandoffArtifacts({ ...handoff, artifacts: { ...handoff.artifacts, quickjsGuest: fileIdentity(outside) } })).toThrow("handoff differs");
+  const tls = handoff.fixtures.tls;
+  if (tls.status !== "resolved") throw new Error("fixture TLS options are resolved");
+  expect(() => requireHandoffArtifacts({ ...handoff, fixtures: { tls: { ...tls, value: { ...tls.value, pagePort: 44000 } } } })).toThrow("handoff differs");
+  expect(() => requireHandoffArtifacts({ ...handoff, outputs: { ...handoff.outputs, tls: "/work/tmp/elsewhere" } })).toThrow("handoff differs");
+  expect(() => requireHandoffArtifacts({ ...handoff, browserTmp: "/work/tmp/c9" })).toThrow("handoff differs");
+  expect(() => admitHandoffFile(fixture.handoff, sha256("other"))).toThrow("pinned SHA-256");
 });
 
 test("readers never change sealed metadata", () => {
@@ -114,40 +143,32 @@ test.each([
   ["an executable bit on a payload", (path: string) => chmodSync(path, 0o555)],
   ["a removed member", (path: string) => rmSync(path)],
 ])("a sealed delivery with %s refuses", (_name, change) => {
-  const root = join(fresh(), "delivery");
-  sealedFixture(root);
+  const root = sealedFixture();
   tamper(root, handoffMemberPaths().quickjsGuest, path => { chmodSync(path, 0o600); change(path); });
   expect(() => readSealedDelivery(root)).toThrow();
 });
 
 test("an extra file or symlink in a sealed delivery refuses", () => {
-  const root = join(fresh(), "delivery");
-  sealedFixture(root);
+  const root = sealedFixture();
   tamper(root, "split/extra.wasm", path => writeFileSync(path, "extra"));
   expect(() => readSealedDelivery(root)).toThrow("missing or extra files");
-  const other = join(fresh(), "delivery");
-  sealedFixture(other);
+  const other = sealedFixture();
   tamper(other, "split/alias", path => symlinkSync(join(other, "source.tar.gz"), path));
   expect(() => readSealedDelivery(other)).toThrow("symlink");
 });
 
 test("a manifest that claims a different mode than the registry refuses", () => {
-  const root = join(fresh(), "delivery");
-  sealedFixture(root);
-  const manifest = json(join(root, "DELIVERY.json")) as { files: { path: string; mode: string }[] };
-  const guest = manifest.files.find(file => file.path === handoffMemberPaths().jscGuest);
-  if (!guest) throw new Error("fixture lacks the JSC guest");
-  guest.mode = "0555";
-  tamper(root, "DELIVERY.json", path => { chmodSync(path, 0o600); writeFileSync(path, JSON.stringify(manifest)); chmodSync(path, 0o444); });
+  const root = sealedFixture();
+  replaceJson(root, "DELIVERY.json", manifest => {
+    const files = manifest.files as { path: string; mode: string }[];
+    return { ...manifest, files: files.map(file => file.path === handoffMemberPaths().jscGuest ? { ...file, mode: "0555" } : file) };
+  });
   expect(() => readSealedDelivery(root)).toThrow("differs from the registry");
 });
 
 test("DELIVERY.json is written exactly once", () => {
-  const root = join(fresh(), "delivery");
-  writeFixtureDelivery(root);
-  const facts = { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") };
-  sealDelivery(root, facts);
-  expect(() => sealDelivery(root, facts)).toThrow();
+  const root = sealedFixture();
+  expect(() => sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") })).toThrow();
 });
 
 test("consumers start only from an intake of this exact delivery", () => {
@@ -168,12 +189,13 @@ test("consumers start only from an intake of this exact delivery", () => {
   expect(variant("producer", { admitted: false })).toThrow(ContractError);
 });
 
-test("parsers reject unknown fields, unauthenticated verified labels and undefined relay requirements", () => {
+test("parsers reject unknown fields, unauthenticated verified labels and a Relay producer requirement", () => {
   const fixture = writeContractFixture(fresh());
   const inputs = json(fixture.inputs) as Record<string, Record<string, unknown>>;
   expect(() => parseInputManifest({ ...inputs, extra: true })).toThrow("unknown field extra");
   expect(() => parseInputManifest({ ...inputs, relay: { ...inputs.relay, provenance: { status: "verified", receipts: [] } } })).toThrow("at least one original receipt");
-  expect(() => parseInputManifest({ ...inputs, consumers: { ...inputs.consumers, relay: { status: "resolved", value: {} } } })).toThrow("no defined resolved shape");
+  expect(() => parseInputManifest({ ...inputs, consumers: { ...inputs.consumers, relay: { status: "unresolved", missing: "x" } } })).toThrow("unknown field relay");
+  expect(RELAY_DECISION.producerGate).toBe(false);
   const { bun: _bun, ...partial } = inputs.donors ?? {};
   expect(() => parseInputManifest({ ...inputs, donors: partial })).toThrow("missing bun");
   expect(() => parseInputManifest({ ...inputs, tools: { ...inputs.tools, rustfmt: inputs.tools?.cargo } })).toThrow("unknown field rustfmt");

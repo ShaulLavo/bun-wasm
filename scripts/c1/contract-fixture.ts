@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths } from "../producer-closure.ts";
 import {
-  DONOR_NAMES, TOOL_NAMES, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type FileIdentity, type InputManifest, type ParentIntake, type ReleaseTuple,
+  DELIVERY_RECORDS, DONOR_NAMES, TOOL_NAMES, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type FileIdentity, type InputManifest, type ParentIntake, type ReleaseTuple,
   type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./contract.ts";
 import type { LoadedObservation } from "./loaded.ts";
@@ -44,8 +44,7 @@ function fixtureTree(root: string, name: string): TreeIdentity {
   return treeIdentity(join(root, name));
 }
 export function fixtureDependencies(root: string): ConsumerDependencies {
-  return { browsers: fixtureTree(root, "browsers"), tls: { status: "unresolved", missing: "pg 8.16.3 tarball, complete installed tree and frozen lock not yet authenticated" },
-    relay: { status: "unresolved", missing: "relay requirements beyond unit 6 are not defined yet" } };
+  return { browsers: fixtureTree(root, "browsers"), tls: { status: "unresolved", missing: "pg 8.16.3 tarball, complete installed tree and frozen lock not yet authenticated" } };
 }
 /** A parseable manifest whose native and consumer entries are honestly draft. */
 export function fixtureInputManifest(root: string): InputManifest {
@@ -80,10 +79,11 @@ function observed(origin: string, path: string, file: string, encoding: LoadedOb
 }
 function fixtureLoaded(handoff: ConsumerHandoff) {
   const origin = "http://127.0.0.1:43839";
-  const web = [observed(origin, "/", join(handoff.webRoot, "index.html"), "identity"), observed(origin, "/bun.wasm", join(handoff.webRoot, "bun.wasm"), "gzip")];
+  const web = [observed(origin, "/", join(handoff.webRoot, "index.html"), "identity"), observed(origin, "/bun-browser.wasm", join(handoff.webRoot, "bun-browser.wasm"), "gzip"),
+    observed(origin, "/bun.wasm", join(handoff.webRoot, "bun.wasm"), "gzip")];
   const guest = handoff.artifacts.browserGuest;
   const tls = [observed(origin, "/", join(handoff.tlsPageRoot, "index.html"), "identity"), observed(origin, "/tls-relay-page.js", join(handoff.tlsPageRoot, "tls-relay-page.js"), "identity"),
-    observed(origin, "/pg-client.ts", handoff.artifacts.tlsPgClient.path, "identity"),
+    observed(origin, "/fs-worker.js", join(handoff.tlsPageRoot, "fs-worker.js"), "identity"), observed(origin, "/pg-client.ts", handoff.artifacts.tlsPgClient.path, "identity"),
     { url: `${origin}/artifact/${guest.sha256}`, method: "GET", status: 200, encoding: "identity", bytes: guest.bytes, sha256: guest.sha256 } as const,
     { url: `${origin}/seed`, method: "GET", status: 200, encoding: "identity", bytes: 2, sha256: sha256("[]") } as const];
   return { web: { loaded: web }, tls: { loaded: tls } };
@@ -98,28 +98,52 @@ export interface ContractFixture {
   readonly loadedWeb: string;
   readonly loadedTls: string;
 }
-/** Build every contract file under `root`, which must not exist yet. */
-export function writeContractFixture(root: string): ContractFixture {
+/**
+ * A synthetic delivery whose sealed CONFIG and INPUTS members are the real
+ * config and input manifest bytes its DELIVERY.json binds, at the root that
+ * config names. Everything else in it is filler, never a product artifact.
+ */
+export function writeFixtureRecords(deliveryRoot: string, configBytes: string, inputsBytes: string): { readonly configSha256: string; readonly inputsSha256: string } {
+  writeFileSync(join(deliveryRoot, DELIVERY_RECORDS.config), configBytes);
+  writeFileSync(join(deliveryRoot, DELIVERY_RECORDS.inputs), inputsBytes);
+  return { configSha256: sha256(configBytes), inputsSha256: sha256(inputsBytes) };
+}
+export interface SealedFixture { readonly inputsPath: string; readonly configPath: string; readonly config: C1Config; readonly deliveryRoot: string; readonly identity: FileIdentity }
+/**
+ * Config, input manifest and a sealed synthetic delivery at the root that
+ * config names, under `root` (which must not exist). `beforeSeal` may change
+ * payload files before the single seal.
+ */
+export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: string) => void = () => {}): SealedFixture {
   mkdirSync(root, { mode: 0o700 });
   const inputsPath = join(root, "inputs.json");
-  write(inputsPath, JSON.stringify(fixtureInputManifest(join(root, "input-files")), null, 2) + "\n");
-  const deliveryRoot = join(root, "artifact/delivery");
+  const inputsBytes = JSON.stringify(fixtureInputManifest(join(root, "input-files")), null, 2) + "\n";
+  write(inputsPath, inputsBytes);
+  const configPath = join(root, "config.json");
+  const config = fixtureConfig(root, fileIdentity(inputsPath));
+  const configBytes = JSON.stringify(config, null, 2) + "\n";
+  write(configPath, configBytes);
+  const deliveryRoot = join(config.roots.run.artifact, "delivery");
   writeFixtureDelivery(deliveryRoot);
-  const identity = sealDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("fixture config"), inputsSha256: fileIdentity(inputsPath).sha256 });
+  const records = writeFixtureRecords(deliveryRoot, configBytes, inputsBytes);
+  beforeSeal(deliveryRoot);
+  const identity = sealDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, ...records });
+  return { inputsPath, configPath, config, deliveryRoot, identity };
+}
+/** Build every contract file under `root`, which must not exist yet. */
+export function writeContractFixture(root: string): ContractFixture {
+  const { inputsPath, configPath, config, deliveryRoot, identity } = writeSealedFixture(root);
   const delivery = readSealedDelivery(deliveryRoot);
   const intake: ParentIntake = { schema: "bun-wasm.c1-intake/1", kind: "independent-parent-byte-admission", owner: "fixture parent", at: "2026-11-05T00:00:00.000Z",
     deliveryRoot, delivery: identity, source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, members: delivery.manifest.files.length, admitted: true };
   const intakePath = join(root, "INTAKE.json");
   write(intakePath, JSON.stringify(intake, null, 2) + "\n");
   const admitted = admitIntake(intakePath, fileIdentity(intakePath).sha256, delivery);
-  const configPath = join(root, "config.json");
-  const config = fixtureConfig(root, fileIdentity(inputsPath));
-  write(configPath, JSON.stringify(config, null, 2) + "\n");
-  const handoffPath = join(root, "qualification/handoff.json");
-  const handoff = buildHandoff(delivery, admitted.identity, fixtureDependencies(join(root, "dependencies")), config.fixtures, join(root, "qualification"), join(root, "b"));
+  const handoffPath = join(config.roots.qualify.output, "handoff.json");
+  const handoff = buildHandoff(delivery, admitted.identity, delivery.inputs.consumers, delivery.config.fixtures, config.roots.qualify.output, config.roots.qualify.browserTmp);
   write(handoffPath, JSON.stringify(handoff, null, 2) + "\n");
   const loaded = fixtureLoaded(handoff);
-  const loadedWeb = join(root, "qualification/five-owner-loaded.json"), loadedTls = join(root, "qualification/tls-loaded.json");
+  const loadedWeb = join(config.roots.qualify.output, "five-owner-loaded.json"), loadedTls = join(config.roots.qualify.output, "tls-loaded.json");
   write(loadedWeb, JSON.stringify(loaded.web, null, 2) + "\n");
   write(loadedTls, JSON.stringify(loaded.tls, null, 2) + "\n");
   return { delivery: deliveryRoot, intake: intakePath, handoff: handoffPath, inputs: inputsPath, config: configPath, loadedWeb, loadedTls };

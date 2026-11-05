@@ -140,8 +140,9 @@ function nativeCustody(context: PublicationContext) {
   const paths = NATIVE_COPIES.map(path => join(jsc.root, path)).concat([join(jsc.root, "jsc.wasm"), join(sysroot.root, "bun-wasm-sysroot.json"), headerManifest(context.manifest).path]);
   return { backing: { jsc: jsc.root, sysroot: sysroot.root }, files: paths.map(path => fileIdentity(path)) };
 }
-function nativeHeaderAdmission(context: PublicationContext, components: readonly ProgramInputSnapshot[]): void {
-  const header = headerManifest(context.manifest);
+/** The original header manifest's native groups must equal the selected source's JSC component inputs. */
+export function requireNativeGroups(manifest: InputManifest, components: readonly ProgramInputSnapshot[]): FileIdentity {
+  const header = requireFile(headerManifest(manifest), "native header manifest");
   const groups = field(json(header.path), "groups");
   const current = field(components.find(component => component.scope === "jsc")?.content, "groups");
   if (!Array.isArray(groups) || !Array.isArray(current)) fail("native header groups are missing");
@@ -151,6 +152,10 @@ function nativeHeaderAdmission(context: PublicationContext, components: readonly
     if (["jsc-prebuild", "sdk", "sysroot"].includes(name) && (!origin || !selected)) fail(`native group ${name} is missing`);
     if (JSON.stringify(selected) !== JSON.stringify(origin)) fail(`native group ${name} differs from the original header manifest`);
   }
+  return header;
+}
+function nativeHeaderAdmission(context: PublicationContext, components: readonly ProgramInputSnapshot[]): void {
+  const header = requireNativeGroups(context.manifest, components);
   save(publication(context, "inputs/NATIVE-CANDIDATE-ADMISSION.json"), { nativeRoot: context.manifest.native.jsc.root, originalHeaderManifest: header, groupsCompared: NATIVE_GROUPS });
 }
 /** Source, vendor and native inputs, captured in E. Every later phase must equal `before`. */

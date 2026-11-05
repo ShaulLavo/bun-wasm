@@ -1,7 +1,7 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ProcessOwner, describe, type ProcessIdentity } from "../process-owner.mts";
-import { CONSUMERS, type ConsumerHandoff, type ConsumerName, type FileIdentity, type SourceIdentity } from "./contract.ts";
+import { CONSUMERS, RELAY_DECISION, sameSource, sameTuple, type ConsumerHandoff, type ConsumerName, type FileIdentity, type SourceIdentity } from "./contract.ts";
 import { bindLoaded, parseLoaded, type LoadedSurface } from "./loaded.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireHandoffArtifacts } from "./delivery.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
@@ -20,6 +20,8 @@ export interface Cleanup {
   readonly removed: readonly string[];
   /** Kept because owned processes could still be using them. */
   readonly retainedUnsafe: readonly string[];
+  /** Owned paths whose removal failed after a proven drain, with the error; they remain on disk. */
+  readonly removalFailed: readonly { readonly path: string; readonly error: string }[];
   readonly retained: readonly string[];
   readonly sourceClean: boolean;
 }
@@ -27,26 +29,44 @@ export interface Cleanup {
 const PRODUCT_OUTPUTS = ["dist", "web/dist"];
 
 /** One invocation's owned state: roots, staged paths and processes. */
-class Invocation {
+export class Invocation {
   readonly owner = new ProcessOwner();
   readonly claimed = new Claimed();
   staging: Staging | undefined;
   constructor(readonly plan: RootPlan, readonly sourceRoot: string) {}
 
-  /** Drain every owned process, then delete only what nothing can still use. */
+  /**
+   * Drain every owned process, then delete only what nothing can still use.
+   * Owned scratch can hold sealed private copies (rehearsal seals its copy
+   * 0555), so removal unlocks owned directories first. A failure is recorded
+   * and the path kept; it never prevents the cleanup receipt.
+   */
   async teardown(drain = STAGE_DRAIN): Promise<Cleanup> {
     const survivors: ProcessIdentity[] = await this.owner.drain(drain);
     const staged = this.staging?.staged ?? [];
     const retained = this.claimed.created.filter(spec => spec.retained).map(spec => spec.path);
-    if (survivors.length) {
-      return { drained: false, survivors: [describe(survivors)], removed: [], retainedUnsafe: staged.concat(this.claimed.created.filter(spec => !spec.retained).map(spec => spec.path)), retained, sourceClean: false };
+    const scratch = this.claimed.created.filter(spec => !spec.retained).map(spec => spec.path);
+    if (survivors.length) return { drained: false, survivors: [describe(survivors)], removed: [], retainedUnsafe: staged.concat(scratch), removalFailed: [], retained, sourceClean: false };
+    const removed: string[] = [];
+    const removalFailed: { path: string; error: string }[] = [];
+    for (const path of staged.toReversed().concat(scratch.toReversed())) {
+      try { removeOwnedTree(path); removed.push(path); }
+      catch (error) { removalFailed.push({ path, error: message(error) }); }
     }
-    for (const path of staged.toReversed()) rmSync(path, { recursive: true, force: true });
-    const removed = staged.concat(this.claimed.removeScratch());
     let sourceClean = true;
     try { cleanSource(this.sourceRoot); } catch { sourceClean = false; }
-    return { drained: true, survivors: [], removed, retainedUnsafe: [], retained, sourceClean };
+    return { drained: true, survivors: [], removed, retainedUnsafe: [], removalFailed, retained, sourceClean };
   }
+}
+/** Make an owned tree's own directories writable (never following links), then remove it. */
+function removeOwnedTree(path: string): void {
+  const unlock = (directory: string): void => {
+    chmodSync(directory, 0o700);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory()) unlock(join(directory, entry.name));
+  };
+  if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory()) unlock(path);
+  rmSync(path, { recursive: true, force: true });
+  if (lstatSync(path, { throwIfNoEntry: false })) throw new AdmissionError(`owned path survived removal: ${path}`);
 }
 
 export interface Admitted { readonly authenticated: Authenticated; readonly environment: ProductEnvironment; readonly staging: Staging }
@@ -97,9 +117,13 @@ export async function check(run: ParsedRun, signal: AbortSignal) {
   });
 }
 
+/** The exact config and manifest bytes admission parsed, re-read and refused if they changed since. */
 function records(run: ParsedRun, admitted: Admitted) {
-  return { config: readFileSync(run.configPath), inputs: readFileSync(run.config.manifest.path),
-    environment: Buffer.from(JSON.stringify({ env: admitted.environment.env, tools: admitted.environment.tools }, null, 2) + "\n") };
+  const config = readFileSync(run.configPath);
+  const inputs = readFileSync(run.config.manifest.path);
+  if (sha256(config) !== run.configSha256) throw new AdmissionError("config bytes changed after admission");
+  if (sha256(inputs) !== run.config.manifest.sha256 || inputs.byteLength !== run.config.manifest.bytes) throw new AdmissionError("input manifest bytes changed after admission");
+  return { config, inputs, environment: Buffer.from(JSON.stringify({ env: admitted.environment.env, tools: admitted.environment.tools }, null, 2) + "\n") };
 }
 function stageContext(run: ParsedRun, admitted: Admitted, invocation: Invocation, mode: "run" | "rehearse", artifact: string, produced: StageContext["produced"]): StageContext {
   const delivered = records(run, admitted);
@@ -139,11 +163,13 @@ function retainedProduced(root: string): StageContext["produced"] {
   const metadata = read("publication/inputs/browser-consumer.json")?.metadata as Record<string, unknown> | undefined;
   return { source, runtime: typeof metadata?.version === "string" ? metadata.version : undefined };
 }
-function treeWitness(root: string, path = ""): string[] {
+/** Content and metadata witness of a retained root: every entry's mode and inode, every file's bytes and SHA-256. */
+export function treeWitness(root: string, path = ""): string[] {
   return readdirSync(join(root, path)).sort().flatMap(name => {
     const member = path ? `${path}/${name}` : name;
     const stat = lstatSync(join(root, member), { bigint: true });
-    const line = `${member}\0${stat.mode}\0${stat.size}\0${stat.mtimeNs}\0${stat.ino}`;
+    const content = stat.isFile() ? fileIdentity(join(root, member)).sha256 : "";
+    const line = `${member}\0${stat.mode}\0${stat.size}\0${stat.mtimeNs}\0${stat.ino}\0${content}`;
     return stat.isDirectory() ? [line].concat(treeWitness(root, member)) : [line];
   });
 }
@@ -214,7 +240,8 @@ const DRIVERS: Readonly<Record<ConsumerName, Driver>> = {
   "five-owner": fiveOwnerDriver,
   // TLS reads everything (delivery, intake, dependencies, fixture options, its sealed page) from the one pinned handoff.
   tls: tlsDriver,
-  relay: handoff => handoff.dependencies.relay.status === "unresolved" ? `relay requirements unresolved: ${handoff.dependencies.relay.missing}` : "relay has no driver",
+  // No producer gate: Relay owns its conditional post-intake Browser-default WebSocket consumer and its driver inputs.
+  relay: () => `not run by the controller: ${RELAY_DECISION.consumer}`,
 };
 
 /**
@@ -226,10 +253,12 @@ export async function qualify(run: ParsedRun, intakePath: string, intakeSha256: 
   const plan = qualifyPlan(run.config);
   const deliveryRoot = join(run.config.roots.run.artifact, "delivery");
   return operate(plan, run, signal, async invocation => {
+    // The sealed CONFIG and INPUTS records are this invocation's exact config and manifest bytes.
     const delivery = readSealedDelivery(deliveryRoot);
     const admitted = admitIntake(intakePath, intakeSha256, delivery);
     if (delivery.manifest.configSha256 !== run.configSha256 || delivery.manifest.inputsSha256 !== run.config.manifest.sha256) throw new AdmissionError("delivery was produced from another config or input manifest");
     const authenticated = authenticate(run, CONTROLLER_ROOT, join(invocation.claimed.path("private"), "admission-git"));
+    if (!sameSource(delivery.manifest.source, authenticated.source) || !sameTuple(delivery.manifest.tuple, run.manifest.tuple)) throw new AdmissionError("delivery source or tuple differs from the admitted selection");
     const staging = new Staging(run.config.sourceRoot, invocation.claimed.path("private"));
     invocation.staging = staging;
     await stageDonors(authenticated, staging, invocation.owner, signal);
@@ -237,7 +266,7 @@ export async function qualify(run: ParsedRun, intakePath: string, intakeSha256: 
     const environment = await establishEnvironment(authenticated, staging, baseEnvironment(authenticated, staging), invocation.owner, signal);
     invocation.claimed.claim(plan.durable);
     const output = invocation.claimed.path("output");
-    const handoff = buildHandoff(delivery, admitted.identity, run.manifest.consumers, run.config.fixtures, output, invocation.claimed.path("browserTmp"));
+    const handoff = buildHandoff(delivery, admitted.identity, delivery.inputs.consumers, delivery.config.fixtures, output, invocation.claimed.path("browserTmp"));
     requireHandoffArtifacts(handoff);
     write(join(output, "handoff.json"), handoff);
     const handoffFile = fileIdentity(join(output, "handoff.json"));
