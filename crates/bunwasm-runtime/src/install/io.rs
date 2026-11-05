@@ -8,6 +8,7 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::pending::Pending;
 use crate::{Transpiler, encoding, host};
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -342,12 +343,11 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|s| *s > 0)
         .unwrap_or(300);
-    let timeout = Duration::from_secs(seconds);
-    let mut progress = Instant::now();
+    let mut pending = Pending::new(Duration::from_secs(seconds), Instant::now());
     let head = loop {
         match host::fetch_head(handle) {
             Ok(head) => break head,
-            Err(host::AGAIN) => wait(progress, timeout, url)?,
+            Err(host::AGAIN) => wait(&mut pending, url)?,
             Err(_) => return Err(network_error(handle, registry)),
         }
     };
@@ -357,15 +357,12 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
         return Err(format!("GET {url} - {status}"));
     }
     let mut out = Vec::new();
-    progress = Instant::now();
+    pending.progressed(Instant::now());
     loop {
         match host::read(handle, 64 * 1024) {
             Ok(bytes) if bytes.is_empty() => return Ok(out),
-            Ok(bytes) => {
-                out.extend_from_slice(&bytes);
-                progress = Instant::now();
-            }
-            Err(host::AGAIN) => wait(progress, timeout, url)?,
+            Ok(bytes) => append_progress(&mut out, &mut pending, &bytes),
+            Err(host::AGAIN) => wait(&mut pending, url)?,
             Err(_) => return Err(network_error(handle, registry)),
         }
         if out.len() > LIMIT {
@@ -374,12 +371,16 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
     }
 }
 
-fn wait(progress: Instant, timeout: Duration, url: &str) -> Result<()> {
-    if progress.elapsed() >= timeout {
-        return Err(format!("Timeout downloading {url}"));
-    }
-    let remaining = timeout.saturating_sub(progress.elapsed());
-    host::poll(remaining.as_millis().clamp(1, 1000) as i32);
+fn append_progress(out: &mut Vec<u8>, pending: &mut Pending, bytes: &[u8]) {
+    out.extend_from_slice(bytes);
+    pending.progressed(Instant::now());
+}
+
+fn wait(pending: &mut Pending, url: &str) -> Result<()> {
+    let timeout_ms = pending
+        .next_poll_ms(Instant::now())
+        .ok_or_else(|| format!("Timeout downloading {url}"))?;
+    host::poll(timeout_ms);
     Ok(())
 }
 
