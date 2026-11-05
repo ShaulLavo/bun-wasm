@@ -55,9 +55,9 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       output = owned;
       abort.signal.throwIfAborted();
       const machine = intake.fixtures.databaseMachine;
-      const remoteBefore = execFileSync("mesh", ["ssh", machine, "--", "sh", "-c", "ps -eo pid,comm; command -v bun; command -v initdb; command -v postgres; command -v pg_isready; command -v openssl; df -Pk /work/tmp"], { encoding: "utf8", timeout: 15_000 });
+      const remoteBefore = execFileSync("mesh", ["ssh", machine, "--", "sh", "-c", 'set -eu; test ! -e "$HOME/.local/state/machine-fleet/owner-busy"; ps -eo pid,comm; command -v bun; command -v podman; command -v openssl; test -d "$HOME/tmp"; df -Pk "$HOME/tmp"; tailscale ip -4; podman info --format "{{.Host.Security.Rootless}}"; podman ps -a --format json; podman volume ls --format json; podman images --format json; ss -lnt'], { encoding: "utf8", timeout: 15_000 });
       abort.signal.throwIfAborted();
-      await writeFile(join(owned, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: machine, remoteBefore, creates: ["private remote PostgreSQL scratch and processes", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context"], frozenDelivery: intake.handoff.delivery.root }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+      await writeFile(join(owned, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: machine, remoteBefore, creates: ["PC Pi lane flock lease process", "private Pi home/tmp scratch, uniquely named rootless Podman container and volume using the parent-held digest image", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context"], frozenDelivery: intake.handoff.delivery.root }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
       const created: object[] = [];
       const record = async (resource: object) => { created.push(resource); await writeFile(join(owned, "resources.created.json"), JSON.stringify(created, null, 2) + "\n", { mode: 0o600 }); };
       const services = await startTlsServices(intake, owner, intake.fixtures, abort.signal, record);

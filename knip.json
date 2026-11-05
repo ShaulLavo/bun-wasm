@@ -149,7 +149,8 @@
     "^c\\+\\+$",
     "findmnt",
     "mesh",
-    "postgres"
+    "podman",
+    "flock"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"

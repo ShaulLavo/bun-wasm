@@ -267,6 +267,38 @@ test("WebKit admission uses a private index and object store and never writes th
   expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
 });
 
+function sparseWebkitFixture(root: string) {
+  const fixture = webkitFixture(root);
+  fixture.git("checkout", "-q", "--", "a.txt");
+  write(join(fixture.webkit, "unused.txt"), "unneeded upstream source\n");
+  fixture.git("add", "unused.txt");
+  fixture.git("commit", "-qm", "unneeded source");
+  write(join(fixture.source, "jsc/common.sh"), `WEBKIT_COMMIT=${fixture.git("rev-parse", "HEAD")}\n`);
+  fixture.git("sparse-checkout", "set", "--no-cone", "/a.txt");
+  fixture.git("apply", join(fixture.source, "jsc/webkit-wasi.patch"));
+  const blob = fixture.git("rev-parse", "HEAD:unused.txt");
+  const object = join(fixture.webkit, ".git/objects", blob.slice(0, 2), blob.slice(2));
+  chmodSync(object, 0o644);
+  rmSync(object);
+  return fixture;
+}
+
+test("sparse WebKit admission accepts an absent unused blob without fetching or original writes", () => {
+  const fixture = sparseWebkitFixture(fresh("webkit-sparse"));
+  const before = gitWitness(join(fixture.webkit, ".git"));
+  admitWebkit(fixture.source, fixture.jsc, fresh("webkit-sparse-scratch"));
+  expect(readFileSync(join(fixture.webkit, "a.txt"), "utf8")).toBe("two\n");
+  expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
+});
+
+test("sparse WebKit admission still refuses changed required source without fetching or original writes", () => {
+  const fixture = sparseWebkitFixture(fresh("webkit-sparse-changed"));
+  write(join(fixture.webkit, "a.txt"), "changed required source\n");
+  const before = gitWitness(join(fixture.webkit, ".git"));
+  expect(() => admitWebkit(fixture.source, fixture.jsc, fresh("webkit-sparse-changed-scratch"))).toThrow("working tree differs");
+  expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
+});
+
 test("WebKit admission with a missing object refuses without fetching or adding objects", () => {
   const fixture = webkitFixture(fresh("webkit-missing"));
   const blob = fixture.git("rev-parse", "HEAD:a.txt");
