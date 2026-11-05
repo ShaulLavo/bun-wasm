@@ -1,7 +1,8 @@
 import { readFile, readdir, rm, symlink, writeFile, lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { object, fileIdentity, readVerifiedFile, recheckDependencies, verifyReviewedHostSource, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
+import { object, guestArtifacts, readVerifiedFile, recheckDependencies, verifyReviewedHostSource, type TlsIntake } from "../../scripts/tls-qualification-inputs.ts";
+import { fileIdentity } from "../../scripts/c1/identity.ts";
 import { qualificationCases, assertCaseContext, isCase, type QualificationEngine } from "../../scripts/tls-qualification-context.ts";
 import { acquireOwned, deadline, type TlsCleanup } from "../../scripts/tls-qualification-lifecycle.ts";
 import { type startTlsServices, type ServiceOptions } from "./tls-relay-services.ts";
@@ -17,13 +18,7 @@ async function seedFiles(modules: string, name = ""): Promise<Map<string, string
   return files;
 }
 function guestAsset(intake: TlsIntake, engine: QualificationEngine, origin: string) {
-  const names = engine === "browser" ? ["browser/default/bun-browser.wasm"]
-    : engine === "quickjs" ? ["split/dist/bun.wasm", "split/dist/quickjs.wasm"] : ["split/dist/bun-jsc.wasm", "split/dist/jsc-engine.wasm"];
-  const files = names.map(path => {
-    const row = intake.files.find(file => file.path === path);
-    if (!row) throw new Error("Missing selected TLS guest artifact");
-    return { url: `${origin}/artifact/${row.sha256}`, sha256: row.sha256, bytes: row.bytes };
-  });
+  const files = guestArtifacts(intake.handoff, engine).map(row => ({ url: `${origin}/artifact/${row.sha256}`, sha256: row.sha256, bytes: row.bytes }));
   const core = files[0];
   if (!core) throw new Error("Missing TLS core");
   if (engine === "browser") return { kind: "single", core };
@@ -33,10 +28,10 @@ function guestAsset(intake: TlsIntake, engine: QualificationEngine, origin: stri
 }
 async function build(intake: TlsIntake, scratch: string, signal: AbortSignal) {
   signal.throwIfAborted();
-  await verifyReviewedHostSource(intake.inputs.hostSource, intake.source);
+  await verifyReviewedHostSource(intake.hostSource, intake.source);
   await recheckDependencies(intake);
   signal.throwIfAborted();
-  const root = intake.inputs.hostSource;
+  const root = intake.hostSource;
   const entry = join(scratch, "tls-relay-page.ts");
   let source = await readFile(new URL("./tls-relay-page.ts", import.meta.url), "utf8");
   for (const [old, replacement] of [
@@ -67,17 +62,12 @@ export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnT
   const out = await build(intake, scratch, signal);
   const outputs = await seedFiles(out);
   const hostOutputs = [];
-  for (const [path, file] of outputs) hostOutputs.push({ path: path.slice("node_modules/".length), ...await fileIdentity(file) });
+  for (const [path, file] of outputs) hostOutputs.push({ ...fileIdentity(file), path: path.slice("node_modules/".length) });
   const files = new Map(intake.dependencies.pg.files.map(row => [`node_modules/${row.path.slice(intake.dependencies.pg.root.length + 1)}`, row]));
   const origin = `http://127.0.0.1:${options.pagePort}`;
   const asset = guestAsset(intake, engine, origin);
-  const artifactFiles = asset.kind === "single" ? [asset.core] : [asset.core, asset.side];
-  const selectedArtifacts = artifactFiles.map(file => {
-    if (!file) throw new Error("Selected guest artifact missing from the asset descriptor");
-    const row = intake.files.find(candidate => candidate.sha256 === file.sha256 && candidate.bytes === file.bytes);
-    if (!row) throw new Error("Selected guest artifact missing from the admitted delivery");
-    return { ...file, path: join(intake.inputs.delivery, row.path) };
-  });
+  // Served only from their sealed delivery paths, by the handoff role's identity.
+  const selectedArtifacts = guestArtifacts(intake.handoff, engine);
   for (const file of selectedArtifacts) await readVerifiedFile(file);
   const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
   await acquireOwned(owner, signal, () => Bun.serve({ hostname: "127.0.0.1", port: options.pagePort, fetch: respond }), async server => {
@@ -111,8 +101,8 @@ export async function runTlsBrowser(intake: TlsIntake, services: Awaited<ReturnT
   signal.throwIfAborted();
   await recheckDependencies(intake);
   signal.throwIfAborted();
-  await verifyReviewedHostSource(intake.inputs.hostSource, intake.source);
-  const playwright: typeof import("playwright") = await import(pathToFileURL(Bun.resolveSync("playwright", intake.inputs.hostSource)).href);
+  await verifyReviewedHostSource(intake.hostSource, intake.source);
+  const playwright: typeof import("playwright") = await import(pathToFileURL(Bun.resolveSync("playwright", intake.hostSource)).href);
   const browser = await acquireOwned(owner, signal, () => playwright.chromium.launch({ headless: true }), browser => browser.close());
   let cancellationClose: Promise<void> | undefined;
   const stopBrowser = () => { cancellationClose ??= browser.close(); void cancellationClose.catch(() => {}); };

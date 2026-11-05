@@ -2,42 +2,42 @@
 
 Status: Approved source unit. Not a TLS application pass, producer grant, or byte admission.
 
-`scripts/tls-qualification.ts` implements `pg-early` on Chromium. It requires an explicitly reviewed TLS source head and tree, pinned delivery and parent intake hashes, and the pinned source-release hash. No paths come from CURRENT. No guest build, pin change, C1 source copy, public route, or deployment occurs.
+`scripts/tls-qualification.ts` implements `pg-early` on Chromium as a consumer of the C1 controller's sealed delivery. It requires the controller's consumer handoff, an independently pinned parent intake hash, and an explicitly reviewed source head and tree. No paths come from CURRENT. No guest build, pin change, C1 source copy, public route, or deployment occurs.
 
 ## Input contract
 
-`--delivery` is the complete immutable delivery directory containing `DELIVERY.json` and `inputs/ADMISSION.json`. The semantic producer contract is `bun-wasm.complete-producer-delivery.v2`. The existing outer manifest has `source`, `files`, and `nativeBacking`, rather than a manufactured schema or TLS-ready flag. The runner reuses `requireCompletePublicationFiles`, `verifyPublicationBuilds`, and `verifyPublicationNativeBacking`.
+The controller contract in `scripts/c1/contract.ts` and `scripts/c1/delivery.ts` is authoritative. TLS uses its exported parsers and checks and keeps no copy of their schemas, role lists or modes.
 
-`--admission` is Next's `independent-parent-byte-admission`, owned by `mcp:e5ea79c9-80ba-4f6e-b71a-4886c114af80`. It must independently admit the same delivery root and exact source. Its existing reference objects bind `deliveryManifest`, `producerAdmission`, `sourceRelease`, `canonicalReuse`, and `sourceArchive` by absolute path, byte count, and SHA-256. Its byte-intake and before/after/preseal custody checks remain required. The runner rehashes the complete inventory, rejects extra files and links, rechecks canonical original bytes, and compares the three custody snapshots with the parent's identities.
+- `--handoff` is the controller's `bun-wasm.c1-handoff/1` record. It is only a locator. TLS parses it strictly, then re-derives the handoff and requires exact equality.
+- `--intake-sha256` pins the bytes of the independent parent's `bun-wasm.c1-intake/1` record named by the handoff.
+- `--reviewed-head` and `--reviewed-tree` are trust inputs supplied after independent source review. They are never inferred from a package version, a record or a boolean.
 
-The explicit expected TLS head/tree and source-release hash are trust inputs supplied after independent source review. They are never inferred from a package version or a boolean. The intake tuple must explicitly select runtime and relay 0.0.109, host interface 1, and QuickJS/JSC/browser. The old runtime107 packet cannot pass.
+Preflight, in order, before any setup:
 
-Complete dependency bytes must already be authenticated by the existing complete delivery inventory or its canonical-reuse `staged` records. A canonical original is identified by its retained absolute `originalPath`, delivery member `path`, byte count, and SHA-256. The runner does not mint a dependency receipt or grant source authority.
+1. `readSealedDelivery` on the handoff's delivery root: closed member set, hashes, registry completeness, sealed modes for every member and directory (registry executables 0555, other files 0444, directories 0555). TLS never chmods, repairs or writes the sealed delivery; a 0444 launcher is a refusal.
+2. The delivery's source must equal the reviewed pin. Its tuple must be exactly `tlsReleaseTuple`: runtime 0.0.110, relay 0.0.109, `programs-v0.0.15`, `waffle-program-release/2`, host interface 1. Older tuples, including the runtime107 packet, runtime109/relay109 and the pre-TLS unit6 source `ffbccf9a`, cannot pass.
+3. `admitIntake` with the pinned hash: same root, `DELIVERY.json` bytes, source, tuple and member count.
+4. The sealed `inputs/CONFIG.json` and `inputs/INPUTS.json` members must have exactly the digests `DELIVERY.json` binds, and parse with `parseConfig` and `parseInputManifest`. The config must place the delivery at `roots.run.artifact/delivery` and name exactly those input bytes. The inputs must select the delivery's source and tuple.
+5. `buildHandoff` from the delivery, the admitted intake, the sealed inputs' consumer dependencies and the sealed config's qualification roots must equal the supplied handoff exactly. Every role therefore resolves to its registry member identity under this delivery, and every dependency claim comes from authenticated inputs. `requireHandoffArtifacts` then rechecks role bytes and modes.
+6. Before/after/preseal custody snapshots must be identical sealed members. Delivered runtime and relay archives must equal the authenticated input archives. `split/web/engine-builds.json` must pass `verifyPublicationBuilds`.
+7. The Playwright browser tree must equal its authenticated identity.
+8. `consumers.tls` must be resolved. Otherwise the run stops with `TLS_EXISTING_INPUT_CONTRACT_MISSING`. The pg project's `package.json` and `bun.lock` sit beside its `node_modules`, and each matches its identity. The `node_modules` tree contains only ordinary files and matches its complete tree identity. Every member of the pinned public pg 8.16.3 tarball equals the installed `pg` package, which has no extra files. Absent inputs also report `TLS_EXISTING_INPUT_CONTRACT_MISSING`.
+9. The host is the sealed config's `sourceRoot`. It must be a clean checkout of the reviewed head and tree that tracks the relay, runner and frozen package files. Its `node_modules` and `web/node_modules` must match the authenticated `rootDependencies` and `webDependencies` donors through the controller's `requireStagedDonor`. Each donor must have been installed from the source's own frozen `package.json` and `bun.lock`. Installed `waffle` must be 0.0.110 and `waffle-relay` 0.0.109; versions are only a consistency check after the bytes pass.
 
-Both `--host-source/node_modules` and `--host-source/web/node_modules`, plus the entire supplied pg `node_modules`, must be ordinary-file trees with exact authenticated membership and no extras. Each project's `package.json` and `bun.lock` must be authenticated too. The pg project is the parent directory of the explicitly supplied pg `node_modules` directory. No dependency install occurs in this CLI. Missing existing inventory coverage produces `TLS_EXISTING_INPUT_CONTRACT_MISSING` before setup. Runtime version strings are only a consistency check after exact bytes have passed.
-
-`--host-source` is a clean checkout of that same reviewed head/tree, with the real C1 `web/src/net/relay.ts`, runner, workers, and normal browser builder. Installed `waffle` and `waffle-relay` must both be 0.0.109. The page bundles these real source files. It does not copy C1 implementations or install dependencies.
-
-`--pg-node-modules` is a separate, ordinary-file installation containing pg 8.16.3 and its dependencies. `--pg-tarball` and `--pg-tarball-sha256` pin the independently checked public pg 8.16.3 tarball. The runner compares every pg package file and rejects additions, changes, missing members, and links. It never changes repository pins or locks. Only preflighted pg files can be seeded. Their bytes are checked again immediately before the response that copies them into the guest. Authenticated host trees and frozen locks are rechecked before setup, dynamic module loading, and browser build. The bounded result retains the original absolute byte/hash identities of the parent intake, delivery manifest, producer admission, source release, source archive, canonical-reuse record, nine custody snapshots, pg archive, and frozen locks. Emitted host bundle identities are retained separately. Results above 256 KiB fail rather than truncate provenance.
+Guest bytes come from handoff roles (`browserGuest`; `quickjsGuest` with `quickjsSide`; `jscGuest` with `jscSide`) and are served from their sealed paths after a byte recheck. Authenticated pg and host trees and frozen locks are rechecked before setup, dynamic module loading and browser build. Seeded pg files are checked again immediately before the response that copies them into the guest. The bounded result retains these exact identities: the handoff file, intake, `DELIVERY.json`, sealed config and inputs, source archive, nine custody snapshots, pg archive, frozen locks, host trees and emitted host bundle files. Results above 256 KiB fail rather than truncate provenance. Output goes to the handoff's own `outputs.tls` directory.
 
 ## Future command
 
-Run only after parent-reviewed production and independent byte intake. All path variables below must name real supplied inputs.
+Run only after controller production, independent parent byte intake and the amended controller interface below.
 
 ```sh
 source env.sh
 bun scripts/tls-qualification.ts \
   --stage pg-early --browser chromium --engine browser \
-  --delivery "$TLS_DELIVERY" --delivery-sha256 "$TLS_DELIVERY_SHA256" \
-  --admission "$TLS_ADMISSION" --admission-sha256 "$TLS_ADMISSION_SHA256" \
-  --source-release-sha256 "$TLS_SOURCE_RELEASE_SHA256" \
+  --handoff "$TLS_HANDOFF" --intake-sha256 "$TLS_INTAKE_SHA256" \
   --reviewed-head "$TLS_REVIEWED_HEAD" --reviewed-tree "$TLS_REVIEWED_TREE" \
-  --host-source "$TLS_HOST_SOURCE" \
-  --pg-node-modules "$TLS_PG_NODE_MODULES" \
-  --pg-tarball "$TLS_PG_TARBALL" --pg-tarball-sha256 "$TLS_PG_TARBALL_SHA256" \
   --database-machine "$TLS_DATABASE_MACHINE" \
-  --database-address "$TLS_DATABASE_ADDRESS" --relay-address "$TLS_RELAY_ADDRESS" \
-  --output "$TLS_RESULTS/pg-early"
+  --database-address "$TLS_DATABASE_ADDRESS" --relay-address "$TLS_RELAY_ADDRESS"
 ```
 
 The page and relay run together on `127.0.0.1`, ports 43839 and 43840 by default. `--page-port` and `--relay-port` override them explicitly. PostgreSQL runs as the remote Mesh user's private native process on a separately approved fleet host. That host needs writable `/work/tmp`, Bun, OpenSSL, `initdb`, `postgres`, and `pg_isready` on its command path. Ports 45433 and 45434 must be free. No container or image is created. The database and page machines need their existing fleet reservation and runner qualification before this command.
@@ -58,12 +58,13 @@ This early runner does not establish public bundled roots, expired/not-yet-valid
 
 Preflight completes before directories, page builds, keys, database processes, relay, or browser creation. Cancellation is checked before validation, immediately after validation, and before every acquisition. Owners register release before acquiring a scratch directory, process, listener, runtime, relay, browser, context, page, or guest. A resource returned after cancellation still belongs to that release. The owned cleanup stack closes page consumers, Chromium, the page server, relay, raw sockets, remote native fixtures/PostgreSQL, and local scratch in reverse order. Remote scratch removal is checked on the actual database host. Per-case lifecycle data comes from the actual runtime `disposed` getter, the retained-consumer lease registrations used by the real runner and C1 adapter, and the native relay server's actual TCP active count. Both cleanup callbacks must resolve and those observations must show zero remaining leases and relay connections. Old completion booleans alone are rejected. Filesystem absence and child exits retain their actual error/status observations. Only bounded redacted results and resource ledgers remain. Credentials, keys, decrypted payloads, and guest stderr are not logged.
 
-Source tests use tiny parser-only bytes. They assert that invalid evidence never calls setup, that source/hash/custody mismatches fail, that query/carrier/engine context is mandatory, and that teardown runs after setup and exercise failure. They do not create an admitted artifact.
+Source tests build a synthetic sealed delivery, intake and handoff with the controller's own `writeFixtureDelivery`, `fixtureInputManifest`, `sealDelivery` and `buildHandoff`, plus a clean synthetic host checkout and donor and pg trees. They are parser fixtures, never product evidence. They assert that an exact handoff reaches setup without changing sealed metadata. Wrong schema, root, source, tuple, manifest, count, role, path, mode, hash, dependency, custody and tampered handoffs, and missing requirements, must all fail before setup. Each fixture removes its own sealed directories after the test by making them writable only to delete them. `TLS_SOURCE_RESOURCE_LEDGER` records creation and confirmed absence.
 
 ## Integration prerequisites
 
-The currently available delivery has no authenticated original-file coverage for a complete pg installation or the ignored host dependency trees and their frozen project locks. Those existing canonical inputs must come from the approved source/consumer handoff. This unit fails closed if they are missing; it does not collect hashes of arbitrary current installs and call them authenticated.
+Two controller-owned interface items are open; the amended controller checkpoint owns both. TLS does not invent fields for them.
 
-The foundation still selects runtime107 and has no C1 relay source file. Its canonical complete-publication helper still names `inputs/runtime107-release.tgz`. Engines and Next must supply the real reviewed runtime109 complete-delivery contract and matching host checkout. This unit neither renames a 107 file to 109 nor relaxes the canonical closure helper.
+- Private database host and service options: the database machine, the database and relay addresses, and the ports are not yet in the typed config, inputs or handoff. They remain CLI flags until the amended contract carries them.
+- Prebuilt page and worker assets: the page is still built at qualification time from the host checkout through `scripts/browser-build.ts`. The amended contract adds sealed preseal page and worker assets, an admitted entry and member set, and a typed loaded-bytes observation. Qualification must then serve only those sealed assets, with no build at consumer time.
 
-The native TLS driver and exposed JS client are separate reviewed work. Their exact integrated source must enter the sole producer and independent parent intake before any live command. The future lifecycle and browser code here has only source tests, types, and lint in this task. Its first authorized live run must validate the remote native fixture, carrier, package preparation, teardown, and verification barrier. Missing functionality remains a failure, never a passing stub.
+The native TLS driver and exposed JS client are separate reviewed work. Their exact integrated source must enter the sole producer and independent parent intake before any live command. Its first authorized live run must validate the remote native fixture, carrier, package preparation, teardown, and verification barrier. Missing functionality remains a failure, never a passing stub.

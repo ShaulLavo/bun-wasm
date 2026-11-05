@@ -154,7 +154,7 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   signal.throwIfAborted();
   const secret = randomBytes(32);
   owner.add(() => { secret.fill(0); });
-  const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(intake.inputs.hostSource, "web"))).href;
+  const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(intake.hostSource, "web"))).href;
   signal.throwIfAborted();
   await recheckDependencies(intake);
   signal.throwIfAborted();
@@ -173,7 +173,7 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   await record({ kind: "relay", port: options.relayPort, destinationPort: proxyPort });
   await listen(server, options.relayPort, signal);
   signal.throwIfAborted();
-  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync("waffle-relay/token", join(intake.inputs.hostSource, "web"))).href), "relay token module");
+  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync("waffle-relay/token", join(intake.hostSource, "web"))).href), "relay token module");
   if (typeof tokenModule.mintRelayToken !== "function") throw new Error("Missing relay token signer");
   const mint = tokenModule.mintRelayToken;
   return {
