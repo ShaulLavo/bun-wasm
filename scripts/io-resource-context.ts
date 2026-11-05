@@ -1,29 +1,29 @@
 // Live driver for tests/fixtures/io-resource-context: runs the five-owner callback rows in one
 // explicitly named guest and evaluates every row's observed frames. It never selects dist/ or builds.
 //
-//   bun scripts/io-resource-context.ts --surface native --engine quickjs|jsc --guest PATH
-//     --launcher PATH --shell PATH --env-utility PATH --out DIR [--qualify HEAD TREE] [row...]
-//   bun scripts/io-resource-context.ts --surface chromium --web-root DIR --out DIR [--qualify HEAD TREE] [row...]
+//   bun scripts/io-resource-context.ts --surface native --engine quickjs|jsc
+//     --handoff PATH --handoff-sha256 SHA --out DIR [row...]
+//   bun scripts/io-resource-context.ts --surface chromium --handoff PATH --handoff-sha256 SHA --out DIR [row...]
 //   bun scripts/io-resource-context.ts --surface node-host --guest PATH --context hooks|native --out DIR [row...]
 //   bun scripts/io-resource-context.ts --surface host-bun --out DIR [row...]
 //
-// `--qualify` verifies original receipts against the selected source. node-host and host-bun are
-// controls and never qualify. docs: .internal/io-resource-context-qualification.md
+// Individual artifact paths remain source checks only. Controls never qualify.
+// docs: .internal/io-resource-context-qualification.md
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Browser, BrowserServer } from "playwright";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt.ts";
-import { guestBuilds } from "./guest-source-manifest.ts";
 import { verifyLauncher } from "./producer-closure.ts";
-import { expectedBrowserPayload, loadedObserver } from "./io-resource-context-assets.ts";
+import { expectedBrowserPayload, loadedObserver, type LoadedAsset } from "./io-resource-context-assets.ts";
+import { bindFiveOwnerBrowser, bindFiveOwnerOutput, bindFiveOwnerSource, readFiveOwnerHandoff, readFiveOwnerMember, recheckFiveOwnerBrowser, recheckFiveOwnerHandoff, requireFiveOwnerMember, requireFiveOwnerResponse, verifyFiveOwnerGuest, type PinnedHandoff } from "./io-resource-context-intake.ts";
+import { bindLoaded, type LoadedObservation } from "./c1/loaded.ts";
 import { RESULT_FILE, isRowId, rowIds, rows, unqualified, type Expected, type ExpectedFrame, type Frame, type Observation, type RowId } from "../tests/fixtures/io-resource-context/rows.ts";
 import { executable, parseRowReport, record, type RowReport } from "../tests/fixtures/io-resource-context/protocol.ts";
 
-const RESULT_SCHEMA ="bun-wasm.io-resource-context.result.v1";
+export const RESULT_SCHEMA ="bun-wasm.io-resource-context.result.v1";
 const root = resolve(import.meta.dir, "..");
 const fixture = join(root, "tests/fixtures/io-resource-context");
 const ROW_BUDGET_MS = 30_000;
@@ -36,7 +36,7 @@ type Surface =
   | { readonly kind: "chromium"; readonly webRoot: string }
   | { readonly kind: "node-host"; readonly guest: string; readonly context: "hooks" | "native" }
   | { readonly kind: "host-bun" };
-type Evidence ={ readonly kind: "qualification"; readonly head: string; readonly tree: string } | { readonly kind: "source-check" };
+type Evidence = PinnedHandoff | { readonly kind: "source-check" };
 export interface Invocation { readonly surface: Surface; readonly evidence: Evidence; readonly out: string; readonly rows: readonly RowId[] }
 /** Root on every hook-path turn; an unspecified ambient frame with a native continuation provider. */
 export type ContextClass = "hooks" | "native";
@@ -47,7 +47,7 @@ export interface GuestResult { readonly execPath: string; readonly rows: readonl
 type RowStatus ="pass" | "limited" | "missing" | "hung" | "error" | "exit" | "unarmed" | "late" | "mismatch";
 export interface RowVerdict { readonly id: RowId; readonly owner: string; readonly status: RowStatus; readonly reasons: readonly string[]; readonly observed: readonly Observation[] | null }
 
-const usage = "usage: io-resource-context.ts --surface native|chromium|node-host|host-bun --out DIR [--qualify HEAD TREE] [surface options] [row...]";
+const usage = "usage: io-resource-context.ts --surface native|chromium|node-host|host-bun --out DIR [--handoff PATH --handoff-sha256 SHA | explicit source-check paths] [surface options] [row...]";
 
 function take(args: string[], name: string): string {
   const index = args.indexOf(name);
@@ -63,9 +63,9 @@ function explicitFile(path: string, name: string): string {
   return absolute;
 }
 
-function parseSurface(args: string[], kind: string): Surface {
+function parseSurface(args: string[], kind: string, evidence: Evidence): Surface {
   if (kind === "host-bun") return { kind };
-  if (kind === "chromium") return { kind, webRoot: explicitFile(take(args, "--web-root"), "--web-root") };
+  if (kind === "chromium") return { kind, webRoot: evidence.kind === "handoff" ? evidence.handoff.webRoot : explicitFile(take(args, "--web-root"), "--web-root") };
   if (kind === "node-host") {
     const context = take(args, "--context");
     if (context !== "hooks" && context !== "native") throw new Error(`--context must be hooks or native. ${usage}`);
@@ -74,26 +74,40 @@ function parseSurface(args: string[], kind: string): Surface {
   if (kind !== "native") throw new Error(`unknown surface ${kind}. ${usage}`);
   const engine = take(args, "--engine");
   if (engine !== "quickjs" && engine !== "jsc") throw new Error(`--engine must be quickjs or jsc. ${usage}`);
+  if (evidence.kind === "handoff") {
+    const artifacts = evidence.handoff.artifacts;
+    return { kind, engine, guest: artifacts[engine === "quickjs" ? "quickjsGuest" : "jscGuest"].path,
+      launcher: artifacts.launcher.path, shell: artifacts.shell.path, envUtility: artifacts.envUtility.path };
+  }
   return {
     kind, engine, guest: explicitFile(take(args, "--guest"), "--guest"), launcher: explicitFile(take(args, "--launcher"), "--launcher"),
     shell: explicitFile(take(args, "--shell"), "--shell"), envUtility: explicitFile(take(args, "--env-utility"), "--env-utility"),
   };
 }
 
-function parseEvidence(args: string[]): Evidence {
-  const index = args.indexOf("--qualify");
-  if (index < 0) return { kind: "source-check" };
-  const [head, tree] = args.splice(index, 3).slice(1);
-  if (!head || !/^[0-9a-f]{40}$/.test(head) || !tree || !/^[0-9a-f]{40}$/.test(tree)) throw new Error(`--qualify needs a 40-hex head and tree. ${usage}`);
-  return { kind: "qualification", head, tree };
+function parseEvidence(args: string[], kind: string): Evidence {
+  if (!args.includes("--handoff")) return { kind: "source-check" };
+  if (kind === "host-bun" || kind === "node-host") throw new Error(`${kind} is a control and cannot qualify`);
+  return readFiveOwnerHandoff(take(args, "--handoff"), take(args, "--handoff-sha256"));
+}
+
+function bindBrowserInvocation(pinned: PinnedHandoff): void {
+  bindFiveOwnerBrowser(pinned, root);
+  if (shortTmp() !== realpathSync(pinned.handoff.browserTmp)) throw new Error("Browser scratch differs from the handoff");
 }
 
 export function parseInvocation(argv: readonly string[]): Invocation {
   const args = argv.slice();
-  const evidence = parseEvidence(args);
-  const surface = parseSurface(args, take(args, "--surface"));
+  const kind = take(args, "--surface");
+  const evidence = parseEvidence(args, kind);
+  const surface = parseSurface(args, kind, evidence);
   const out = resolve(take(args, "--out"));
-  if (evidence.kind === "qualification" && (surface.kind === "node-host" || surface.kind === "host-bun")) throw new Error(`${surface.kind} is a control and cannot qualify`);
+  if (evidence.kind === "handoff") {
+    const selected = surface.kind === "native" ? surface.engine : "chromium";
+    bindFiveOwnerOutput(evidence, selected, out);
+    bindFiveOwnerSource(evidence, root);
+    if (surface.kind === "chromium") bindBrowserInvocation(evidence);
+  }
   const unknown = args.find(arg => arg.startsWith("--"));
   if (unknown) throw new Error(`unknown option ${unknown}. ${usage}`);
   for (const name of args) if (!isRowId(name)) throw new Error(`unknown row ${name}`);
@@ -162,7 +176,7 @@ function failure(id: RowId, status: RowStatus, reasons: readonly string[], obser
   return { id, owner: rows[id].owner, status, reasons, observed };
 }
 
-/** Pure: one verdict per requested row. Anything but `pass` makes the run fail. */
+/** Pure: exact rows pass; native turn-exclusion rows remain limited, not exact evidence. */
 export function evaluateRow(id: RowId, run: RowRun | undefined, mode: ContextClass): RowVerdict {
   if (!run) return failure(id, "missing", ["row never ran"], null);
   if (run.timedOut) return failure(id, "hung", ["row process did not exit by itself within its budget", run.stderr], run.report?.records ?? null);
@@ -210,7 +224,7 @@ export function parseGuestResult(text: string, requested?: readonly RowId[], per
 
 // ---- execution -----------------------------------------------------------------------------
 
-interface Execution { readonly code: number | null; readonly timedOut: boolean; readonly resultText: string | null; readonly loaded: readonly FileIdentity[]; readonly cleanup: Record<string, unknown>; readonly error?: string | null }
+interface Execution { readonly code: number | null; readonly timedOut: boolean; readonly resultText: string | null; readonly loaded: readonly LoadedObservation[]; readonly payloadEvidence?: readonly LoadedAsset[]; readonly cleanup: Record<string, unknown>; readonly error?: string | null }
 
 function stageFixture(work: string): FileIdentity[] {
   mkdirSync(work, { recursive: true });
@@ -264,6 +278,7 @@ function hostArgs(surface: Exclude<Surface, { kind: "chromium" }>, work: string,
 
 async function runHost(surface: Exclude<Surface, { kind: "chromium" }>, invocation: Invocation, work: string): Promise<Execution> {
   const [command, args] = hostArgs(surface, work, invocation.rows);
+  if (invocation.evidence.kind === "handoff") recheckFiveOwnerHandoff(invocation.evidence);
   const run = await runGroup(command, args, work, invocation.out, (invocation.rows.length + 2) * ROW_BUDGET_MS);
   const resultPath = join(work, RESULT_FILE);
   const resultText = existsSync(resultPath) ? readFileSync(resultPath, "utf8") : null;
@@ -328,7 +343,7 @@ async function stopChromium(resources: ChromiumResources): Promise<void> {
 
 function startWeb(resources: ChromiumResources, webRoot: string): Promise<string> {
   const child = spawn(process.execPath, [join(root, "web/serve.ts")], { cwd: join(root, "web"), detached: true,
-    env: { ...process.env, PORT: "0", ROOT: webRoot }, stdio: ["ignore", "pipe", "pipe"] });
+    env: { ...process.env, HOST: "127.0.0.1", ISOLATE: "1", PREVIEW_ORIGINS: "0", PORT: "0", ROOT: webRoot }, stdio: ["ignore", "pipe", "pipe"] });
   resources.server = child;
   const completion = Promise.withResolvers<string>();
   let output = "";
@@ -346,6 +361,10 @@ function startWeb(resources: ChromiumResources, webRoot: string): Promise<string
 async function chromiumBody(webRoot: string, invocation: Invocation, work: string, resources: ChromiumResources, signal: AbortSignal): Promise<Omit<Execution, "cleanup">> {
   const { playwright, ready, run, writeFile } = await abortable(import("../web/tests/playground.mjs"), signal);
   signal.throwIfAborted();
+  if (invocation.evidence.kind === "handoff") {
+    recheckFiveOwnerHandoff(invocation.evidence);
+    recheckFiveOwnerBrowser(invocation.evidence, playwright.chromium.executablePath());
+  }
   resources.browserServer = playwright.chromium.launchServer({ timeout: 30_000, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
   const browserServer = await abortable(resources.browserServer, signal);
   signal.throwIfAborted();
@@ -353,7 +372,10 @@ async function chromiumBody(webRoot: string, invocation: Invocation, work: strin
   const browser = await abortable(resources.browser, signal);
   const url = await abortable(startWeb(resources, webRoot), signal);
   const context = await abortable(browser.newContext(), signal);
-  const observer = loadedObserver(new URL("bun-browser.wasm", url).href, expectedBrowserPayload(webRoot));
+  const pinned = invocation.evidence.kind === "handoff" ? invocation.evidence : null;
+  const expected = expectedBrowserPayload(webRoot, path => pinned ? readFiveOwnerMember(pinned, path) : readFileSync(path));
+  const observer = loadedObserver(new URL("bun-browser.wasm", url).href, expected,
+    path => { if (pinned) requireFiveOwnerResponse(pinned, path); });
   context.on("response", observer.capture);
   const page = await abortable(context.newPage(), signal);
   await abortable(page.goto(`${url}?engine=browser&prompt=off`), signal);
@@ -367,9 +389,9 @@ async function chromiumBody(webRoot: string, invocation: Invocation, work: strin
   const resultText = await abortable(page.evaluate(read), signal);
   await abortable(observer.flush(), signal);
   await abortable(context.close(), signal);
-  const loaded = await abortable(observer.finish(), signal);
+  const observations = await abortable(observer.finish(), signal);
   if (typeof resultText !== "string") throw new Error("Missing Chromium guest result");
-  return { code: result.code, timedOut: result.code === null, resultText, loaded };
+  return { code: result.code, timedOut: result.code === null, resultText, loaded: observations.loaded, payloadEvidence: observations.payloads };
 }
 
 async function runChromium(webRoot: string, invocation: Invocation, work: string): Promise<Execution> {
@@ -387,24 +409,16 @@ async function runChromium(webRoot: string, invocation: Invocation, work: string
 
 // ---- admission -----------------------------------------------------------------------------
 
-const nativeArtifacts = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm" } as const;
-
 async function admitNative(surface: Extract<Surface, { kind: "native" }>, evidence: Evidence): Promise<{ artifacts: FileIdentity[]; receipts: unknown[] }> {
   const artifacts = [identity("guest", surface.guest), identity("launcher", surface.launcher), identity("shell", surface.shell), identity("env-utility", surface.envUtility)];
-  if (evidence.kind !== "qualification") return { artifacts, receipts: [] };
+  if (evidence.kind !== "handoff") return { artifacts, receipts: [] };
+  const receipt = await verifyFiveOwnerGuest(evidence, surface.engine);
   const receiptPath = `${surface.guest}.build.json`;
-  const receipt: unknown = JSON.parse(readFileSync(receiptPath, "utf8"));
-  verifyGuestBuildReceipt(readFileSync(surface.guest), receipt);
-  if (basename(surface.guest) !== nativeArtifacts[surface.engine] || guestBuilds[receipt.sourceManifest.build].artifact !== nativeArtifacts[surface.engine]) throw new Error(`guest is not the ${surface.engine} build`);
-  const source = receipt.sourceManifest.source;
-  if (source.head !== evidence.head || source.tree !== evidence.tree) throw new Error(`guest source ${source.head}/${source.tree} is not the selected ${evidence.head}/${evidence.tree}`);
-  await verifyGuestCompanions(receipt, dirname(surface.guest));
   const launcherReceiptPath = `${surface.launcher}.launcher.json`;
-  verifyLauncher(surface.launcher, JSON.parse(readFileSync(launcherReceiptPath, "utf8")), evidence);
-  return {
-    artifacts: artifacts.concat(identity("guest-receipt", receiptPath), identity("launcher-receipt", launcherReceiptPath)),
-    receipts: [{ guest: receiptPath, program: receipt.program, sourceManifestSha256: receipt.sourceManifestSha256 }],
-  };
+  verifyLauncher(surface.launcher, JSON.parse(readFiveOwnerMember(evidence, launcherReceiptPath).toString("utf8")), evidence.handoff.source);
+  requireFiveOwnerMember(evidence, surface.launcher);
+  return { artifacts: artifacts.concat(identity("guest-receipt", receiptPath), identity("launcher-receipt", launcherReceiptPath)),
+    receipts: [{ guest: receiptPath, program: receipt.program, sourceManifestSha256: receipt.sourceManifestSha256 }] };
 }
 
 function admitChromium(webRoot: string): FileIdentity[] {
@@ -418,7 +432,7 @@ function admitChromium(webRoot: string): FileIdentity[] {
 function resultStatus(surface: Surface, verdicts: readonly RowVerdict[], execution: Execution, parsed: GuestResult | null): "pass" | "partial" | "fail" {
   if (!parsed || execution.error || execution.timedOut || execution.code !== 0) return "fail";
   if (Object.values(execution.cleanup).some(value => value !== true)) return "fail";
-  if (surface.kind === "chromium" && !execution.loaded.some(file => /\/bun-browser\.wasm(?:\.gz)?$/.test(new URL(file.path).pathname))) return "fail";
+  if (surface.kind === "chromium" && !execution.loaded.some(file => /\/bun-browser\.wasm(?:\.gz)?$/.test(new URL(file.url).pathname))) return "fail";
   if (verdicts.some(verdict => verdict.status !== "pass" && verdict.status !== "limited")) return "fail";
   return verdicts.some(verdict => verdict.status === "limited") ? "partial" : "pass";
 }
@@ -435,6 +449,46 @@ async function execute(invocation: Invocation, work: string): Promise<Execution>
   return await runHost(surface, invocation, work);
 }
 
+interface ResultInput {
+  readonly invocation: Invocation;
+  readonly admitted: { readonly artifacts: readonly FileIdentity[]; readonly receipts: readonly unknown[] };
+  readonly fixtureFiles: readonly FileIdentity[];
+  readonly execution: Execution;
+  readonly parsed: GuestResult | null;
+  readonly error: string | null;
+  readonly workRemoved: boolean;
+}
+
+/** Exact output contract. Exit zero permits partial observations; it never promotes them to qualification. */
+export function buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execution, parsed, error, workRemoved }: ResultInput) {
+  const { surface, evidence } = invocation;
+  const verdicts = parsed ? evaluate(parsed, invocation.rows, contextClass(surface)) : invocation.rows.map(id => evaluateRow(id, undefined, contextClass(surface)));
+  const status = error || !workRemoved ? "fail" : resultStatus(surface, verdicts, execution, parsed);
+  const omitted = rowIds.filter(id => !invocation.rows.includes(id));
+  const projectedEvidence = evidence.kind === "handoff"
+    ? { kind: evidence.kind, reference: evidence.reference, source: evidence.handoff.source, tuple: evidence.handoff.tuple, intake: evidence.handoff.intake }
+    : evidence;
+  const admissionKind: "verified-c1-intake" | "source-check-only" = evidence.kind === "handoff" ? "verified-c1-intake" : "source-check-only";
+  return {
+    schema: RESULT_SCHEMA, status, error: error ?? execution.error ?? null, surface, contextClass: contextClass(surface),
+    evidence: projectedEvidence,
+    qualification: evidence.kind === "handoff" && status === "pass" && omitted.length === 0,
+    acceptanceScope: "Observed public-API rows only; named unqualified lifetime/fault limits remain",
+    admission: { kind: admissionKind },
+    coverage: { requested: invocation.rows, omittedImplemented: omitted, limitedNativeRows: verdicts.filter(verdict => verdict.status === "limited").map(verdict => verdict.id) },
+    artifacts: admitted.artifacts, receipts: admitted.receipts, loaded: execution.loaded, payloadEvidence: execution.payloadEvidence ?? [], fixture: fixtureFiles,
+    guest: { exitCode: execution.code, timedOut: execution.timedOut, execPath: parsed?.execPath ?? null, rowExecPaths: parsed?.rows.map(run => run.report?.execPath ?? null) ?? [] },
+    rows: verdicts, unqualified,
+    cleanup: { ...execution.cleanup, workRemoved },
+  };
+}
+export type FiveOwnerResult = ReturnType<typeof buildFiveOwnerResult>;
+
+function finishRun(work: string, evidence: Evidence): void {
+  rmSync(work, { recursive: true, force: true });
+  if (evidence.kind === "handoff") recheckFiveOwnerHandoff(evidence);
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const invocation = parseInvocation(argv);
   mkdirSync(invocation.out, { recursive: true });
@@ -448,32 +502,22 @@ export async function main(argv: readonly string[]): Promise<number> {
   let error: string | null = null;
   try {
     admitted = surface.kind === "native" ? await admitNative(surface, evidence) : { artifacts: surface.kind === "chromium" ? admitChromium(surface.webRoot) : [], receipts: [] };
+    if (evidence.kind === "handoff" && surface.kind === "chromium") await verifyFiveOwnerGuest(evidence, "browser");
     fixtureFiles = stageFixture(work);
     execution = await execute(invocation, work);
+    if (evidence.kind === "handoff" && surface.kind === "chromium") bindLoaded(evidence.handoff, "web", execution.loaded);
     parsed = execution.resultText === null ? null : parseGuestResult(execution.resultText, invocation.rows, permittedRoutes(surface));
   } catch (caught) {
     error = String(caught);
   } finally {
-    try { rmSync(work, { recursive: true, force: true }); }
-    catch (caught) { error = `${error ?? ""} Cleanup failed: ${String(caught)}`; }
+    try { finishRun(work, evidence); }
+    catch (caught) { error = `${error ?? ""} Cleanup or input custody failed: ${String(caught)}`; }
   }
-  const verdicts = parsed ? evaluate(parsed, invocation.rows, contextClass(surface)) : invocation.rows.map(id => evaluateRow(id, undefined, contextClass(surface)));
-  const status = error ? "fail" : resultStatus(surface, verdicts, execution, parsed);
-  const omitted = rowIds.filter(id => !invocation.rows.includes(id));
-  const result = {
-    schema: RESULT_SCHEMA, status, error: error ?? execution.error ?? null, surface, contextClass: contextClass(surface), evidence,
-    qualification: false,
-    admission: { kind: "pending-controller-interface", required: "Actual selected source/profile/registry/mode/intake handoff; row success is not full qualification" },
-    coverage: { requested: invocation.rows, omittedImplemented: omitted, limitedNativeRows: verdicts.filter(verdict => verdict.status === "limited").map(verdict => verdict.id) },
-    artifacts: admitted.artifacts, receipts: admitted.receipts, loaded: execution.loaded, fixture: fixtureFiles,
-    guest: { exitCode: execution.code, timedOut: execution.timedOut, execPath: parsed?.execPath ?? null, rowExecPaths: parsed?.rows.map(run => run.report?.execPath ?? null) ?? [] },
-    rows: verdicts, unqualified,
-    cleanup: { ...execution.cleanup, workRemoved: !existsSync(work) },
-  };
+  const result = buildFiveOwnerResult({ invocation, admitted, fixtureFiles, execution, parsed, error, workRemoved: !existsSync(work) });
   writeFileSync(join(invocation.out, "result.json"), JSON.stringify(result, null, 2) + "\n");
-  for (const verdict of verdicts) console.log(`${verdict.status.toUpperCase()} ${verdict.id}${verdict.reasons.length ? ` ${verdict.reasons[0]}` : ""}`);
-  console.log(`${status.toUpperCase()} io-resource-context ${surface.kind}: ${verdicts.filter(verdict => verdict.status === "pass").length}/${verdicts.length} exact rows`);
-  return status === "fail" ? 1 : 0;
+  for (const verdict of result.rows) console.log(`${verdict.status.toUpperCase()} ${verdict.id}${verdict.reasons.length ? ` ${verdict.reasons[0]}` : ""}`);
+  console.log(`${result.status.toUpperCase()} io-resource-context ${surface.kind}: ${result.rows.filter(verdict => verdict.status === "pass").length}/${result.rows.length} exact rows`);
+  return result.status === "fail" ? 1 : 0;
 }
 
 if (import.meta.main) process.exitCode = await main(process.argv.slice(2));

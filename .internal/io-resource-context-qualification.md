@@ -2,8 +2,8 @@
 
 `tests/fixtures/io-resource-context` checks the callback frames PR 470 gave fs.watch, child IPC,
 spawn, stdin and Bun.serve, on real guest engines. `scripts/io-resource-context.ts` runs it against
-artifacts named on its command line and writes one `result.json`. It never selects `dist/` and
-never builds.
+the current controller's pinned handoff and writes one `result.json`. It never selects `dist/`
+and never builds. Individual artifact paths remain source checks, not qualification.
 
 ## How it runs
 
@@ -35,32 +35,46 @@ owned server and browser termination is awaited before cleanup is reported.
 Source `env.sh` first. Use fresh, task-owned output directories.
 
 ```sh
-# QuickJS and JSC: the selected launcher, the selected guest, and its side beside it.
+# QuickJS and JSC derive exact guests, sides, launcher and shell from the handoff.
 bun scripts/io-resource-context.ts --surface native --engine quickjs \
-  --guest $UNIT/dist/bun.wasm --launcher $UNIT/launcher/bun-wasm \
-  --shell $UNIT/dist/bash-web-shell.wasm --env-utility $UNIT/dist/bash-web-env.wasm \
-  --out $OUT/quickjs --qualify $HEAD $TREE
-bun scripts/io-resource-context.ts --surface native --engine jsc --guest $UNIT/dist/bun-jsc.wasm ... --out $OUT/jsc --qualify $HEAD $TREE
+  --handoff "$HANDOFF" --handoff-sha256 "$SHA" --out "$OUT/quickjs"
+bun scripts/io-resource-context.ts --surface native --engine jsc \
+  --handoff "$HANDOFF" --handoff-sha256 "$SHA" --out "$OUT/jsc"
 
 # Browser: the selected web root in a real Chromium worker. TMPDIR must be 48 bytes or fewer.
-TMPDIR=$SHORT bun scripts/io-resource-context.ts --surface chromium --web-root $UNIT/web --out $OUT/chromium --qualify $HEAD $TREE
+TMPDIR="$SHORT" bun scripts/io-resource-context.ts --surface chromium \
+  --handoff "$HANDOFF" --handoff-sha256 "$SHA" --out "$OUT/chromium"
 
 # Controls, never qualification: Node-hosted Browser guest, and native Bun as a comparator.
 bun scripts/io-resource-context.ts --surface node-host --guest PATH --context hooks --out DIR
 bun scripts/io-resource-context.ts --surface host-bun --out DIR
 ```
 
-These commands are prepared source-check routes, not execution approval. `--qualify HEAD TREE`
-checks original native guest/side/launcher receipts against that source, but full input admission is
-still pending the actual controller handoff. `qualification` stays false until that integration.
-For Chromium, required selected Browser response bodies are awaited, including `.wasm.gz`, and
-both response and decompressed identities are retained. An unrelated loaded Wasm cannot arm the
-Browser observation. Matching the actual registry, source and full profiles remains an integration
-gate. `scripts/test.sh` runs without `--qualify` for its selected engine.
+These are prepared commands, not execution approval. The handoff must follow the current
+`bun-wasm.c1-handoff/1` contract and independent byte intake. Old admission shapes and `--qualify`
+are rejected. The adapter binds the clean selected source, tuple, registry member paths, output
+roots, dependency trees and full split or default Browser receipts. Source-cache Browser and
+minimal or shared-group QuickJS do not substitute. `scripts/test.sh` uses explicit source-check
+paths for its selected engine, never the qualification route.
 
-The future handoff must validate registry-derived modes before setup: executable payloads 0555,
-other files 0444, directories 0555. Never chmod sealed inputs or accept historical modes through
-a compatibility branch. Unit 6 remains immutable and is not this fixture's executable input.
+`FiveOwnerResult` and `buildFiveOwnerResult` in the driver define the output contract. `status`
+is `pass`, `partial` or `fail`. Native turn exclusions produce `partial` and `qualification: false`,
+even if every requested row finishes without a mismatch. A complete Chromium hook-path run can
+qualify its 22 observed rows. The ten named public-API limits remain in every result. Exit zero
+means either `pass` or `partial`, not full consumer acceptance. Subsets and controls cannot qualify.
+
+The top-level `loaded` array uses the controller's exported `LoadedObservation` type. It contains
+actual successful GET response bodies, including the page and worker assets. The body is decoded
+for HTTP Content-Encoding. An explicitly fetched `.wasm.gz` with identity encoding remains raw
+gzip in `loaded`; `payloadEvidence` separately retains its decompressed identity. All pending
+body reads finish before context closure. `bindLoaded` checks the actual observations against
+the admitted Web registry, and the selected default Browser payload must be observed.
+
+Intake checks registry-derived exact modes before setup: executable payloads 0555, other files
+0444, directories 0555. Delivery reads recheck member modes and every sealed ancestor before and
+after the bytes are read. Chromium's dependency tree is rechecked immediately before launch.
+The whole delivery and its pinned handoff and intake are checked again after teardown. Consumers
+never chmod sealed inputs. Unit 6 remains immutable and is not an executable input to this driver.
 
 Native Bun 1.4.4 passes 17 of 22 rows. The five others are measured native differences the
 runtime keeps on purpose: caller close and abort, caller IPC disconnect, the onExit receiver and
