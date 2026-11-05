@@ -899,13 +899,22 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     expect(running(lease.pid)).toBe(false);
     expect(lockFree(lock)).toBe(true);
   });
+  // The lock acknowledgement precedes exec(cat); wait for the actual control target.
+  async function catDescendant(holder: number): Promise<number> {
+    const until = performance.now() + 1000;
+    while (performance.now() < until) {
+      const members = readFileSync(`/proc/${holder}/task/${holder}/children`, "utf8").trim().split(/\s+/).map(Number);
+      expect(members).toHaveLength(1);
+      const member = members[0];
+      if (member && readFileSync(`/proc/${member}/comm`, "utf8").trim() === "cat") return member;
+      await Bun.sleep(5);
+    }
+    throw new Error("Owned lease shell did not exec cat within the control deadline");
+  }
   test.each([true, false])("a stopped lease descendant is gone and its lock released after timeout, reconciled=%s", async reconciled => {
     const { owner, lease, lock } = await lane(reconciled);
     if (!lease.pid) throw new Error("Expected an owned lease PID");
-    const members = readFileSync(`/proc/${lease.pid}/task/${lease.pid}/children`, "utf8").trim().split(/\s+/).map(Number);
-    expect(members).toHaveLength(1);
-    const member = members[0];
-    if (!member || readFileSync(`/proc/${member}/comm`, "utf8").trim() !== "cat") throw new Error("Expected the owned cat descendant");
+    const member = await catDescendant(lease.pid);
     process.kill(member, "SIGSTOP");
     const failure = await owner.close().catch(error => error);
     expect(failure).toBeInstanceOf(AggregateError);
