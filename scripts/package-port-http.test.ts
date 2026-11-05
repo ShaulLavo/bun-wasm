@@ -18,6 +18,7 @@ function fixture(refuse = false, protocol: "http" | "tcp" = "http") {
     hostLocalAddr: () => -2,
     hostClose: () => 0,
     hostError: () => JSON.stringify({ code: "EADDRINUSE", message: "fixture bind failure" }),
+    getAsyncContext: () => undefined,
   };
   function load(name: string, extension = "ts") {
     const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
@@ -28,7 +29,7 @@ function fixture(refuse = false, protocol: "http" | "tcp" = "http") {
   const modules: Record<string, unknown> = {
     events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: load("net_address")({ require: () => ports }),
     http_common: load("http_common")(), http_agent: load("http_agent")(), websocket: { clientClass() {} },
-    net_listener: load("net_listener")({ native }),
+    net_listener: load("net_listener")({ native, runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => fn.apply(receiver, args) }),
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
   const internal = {

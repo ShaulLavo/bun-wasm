@@ -24,6 +24,7 @@
   type Listener = (...args: unknown[]) => void;
   const EventEmitter = internal.require("events");
   const { Buffer } = internal.require("buffer");
+  const frames = internal.require("resource_frame");
 
   const native = internal.native;
   const AGAIN = -6;
@@ -98,6 +99,8 @@
       #closed = false;
       #id: number;
       #waiter: BunWasm.IoWaiter & { watch: true };
+      // Changes, errors and the close an error causes run in the frame current at watch().
+      #frame: BunWasm.ResourceFrame;
       #path: string;
       #options: Options;
       #abort = () => this.close();
@@ -112,14 +115,15 @@
         this.#id = id;
         this.#path = path;
         this.#options = settings;
+        this.#frame = frames.capture();
         // No subscriptions(): the idle loop then sleeps in the network host poll, whose
         // notification set wakes on filesystem commits (runtime_proc.poll cannot).
-        this.#waiter = {
+        this.#waiter = this.#frame.bind({
           ref: settings.persistent !== false,
           watch: true,
           step: () => this.#step(),
           fail: (error: unknown) => this.#fail(error),
-        };
+        });
         try {
           if (listener) this.on("change", listener);
           internal.require("net");
@@ -160,9 +164,13 @@
 
       #release() {
         this.#closed = true;
-        internal.removeIoWaiter(this.#waiter);
-        native.fsWatchClose(this.#id);
-        this.#options.signal?.removeEventListener("abort", this.#abort);
+        try {
+          internal.removeIoWaiter(this.#waiter);
+          native.fsWatchClose(this.#id);
+          this.#options.signal?.removeEventListener("abort", this.#abort);
+        } finally {
+          this.#frame.release();
+        }
       }
 
       close() {

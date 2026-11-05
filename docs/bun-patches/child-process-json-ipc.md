@@ -34,6 +34,21 @@ result through the real Waffle service-worker HTTP preview. It never executes
 guest source on the host JavaScript engine.
 
 
+A channel captures the async-context frame current when it opens
+([resource frames](0008-await-context-hooks.md)). Incoming messages and the channel's own disconnect (end
+of input, a read failure, the child's exit and spawn's teardown through `end`) are queued in that frame, also
+when spawn drains the channel from its own step. Native Bun and Node deliver messages in the creation frame.
+A disconnect the caller requests keeps the caller's frame, as before (native Bun reports the channel frame,
+Node the caller's). Send completions are not channel events: an immediate completion keeps the send's frame,
+as on both native runtimes; one completed by a later pump keeps that turn's frame, which is root on the hook
+path, as native Bun reports for a blocked send (Node reports the send's). A send failed by the channel's end
+keeps the frame its terminal path runs in; no native contract for it was established. Close releases the
+frame in a `finally`.
+
+Spawn failure cleanup always ends the IPC channel, even when a pending stdin callback or abort-listener
+removal throws. Terminal close ends the channel before destroying the sink, then releases the spawn frame.
+The throwing callback keeps its original error object.
+
 ## Classification
 
 | Patch or source | Class | Change |

@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 interface Watcher extends EventEmitter {
   close(): void;
@@ -25,6 +26,7 @@ function watchOptions() {
       if (name === "events") return EventEmitter;
       if (name === "buffer") return { Buffer };
       if (name === "net") return {};
+      if (name === "resource_frame") return resourceFrames();
       throw new Error(`Unexpected module ${name}`);
     },
     addIoWaiter: (waiter: unknown) => { waiters.add(waiter); return waiter; },

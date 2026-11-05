@@ -4,6 +4,7 @@
   const AGAIN = -6;
   const encoder = new TextEncoder();
   const HIGH_WATER_MARK = 128 * 1024;
+  const frames = internal.require("resource_frame");
   type Callback = (error: Error | null) => void;
   interface Write { bytes: Uint8Array; offset: number; callback?: Callback }
 
@@ -44,18 +45,41 @@
     let incoming = "";
     let queuedBytes = 0;
     let explicitRef: boolean | undefined;
+    // Incoming messages and the channel's own disconnect (end of input, a read failure, the
+    // child's exit) are queued in the frame current at open(), as the channel's events. Send
+    // completions and a disconnect the caller asked for keep the frame they are queued in.
+    const frame = frames.capture();
     function complete(callback: Callback | undefined, error: Error | null) {
       internal.nextTick(() => callback ? callback(error) : error && target.emit("error", error));
     }
-    function close(error: Error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
+    function queueMessage(message: unknown) {
+      internal.nextTick(() => target.emit("message", message, undefined));
+    }
+    function queueDisconnect() {
+      internal.nextTick(() => target.emit("disconnect"));
+    }
+    function queueOwnDisconnect() {
+      frame.run(queueDisconnect, undefined, []);
+    }
+    function shutdown(error: Error, disconnect: () => void) {
       if (state === "closed") return;
       state = "closed";
-      native.procClose(descriptors.input);
-      native.procClose(descriptors.output);
-      for (const write of queue.splice(0)) complete(write.callback, error);
-      queuedBytes = 0;
-      incoming = "";
-      internal.nextTick(() => target.emit("disconnect"));
+      try {
+        native.procClose(descriptors.input);
+        native.procClose(descriptors.output);
+        for (const write of queue.splice(0)) complete(write.callback, error);
+        queuedBytes = 0;
+        incoming = "";
+        disconnect();
+      } finally {
+        frame.release();
+      }
+    }
+    function close(error: Error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
+      shutdown(error, queueDisconnect);
+    }
+    function end(error: Error = channelError("ERR_IPC_CHANNEL_CLOSED", "Channel closed")) {
+      shutdown(error, queueOwnDisconnect);
     }
     function flush() {
       let progressed = false;
@@ -79,7 +103,7 @@
       while (end >= 0) {
         const message: unknown = JSON.parse(incoming.slice(0, end));
         incoming = incoming.slice(end + 1);
-        internal.nextTick(() => target.emit("message", message, undefined));
+        frame.run(queueMessage, undefined, [message]);
         end = incoming.indexOf("\n");
       }
       if (incoming.length > 64 * 1024 * 1024) throw channelError("ERR_IPC_MESSAGE_TOO_LARGE", "IPC message exceeds 64 MiB");
@@ -96,7 +120,7 @@
           continue;
         }
         if (bytes < 0 || incoming.length) throw channelError("ERR_IPC_CHANNEL_CLOSED", "Invalid or incomplete IPC message");
-        close(); return true;
+        end(); return true;
       }
       return progressed;
     }
@@ -119,8 +143,9 @@
         state = "draining";
         flush();
       },
-      finish() { if (state !== "closed") read(Infinity); close(); },
+      finish() { if (state !== "closed") read(Infinity); end(); },
       close,
+      end,
       ref() { explicitRef = true; return channel; },
       unref() { explicitRef = false; return channel; },
     };
@@ -133,7 +158,7 @@
         const progress = read();
         return flush() || progress ? "progress" : false;
       },
-      fail(error) { close(error instanceof Error ? error : new Error(String(error))); },
+      fail(error) { end(error instanceof Error ? error : new Error(String(error))); },
       subscriptions() {
         if (state === "closed") return new Uint8Array(0);
         const reading = subscription(0, descriptors.input);

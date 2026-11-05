@@ -95,7 +95,7 @@ declare namespace BunWasm {
       error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
     };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
-    runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
+    runInContext<This, Args extends readonly unknown[], R>(context: unknown, callback: (this: This, ...args: Args) => R, receiver: This, args: Args): R;
     handleUncaught(error: unknown): boolean;
   }
   interface AsyncResourceOptions { triggerAsyncId?: number; requireManualDestroy?: boolean }

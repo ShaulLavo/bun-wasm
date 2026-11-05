@@ -113,7 +113,7 @@ export function adapter() {
     return loaded;
   }
   const native = {
-    hostCaps: { connect: true, listen: false, fetch: false }, domainToASCII,
+    hostCaps: { connect: true, listen: false, fetch: false }, domainToASCII, getAsyncContext: () => undefined,
     hostConnect(host: string, port: number) { counters.opens++; return host && port ? counters.opens : -1; },
     hostWrite(_handle: number, bytes: Uint8Array) {
       if (!state.tcpReady) return -2;
@@ -160,6 +160,7 @@ export function adapter() {
   } }));
   const internal = {
     pumpIo: () => false, ioPending: () => 0, cancelIoWaiters: () => {},
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => fn.apply(receiver, args),
     native, nextTick, web: { Request, Response, Headers }, builtinFactories: {},
     realTimers: { setImmediate(callback: () => void) { immediates.push(callback); }, clearImmediate() {} },
     addIoWaiter<W extends { ref: boolean; step(): boolean | "progress" }>(waiter: W): W { waiters.add(waiter); return waiter; },

@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 // The shipped watcher and the real net.js waiter scheduler over the frozen runtime_fs watch ABI
 // as the natives surface it: fsWatchOpen returns an id, fsWatchRead returns whole padded
@@ -71,6 +72,7 @@ function fixture() {
       if (name === "buffer") return { Buffer };
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
+      if (name === "resource_frame") return resourceFrames();
       if (name === "net") return net ??= runInNewContext(readFileSync(new URL("net.js", directory), "utf8"), { Uint8Array, ArrayBuffer, DataView, URL, TextEncoder })(internal);
       throw new Error(`Unexpected module ${name}`);
     },

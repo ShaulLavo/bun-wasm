@@ -55,7 +55,7 @@ export function fixture() {
     return runInNewContext(code, context);
   }
   const native = {
-    hostCaps: { connect: true }, platformInfo: { version: "test" },
+    hostCaps: { connect: true }, platformInfo: { version: "test" }, getAsyncContext: () => undefined,
     hostFetch: () => 7,
     hostConnect: () => 9,
     hostFetchHead: () => JSON.stringify({ status: 200, headers: [], url: "https://localhost/" }),
@@ -79,6 +79,7 @@ export function fixture() {
   modules.node_net_socket_state = load("node_net_socket_state")();
   const internal = {
     native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => immediates.push(fn) },
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => fn.apply(receiver, args),
     require(name: string): unknown { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
     builtin(name: string): unknown {
       if (name === "node:process") return { env: {}, versions: process.versions, nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => ticks.push(() => fn(...args)), stderr: { write() {} }, emitWarning() {} };
@@ -94,6 +95,7 @@ export function fixture() {
   };
   modules.tls_transport = load("tls_transport")(internal);
   modules.net_path = load("net_path")(internal);
+  modules.net_listener = load("net_listener")(internal);
   modules.http_server_response = load("http_server_response")(internal);
   modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);

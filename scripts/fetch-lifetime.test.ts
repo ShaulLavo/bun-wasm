@@ -35,7 +35,7 @@ function fixture() {
     html_server: { websocket: () => undefined, developmentEnabled: () => false, attach() {}, dispose() {}, upgrade: () => false, asset: () => null },
   };
   const native = {
-    platformInfo: { version: "fixture", arch: "x64" }, hostCaps: { fetch: true },
+    platformInfo: { version: "fixture", arch: "x64" }, hostCaps: { fetch: true }, getAsyncContext: () => undefined,
     utf8Encode: (text: string) => new TextEncoder().encode(text),
     utf8Decode: (bytes: Uint8Array) => new TextDecoder().decode(bytes),
     latin1Decode: (bytes: Uint8Array) => Buffer.from(bytes).toString("latin1"),
@@ -65,6 +65,7 @@ function fixture() {
     native, web: { Request, Response, Headers, AbortController, DOMException },
     builtinFactories: {}, nextTick: queueMicrotask, printError(error: unknown) { errors.push(error); },
     pumpIo: () => false, ioPending: () => 0,
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => fn.apply(receiver, args),
     toUint8: (value: ArrayBuffer) => new Uint8Array(value),
     concatBytes: (chunks: readonly Uint8Array[]) => new Uint8Array(Buffer.concat(chunks)),
     require(name: string): unknown {

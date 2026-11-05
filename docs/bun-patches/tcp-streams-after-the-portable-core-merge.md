@@ -24,6 +24,14 @@ the first write to bypass the limit. The bounded host test fails with that
 implementation and passes with capacity-aware writes, including full-queue,
 zero-length and owned-copy cases. No upstream implementation is copied.
 
+An outbound socket's connection waiter, TCP or Unix path, runs in the
+async-context frame current when `connect` dialed, as a Node socket resource's
+callbacks do, so `connect` and the reads it starts see that frame after the
+host's root entry ([0008](0008-await-context-hooks.md)). It uses
+`net_listener`'s `inContext`; the waiter retires on connection, failure or
+destroy as before. `web/tests/listen-context.test.ts` compares `enterWith`,
+scoped `run`, unrelated ambient work and root dialing with Node's own sockets.
+
 
 [Parent context](http-framing.md).
 

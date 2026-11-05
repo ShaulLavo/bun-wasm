@@ -131,6 +131,16 @@ unstarted instance's own table releases them, so the release ignores that one er
 Node WASI host and checks each errno and the unstarted release.
 
 
+## Watcher callback frame
+
+A watcher captures the async-context frame current at `fs.watch()` once the native watch opened
+([resource frames](0008-await-context-hooks.md)). Its change and error events, and the close event an error
+causes, run in that frame although the host pumps at root. A listener that closes the watcher and then
+throws gets its `error` event in the same frame. A caller's `close()` and an abort keep their own frame, as
+before. Closing releases the frame in a `finally`, also on constructor rollback, so a closed watcher kept
+reachable holds nothing once its queued close event ran. Native Bun and Node report the watch frame for
+change events; error and close parity was not measured natively.
+
 ## Wasmtime preview1 node identity
 
 Class **Host feature**, **adapted implementation** in `crates/bunwasm-host/src/fs_watch.rs`

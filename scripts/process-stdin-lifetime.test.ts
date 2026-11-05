@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInThisContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 const require = createRequire(import.meta.url);
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -25,6 +26,7 @@ function fixture() {
       if (name === "buffer") return { Buffer };
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
+      if (name === "resource_frame") return resourceFrames();
       if (name !== "net") throw new Error(`unexpected ${name}`);
       if (!netLoaded) { netLoaded = true; factory("net.js")(internal); }
       return {};

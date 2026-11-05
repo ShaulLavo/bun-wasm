@@ -10,6 +10,7 @@ type Wait = ReturnType<typeof Atomics.waitAsync>;
 function engineMethods(atomics: object) {
   const methods: unknown = runInNewContext(source.concat(`\n({
     pump: EngineHost.prototype.pump,
+    enterRoot: EngineHost.prototype.enterRoot,
     wakeOnProcessChange: EngineHost.prototype.wakeOnProcessChange,
     exit: EngineHost.prototype.exit,
   });`), {
@@ -18,11 +19,12 @@ function engineMethods(atomics: object) {
   });
   if (typeof methods !== "object" || methods === null
     || !("pump" in methods) || typeof methods.pump !== "function"
+    || !("enterRoot" in methods) || typeof methods.enterRoot !== "function"
     || !("wakeOnProcessChange" in methods) || typeof methods.wakeOnProcessChange !== "function"
     || !("exit" in methods) || typeof methods.exit !== "function") {
     throw new Error("Expected the real engine loop methods");
   }
-  return { pump: methods.pump, wakeOnProcessChange: methods.wakeOnProcessChange, exit: methods.exit };
+  return { pump: methods.pump, enterRoot: methods.enterRoot, wakeOnProcessChange: methods.wakeOnProcessChange, exit: methods.exit };
 }
 
 // Only the guest and scheduler boundary is stubbed. Atomics registrations are real.
@@ -54,6 +56,7 @@ function fixture(waitAsync = true, withWord = true) {
       ioPending() { return 1; }, pumpIo() { return false; },
     },
     pump() { Reflect.apply(methods.pump, this, []); },
+    enterRoot() { Reflect.apply(methods.enterRoot, this, []); },
     wakeOnProcessChange(observed: number) { Reflect.apply(methods.wakeOnProcessChange, this, [observed]); },
     exit(code: number) { Reflect.apply(methods.exit, this, [code]); },
     guard<T>(callback: () => T) { return callback(); },

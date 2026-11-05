@@ -300,8 +300,9 @@
       if (this.reading || this.closed) return;
       this.reading = true;
       const epoch = this.ownership.state.epoch;
+      const context = native.getAsyncContext();
       this.reader = addWaiter({
-        step: () => this.ownership.valid(epoch) ? this.pumpRead() : true,
+        step: () => this.ownership.valid(epoch) ? internal.runInContext(context, this.pumpRead, this, []) : true,
         fail: (err) => this.fail(err),
         ref: this.referenced !== false,
       });
@@ -648,6 +649,7 @@
         if (!stopped) {
           stopped = true;
           waiters.delete(accepting);
+          accepting = null;
           native.hostClose(listener);
           htmlServer.dispose(server);
           // Idle keep-alive connections close now; busy ones after their
@@ -657,10 +659,10 @@
         return Promise.resolve();
       },
       ref() {
-        accepting.ref = !stopped;
+        if (accepting) accepting.ref = true;
       },
       unref() {
-        accepting.ref = false;
+        if (accepting) accepting.ref = false;
       },
       upgrade(req, upgradeOptions = {}) {
         const state = requests.get(req);
@@ -745,7 +747,7 @@
       }
     }
 
-    const accepting = acceptLoop(listener, (conn) => {
+    let accepting = acceptLoop(listener, (conn) => {
       connections.add(conn);
       const destroy = conn.destroy.bind(conn);
       conn.destroy = () => {
@@ -754,6 +756,10 @@
       };
       serveHttp(conn, handleRequest);
     });
+    // A frame entered at Bun.serve() is where its connections start reading and its requests
+    // run, as under Bun. Started outside any frame, it keeps each turn's own frame.
+    const context = native.getAsyncContext();
+    if (context !== undefined) accepting = internal.require("net_listener").inContext(context, accepting);
     htmlServer.attach(server, routes, options.development);
     return server;
   }
@@ -786,6 +792,8 @@
     if (server.listening) {
       waiters.delete(server._accepting);
       waiters.delete(server._starting);
+      server._accepting = null;
+      server._starting = null;
       if (server._pipeName === undefined) native.hostClose(server._listener);
       else internal.require("net_path").close(server, hostError, typeof callback === "function");
       server.listening = false;
