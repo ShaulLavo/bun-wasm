@@ -241,10 +241,9 @@ test("a pinned handoff cannot substitute fixture or dependency choices", async (
   const h = f.pinned.handoff;
   const altered = { ...h, dependencies: { ...h.dependencies, browsers: { ...h.dependencies.browsers, sha256: "a".repeat(64) } } };
   writeFileSync(f.handoff, JSON.stringify(altered));
-  const pinned = readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256);
-  expect(() => bindFiveOwnerSource(pinned, f.host)).toThrow("dependencies or fixtures");
+  expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow("handoff differs");
   writeFileSync(f.handoff, JSON.stringify({ ...h, fixtures: { tls: { status: "unresolved", missing: "changed" } } }));
-  expect(() => bindFiveOwnerSource(readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256), f.host)).toThrow("dependencies or fixtures");
+  expect(() => readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256)).toThrow("handoff differs");
 });
 
 test("original input custody and staged dependency bytes are not satisfied by their recorded labels", async () => {
@@ -354,6 +353,9 @@ test("raw gzip-only observations bind through the actual exported loaded validat
   const digest = createHash("sha256").update(bytes).digest("hex");
   const observer = loadedObserver(url.slice(0, -3), { bytes: bytes.length, sha256: digest }, path => requireFiveOwnerResponse(f.pinned, path));
   observer.capture(response(url, async () => compressed));
+  for (const name of ["index.html", "worker.js"]) {
+    observer.capture(response(new URL(name, url).href, async () => readFileSync(join(f.pinned.handoff.webRoot, name))));
+  }
   const observations = await observer.finish();
   const loaded = parseLoaded(observations.loaded);
   expect(loaded[0]?.encoding).toBe("identity");
