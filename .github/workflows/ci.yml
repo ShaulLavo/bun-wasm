@@ -323,7 +323,7 @@ jobs:
     runs-on: boat-large
     defaults:
       run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
@@ -362,6 +362,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -473,7 +474,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned wasm-tools
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -500,7 +501,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned Wasmtime
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -691,7 +692,7 @@ jobs:
           TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           run_native_checks() {
             source env.sh
@@ -743,7 +744,7 @@ jobs:
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
       - name: Package the verified native quality checkpoint
         id: native-artifact
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         env:
           NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
@@ -770,7 +771,7 @@ jobs:
     runs-on: boat-large
     defaults:
       run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -803,6 +804,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -910,7 +912,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned wasm-tools
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -937,7 +939,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned Wasmtime
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -1048,7 +1050,7 @@ jobs:
           path: ${{ runner.temp }}/native-quality-artifact
       - name: Import the verified native quality checkpoint
         id: native-import
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         env:
           NATIVE_QUALITY_MANIFEST_SHA256: ${{ needs.native-quality.outputs.manifest-sha256 }}
           NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ needs.native-quality.outputs.producer-attempt }}
@@ -1226,7 +1228,7 @@ jobs:
           key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
 
       - name: Blocking Web guest cases (QuickJS and host engine)
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm
@@ -1244,7 +1246,7 @@ jobs:
           retention-days: 1
       - name: Blocking Web guest case (JSC)
         if: needs.quality.outputs.jsc == 'true'
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log

@@ -6,6 +6,22 @@ Hermes remains parked under the November 1 owner decision; its retained `c36356f
 
 ## Goal
 
+### Later: unoptimized WASI guest link
+
+Status: Approved, deferred. Keep the supported guest at dev opt-level 1.
+At `3b46c7fb6cc4eef1fb5493d05ebf16a90473d396` on the PC, nightly-2026-09-15,
+`CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo build --locked --offline -j 2 --target wasm32-wasip1 -p bunwasm-cli`
+(after sourcing `env.sh` and preparing the matched Bun sources/sysroot) fails
+with `undefined symbol: highway_memmem16` from `bun_bundler` and `bun_paths`.
+The matched Bun `src/highway/lib.rs:34` declares it and `memmem16` at line 380
+calls it. Our `crates/bunwasm-glue/src/bun_native.rs:529` defines
+`highway_memmem`, but has no `highway_memmem16` implementation. Optimization
+appears to remove the missing path at opt-level 1 and in release builds, which
+both link. Implement and test the portable 16-bit search later, then rerun the
+opt-level 0 link and the supported profiles. Original reproduction and full
+linker output: `/work/reports/wave-20261106/rust-build-speed/bench.py run bun-guest opt0`
+and `bun-guest-opt0-clean.log` beside that script. No fix is included here.
+
 Run as much of Bun's own code as possible, on all three engines (QuickJS, the browser's engine,
 JavaScriptCore in wasm). Bun Lite and "full Bun" are one runtime: the more of Bun's code we can
 run engine-independently, the fewer polyfills we keep. JSC additionally gets Bun's C++ bindings
