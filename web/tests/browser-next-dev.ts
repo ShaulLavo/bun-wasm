@@ -24,6 +24,20 @@ async function setSource(page: Page, text: string): Promise<void> {
   }, text);
 }
 
+async function projectLinks(page: Page): Promise<void> {
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const boxes = await page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => {
+      const { left, right, top, bottom } = link.getBoundingClientRect();
+      return { left, right, top, bottom };
+    }));
+    assert.equal(boxes.length, 3);
+    assert.ok(boxes.every(box => box.left >= 0 && box.right <= width));
+    assert.ok(boxes.every((box, index) => index === 0 || box.left >= (boxes[index - 1]?.right ?? Infinity)), "Project links must not overlap");
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+
 async function development(page: Page): Promise<void> {
   await page.evaluate(() => { void playground.shell.submit("bun run dev"); });
   await page.waitForFunction(() => playground.previews.serves(5173), undefined, { timeout: 90_000 });
@@ -65,6 +79,7 @@ try {
   await page.goto(url.href);
   assert.match(await ready(page), /ready · Browser/);
   assert.equal(await page.evaluate(() => playground.editor.path), "/home/user/pages/index.tsx");
+  await projectLinks(page);
   const installed = await run(page, "bun install", 180_000);
   assert.equal(installed.code, 0, installed.output);
   console.log("PASS Next dependencies installed in the guest");
