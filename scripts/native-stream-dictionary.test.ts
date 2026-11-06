@@ -26,23 +26,24 @@ function conversions({ controls, initialize }: { controls: string; initialize: s
 function representation({ controls, initialize }: { controls: string; initialize: string }) {
   return new Function(`${controls}\nreturn dictionaryRepresentation(() => new Function(${JSON.stringify(initialize)})());`)();
 }
+async function browserDictionaryControl(engine: typeof webkit | typeof chromium) {
+  const browser = await engine.launch({ headless: true });
+  try {
+    let page = await browser.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const native = await page.evaluate(conversions, { controls, initialize: "" });
+    await page.close();
+    page = await browser.newPage();
+    page.on("pageerror", error => errors.push(error.message));
+    expect(await page.evaluate(conversions, { controls, initialize })).toEqual(native);
+    await page.close();
+    page = await browser.newPage();
+    page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(representation, { controls, initialize });
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); }
+}
 for (const engine of [webkit, chromium]) {
-  test(`${engine.name()} dictionary shape and native conversion parity`, async () => {
-    const browser = await engine.launch({ headless: true });
-    try {
-      let page = await browser.newPage();
-      const errors: string[] = [];
-      page.on("pageerror", error => errors.push(error.message));
-      const native = await page.evaluate(conversions, { controls, initialize: "" });
-      await page.close();
-      page = await browser.newPage();
-      page.on("pageerror", error => errors.push(error.message));
-      expect(await page.evaluate(conversions, { controls, initialize })).toEqual(native);
-      await page.close();
-      page = await browser.newPage();
-      page.on("pageerror", error => errors.push(error.message));
-      await page.evaluate(representation, { controls, initialize });
-      expect(errors).toEqual([]);
-    } finally { await browser.close(); }
-  }, 30000);
+  test(`${engine.name()} dictionary shape and native conversion parity`, () => browserDictionaryControl(engine), 30000);
 }

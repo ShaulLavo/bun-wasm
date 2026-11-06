@@ -105,7 +105,12 @@ WebContent 8624.2.5.10.4, in which the actual file-source factory passed with an
 ordinary own-property dictionary while a fresh-callback Proxy dictionary crashed.
 The reduction alone does not identify a native lifetime, identity or GC cause.
 Source-level regressions prove the dictionary representation and conversion
-behavior, not that the production candidate fixes the actual iOS crash.
+behavior. A subsequent iOS 26.5 comparison of the complete old and corrected
+adapters reproduced the old crash and passed the corrected file case. Single-
+and four-guest streamed previews also passed. Nuxt rendering, hydration and hot
+reload passed only with a development filesystem restore and changed oxc WASI
+memory settings; those remain separate blockers for unmodified-product use.
+These observations do not establish a native lifetime, identity or GC cause.
 
 Writable and transform dictionaries retain their existing representation.
 WebKit tests distinguish absent optional properties from present undefined

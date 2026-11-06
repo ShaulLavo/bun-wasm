@@ -8,21 +8,27 @@ const dictionaries: readonly DictionaryCase[] = [
 function dictionaryInvariant(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
+type ConversionContext = { source: object; entry: DictionaryCase; trace: string[]; fault: string; value: unknown; throws: boolean; native: boolean };
+function emptyCallback() { return () => {}; }
+function conversionGetter(context: ConversionContext, key: string) {
+  return function (this: object) {
+    const { source, entry, trace, fault, value, throws, native } = context;
+    dictionaryInvariant(this === source, `${entry.name}.${key} getter receiver`);
+    trace.push(key);
+    if (key !== fault) return entry.methods.includes(key) ? emptyCallback() : undefined;
+    if (throws) throw value;
+    // The completion bridge has always supplied a no-op for undefined start.
+    // Compare native conversion under that existing policy, not a new policy.
+    return native && key === "start" && value === undefined ? emptyCallback() : value;
+  };
+}
 function conversionControl(entry: DictionaryCase, fault: string, value: unknown, throws: boolean, inherited: boolean, native: boolean, missing = false) {
   const trace: string[] = [];
   const source = {};
   const properties = inherited ? {} : source;
-  const get = (key: string) => function (this: object) {
-    dictionaryInvariant(this === source, `${entry.name}.${key} getter receiver`);
-    trace.push(key);
-    if (key !== fault) return entry.methods.includes(key) ? () => {} : undefined;
-    if (throws) throw value;
-    // The completion bridge has always supplied a no-op for undefined start.
-    // Compare native conversion under that existing policy, not a new policy.
-    return native && key === "start" && value === undefined ? () => {} : value;
-  };
+  const context = { source, entry, trace, fault, value, throws, native };
   const fields = entry.name === "ReadableStream" ? entry.fields : entry.methods.concat(entry.fields.filter(key => !entry.methods.includes(key) && key === fault));
-  for (const key of fields.filter(key => !missing || key !== fault)) Object.defineProperty(properties, key, { get: get(key) });
+  for (const key of fields.filter(key => !missing || key !== fault)) Object.defineProperty(properties, key, { get: conversionGetter(context, key) });
   if (inherited) Object.setPrototypeOf(source, properties);
   Object.freeze(source);
   const strategy = { get size() { trace.push("size"); return undefined; }, get highWaterMark() { trace.push("highWaterMark"); return 0; } };
