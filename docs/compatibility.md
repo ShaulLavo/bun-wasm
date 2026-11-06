@@ -49,6 +49,8 @@ The three engines differ in these ways, which follow from the `browser` engine r
 | `process.memoryUsage()` | Reads `performance.memory` where available (Chromium), else zeros. |
 | Raw `err.stack` strings | Follow the host engine's format. Printed errors (uncaught errors, `console.log(err)`, `bun test`) match the other engines. |
 
+Hermes remains withdrawn from normal publication. In the retained Hermes revision `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`, `Object.isSealed` and `Object.isFrozen` return false for sealed or frozen objects wrapped in an empty-handler Proxy. This known engine limitation has no workaround; it does not affect the supported Browser engines. See [Dormant Hermes source](hermes-engine.md#known-engine-limitation).
+
 ## Real apps
 
 The matrix installs each project fresh from an offline copy of the npm registry, then runs its commands on QuickJS, JSC and the `browser` engine. A stage passes only on its declared assertion: an exit code and output, an HTTP response with the expected body, or rendered DOM text in headless Chromium. An install that succeeds does not count as the app working.

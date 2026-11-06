@@ -2,6 +2,8 @@
 
 Status: Approved (owner, 2026-10-15)
 
+Hermes remains parked under the November 1 owner decision; its retained `c36356f4` engine has a documented empty-handler Proxy `isSealed`/`isFrozen` limitation, accepted narrowly for PR 482 with no engine fix or restart in scope.
+
 ## Goal
 
 Run as much of Bun's own code as possible, on all three engines (QuickJS, the browser's engine,
