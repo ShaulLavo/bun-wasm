@@ -6,6 +6,7 @@ import {
 } from "waffle/browser/runtime-terminals";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
 import { createWorkerProcessTransport } from "waffle/proc/worker-client";
+import { terminalPreview1Executor } from "../src/preview1-executor";
 import { attachBunTerminal } from "../src/bun-terminal";
 
 function must<T>(result: { kind: "ok"; value: T } | { kind: "error"; code: string }): T {
@@ -48,8 +49,8 @@ test("stdin reads the foreground terminal's keys; stdout and stderr keep the def
     expect(new TextDecoder().decode(bytes.subarray(0, 3))).toBe("ab\n");
     expect(terminal!.setRawMode(true)).toBeUndefined();
     const inherited = terminal!.spawnData();
-    expect(inherited.terminalInput).toBe(input.buffer);
-    expect(inherited.terminalContext).toBeDefined();
+    expect(Reflect.get(inherited, "terminalInput")).toBe(input.buffer);
+    expect(Reflect.get(inherited, "terminalContext")).toBeDefined();
   } finally {
     terminal!.dispose();
     display.close("disposed");
@@ -66,6 +67,44 @@ test("without terminal metadata stdin stays an ordinary descriptor; partial meta
     expect(() => attachBunTerminal(request({ terminalContext: display.inherit(), terminalInput: new ArrayBuffer(64) }), () => {})).toThrow(TypeError);
     expect(() => attachBunTerminal(request({ terminalContext: {}, terminalInput: input.buffer }), () => {})).toThrow();
   } finally {
+    display.close("disposed");
+  }
+});
+
+
+test("Preview1 env keeps stdin open and passes terminal metadata to its Bun child", () => {
+  const { input, display, request } = foregroundTerminal();
+  const executor = terminalPreview1Executor(request({ terminalContext: display.inherit(), terminalInput: input.buffer }));
+  executor.setup({ checkActive() {} });
+  const inherited = executor.spawnData();
+  const child = attachBunTerminal(request(inherited), () => {});
+  try {
+    expect(Reflect.get(inherited, "terminalInput")).toBe(input.buffer);
+    expect(Reflect.get(inherited, "terminalContext")).toBeDefined();
+    const bytes = new Uint8Array(16);
+    expect(executor.resolveTerminal(0)?.tryRead?.([bytes])).toBe(-6);
+    expect(child?.resolve(0)?.tryRead?.([bytes])).toBe(-6);
+    executor.beforeFinish();
+    expect(input.push(new TextEncoder().encode("still open"))).toBe(10);
+    expect(child?.resolve(0)?.tryRead?.([bytes])).toBe(10);
+    expect(new TextDecoder().decode(bytes.subarray(0, 10))).toBe("still open");
+    expect(child?.resolve(0)?.tryRead?.([bytes])).toBe(-6);
+  } finally {
+    executor.beforeFinish();
+    child?.dispose();
+    display.close("disposed");
+  }
+});
+
+test("noninteractive Preview1 input keeps its ordinary descriptor and no terminal metadata", () => {
+  const { display, request } = foregroundTerminal();
+  const executor = terminalPreview1Executor(request(undefined));
+  try {
+    executor.setup({ checkActive() {} });
+    expect(executor.resolveTerminal(0)).toBeUndefined();
+    expect(executor.spawnData()).toEqual({});
+  } finally {
+    executor.beforeFinish();
     display.close("disposed");
   }
 });

@@ -21,6 +21,7 @@ declare namespace BunWasm {
     rows<Mode extends 0 | 1 | 2 | 3, Safe extends boolean>(handle: SQLiteStatementHandle, values: readonly SQLiteBinding[] | undefined, mode: Mode, safe: Safe): SQLiteRows<Safe>[Mode];
     next<Safe extends boolean>(handle: SQLiteStatementHandle, values: readonly SQLiteBinding[] | undefined, first: boolean, safe: Safe): SQLiteRow<Safe> | null;
     run<Safe extends boolean>(handle: SQLiteStatementHandle, values: readonly SQLiteBinding[] | undefined, safe: Safe): SQLiteChanges<Safe>;
+    reset(handle: SQLiteStatementHandle): void;
     bind(handle: SQLiteStatementHandle, values: readonly SQLiteBinding[]): void;
     paramNames(handle: SQLiteStatementHandle): (string | null)[];
     columns(handle: SQLiteStatementHandle): string[];

@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { playwright, ready, run, session, terminalText, writeFile } from "./playground.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { stopForeground } from "./foreground.ts";
+import { checkPlaygroundStdin } from "./playground-stdin.ts";
 
 const { chromium, webkit, devices } = playwright;
 const s = session("bun-wasm-web-engine-");
@@ -53,6 +54,11 @@ async function checkPage(name, page, visit, fixtureBase) {
   check(`${name}: status names the engine`, status.startsWith(`bun.wasm ready · ${engineName} ·`), status);
   check(`${name}: dropdown shows the engine`, (await page.inputValue("#engine")) === engine);
   if (!status.includes("ready")) return;
+
+  if (engine === "browser") {
+    await checkPlaygroundStdin(page);
+    check(`${name}: terminal input survives env and shebangs, pipes retain EOF`, true);
+  }
 
   await expectRun(page, `${name}: bun --version (native side)`, "bun --version", 0, [], ["error"]);
   await expectRun(page, `${name}: hello world (index.ts)`, "bun run index.ts", 0, ["Hello, world.", "Hello, Bun!", "cwd: /home/user"]);

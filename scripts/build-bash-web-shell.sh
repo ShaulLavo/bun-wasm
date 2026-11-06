@@ -33,5 +33,5 @@ target="$CARGO_TARGET_DIR/bash-web-shell"
   -j "${JOBS:-2}" -p shell-engine --bin shell-runtime)
 mkdir -p "$root/dist"
 cp "$target/wasm32-wasip1/release/shell-runtime.wasm" "$root/dist/bash-web-shell.wasm"
-cp "$root/node_modules/waffle-coreutils/dist/env.wasm" "$root/dist/bash-web-env.wasm"
+bun "$root/scripts/bash-web-guests.ts" stage-env "$root" "$root/dist"
 bun "$root/scripts/bash-web-guests.ts" write "$root/dist" "$commit" "$toolchain"
