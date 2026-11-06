@@ -500,6 +500,19 @@ mod tests {
         register(source, path, Loader::Js).unwrap().code
     }
 
+    fn original_position(mappings: &str, generated: i64) -> Option<(i64, i64)> {
+        let mut column = 0i64;
+        let mut original = (0i64, 0i64);
+        let mut found = None;
+        for segment in mappings.split(';').next().unwrap().split(',') {
+            let fields = crate::record_fixup::tests::decode_fields(segment);
+            column += fields[0];
+            original = (original.0 + fields[2], original.1 + fields[3]);
+            found = found.or((column == generated).then_some(original));
+        }
+        found
+    }
+
     #[test]
     fn record_map_includes_the_header_column_offset() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -770,15 +783,7 @@ mod tests {
         let list = line[..line.find(")(\"no body\")").unwrap() + 1]
             .encode_utf16()
             .count() as i64;
-        let mut column = 0i64;
-        let mut original = (0i64, 0i64);
-        let mut found = None;
-        for segment in record.mappings.split(';').next().unwrap().split(',') {
-            let fields = crate::record_fixup::tests::decode_fields(segment);
-            column += fields[0];
-            original = (original.0 + fields[2], original.1 + fields[3]);
-            found = found.or((column == list).then_some(original));
-        }
+        let found = original_position(&record.mappings, list);
         assert_eq!(found, Some((1, 2)), "{}", record.code);
     }
 
@@ -789,15 +794,7 @@ mod tests {
         let record = register(source, "/map.mjs", Loader::Js).unwrap();
         let line = record.code.lines().next().unwrap();
         let generated = line[..line.find("zz").unwrap()].encode_utf16().count() as i64;
-        let mut column = 0i64;
-        let mut original = (0i64, 0i64);
-        let mut found = None;
-        for segment in record.mappings.split(';').next().unwrap().split(',') {
-            let fields = crate::record_fixup::tests::decode_fields(segment);
-            column += fields[0];
-            original = (original.0 + fields[2], original.1 + fields[3]);
-            found = found.or((column == generated).then_some(original));
-        }
+        let found = original_position(&record.mappings, generated);
         assert_eq!(
             found,
             Some((0, source.find("zz").unwrap() as i64)),
