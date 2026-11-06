@@ -6,13 +6,15 @@ import { templateFiles as exportTemplateFiles } from "../../sandbox/template-fil
 import { defaultTemplate, selectTemplate, templates } from "../../sandbox/src/template-catalog";
 import { templateFiles } from "../../sandbox/src/template";
 
+const viteTemplates = templates.filter(template => template.id === "react" || template.id === "vanilla");
+
 const packageJson = JSON.stringify({ scripts: { dev: "framework dev", build: "framework build" } });
 
 test("template selection uses the same catalog as the dropdown and build", () => {
   expect(selectTemplate(null)).toBe(defaultTemplate);
   expect(selectTemplate("unknown")).toBe(defaultTemplate);
   for (const template of templates) expect(selectTemplate(template.id)).toBe(template);
-  expect(templates.map(template => template.id)).toEqual(["react", "vanilla"]);
+  expect(templates.map(template => template.id)).toEqual(["react", "next", "vanilla"]);
   expect(templates.map(template => template.label)).not.toContain("Vite");
 });
 
@@ -37,7 +39,7 @@ test("project paths cannot escape or alias the workspace root", () => {
   }
 });
 
-for (const template of templates) {
+for (const template of viteTemplates) {
   test(`${template.label} has a source-only Vite 8 project with real package scripts`, async () => {
     const root = join(import.meta.dir, "../../sandbox", template.directory);
     const files = await exportTemplateFiles(root);
@@ -53,7 +55,7 @@ for (const template of templates) {
 }
 
 test("starter locks preserve the qualified Vite 8 graph", async () => {
-  for (const template of templates) {
+  for (const template of viteTemplates) {
     const path = join(import.meta.dir, "../../sandbox", template.directory, "bun.lock");
     const lock: unknown = Bun.JSONC.parse(await Bun.file(path).text());
     expect(lock).toMatchObject({ packages: { vite: expect.arrayContaining(["vite@8.3.5"]), rolldown: expect.arrayContaining(["rolldown@1.2.16"]) } });

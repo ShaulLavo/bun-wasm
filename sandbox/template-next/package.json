@@ -1,0 +1,20 @@
+{
+  "name": "next-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --hostname 127.0.0.1 --port 5173",
+    "build": "next build"
+  },
+  "dependencies": {
+    "@next/swc-wasm-nodejs": "15.5.6",
+    "next": "15.5.6",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.11",
+    "@types/react": "19.1.16",
+    "typescript": "5.9.3"
+  }
+}

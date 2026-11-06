@@ -239,10 +239,15 @@ main {
     text-overflow: ellipsis;
   }
 
-  header a.nav {
+  header .workspace-nav {
+    gap: 6px;
     grid-column: 2;
     grid-row: 1;
     justify-self: end;
+  }
+
+  header .workspace-nav a.nav {
+    font-size: 12px;
   }
 
   header #status {
@@ -316,6 +321,12 @@ main {
   background-repeat: no-repeat;
   background-size: 12px 12px;
   padding: 4px 30px 4px 10px;
+}
+
+.workspace-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 a.nav {

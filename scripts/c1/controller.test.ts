@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { enableSubreaper } from "../linux-subreaper.mts";
+import { testSubreaper } from "../test-subreaper.ts";
 import { ProcessOwner } from "../process-owner.mts";
 import { handoffMemberPaths } from "../producer-closure.ts";
 import { SYSROOT_PROBE, Staging, environmentDifferences, nativeWitness, requireCanonicalBuildTools, requireNativeEntry, requireStagedWaffle } from "./admission.ts";
@@ -16,13 +16,16 @@ import { STAGES, blockReason, runStages, validateStages, type Stage, type StageC
 
 const repository = realpathSync(join(import.meta.dir, "../.."));
 let scratch = "";
+let restoreSubreaper = () => {};
 beforeAll(async () => {
-  await enableSubreaper();
+  restoreSubreaper = await testSubreaper(true);
   scratch = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-c1-controller-")));
 });
 afterAll(() => {
-  execFileSync("/usr/bin/chmod", ["-R", "u+w", scratch]);
-  rmSync(scratch, { recursive: true, force: true });
+  try {
+    execFileSync("/usr/bin/chmod", ["-R", "u+w", scratch]);
+    rmSync(scratch, { recursive: true, force: true });
+  } finally { restoreSubreaper(); }
 });
 function fresh(name: string): string {
   const path = join(scratch, name);

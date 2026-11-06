@@ -2,6 +2,7 @@ import { on, type Handle } from "@remix-run/component";
 import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
+import { projectTemplates } from "./project-templates";
 
 type Props = { playground: Playground };
 
@@ -31,8 +32,13 @@ function Header(handle: Handle<Props>) {
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
-        <a class="nav" href={playground.viteReact ? "./" : "?template=vite-react"}>{playground.viteReact ? "Examples" : "Vite + React"}</a>
-        <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
+        <nav class="workspace-nav" aria-label="Projects">
+          {playground.template ? <a class="nav" href="./">Examples</a> : null}
+          {projectTemplates.filter(template => template.id !== playground.template?.id).map(template => (
+            <a class="nav" href={`?template=${template.id}`}>{template.label}</a>
+          ))}
+          <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
+        </nav>
         <select
           id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)"
           disabled={playground.locked}
