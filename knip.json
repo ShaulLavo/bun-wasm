@@ -78,6 +78,7 @@
       "entry": [
         "src/main.ts",
         "src/worker.ts",
+        "src/preview1-worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
         "guest-tests/*.test.ts",
