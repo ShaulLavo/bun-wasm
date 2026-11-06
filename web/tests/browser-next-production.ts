@@ -61,7 +61,7 @@ async function start(target: Page): Promise<string> {
   operation = "next start listener on port 5173";
   await target.evaluate(() => {
     Object.assign(globalThis, { productionServer: { finished: false, error: null } });
-    void playground.shell.submit("NEXT_TELEMETRY_DISABLED=1 bun run node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 5173")
+    void playground.shell.submit("bun run start")
       .catch(error => { productionServer.error = String(error); })
       .finally(() => { productionServer.finished = true; });
   });
@@ -100,7 +100,7 @@ async function compiledPage(target: Page, url: string, expectedBuildID: string):
 }
 
 async function execute(): Promise<void> {
-  const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? "https://bun.sprockt.dev/playground/?template=next");
+  const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? await task.serve());
   url.searchParams.set("template", "next");
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
@@ -110,7 +110,7 @@ async function execute(): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await context.newPage();
   observe(page, "playground");
-  operation = "live Pages template startup";
+  operation = "Pages template startup";
   await page.goto(url.href, { timeout: 120_000 });
   assert.match(await ready(page), /ready · Browser/);
   assert.equal(await page.evaluate(() => playground.editor.path), "/home/user/pages/index.tsx");
@@ -118,7 +118,7 @@ async function execute(): Promise<void> {
   report("package.json", await readGuest(page, "/home/user/package.json") ?? "missing");
   report("next.config.ts", await readGuest(page, "/home/user/next.config.ts") ?? "missing");
   await command(page, "install", "bun install", 180_000);
-  await command(page, "build", "NEXT_TELEMETRY_DISABLED=1 bun run node_modules/next/dist/bin/next build", 600_000);
+  await command(page, "build", "NEXT_TELEMETRY_DISABLED=1 bun run build", 600_000);
   operation = "production BUILD_ID written";
   const completedBuildID = await readGuest(page, "/home/user/.next/BUILD_ID");
   assert.ok(completedBuildID && completedBuildID.trim(), "next build exited zero without writing .next/BUILD_ID");
