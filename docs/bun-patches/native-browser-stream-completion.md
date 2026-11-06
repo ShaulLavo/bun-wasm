@@ -87,3 +87,33 @@ Bun-controller adapter used by the construction bridge.
 [Parent context](http-framing.md).
 
 [Ledger scope and pinned revisions](scope.md).
+
+### Lazy readable-source dictionaries
+
+The readable-source completion adapter now supplies an ordinary object with lazy
+own accessors for the native dictionary fields. Native conversion alone reads the
+original getters with the original source receiver. Callable members become own
+data properties holding their completion wrappers; scalar and noncallable members
+remain accessors, including repeated native `type` reads. Frozen and inherited
+inputs are not changed. The direct-stream dispatch dictionary uses the same
+representation at the actual native constructor boundary. The callback and
+promise policy described above is unchanged. Captures belong to the stream's
+callback graph, with no independent strong-root collection or wrapper cache.
+
+This bounded representation change follows an actual iOS 26.5 worker reduction,
+WebContent 8624.2.5.10.4, in which the actual file-source factory passed with an
+ordinary own-property dictionary while a fresh-callback Proxy dictionary crashed.
+The reduction alone does not identify a native lifetime, identity or GC cause.
+Source-level regressions prove the dictionary representation and conversion
+behavior. A subsequent iOS 26.5 comparison of the complete old and corrected
+adapters reproduced the old crash and passed the corrected file case. Single-
+and four-guest streamed previews also passed. Nuxt rendering, hydration and hot
+reload passed only with a development filesystem restore and changed oxc WASI
+memory settings; those remain separate blockers for unmodified-product use.
+These observations do not establish a native lifetime, identity or GC cause.
+
+Writable and transform dictionaries retain their existing representation.
+WebKit tests distinguish absent optional properties from present undefined
+properties on those dictionaries. Creating all optional own accessors would
+change their native validation. Constructor-boundary tests cover their conversion
+order and errors alongside the corrected readable path.
