@@ -123,7 +123,8 @@
     "sandbox": {
       "entry": [
         "src/main.ts",
-        "tests/*.{test.ts,mjs,js}"
+        "tests/*.{test.ts,mjs,js}",
+        "tests/next-dev.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
