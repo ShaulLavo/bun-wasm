@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+const fixtureStarted = Date.now();
+let stage = 0;
+function tracedSpawnSync(command: string[], options: Parameters<typeof Bun.spawnSync>[1]) {
+  const id = ++stage;
+  const started = Date.now();
+  console.error(JSON.stringify({ event: "start", id, command, elapsedMs: started - fixtureStarted }));
+  const result = Bun.spawnSync(command, options);
+  console.error(JSON.stringify({ event: "end", id, elapsedMs: Date.now() - fixtureStarted, durationMs: Date.now() - started, exitCode: result.exitCode }));
+  return result;
+}
+console.error(JSON.stringify({ event: "fixture-start", execPath: process.execPath, cwd: process.cwd() }));
 
 function run(name: string, args: string[] = []) {
-  return Bun.spawnSync([process.execPath, "run", name].concat(args), { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+  return tracedSpawnSync([process.execPath, "run", name].concat(args), { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
 }
 
 for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags", "42"], ["ok", "direct file"], ["nodejs-file", "direct file"], ["nodejs-eval", "42"], ["nodejs-named-file", "node filename tail"], ["bun-file", "direct file"], ["bun-alias", "42"], ["node-file", "node filename tail"], ["node-alias-file", "node alias filename tail"]]) {
@@ -23,7 +34,7 @@ assert.equal(syntax.stdout.toString(), "one\nTWO SHELL-SYNTAX\nthree\n");
 const hooked = run("hooked");
 assert.equal(hooked.stdout.toString(), "pre\nmain\npost\n");
 assert.equal(hooked.stderr.toString(), "$ echo pre\n$ echo main\n$ echo post\n");
-const silent = Bun.spawnSync([process.execPath, "run", "--silent", "exit"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+const silent = tracedSpawnSync([process.execPath, "run", "--silent", "exit"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
 assert.equal(silent.exitCode, 17);
 assert.equal(silent.stderr.toString(), "");
 const inspected = run("alias", ["tail"]);

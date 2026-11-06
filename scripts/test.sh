@@ -302,7 +302,7 @@ for name in "${names[@]}"; do
   failed+=("$name")
   printf 'FAIL %s (exit %s, expected %s)\n' "$name" "$code" "$expected_exit"
   head -40 "$scratch/diff"
-  [[ -s "$scratch/err" ]] && { echo "--- stderr:"; head -20 "$scratch/err"; }
+  [[ -s "$scratch/err" ]] && { echo "--- stderr:"; tail -20 "$scratch/err"; }
 done
 
 [[ $update == 1 ]] && exit 0
