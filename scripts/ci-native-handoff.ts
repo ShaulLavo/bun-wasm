@@ -183,7 +183,9 @@ async function inspect(state: Context, bundle: string) {
   if (manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)) throw new Error("Foreign native handoff identity");
   const archives = object(manifest.archives);
   if (JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)) throw new Error("Native archive whitelist mismatch");
-  if (JSON.stringify(readdirSync(bundle).sort()) !== JSON.stringify(["manifest.json"].concat(archiveNames).sort())) throw new Error("Unexpected native bundle files");
+  const files = readdirSync(bundle).sort();
+  const expected = ["manifest.json"].concat(archiveNames).sort();
+  if (JSON.stringify(files) !== JSON.stringify(expected)) throw new Error(`Unexpected native bundle files: expected ${JSON.stringify(expected)}, found ${JSON.stringify(files)}`);
   for (const name of archiveNames) if (archives[name] !== await hash(join(bundle, name))) throw new Error(`Native archive digest mismatch: ${name}`);
   if (!Array.isArray(manifest.repositories)) throw new Error("Missing Git metadata inventory");
   const repositories = manifest.repositories.map(parseGit);

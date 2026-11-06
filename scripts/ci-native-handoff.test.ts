@@ -18,7 +18,7 @@ test("native quality has a bounded checkpoint before the unchanged final native 
 
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -70,8 +70,9 @@ test("producer attempt and manifest admission come from that producer, not the c
   expect(record(producer.outputs)["producer-attempt"]).toBe("${{ steps.native-artifact.outputs.producer-attempt }}");
   expect(record(step("native-quality", packName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ github.run_attempt }}");
   expect(record(step("rust", unpackName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ needs.native-quality.outputs.producer-attempt }}");
-  const download = steps("rust").filter(step => step.uses === "actions/download-artifact@v4").map(step => record(step.with).name);
-  expect(download).toContain("native-quality-${{ needs.native-quality.outputs.producer-attempt }}");
+  const download = steps("rust").find(step => step.with && record(step.with).name === "native-quality-${{ needs.native-quality.outputs.producer-attempt }}");
+  expect(download?.uses).toBe("actions/download-artifact@v8");
+  expect(record(download!.with)["digest-mismatch"]).toBe("error");
   for (const [job, name] of [["native-quality", packName], ["rust", unpackName]]) expect(step(job!, name!).shell).toBe(boatShell);
   expect(script("rust", unpackName)).not.toContain("github.run_attempt");
 });
@@ -348,6 +349,10 @@ for (const mode of ["corrupt", "missing", "extra", "overlay", "sysroot", "manife
     mutateFixture(mode, root, bundle, changes);
     const imported = invoke("rust", unpackName, changes);
     expect(imported.status, imported.stdout).not.toBe(0);
+    if (mode === "missing" || mode === "extra") {
+      expect(imported.stderr).toContain("Unexpected native bundle files: expected");
+      expect(imported.stderr).toContain(`found ${JSON.stringify(readdirSync(bundle).sort())}`);
+    }
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("");
     if (mode !== "source-check") expect(existsSync(join(root, "temp/source-verified"))).toBe(false);
   });
