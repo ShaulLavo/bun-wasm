@@ -14,6 +14,7 @@ import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchiv
 import { nativePipeline } from "./ci-native-pipeline";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}";
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n")[0]!;
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
@@ -454,7 +455,7 @@ for (const { job, install } of [
   { job: "web", install: "bunx playwright install chromium webkit" },
   { job: "browser-process", install: "bunx playwright install ${{ matrix.browser }}" },
 ]) {
-  test(`${job} selects the existing HTTPS apt mirrors before installing browsers`, () => {
+  test(`${job} selects HTTPS apt sources with optional mirrors before installing browsers`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
     const step = section.match(/      - name: Use Ubuntu HTTPS archives for browser dependencies\n        run: \|\n((?:          .*\n)+)/);
     if (!step?.[1]) throw new Error("configure apt transport before installing browser dependencies");
@@ -466,8 +467,8 @@ for (const { job, install } of [
     try {
       const mirrors = join(directory, "apt-mirrors.txt");
       const sources = join(directory, "ubuntu.sources");
-      const security = "Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
-      writeFileSync(sources, security);
+      const ubuntuSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
+      writeFileSync(sources, ubuntuSources);
       const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
       const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
       const preserved = fallbacks + unrelated;
@@ -478,13 +479,17 @@ for (const { job, install } of [
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(readFileSync(mirrors, "utf8")).toBe(preserved);
-      expect(readFileSync(sources, "utf8")).toBe(security.replace("http:", "https:"));
+      expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
       expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
       expect(readFileSync(mirrors, "utf8")).toBe(preserved);
       writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
       expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
       rmSync(mirrors);
-      expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
+      writeFileSync(sources, ubuntuSources);
+      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+      expect(existsSync(mirrors)).toBe(false);
+      expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
+      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -843,7 +848,7 @@ function wasmToolsSetup(): string {
 test("split producer wasm-tools setup is pinned, cached and unconditional before native gates", () => {
   const step = nativeWorkflowStep("name", wasmToolsSetupName);
   expect(step).not.toHaveProperty("if");
-  expect(workflowField(step, "shell")).toBe("bash");
+  expect(workflowField(step, "shell")).toBe(boatShell);
   const cache = workflowField(nativeWorkflowStep("id", "wasm-tools-cache"), "with");
   expect(workflowField(cache, "path")).toBe("${{ env.WASM_TOOLS }}/" + wasmToolsArchive);
   expect(workflowField(cache, "key")).toBe("wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}");
@@ -1184,7 +1189,7 @@ function replaceWorkload(script: string, functionName: string, body: string): st
 test("ordered producers keep every blocking native command and save JSC before its hand-off", () => {
   const script = prebuildScript();
   const step = nativeWorkflowStep("name", prebuildStepName, "jsc-prebuild");
-  expect(workflowField(step, "shell")).toBe("bash");
+  expect(workflowField(step, "shell")).toBe(boatShell);
   expect(step).not.toHaveProperty("if");
   expect(workflowField(step, "env")).toEqual({
     CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}",

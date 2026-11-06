@@ -116,7 +116,7 @@ test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
   expect(steps).toHaveLength(2);
   for (const step of steps) {
     const gate = step.split("      - ")[0]!;
-    expect(gate).toContain("shell: bash"); // Explicit Bash enables GitHub's -eo pipefail.
+    expect(gate).toContain("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}");
     expect(gate).toContain("2>&1 | tee dist/web-guests-");
   }
 });
