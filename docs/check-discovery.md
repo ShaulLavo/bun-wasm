@@ -10,8 +10,12 @@ Add one `checks/<owner>-<feature>.json` file for a new script test or native fix
 }
 ```
 
-Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`
-and `native`. Native paths name a directory under `tests/fixtures/`. Other paths
+Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
+`browser-guest` and `native`. `browser-guest` checks run the built playground on the
+browser guest built from the same commit: CI's Processes job links the rust job's
+receipt-verified guest and its bash-web shell into `dist/` for Chromium and WebKit, and
+each check verifies the receipt before using it. Native paths name a directory under
+`tests/fixtures/`. Other paths
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.

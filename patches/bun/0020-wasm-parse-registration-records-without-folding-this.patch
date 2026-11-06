@@ -1,54 +1,77 @@
-From 6860d25d31bb382de5c0b6132d9f8e3d76f58100 Mon Sep 17 00:00:00 2001
+From c1482ec047e27a76802d730a3ccd8b69ab5b0738 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 6 Nov 2026 03:35:54 +0200
-Subject: [PATCH 20/20] wasm: parse registration records without folding this
+Subject: [PATCH 20/21] wasm: parse registration records without folding this
  or literals
 
 A registration record runs a module's body as a strict generator called
 without a receiver. While bun-wasm parses for one
 (with_bunwasm_register_parse), module-level this stays this instead of
 becoming null or exports, typeof of a primitive literal and literal
-(in)equality are not folded, and an anonymous export default function is
-not given the generated default name. Ordinary parsing is unchanged.
+(in)equality are neither folded nor reordered, and an anonymous export
+default function is not given the generated default name. A new.target
+outside every function is noted for the caller, which rejects it in a
+module and keeps it in CommonJS. Ordinary parsing is unchanged.
 ---
- src/js_parser/lib.rs                | 23 +++++++++++++++++++++++
+ src/js_parser/lib.rs                | 44 +++++++++++++++++++++++++++++
  src/js_parser/p.rs                  |  2 +-
- src/js_parser/visit/visit_binary.rs | 26 +++++++++++++-------------
- src/js_parser/visit/visit_expr.rs   |  2 +-
- src/js_parser/visit/visit_stmt.rs   |  4 +++-
- 5 files changed, 41 insertions(+), 16 deletions(-)
+ src/js_parser/visit/visit_binary.rs | 31 +++++++++++---------
+ src/js_parser/visit/visit_expr.rs   |  8 ++++--
+ src/js_parser/visit/visit_stmt.rs   |  4 ++-
+ 5 files changed, 71 insertions(+), 18 deletions(-)
 
 diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
-index 32222685..bde53420 100644
+index 32222685..2bc9d006 100644
 --- a/src/js_parser/lib.rs
 +++ b/src/js_parser/lib.rs
-@@ -790,6 +790,29 @@ pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>)
+@@ -790,6 +790,50 @@ pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>)
  
  thread_local! {
      static BUNWASM_DYNAMIC_IMPORTS: core::cell::RefCell<Option<Vec<usize>>> = const { core::cell::RefCell::new(None) };
 +    static BUNWASM_REGISTER_PARSE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++    static BUNWASM_MODULE_NEW_TARGET: core::cell::Cell<Option<bun_ast::Loc>> = const { core::cell::Cell::new(None) };
 +}
 +
 +/// bun-wasm: parse a module for a registration record, whose body runs as a strict
 +/// generator called without a receiver. Module-level `this` stays `this` instead of
-+/// becoming `null` or `exports`, `typeof` of a primitive literal and literal (in)equality
-+/// are not folded, and an anonymous `export default function` stays anonymous, so the
-+/// record keeps the module's expressions and names as written. The guard restores the
-+/// outer mode on unwind.
++/// becoming `null` or `exports`, `typeof` of a primitive literal is not folded, literal
++/// (in)equality is neither folded nor reordered, and an anonymous `export default
++/// function` stays anonymous, so the record keeps the module's expressions and names as
++/// written. A `new.target` outside every function is noted ([`bunwasm_module_new_target`]):
++/// it is an early error in a module but valid in CommonJS, which only the caller knows.
++/// The guard restores the outer mode on unwind.
 +pub fn with_bunwasm_register_parse<T>(f: impl FnOnce() -> T) -> T {
-+    struct Restore(bool);
++    struct Restore(bool, Option<bun_ast::Loc>);
 +    impl Drop for Restore {
 +        fn drop(&mut self) {
 +            BUNWASM_REGISTER_PARSE.with(|mode| mode.set(self.0));
++            BUNWASM_MODULE_NEW_TARGET.with(|loc| loc.set(self.1));
 +        }
 +    }
-+    let _restore = Restore(BUNWASM_REGISTER_PARSE.with(|mode| mode.replace(true)));
++    let _restore = Restore(
++        BUNWASM_REGISTER_PARSE.with(|mode| mode.replace(true)),
++        BUNWASM_MODULE_NEW_TARGET.with(|loc| loc.replace(None)),
++    );
 +    f()
 +}
 +
 +/// True while parsing for a registration record (see [`with_bunwasm_register_parse`]).
 +pub(crate) fn bunwasm_register_parse() -> bool {
 +    BUNWASM_REGISTER_PARSE.with(|mode| mode.get())
++}
++
++/// The first `new.target` outside every function, class body and static block in the
++/// current [`with_bunwasm_register_parse`] parse.
++pub fn bunwasm_module_new_target() -> Option<bun_ast::Loc> {
++    BUNWASM_MODULE_NEW_TARGET.with(|loc| loc.get())
++}
++
++pub(crate) fn note_bunwasm_module_new_target(loc: bun_ast::Loc) {
++    BUNWASM_MODULE_NEW_TARGET.with(|first| {
++        if first.get().is_none() {
++            first.set(Some(loc));
++        }
++    });
  }
  
  fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
@@ -66,10 +89,26 @@ index 34889e62..800a50f9 100644
              }
              if self.has_es_module_syntax && self.commonjs_named_exports.count() == 0 {
 diff --git a/src/js_parser/visit/visit_binary.rs b/src/js_parser/visit/visit_binary.rs
-index 5c1ebed7..51ff820e 100644
+index 5c1ebed7..207041f6 100644
 --- a/src/js_parser/visit/visit_binary.rs
 +++ b/src/js_parser/visit/visit_binary.rs
-@@ -258,9 +258,9 @@ impl BinaryExpressionVisitor {
+@@ -192,11 +192,14 @@ impl BinaryExpressionVisitor {
+         // Always put constants on the right for equality comparisons to help
+         // reduce the number of cases we have to check during pattern matching. We
+         // can only reorder expressions that do not have any side effects.
++        // bun-wasm: a registration record keeps both operands where they were written.
+         match e_.op {
+             Op::Code::BinLooseEq
+             | Op::Code::BinLooseNe
+             | Op::Code::BinStrictEq
+-            | Op::Code::BinStrictNe => {
++            | Op::Code::BinStrictNe
++                if !crate::bunwasm_register_parse() =>
++            {
+                 if SideEffects::is_primitive_to_reorder(&e_.left.data)
+                     && !SideEffects::is_primitive_to_reorder(&e_.right.data)
+                 {
+@@ -258,9 +261,9 @@ impl BinaryExpressionVisitor {
                          p.ignore_usage(p.module_ref);
                          return p.value_for_import_meta_main(false, v.loc);
                      }
@@ -82,7 +121,7 @@ index 5c1ebed7..51ff820e 100644
                  }
  
                  if p.options.features.minify_syntax {
-@@ -288,9 +288,9 @@ impl BinaryExpressionVisitor {
+@@ -288,9 +291,9 @@ impl BinaryExpressionVisitor {
                          p.ignore_usage_of_runtime_require();
                          return p.value_for_import_meta_main(false, v.loc);
                      }
@@ -95,7 +134,7 @@ index 5c1ebed7..51ff820e 100644
                  }
  
                  if p.options.features.minify_syntax {
-@@ -311,9 +311,9 @@ impl BinaryExpressionVisitor {
+@@ -311,9 +314,9 @@ impl BinaryExpressionVisitor {
                          p.ignore_usage_of_runtime_require();
                          return p.value_for_import_meta_main(true, v.loc);
                      }
@@ -108,7 +147,7 @@ index 5c1ebed7..51ff820e 100644
                  }
                  if p.options.features.minify_syntax {
                      // "typeof x != 'undefined'" => "typeof x < 'u'"
-@@ -327,7 +327,7 @@ impl BinaryExpressionVisitor {
+@@ -327,7 +330,7 @@ impl BinaryExpressionVisitor {
                  // TODO: warn about typeof string
  
                  // "x != void 0" => "x != null"
@@ -117,7 +156,7 @@ index 5c1ebed7..51ff820e 100644
                      e_.right = p.new_expr(E::Null {}, e_.right.loc);
                  }
              }
-@@ -338,9 +338,9 @@ impl BinaryExpressionVisitor {
+@@ -338,9 +341,9 @@ impl BinaryExpressionVisitor {
                          p.ignore_usage_of_runtime_require();
                          return p.value_for_import_meta_main(true, v.loc);
                      }
@@ -131,10 +170,25 @@ index 5c1ebed7..51ff820e 100644
  
                  if p.options.features.minify_syntax {
 diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
-index a5e206bc..9d381ece 100644
+index a5e206bc..cb57adb1 100644
 --- a/src/js_parser/visit/visit_expr.rs
 +++ b/src/js_parser/visit/visit_expr.rs
-@@ -1213,7 +1213,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -87,9 +87,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+     // Private associated fns on this impl so they can see the const-generic
+     // feature params.
+ 
+-    fn e_new_target(_: &mut Self, _e: &mut Expr, _: ExprIn) {
++    fn e_new_target(p: &mut Self, e: &mut Expr, _: ExprIn) {
+         // The "Cannot use \"new.target\" here" range error is intentionally
+         // not emitted: it is not necessary and it was causing breakages.
++        // bun-wasm: a registration record's caller rejects it outside every function.
++        if crate::bunwasm_register_parse() && !p.fn_only_data_visit.is_this_nested {
++            crate::note_bunwasm_module_new_target(e.loc);
++        }
+     }
+ 
+     fn e_string(_: &mut Self, _e: &mut Expr, _: ExprIn) {
+@@ -1213,7 +1217,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
                      return;
                  }
  

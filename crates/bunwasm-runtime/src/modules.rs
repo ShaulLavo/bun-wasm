@@ -160,11 +160,34 @@ pub fn resolve_error(
 /// source line, a caret, `error: message` and the location. The transpiler
 /// formats each error as `file:line:col: message`.
 fn build_error(report: &str, source: &str) -> NativeError {
+    let (message, text) = formatted_report(report, source, "error");
+    NativeError::error(message)
+        .prop("name", "BuildError")
+        .prop("__bunwasmFormatted", text)
+}
+
+/// A registration record's [`crate::RecordError`]: invalid module source is a
+/// `SyntaxError`, as loading the module natively reports it, printed with its source line
+/// and location like a build error but labelled `SyntaxError`; anything else stays a build
+/// error.
+#[cfg(any(feature = "engine-split", feature = "engine-host"))]
+fn record_error(error: crate::RecordError, source: &str) -> NativeError {
+    let report = match error {
+        crate::RecordError::Syntax(report) => report,
+        crate::RecordError::Other(report) => return build_error(&report, source),
+    };
+    let (message, text) = formatted_report(&report, source, "SyntaxError");
+    NativeError::syntax_error(message).prop("__bunwasmFormatted", text)
+}
+
+/// The first message of a transpiler report and the report formatted like Bun's build
+/// errors.
+fn formatted_report(report: &str, source: &str, label: &str) -> (String, String) {
     let mut text = String::new();
     let mut first_message = None;
     for entry in report.lines().filter(|l| !l.trim().is_empty()) {
         let Some((file, line, col, message)) = parse_location(entry) else {
-            text.push_str(&format!("error: {entry}\n"));
+            text.push_str(&format!("{label}: {entry}\n"));
             first_message.get_or_insert_with(|| entry.to_owned());
             continue;
         };
@@ -176,12 +199,12 @@ fn build_error(report: &str, source: &str) -> NativeError {
                 " ".repeat(gutter.len() + col.saturating_sub(1))
             ));
         }
-        text.push_str(&format!("error: {message}\n    at {file}:{line}:{col}\n\n"));
+        text.push_str(&format!(
+            "{label}: {message}\n    at {file}:{line}:{col}\n\n"
+        ));
     }
     let message = first_message.unwrap_or_else(|| report.trim().to_owned());
-    NativeError::error(message)
-        .prop("name", "BuildError")
-        .prop("__bunwasmFormatted", text)
+    (message, text)
 }
 
 /// Split `file:line:col: message`.
@@ -334,7 +357,7 @@ impl State {
             true => self.transpiler.register_module(&source, name),
             false => self.transpiler.register(&source, name),
         }
-        .map_err(|message| build_error(&message, &source))?;
+        .map_err(|error| record_error(error, &source))?;
         self.positions
             .borrow_mut()
             .entry(name.to_owned())
@@ -691,6 +714,47 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 mod tests {
     use super::*;
 
+    /// A record's invalid source is a SyntaxError with the source line and location; any other
+    /// record failure stays a build error.
+    #[cfg(any(feature = "engine-split", feature = "engine-host"))]
+    #[test]
+    fn record_errors_keep_syntax_and_build_classes() {
+        use crate::data::ErrorKind;
+        let source = "console.log(1);\nexport const = ;\n";
+        let formatted = |error: &NativeError| format!("{:?}", error.props);
+        let syntax = record_error(
+            crate::RecordError::Syntax("/bad.mjs:2:14: Unexpected \"=\"\n".into()),
+            source,
+        );
+        assert_eq!(syntax.kind, ErrorKind::SyntaxError);
+        assert_eq!(syntax.message, "Unexpected \"=\"");
+        assert!(
+            formatted(&syntax).contains("2 | export const = ;"),
+            "{}",
+            formatted(&syntax)
+        );
+        assert!(
+            formatted(&syntax).contains("SyntaxError: Unexpected"),
+            "{}",
+            formatted(&syntax)
+        );
+        assert!(
+            !formatted(&syntax).contains("BuildError"),
+            "{}",
+            formatted(&syntax)
+        );
+        let other = record_error(
+            crate::RecordError::Other("failed to print /bad.mjs: Oom".into()),
+            source,
+        );
+        assert_eq!(other.kind, ErrorKind::Error);
+        assert!(
+            formatted(&other).contains("BuildError"),
+            "{}",
+            formatted(&other)
+        );
+    }
+
     #[test]
     fn record_positions_compose_before_prologue_and_transpile_maps() {
         let positions = PositionMap {
@@ -712,7 +776,7 @@ mod tests {
             Ok(source.to_owned())
         }
 
-        fn register(&self, source: &str, _: &str) -> Result<crate::Transpiled, String> {
+        fn register(&self, source: &str, _: &str) -> Result<crate::Transpiled, crate::RecordError> {
             Ok(crate::Transpiled {
                 code: source.to_owned(),
                 mappings: Some("AAAA".into()),

@@ -33,6 +33,8 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(files).toContain("package/src/notification-worker-entry.ts");
     expect(files).toContain("package/src/quickjs-program.ts");
     expect(files).toContain("package/web/src/tool-command.ts");
+    // engine-host.js imports the record loader host layer.
+    expect(files).toContain("package/web/src/module-records.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");

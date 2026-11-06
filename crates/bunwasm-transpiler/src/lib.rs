@@ -477,6 +477,36 @@ fn run(
         preserve_source,
         Pass::Print,
     )
+    .map_err(String::from)
+}
+
+/// Why a module could not be transpiled or registered.
+#[derive(Debug)]
+pub enum Failure {
+    /// The source is not a valid module: a parse error or, for a record, a module early
+    /// error. A host reports it as a `SyntaxError`, as loading the module natively would.
+    /// The text is formatted like Bun's build errors (`file:line:col: message` lines).
+    Syntax(String),
+    /// Anything else, such as a printer failure.
+    Other(String),
+}
+
+impl From<Failure> for String {
+    fn from(failure: Failure) -> String {
+        match failure {
+            Failure::Syntax(text) | Failure::Other(text) => text,
+        }
+    }
+}
+
+/// `file:line:col: message` for the byte `offset` of `source`, as [`format_log`] prints
+/// parser errors; the column counts characters from 0.
+fn early_error(path: &str, source: &str, offset: i32, message: &str) -> String {
+    let offset = usize::try_from(offset).unwrap_or(0).min(source.len());
+    let before = source.get(..offset).unwrap_or(source);
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count();
+    format!("{path}:{line}:{column}: {message}\n")
 }
 
 /// Which output [`run_with_scan`] produces from the parsed module.
@@ -494,13 +524,13 @@ enum Pass {
 /// The ES module `source` as a registration record: a script expression for
 /// engines without native ES modules, linked and evaluated by the runtime's
 /// `esm_loader.ts`. See `register.rs` for the format.
-pub fn register(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+pub fn register(source: &str, path: &str, loader: Loader) -> Result<Transpiled, Failure> {
     register_with(source, path, loader, Pass::Register)
 }
 
 /// [`register`] as an ES module that default-exports the record: for the browser engine,
 /// which evaluates records as modules so their functions keep a script URL in stack traces.
-pub fn register_module(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+pub fn register_module(source: &str, path: &str, loader: Loader) -> Result<Transpiled, Failure> {
     register_with(source, path, loader, Pass::RegisterModule)
 }
 
@@ -509,10 +539,10 @@ fn register_with(
     path: &str,
     loader: Loader,
     pass: Pass,
-) -> Result<Transpiled, String> {
+) -> Result<Transpiled, Failure> {
     let mut collector = ChunkCollector::default();
     let mut out = with_state(|state| {
-        with_record_parse(state, |state| {
+        Ok(with_record_parse(state, |state| {
             run_with_scan(
                 state,
                 source,
@@ -522,8 +552,9 @@ fn register_with(
                 false,
                 pass,
             )
-        })
-    })?;
+        }))
+    })
+    .map_err(Failure::Other)??;
     out.mappings = shift_record_mappings(&collector.mappings(), collector.1);
     Ok(out)
 }
@@ -570,9 +601,18 @@ pub fn use_module_records() {
 }
 
 /// Applies [`record_fixup`] to a printed record body and keeps its mappings in `collector`.
-fn fix_record_body(code: &mut String, source: &str, collector: Option<&mut ChunkCollector>) {
+fn fix_record_body(
+    code: &mut String,
+    module: &register::Module,
+    collector: Option<&mut ChunkCollector>,
+) {
     let Some(collector) = collector else { return };
-    let Some(fixed) = record_fixup::fix(code, &collector.mappings(), source) else {
+    let names = record_fixup::Names {
+        api: &module.names.api,
+        arguments: &module.names.arguments,
+        views: module.binding_views().collect(),
+    };
+    let Some(fixed) = record_fixup::fix(code, &collector.mappings(), &names) else {
         return;
     };
     *code = fixed.code;
@@ -622,7 +662,7 @@ fn run_with_scan(
     mut source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
     pass: Pass,
-) -> Result<Transpiled, String> {
+) -> Result<Transpiled, Failure> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -685,11 +725,11 @@ fn run_with_scan(
     if log.errors > 0 || parsed.is_none() {
         let msg = format_log(&log, path);
         restore(&mut state.transpiler, &mut state.log);
-        return Err(if msg.is_empty() {
+        return Err(Failure::Syntax(if msg.is_empty() {
             format!("failed to parse {path}")
         } else {
             msg
-        });
+        }));
     }
     let mut parsed = parsed.expect("checked above");
     let module_kind = module_kind(&parsed.ast, loader);
@@ -727,8 +767,20 @@ fn run_with_scan(
             module_kind,
         });
     }
-    let registered = matches!(pass, Pass::Register | Pass::RegisterModule)
-        .then(|| register::prepare(&mut parsed.ast, arena_ref));
+    let registering = matches!(pass, Pass::Register | Pass::RegisterModule);
+    if let Some(loc) = registering
+        .then(bun_js_parser::bunwasm_module_new_target)
+        .flatten()
+    {
+        restore(&mut state.transpiler, &mut state.log);
+        return Err(Failure::Syntax(early_error(
+            path,
+            source,
+            loc.start,
+            "new.target expression is not allowed here",
+        )));
+    }
+    let registered = registering.then(|| register::prepare(&mut parsed.ast, arena_ref, source));
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
     let format = if state.public_api {
         bun_bundler::transpiler::PrintFormat::EsmAscii
@@ -746,22 +798,21 @@ fn run_with_scan(
         ),
         None => state.transpiler.print(&arena, parsed, &mut printer, format),
     };
-    let printed = if registered.is_some() {
-        bun_js_printer::with_bunwasm_register(print)
-    } else {
-        print()
+    let printed = match &registered {
+        Some(module) => bun_js_printer::with_bunwasm_register(module.printer_names(), print),
+        None => print(),
     };
     restore(&mut state.transpiler, &mut state.log);
-    printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
-    let mut code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
+    printed.map_err(|e| Failure::Other(format!("failed to print {path}: {e:?}")))?;
+    let mut code = String::from_utf8(printer.ctx.written().to_vec())
+        .map_err(|e| Failure::Other(e.to_string()))?;
     if let Some(module) = &registered {
-        fix_record_body(&mut code, source, source_map.as_deref_mut());
-        let record = register::assemble(module, &code, pass == Pass::RegisterModule);
+        fix_record_body(&mut code, module, source_map.as_deref_mut());
+        let record = register::assemble(module, pass == Pass::RegisterModule);
         if let Some(collector) = source_map {
-            collector.1 =
-                record.encode_utf16().count() - code.encode_utf16().count() - "\n}})".len();
+            collector.1 = record.header.encode_utf16().count();
         }
-        code = record;
+        code = format!("{}{code}{}", record.header, record.footer);
     }
     Ok(Transpiled {
         code,

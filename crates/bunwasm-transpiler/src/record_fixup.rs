@@ -1,25 +1,31 @@
-//! Source-map-guided corrections to a printed registration record body (see `register.rs`).
+//! Source-map-preserving corrections to a printed registration record body (see
+//! `register.rs`).
 //!
 //! A module's `arguments`: in a module, `arguments` is an ordinary global-scope reference. A
 //! record body runs inside a generator, whose own `arguments` would shadow it, so
-//! `register::prepare` renames the module's unbound `arguments` to [`ARGUMENTS`]. Its uses
-//! are found through the printer's source map, which marks every identifier it prints, and
-//! are rewritten to read through the loader: `__bunwasm_m.ga()` evaluates `arguments` in the
-//! global scope (a read or a call target, called without a receiver as natively),
-//! `__bunwasm_m.gt()` its `typeof`. Assigning to `arguments` is a parse error in a module.
+//! `register::prepare` renames the module's unbound `arguments` symbol, whatever escapes
+//! its source spells it with, to a placeholder. The placeholder is allocated to differ from
+//! every name and every piece of text in the module, so each printed occurrence is that
+//! symbol, and it is rewritten to read through the loader: `<api>.ga()` evaluates
+//! `arguments` in the global scope (a read or a call target, called without a receiver as
+//! natively), `<api>.gt()` its `typeof`. Assigning to `arguments` is a parse error in a
+//! module.
 //!
-//! Calls of imported functions: a record prints `f(x)` as `(0, __bunwasm_nsR_K.f)(x)`. V8
-//! places such a call at its argument list, but a plain call at its callee, so the record
-//! maps the argument list's `(` to where the call starts, and a stack frame keeps the
-//! column the module would report natively.
+//! Calls of imported functions: a record prints `f(x)` as `(0, <view>.f)(x)`, `<view>` being
+//! the header binding of the dependency's binding view. V8 places such a call at its
+//! argument list, but a plain call at its callee, so the record maps the argument list's
+//! `(` to where the call starts, and a stack frame keeps the column the module would report
+//! natively.
 //!
 //! Mapping columns are UTF-16 code units, as the printer writes them.
 
-/// The printed name of a module's unbound `arguments` (see `register::prepare`).
-pub(crate) const ARGUMENTS: &str = "__bunwasm_arguments";
-
-const GLOBAL_ARGUMENTS: &str = "__bunwasm_m.ga()";
-const GLOBAL_ARGUMENTS_TYPEOF: &str = "__bunwasm_m.gt()";
+/// The record's generated names the corrections look for (see `register::RecordNames`).
+pub(crate) struct Names<'a> {
+    pub api: &'a str,
+    pub arguments: &'a str,
+    /// The header bindings of named imports' binding views.
+    pub views: Vec<&'a str>,
+}
 
 /// One decoded segment with absolute values: generated column, then source index, line,
 /// column and name index when present.
@@ -32,7 +38,7 @@ struct Edit {
     line: usize,
     start: usize,
     old_len: usize,
-    text: &'static str,
+    text: String,
 }
 
 /// The fixed body and mappings, or `None` when nothing needed a change.
@@ -41,73 +47,99 @@ pub(crate) struct Fixed {
     pub mappings: String,
 }
 
-/// `input` is the source the record was parsed from.
-pub(crate) fn fix(code: &str, mappings: &str, input: &str) -> Option<Fixed> {
-    if mappings.is_empty() || !(code.contains(ARGUMENTS) || code.contains(NAMESPACE_CALL)) {
+pub(crate) fn fix(code: &str, mappings: &str, names: &Names<'_>) -> Option<Fixed> {
+    let calls_possible = names.views.iter().any(|view| code.contains(view));
+    if mappings.is_empty() || !(code.contains(names.arguments) || calls_possible) {
         return None;
     }
     let mut lines = decode(mappings);
-    let arguments = fix_arguments(code, &mut lines, input);
+    let arguments = fix_arguments(code, &mut lines, names);
     let changed = arguments.is_some();
     let code = arguments.unwrap_or_else(|| code.to_owned());
-    let calls = map_namespace_calls(&code, &mut lines);
+    let calls = map_namespace_calls(&code, &mut lines, &names.views);
     (changed || calls > 0).then(|| Fixed {
         code,
         mappings: encode(&lines),
     })
 }
 
-fn fix_arguments(code: &str, lines: &mut [Vec<Segment>], input: &str) -> Option<String> {
-    if !code.contains(ARGUMENTS) {
+fn fix_arguments(code: &str, lines: &mut [Vec<Segment>], names: &Names<'_>) -> Option<String> {
+    if !code.contains(names.arguments) {
         return None;
     }
-    let input_lines: Vec<&str> = input.split('\n').collect();
     let code_lines: Vec<&str> = code.split('\n').collect();
     let mut edits = Vec::new();
-    for (line, (segments, text)) in lines.iter().zip(&code_lines).enumerate() {
+    for (line, text) in code_lines.iter().enumerate() {
         edits.extend(
-            segments
-                .iter()
-                .filter_map(|segment| edit_at(line, text, segment, &input_lines)),
+            words(text, names.arguments).map(|start| argument_edit(line, text, start, names)),
         );
     }
     if edits.is_empty() {
         return None;
     }
-    edits.sort_by_key(|edit| (edit.line, edit.start));
-    edits.dedup_by_key(|edit| (edit.line, edit.start));
     shift(lines, &code_lines, &edits);
     Some(apply(&code_lines, &edits))
 }
 
-const NAMESPACE_CALL: &str = "(0, __bunwasm_ns";
+/// Byte offsets of `name` as a whole identifier in `text`.
+fn words<'a>(text: &'a str, name: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let identifier = |c: char| c == '$' || c == '_' || c.is_alphanumeric();
+    text.match_indices(name)
+        .map(|(start, _)| start)
+        .filter(move |&start| {
+            let before = text[..start].chars().next_back().is_some_and(identifier);
+            let after = text[start + name.len()..]
+                .chars()
+                .next()
+                .is_some_and(identifier);
+            !before && !after
+        })
+}
 
-/// Adds a segment at the argument list of each `(0, __bunwasm_nsR_K.f)(` that copies the
-/// segment where the call starts. Returns how many were added.
-fn map_namespace_calls(code: &str, lines: &mut [Vec<Segment>]) -> usize {
+fn argument_edit(line: usize, text: &str, start: usize, names: &Names<'_>) -> Edit {
+    const TYPEOF: &str = "typeof ";
+    if text[..start].ends_with(TYPEOF) {
+        return Edit {
+            line,
+            start: start - TYPEOF.len(),
+            old_len: TYPEOF.len() + names.arguments.len(),
+            text: format!("{}.gt()", names.api),
+        };
+    }
+    Edit {
+        line,
+        start,
+        old_len: names.arguments.len(),
+        text: format!("{}.ga()", names.api),
+    }
+}
+
+/// Adds a segment at the argument list of each `(0, <view>.f)(` that copies the segment
+/// where the call starts. Returns how many were added.
+fn map_namespace_calls(code: &str, lines: &mut [Vec<Segment>], views: &[&str]) -> usize {
     let mut added = 0;
     for (text, segments) in code.split('\n').zip(lines.iter_mut()) {
-        let calls = text
-            .match_indices(NAMESPACE_CALL)
-            .filter_map(|(start, _)| Some((start, namespace_callee_end(&text[start..])?)));
-        for (start, arguments) in calls {
-            let call = text[..start].encode_utf16().count() as i64;
-            let list = call + text[start..start + arguments].encode_utf16().count() as i64;
-            added += usize::from(copy_segment(segments, call, list));
+        for view in views {
+            let prefix = format!("(0, {view}");
+            let calls = text
+                .match_indices(prefix.as_str())
+                .filter_map(|(start, _)| {
+                    Some((start, namespace_callee_end(&text[start..], &prefix)?))
+                });
+            for (start, arguments) in calls.collect::<Vec<_>>() {
+                let call = text[..start].encode_utf16().count() as i64;
+                let list = call + text[start..start + arguments].encode_utf16().count() as i64;
+                added += usize::from(copy_segment(segments, call, list));
+            }
         }
     }
     added
 }
 
-/// For text starting `(0, __bunwasm_nsR_K.name)(` (or `[“string”]` for the name), the byte
-/// offset of the argument list's `(`.
-fn namespace_callee_end(text: &str) -> Option<usize> {
-    let rest = text.strip_prefix(NAMESPACE_CALL)?;
-    let digits = |s: &str| s.find(|c: char| !c.is_ascii_digit()).filter(|&n| n > 0);
-    let after_request = digits(rest)?;
-    let rest = rest[after_request..].strip_prefix('_')?;
-    let after_index = digits(rest)?;
-    let rest = &rest[after_index..];
+/// For text starting `(0, <view>.name)(` (or `[“string”]` for the name), `prefix` being
+/// `(0, <view>`, the byte offset of the argument list's `(`.
+fn namespace_callee_end(text: &str, prefix: &str) -> Option<usize> {
+    let rest = text.strip_prefix(prefix)?;
     let member = member_length(rest)?;
     rest[member..]
         .starts_with(")(")
@@ -159,57 +191,6 @@ fn copy_segment(segments: &mut Vec<Segment>, from: i64, to: i64) -> bool {
     true
 }
 
-fn edit_at(line: usize, text: &str, segment: &Segment, input_lines: &[&str]) -> Option<Edit> {
-    let &[_, orig_line, orig_col, ..] = &segment.rest[..] else {
-        return None;
-    };
-    let start = byte_offset(text, segment.gen_col)?;
-    let source = input_lines.get(usize::try_from(orig_line).ok()?)?;
-    let origin = &source[byte_offset(source, orig_col)?..];
-    if !word(&text[start..], ARGUMENTS) || !word(origin, "arguments") {
-        return None;
-    }
-    const TYPEOF: &str = "typeof ";
-    if text[..start].ends_with(TYPEOF) {
-        let start = start - TYPEOF.len();
-        return Some(Edit {
-            line,
-            start,
-            old_len: TYPEOF.len() + ARGUMENTS.len(),
-            text: GLOBAL_ARGUMENTS_TYPEOF,
-        });
-    }
-    Some(Edit {
-        line,
-        start,
-        old_len: ARGUMENTS.len(),
-        text: GLOBAL_ARGUMENTS,
-    })
-}
-
-/// `text` starts with the whole identifier `token`.
-fn word(text: &str, token: &str) -> bool {
-    let Some(after) = text.strip_prefix(token) else {
-        return false;
-    };
-    !after
-        .chars()
-        .next()
-        .is_some_and(|c| c == '$' || c == '_' || c.is_alphanumeric())
-}
-
-/// Byte offset of a UTF-16 column within one line.
-fn byte_offset(line: &str, column: i64) -> Option<usize> {
-    let mut units = 0i64;
-    for (offset, c) in line.char_indices() {
-        if units == column {
-            return Some(offset);
-        }
-        units += c.len_utf16() as i64;
-    }
-    (units == column).then_some(line.len())
-}
-
 fn apply(code_lines: &[&str], edits: &[Edit]) -> String {
     let mut out = String::new();
     for (index, text) in code_lines.iter().enumerate() {
@@ -219,7 +200,7 @@ fn apply(code_lines: &[&str], edits: &[Edit]) -> String {
         let mut at = 0;
         for edit in edits.iter().filter(|edit| edit.line == index) {
             out.push_str(&text[at..edit.start]);
-            out.push_str(edit.text);
+            out.push_str(&edit.text);
             at = edit.start + edit.old_len;
         }
         out.push_str(&text[at..]);
@@ -229,15 +210,18 @@ fn apply(code_lines: &[&str], edits: &[Edit]) -> String {
 
 /// Moves the generated columns of segments after each edit on its line. A segment inside a
 /// replaced span (the identifier of `typeof arguments`) moves to the span's start. Replaced
-/// spans and replacements are ASCII, so their byte and UTF-16 lengths agree.
+/// spans and replacements are generated names and ASCII punctuation, whose UTF-16 lengths
+/// are counted from their text.
 fn shift(lines: &mut [Vec<Segment>], code_lines: &[&str], edits: &[Edit]) {
     for edit in edits.iter().rev() {
         let Some(text) = code_lines.get(edit.line) else {
             continue;
         };
-        let start = text[..edit.start].encode_utf16().count() as i64;
-        let end = start + edit.old_len as i64;
-        let delta = edit.text.len() as i64 - edit.old_len as i64;
+        let units = |s: &str| s.encode_utf16().count() as i64;
+        let start = units(&text[..edit.start]);
+        let old = units(&text[edit.start..edit.start + edit.old_len]);
+        let end = start + old;
+        let delta = units(&edit.text) - old;
         for segment in &mut lines[edit.line] {
             segment.gen_col = shifted(segment.gen_col, start, end, delta);
         }
@@ -373,30 +357,87 @@ pub(crate) mod tests {
         assert_eq!(encode(&decode(mappings)), mappings);
     }
 
-    #[test]
-    fn namespace_callees() {
-        assert_eq!(
-            namespace_callee_end("(0, __bunwasm_ns0_1.test)(1)"),
-            Some(25)
-        );
-        assert_eq!(
-            namespace_callee_end(r#"(0, __bunwasm_ns12_3["a-\"b"])()"#),
-            Some(30)
-        );
-        assert_eq!(namespace_callee_end("(0, __bunwasm_ns0_1.test)"), None);
-        assert_eq!(namespace_callee_end("(0, __bunwasm_ns0.test)()"), None);
-        assert_eq!(namespace_callee_end("(0, __bunwasm_ns0_1)()"), None);
-        // As printed: the call's segment marks the imported name (column 4), then a later
-        // token (30); the argument list (25) gets the call's original position.
-        let fixed = fix("(0, __bunwasm_ns0_0.test)(\"no body\");", "IACE,0BAAK", "")
-            .expect("a call segment");
-        assert_eq!(fixed.mappings, "IACE,qBAAA,KAAK");
+    fn names<'a>(views: Vec<&'a str>) -> Names<'a> {
+        Names {
+            api: "__bunwasm_m",
+            arguments: "__bunwasm_arguments",
+            views,
+        }
     }
 
     #[test]
-    fn utf16_columns() {
-        assert_eq!(byte_offset("a😀b", 3), Some(5));
-        assert_eq!(byte_offset("ab", 2), Some(2));
-        assert_eq!(byte_offset("ab", 3), None);
+    fn namespace_callees() {
+        let view = "(0, __bunwasm_ns0_1";
+        assert_eq!(
+            namespace_callee_end("(0, __bunwasm_ns0_1.test)(1)", view),
+            Some(25)
+        );
+        assert_eq!(
+            namespace_callee_end(
+                r#"(0, __bunwasm_ns12_3["a-\"b"])()"#,
+                "(0, __bunwasm_ns12_3"
+            ),
+            Some(30)
+        );
+        assert_eq!(
+            namespace_callee_end("(0, __bunwasm_ns0_1.test)", view),
+            None
+        );
+        assert_eq!(namespace_callee_end("(0, __bunwasm_ns0_1)()", view), None);
+        // As printed: the call's segment marks the imported name (column 4), then a later
+        // token (30); the argument list (25) gets the call's original position.
+        let fixed = fix(
+            "(0, __bunwasm_ns0_0.test)(\"no body\");",
+            "IACE,0BAAK",
+            &names(vec!["__bunwasm_ns0_0"]),
+        )
+        .expect("a call segment");
+        assert_eq!(fixed.mappings, "IACE,qBAAA,KAAK");
+        // A view name that only prefixes the printed one is a different binding.
+        assert!(
+            fix(
+                "(0, __bunwasm_ns0_01.test)(1);",
+                "IACE",
+                &names(vec!["__bunwasm_ns0_0"])
+            )
+            .is_none()
+        );
+    }
+
+    fn line(columns: &[i64]) -> String {
+        let segments = columns
+            .iter()
+            .enumerate()
+            .map(|(index, &gen_col)| Segment {
+                gen_col,
+                rest: vec![0, 0, index as i64],
+            })
+            .collect::<Vec<_>>();
+        encode(&[segments])
+    }
+
+    #[test]
+    fn arguments_are_whole_placeholder_words_shifted_in_utf16() {
+        // `é` and `😀` are one and two UTF-16 units, so the placeholder starts at column 4
+        // and its `;` is at 23; `typeof ` starts at 24 and its operand at 31; the identifier
+        // that only contains the placeholder starts at 51.
+        let code = "é😀;__bunwasm_arguments;typeof __bunwasm_arguments;x__bunwasm_arguments;";
+        let fixed = fix(code, &line(&[4, 23, 31, 51]), &names(Vec::new())).expect("edits");
+        assert_eq!(
+            fixed.code,
+            "é😀;__bunwasm_m.ga();__bunwasm_m.gt();x__bunwasm_arguments;"
+        );
+        // ga() is 16 units for the 19-unit placeholder (-3); gt() is 16 for the 26 units of
+        // `typeof ` and the placeholder (-10), and the operand's segment moves to its start.
+        let columns: Vec<i64> = decode(&fixed.mappings)[0]
+            .iter()
+            .map(|s| s.gen_col)
+            .collect();
+        assert_eq!(columns, vec![4, 20, 21, 38]);
+        let originals: Vec<i64> = decode(&fixed.mappings)[0]
+            .iter()
+            .map(|s| s.rest[2])
+            .collect();
+        assert_eq!(originals, vec![0, 1, 2, 3]);
     }
 }

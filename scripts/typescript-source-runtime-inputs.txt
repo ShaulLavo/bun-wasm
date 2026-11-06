@@ -108,6 +108,13 @@ tests/fixtures/esm-loader/dynamic-import/main.mjs
 tests/fixtures/esm-loader/dynamic-reentry/a.mjs
 tests/fixtures/esm-loader/dynamic-reentry/b.mjs
 tests/fixtures/esm-loader/dynamic-reentry/main.mjs
+tests/fixtures/esm-loader/export-identity/hub.mjs
+tests/fixtures/esm-loader/export-identity/main.mjs
+tests/fixtures/esm-loader/export-identity/one.mjs
+tests/fixtures/esm-loader/export-identity/origin.mjs
+tests/fixtures/esm-loader/export-identity/proto.mjs
+tests/fixtures/esm-loader/export-identity/relay.mjs
+tests/fixtures/esm-loader/export-identity/two.mjs
 tests/fixtures/esm-loader/for-await/main.mjs
 tests/fixtures/esm-loader/import-meta/dep.mjs
 tests/fixtures/esm-loader/import-meta/main.mjs

@@ -1,20 +1,32 @@
-// Worker module loading without a service-worker controller, through the built playground's Bun
-// launcher (worker URL ./__bunwasm/worker.js, as the playground picks once its scope registers).
+// Worker module loading with and without a service-worker controller, through the built
+// playground's Bun launcher.
 //
-// Each guest process runs the same acyclic bootstrap: it prints `startup` and the executing
-// worker's own service-worker capability (`unavailable` when the worker does not expose one, never
-// read as null), then dynamically imports a graph of import cycles and prints its result, which
-// must equal Node's for the same files.
+// Each guest process runs the same acyclic bootstrap (`files["boot.mjs"]`): it prints `startup`,
+// a token, the executing worker's location and service-worker capability (`unavailable` when
+// the worker exposes no container, never read as null), and fetches a probe with the worker's
+// native fetch, then dynamically imports a graph of import cycles and prints its result, which
+// must equal Node's for the same files. Two processes run in sequence in each context; the
+// second runs on the pool's spare worker.
 //
 //   bun web/tests/browser-module-records.ts [chromium] [webkit]
 //   MODULE_RECORDS_ROOT=<built web dir>   serve another build (default web/dist)
-//   MODULE_RECORDS_EXPECT=old             that build is the old loader: it must fail on the
-//                                          graph after startup and the probe, in the uncontrolled
-//                                          context (the controlled one is not checked)
+//   MODULE_RECORDS_EXPECT=old             that build is the old loader: in both uncontrolled
+//                                          contexts, both processes must start, print the probe
+//                                          and then fail on the cycle with a 404 for its module
+//                                          route (a launch, asset or probe failure is not that)
 //
-// Contexts: `uncontrolled` removes the registration before the first command, so every guest
-// worker (the second process runs on the pool's spare) starts outside any service worker;
-// `controlled` keeps it and must show positive control of the executing worker.
+// Contexts, each a fresh browser context:
+//   blocked       Playwright blocks service workers for the context; no registration exists
+//   unregistered  the page registers its service worker, which is removed before the first
+//                 command, so workers start outside its control (the iPhone case)
+//   controlled    the registration stays. Where the browser controls a page's Bun workers
+//                 (WebKit, `controlsWorkers`), at least one process must show positive control
+//                 of its own worker: a controller, or (where workers expose no container) its
+//                 probe answered by the service worker. Each process's state is reported as is.
+//
+// Evidence is attributed per process: requests seen while that process ran, its probe's
+// response (matched by token), and the executing worker's own report of its location. (The
+// guest's idle workers block in Atomics.wait, so Playwright cannot evaluate in them.)
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -26,12 +38,31 @@ import { ready, run, session, web, writeFile } from "./playground.mjs";
 const root = process.env.MODULE_RECORDS_ROOT ?? join(web, "dist");
 const expectOld = process.env.MODULE_RECORDS_EXPECT === "old";
 
+// Whether a controlled page's Bun workers are themselves controlled. Observed (2026-11-06,
+// Playwright Chromium and WebKit): WebKit's first worker reports the controller and its probe is
+// answered by the service worker; Chromium's workers expose no container and their probes come
+// from the network although the service worker served their script. So Chromium gives no
+// positive proof for an executing worker, and its controlled context only shows that the
+// loader works on a controlled page.
+const controlsWorkers: Record<string, boolean> = { chromium: false, webkit: true };
+
 const files: Record<string, string> = {
+  // Acyclic: startup, then the executing worker's own identity, service-worker capability and a
+  // probe fetched with the worker's native fetch, and only then the import cycles. The probe is
+  // under the module scope (`/__bunwasm/`), which the service worker answers for every client it
+  // controls, so the probe's response shows whether a service worker controls this worker.
   "boot.mjs": `console.log("startup", typeof Bun);
+const token = Math.random().toString(36).slice(2);
 const scope = globalThis.WorkerGlobalScope?.prototype;
-const workerNavigator = scope && Object.getOwnPropertyDescriptor(scope, "navigator")?.get?.call(globalThis);
+const own = name => scope && Object.getOwnPropertyDescriptor(scope, name);
+const workerNavigator = own("navigator")?.get?.call(globalThis);
 const container = workerNavigator && "serviceWorker" in workerNavigator ? workerNavigator.serviceWorker : undefined;
 console.log("controller", container == null ? "unavailable" : container.controller === null ? "null" : container.controller.scriptURL);
+const location = own("location")?.get?.call(globalThis);
+console.log("worker", token, location ? location.href : "none");
+const nativeFetch = own("fetch")?.value;
+const probe = nativeFetch && location ? await nativeFetch.call(globalThis, location.origin + "/__bunwasm/worker.js?bwl-probe=" + token, { cache: "no-store" }) : undefined;
+console.log("probe", token, probe ? probe.status : "none");
 const graph = await import("./graph/main.mjs");
 console.log("graph", graph.result);
 `,
@@ -123,7 +154,7 @@ function inventory(dir: string): Set<string> {
   return paths;
 }
 
-type Request = { path: string; fromServiceWorker: boolean; status: number; blob: boolean };
+type Request = { path: string; query: string; fromServiceWorker: boolean; status: number; blob: boolean };
 
 function watchRequests(context: BrowserContext, origin: string): Request[] {
   const requests: Request[] = [];
@@ -131,28 +162,43 @@ function watchRequests(context: BrowserContext, origin: string): Request[] {
     const url = new URL(response.url());
     if (url.origin !== origin) return;
     // Evaluated records load as blob: modules; their origin is the page's.
-    requests.push({ path: url.pathname, fromServiceWorker: response.fromServiceWorker(), status: response.status(), blob: url.protocol === "blob:" });
+    requests.push({ path: url.pathname, query: url.search, fromServiceWorker: response.fromServiceWorker(), status: response.status(), blob: url.protocol === "blob:" });
   });
   return requests;
 }
 
-async function guest(page: Page): Promise<{ code: number | null; output: string; controller: string; startup: boolean; graph: string | undefined }> {
+type GuestRun = {
+  code: number | null; output: string; startup: boolean; controller: string; token: string | undefined;
+  location: string | undefined; probe: string | undefined; graph: string | undefined; failure: string | undefined;
+};
+
+async function guest(page: Page): Promise<GuestRun> {
   const checked = await run(page, "bun run records/boot.mjs", 120_000);
   const output: string = checked.output;
+  const worker = /^worker (\S+) (\S+)$/m.exec(output);
   return {
     code: checked.code,
     output,
     startup: /^startup /m.test(output),
     controller: /^controller (\S+)/m.exec(output)?.[1] ?? "missing",
+    token: worker?.[1],
+    location: worker?.[2],
+    probe: /^probe \S+ (\S+)$/m.exec(output)?.[1],
     graph: /^graph (.*)$/m.exec(output)?.[1],
+    // The first error line after the probe: what stopped the graph.
+    failure: /^probe .*$/m.test(output) ? /^.*(?:Error|error:|ERR_).*$/m.exec(output.slice(output.search(/^probe /m)))?.[0] : undefined,
   };
+}
+
+async function registrations(page: Page): Promise<number | "unavailable"> {
+  return page.evaluate(async () => navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).length : "unavailable");
 }
 
 async function unregister(page: Page): Promise<number> {
   return page.evaluate(async () => {
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    for (const registration of registrations) await registration.unregister();
-    return registrations.length;
+    const found = await navigator.serviceWorker.getRegistrations();
+    for (const registration of found) await registration.unregister();
+    return found.length;
   });
 }
 
@@ -168,83 +214,119 @@ try {
   const browsers = process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"];
   for (const name of browsers) failures = failures.concat(await checkBrowser(name, site));
   assert.deepEqual(failures, []);
-  console.log(expectOld ? "old loader fails the cycle graph after startup and probe" : "worker module records pass with and without a controller");
+  console.log(expectOld ? "old loader fails the cycle graph in both processes, after startup and probe" : "worker module records pass in blocked, unregistered and controlled contexts");
 } finally {
   clearTimeout(deadline);
   await s.cleanup();
 }
 
 type Site = { url: string; origin: string; served: Set<string>; expected: string };
-type Variant = Site & { name: string; variant: string };
+type Context = "blocked" | "unregistered" | "controlled";
+type Variant = Site & { name: string; context: Context };
+
+/** One process's attributed evidence. */
+type ProcessEvidence = {
+  /** The executing worker's own report: its script location and the token it printed and fetched. */
+  code: number | null; startup: boolean; controller: string; location: string | undefined; token: string | undefined;
+  probe: string | undefined; probeServedBySw: boolean | "no probe response"; graph: string | undefined; failure: string | undefined;
+  /** Retired module-store routes requested while it ran, and their statuses. */
+  moduleRoutes: string[]; blobModules: number; unserved: string[];
+  /** How its own worker was controlled: by a controller, by a service worker that served its probe, or not. */
+  control: string;
+};
 
 async function checkBrowser(name: string, site: Site): Promise<string[]> {
   const browser = await s.launch(browserType(name));
   const problems: string[] = [];
-  for (const variant of expectOld ? ["uncontrolled"] : ["uncontrolled", "controlled"]) {
-    const problem = await checkVariant(browser, { ...site, name, variant });
+  const contexts: Context[] = expectOld ? ["blocked", "unregistered"] : ["blocked", "unregistered", "controlled"];
+  for (const context of contexts) {
+    const problem = await checkVariant(browser, { ...site, name, context });
     if (problem) problems.push(problem);
   }
   return problems;
 }
 
-// One fresh browser context: two guest processes, then the request, cache and control evidence.
-async function checkVariant(browser: Browser, { name, variant, url, origin, served, expected }: Variant): Promise<string | undefined> {
-  const context = await browser.newContext();
+function control(controller: string, probeServedBySw: boolean | "no probe response"): string {
+  if (controller.endsWith("/sw.js")) return "controlled (controller)";
+  if (controller === "unavailable" && probeServedBySw === true) return "controlled (probe served by the service worker; no worker container)";
+  if (probeServedBySw === true) return `served by the service worker but controller ${controller}`;
+  return controller === "unavailable" ? "not controlled (no worker container, probe from the network)" : "not controlled (controller null)";
+}
+
+// One fresh browser context: two guest processes in sequence, each with its own requests,
+// probe and executing worker, then the context's registrations and caches.
+async function checkVariant(browser: Browser, { name, context: policy, url, origin, served, expected }: Variant): Promise<string | undefined> {
+  const context = await browser.newContext({ serviceWorkers: policy === "blocked" ? "block" : "allow" });
   const requests = watchRequests(context, origin);
   const page = await context.newPage();
   await page.goto(`${url}?engine=browser&prompt=off`);
   assert.match(await ready(page), /ready/);
-  const removed = variant === "uncontrolled" ? await unregister(page) : 0;
+  const removed = policy === "unregistered" ? await unregister(page) : 0;
+  const registered = await registrations(page);
   for (const [file, text] of Object.entries(files)) await writeFile(page, `/home/user/records/${file}`, text);
-  const runs = [await guest(page), await guest(page)];
-  const moduleCaches: string[] = await page.evaluate(async () => (await caches.keys()).filter((key: string) => key.startsWith("bunwasm-m-")));
-  await context.close();
-  const forbidden = requests.filter(request => request.path.includes("/__bunwasm/m/"));
-  const blobModules = requests.filter(request => request.blob).length;
-  const unserved = requests.filter(request => !request.blob && !served.has(decodeURIComponent(request.path)) && request.path !== "/" && !request.path.startsWith("/__preview/"));
-  const scoped = requests.some(request => request.path === "/__bunwasm/worker.js");
-  const workerServedBySw = requests.some(request => request.path.startsWith("/__bunwasm/") && request.fromServiceWorker);
-  const evidence = { browser: name, variant, root, removedRegistrations: removed, scopedWorkerRequested: scoped, workerServedBySw, caches: moduleCaches, forbidden, unserved, blobModules, runs: runs.map(({ code, startup, controller, graph }) => ({ code, startup, controller, graph })) };
-  console.log(JSON.stringify(evidence));
-  const problem = expectOld ? oldProblems(runs, variant) : newProblems(runs, variant, expected, { forbidden, caches: moduleCaches, scoped, workerServedBySw, unserved });
-  return problem && `${name} ${variant}: ${problem}\n${runs.map(guestRun => guestRun.output).join("\n---\n")}`;
-}
-
-function controllerProblem(controller: string, variant: string): string | undefined {
-  if (controller === "missing") return "no controller probe output";
-  if (variant === "uncontrolled" && controller !== "null" && controller !== "unavailable") return `controlled worker: ${controller}`;
-  return undefined;
-}
-
-// A controlled page may still hand a process an uncontrolled worker (WebKit's second process
-// does), so positive control needs one controlled process, or SW-served worker requests where
-// workers have no container.
-function positiveControl(runs: Awaited<ReturnType<typeof guest>>[], workerServedBySw: boolean): boolean {
-  return runs.some(run => run.controller.endsWith("/sw.js") || (run.controller === "unavailable" && workerServedBySw));
-}
-
-function newProblems(runs: Awaited<ReturnType<typeof guest>>[], variant: string, expected: string, seen: { forbidden: Request[]; caches: string[]; scoped: boolean; workerServedBySw: boolean; unserved: Request[] }): string | undefined {
-  if (!seen.scoped) return "the scoped worker URL was not requested";
-  if (seen.forbidden.length) return `synthetic module routes requested: ${seen.forbidden.map(request => request.path).join(", ")}`;
-  if (seen.unserved.length) return `requests outside the built site: ${seen.unserved.map(request => request.path).join(", ")}`;
-  if (seen.caches.length) return `module caches left: ${seen.caches.join(", ")}`;
-  if (variant === "controlled" && !positiveControl(runs, seen.workerServedBySw)) return "no positive control evidence";
-  for (const [index, run] of runs.entries()) {
-    if (!run.startup) return `process ${index + 1} did not start`;
-    const controller = controllerProblem(run.controller, variant);
-    if (controller) return `process ${index + 1}: ${controller}`;
-    if (run.code !== 0 || run.graph !== expected) return `process ${index + 1}: exit ${run.code}, graph ${run.graph} (Node: ${expected})`;
+  const processes: ProcessEvidence[] = [];
+  for (let index = 0; index < 2; index++) {
+    const start = requests.length;
+    const guestRun = await guest(page);
+    const seen = requests.slice(start);
+    const probe = seen.find(request => guestRun.token !== undefined && request.query === `?bwl-probe=${guestRun.token}`);
+    const probeServedBySw = probe ? probe.fromServiceWorker : "no probe response";
+    processes.push({
+      code: guestRun.code, startup: guestRun.startup, controller: guestRun.controller, location: guestRun.location,
+      token: guestRun.token, probe: guestRun.probe, probeServedBySw, graph: guestRun.graph, failure: guestRun.failure,
+      moduleRoutes: seen.filter(request => request.path.includes("/__bunwasm/m/")).map(request => `${request.status} ${decodeURIComponent(request.path)}`),
+      blobModules: seen.filter(request => request.blob).length,
+      unserved: seen.filter(request => !request.blob && !served.has(decodeURIComponent(request.path)) && request.path !== "/" && !request.path.startsWith("/__preview/") && !request.path.includes("/__bunwasm/m/")).map(request => request.path),
+      control: control(guestRun.controller, probeServedBySw),
+    });
+    if (processes[index]!.code === null) break;
   }
+  // Logical cleanup: both processes reported their exit, and no module cache exists. Closing the
+  // context says nothing about when its workers physically retire, so nothing is inferred from it.
+  const moduleCaches: string[] = await page.evaluate(async () => (await caches.keys()).filter((key: string) => key.startsWith("bunwasm-m-")));
+  const scoped = requests.some(request => request.path === "/__bunwasm/worker.js");
+  await context.close();
+  console.log(JSON.stringify({ browser: name, context: policy, root, removedRegistrations: removed, registrations: registered, scopedWorkerRequested: scoped, caches: moduleCaches, processes }));
+  const problem = expectOld ? oldProblems(processes, policy) : newProblems(processes, policy, name, expected, { registered, caches: moduleCaches });
+  return problem && `${name} ${policy}: ${problem}`;
+}
+
+function newProblems(processes: ProcessEvidence[], policy: Context, browserName: string, expected: string, seen: { registered: number | "unavailable"; caches: string[] }): string | undefined {
+  if (processes.length !== 2) return "the first process did not finish";
+  if (policy === "blocked" && seen.registered !== 0) return `service worker registrations in a blocked context: ${String(seen.registered)}`;
+  if (seen.caches.length) return `module caches left: ${seen.caches.join(", ")}`;
+  for (const [index, process] of processes.entries()) {
+    const label = `process ${index + 1}`;
+    if (!process.startup || process.probe === undefined) return `${label} did not start and probe`;
+    if (process.moduleRoutes.length) return `${label} requested module routes: ${process.moduleRoutes.join(", ")}`;
+    if (process.unserved.length) return `${label} requested files outside the built site: ${process.unserved.join(", ")}`;
+    if (process.code !== 0 || process.graph !== expected) return `${label}: exit ${process.code}, graph ${process.graph} (Node: ${expected})`;
+    if (policy !== "controlled" && process.control.startsWith("controlled")) return `${label} was controlled in a ${policy} context: ${process.control}`;
+    if (policy !== "controlled" && process.probeServedBySw !== false) return `${label}'s probe was not a network response: ${String(process.probeServedBySw)}`;
+  }
+  // A controlled page may still hand a process an uncontrolled worker (WebKit's second process
+  // does), which is reported as such. Where the browser controls executing workers at all, at
+  // least one process must show its own worker controlled.
+  if (policy === "controlled" && controlsWorkers[browserName] && !processes.some(process => process.control.startsWith("controlled"))) return "no process showed positive control of its own worker";
   return undefined;
 }
 
-// The old loader must reach the graph (startup and probe printed, worker uncontrolled) and fail
-// there; a launch, asset or probe failure is not that regression.
-function oldProblems(runs: Awaited<ReturnType<typeof guest>>[], variant: string): string | undefined {
-  const [first] = runs;
-  if (!first!.startup) return "old: the guest did not start";
-  const controller = controllerProblem(first!.controller, variant);
-  if (controller) return `old: ${controller}`;
-  if (first!.code === 0 || first!.graph !== undefined) return "old: the cycle graph unexpectedly loaded";
+// The old loader must reach the graph in both processes (startup and probe printed, worker not
+// controlled) and fail there on the cycle, in one of its two ways: with its module store, the
+// cycle's module route 404s outside service-worker control (the iPhone failure); without a store
+// (service workers blocked), the cycle is its ERR_CIRCULAR_IMPORT error. A launch, asset or probe
+// failure is not that regression.
+function oldProblems(processes: ProcessEvidence[], policy: Context): string | undefined {
+  if (processes.length !== 2) return "old: the first process did not finish";
+  for (const [index, process] of processes.entries()) {
+    const label = `old process ${index + 1}`;
+    if (!process.startup || process.probe === undefined) return `${label} did not start and probe`;
+    if (process.control.startsWith("controlled")) return `${label} was controlled: ${process.control}`;
+    if (process.code === 0 || process.graph !== undefined) return `${label}: the cycle graph loaded`;
+    const routeMissing = process.moduleRoutes.some(route => /^404 \/__bunwasm\/m\/.*\/graph\/main\.mjs$/.test(route));
+    const circular = /Circular ES module imports|ERR_CIRCULAR_IMPORT/.test(process.failure ?? "");
+    if (policy === "unregistered" && !routeMissing) return `${label}: no 404 for the cycle's module route (${process.moduleRoutes.join(", ") || "none"}; ${process.failure})`;
+    if (policy === "blocked" && (!circular || process.moduleRoutes.length)) return `${label}: not the store-less cycle error (${process.failure}; routes ${process.moduleRoutes.join(", ") || "none"})`;
+  }
   return undefined;
 }

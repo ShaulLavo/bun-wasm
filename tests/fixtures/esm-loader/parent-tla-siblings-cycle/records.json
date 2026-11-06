@@ -1,9 +1,9 @@
 {
  "modules": {
-  "/a.mjs": "({r:[\"./b.mjs\",\"./c.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a\");\n\n}})",
-  "/b.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:true,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b-start\");\n(yield globalThis.gate);\nconsole.log(\"b-end\");\n\n}})",
-  "/c.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"c\");\nglobalThis.openGate();\n\n}})",
-  "/main.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;let open;\nglobalThis.gate = new Promise((resolve) => {\n  open = resolve;\n});\nglobalThis.openGate = open;\n(yield __bunwasm_m.import(\"./a.mjs\"));\nconsole.log(\"main\");\n\n}})"
+  "/a.mjs": "({r:[\"./b.mjs\",\"./c.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a\");\n\n}}.__bunwasm_cjs__})",
+  "/b.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[],a:true,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b-start\");\n(yield globalThis.gate);\nconsole.log(\"b-end\");\n\n}}.__bunwasm_cjs__})",
+  "/c.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"c\");\nglobalThis.openGate();\n\n}}.__bunwasm_cjs__})",
+  "/main.mjs": "({r:[],i:[],x:[],s:[],e:[],a:true,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;let open;\nglobalThis.gate = new Promise((resolve) => {\n  open = resolve;\n});\nglobalThis.openGate = open;\n(yield __bunwasm_m.import(\"./a.mjs\"));\nconsole.log(\"main\");\n\n}}.__bunwasm_cjs__})"
  },
  "cjs": {}
 }

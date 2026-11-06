@@ -50,6 +50,13 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+// Called through a variable: an indirect eval, in the global scope. Captured so a guest that
+// replaces `globalThis.eval` cannot reach CommonJS compilation or lazy polyfills.
+// oxlint-disable-next-line no-eval -- The runtime's classic-script factories run through the engine evaluator.
+const nativeEval = globalThis.eval;
+const nativeEncodeURIComponent = globalThis.encodeURIComponent;
+const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+const nativeMapSet = uncurryThis(Map.prototype.set);
 
 // A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
 // reads and calls of GetIterator(iterable, async) and given to the loop in
@@ -591,24 +598,29 @@ class EngineHost {
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
   // sourceURL names the file in stack traces.
   evalAt(code, filename) {
-    // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
-    return (0, eval)(`${code}\n//# sourceURL=${filename}`);
+    return nativeEval(`${code}\n//# sourceURL=${filename}`);
   }
 
-  /** The record loader for every ES module of a host without a module store. */
+  /**
+   * The record loader for every ES module of a host without a module store. Called after
+   * promise reactions are wrapped and before user code, so `then` is the host's own.
+   */
   createRecords() {
     const host = this;
+    const then = uncurryThis(Promise.prototype.then);
     return createModuleRecords({
       record: key => host.native.hostModuleRecord(key),
       // A module URL the URL -> path table maps back to the file in stack traces.
-      evaluate: (code, key) => import(host.url(code, key)).then(namespace => namespace.default),
+      evaluate: (code, key, done, fail) => {
+        then(import(host.url(code, key)), namespace => { done(namespace.default); }, fail);
+      },
       handoff: (key, format) => host.handoff(key, format),
       keys: wrapperKeys,
       initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
       resolve: (specifier, referrer) => host.native.resolve(specifier, referrer, false),
       active: () => !host.exited,
-      track: operation => host.track(operation),
-    }, this.evalPolyfill("esm_loader"));
+      track: operation => host.track(operation, then),
+    }, this.evalPolyfill("esm_loader"), then);
   }
 
   // --- ES modules ---
@@ -620,9 +632,9 @@ class EngineHost {
   url(source, key) {
     const base = this.o.moduleUrls === "blob" && nativeCreateObjectURL
       ? nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }))
-      : `data:text/javascript;charset=utf-8,${encodeURIComponent(source).replace(/[()]/g, escapeParenthesis)}`;
-    this.paths.set(base, key);
-    return `${base}#${encodeURIComponent(key)}`;
+      : `data:text/javascript;charset=utf-8,${escapeParentheses(nativeEncodeURIComponent(source))}`;
+    nativeMapSet(this.paths, base, key);
+    return `${base}#${nativeEncodeURIComponent(key)}`;
   }
 
   importKey(key) {
@@ -1030,13 +1042,15 @@ class EngineHost {
   // --- the event loop ---
 
   /** Keep the process alive until `promise` settles; wake the loop then. */
-  track(promise) {
+  /** Keeps the loop alive until `promise` settles; `then`, when given, is a captured reaction. */
+  track(promise, then) {
     this.pendingAsync++;
     const done = () => {
       this.pendingAsync--;
       this.schedule(0);
     };
-    promise.then(done, done);
+    if (then) then(promise, done, done);
+    else promise.then(done, done);
     return promise;
   }
 
@@ -1207,14 +1221,31 @@ class EngineHost {
   }
 }
 
-function escapeParenthesis(character) {
-  return character === "(" ? "%28" : "%29";
+/** An encoded URL component with `(` and `)` encoded too. */
+function escapeParentheses(text) {
+  let out = "";
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    out += character === "(" ? "%28" : character === ")" ? "%29" : character;
+  }
+  return out;
 }
+
+// What wrapperKeys uses, captured before user code: it also runs on the record import path.
+const nativeObjectKeys = Object.keys;
+const nativeArrayPush = Function.prototype.call.bind(Array.prototype.push);
+const nativeRegExpExec = Function.prototype.call.bind(RegExp.prototype.exec);
+const identifierKey = /^[\p{L}\p{N}_$]+$/u;
 
 /** The named exports a non-ES module's namespace gets: its own enumerable identifier keys. */
 function wrapperKeys(value) {
-  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? Object.keys(value) : [];
-  return keys.filter(k => k !== "default" && k !== "__esModule" && /^[\p{L}\p{N}_$]+$/u.test(k));
+  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? nativeObjectKeys(value) : [];
+  const names = [];
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index];
+    if (key !== "default" && key !== "__esModule" && nativeRegExpExec(identifierKey, key) !== null) nativeArrayPush(names, key);
+  }
+  return names;
 }
 
 /** ES module re-exporting a CommonJS/JSON/builtin module's exports (handed over by __bunwasm_wrap). */

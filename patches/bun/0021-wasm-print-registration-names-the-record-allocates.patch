@@ -1,0 +1,124 @@
+From 2c6e008061ec335608548f045e440711fcc9295a Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Fri, 6 Nov 2026 06:15:03 +0200
+Subject: [PATCH 21/21] wasm: print registration names the record allocates
+
+A registration record body refers to the loader's API object and, for a
+top-level for await, to an iterator and a step result. The caller now
+passes those identifiers (with_bunwasm_register(names, ...)) so they can
+differ from every name the module declares or references, instead of the
+fixed __bunwasm_m, __bunwasm_i and __bunwasm_r.
+---
+ src/js_printer/lib.rs | 50 +++++++++++++++++++++++++++----------------
+ 1 file changed, 32 insertions(+), 18 deletions(-)
+
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index 4d6328e3..68fbb9e5 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -2193,26 +2193,23 @@ pub(crate) mod __gated_printer {
+         /// top-level `for await` driven by `yield`. Unlabeled loops close the
+         /// iterator when left early; a labeled one must stay a bare loop.
+         fn print_bunwasm_register_for_await(&mut self, s: &S::ForOf, loc: bun_ast::Loc, labeled: bool) {
++            let BunwasmRegisterNames { api: m, iterator: i, result: r } = bunwasm_register_names();
+             self.print_indent();
+             self.add_source_mapping(loc);
+-            if !labeled {
+-                self.print(b"{let __bunwasm_i=__bunwasm_m.ai(");
+-                self.print_expr(s.value, Level::Comma, ExprFlag::none());
+-                self.print(b"),__bunwasm_r;try{for(;");
+-            } else {
+-                self.print(b"for(let __bunwasm_i=__bunwasm_m.ai(");
+-                self.print_expr(s.value, Level::Comma, ExprFlag::none());
+-                self.print(b"),__bunwasm_r;");
+-            }
+-            self.print(b"!(__bunwasm_r=void 0,__bunwasm_r=yield __bunwasm_i.next()).done;){");
++            let open = if labeled { "for(" } else { "{" };
++            self.print(format!("{open}let {i}={m}.ai(").as_bytes());
++            self.print_expr(s.value, Level::Comma, ExprFlag::none());
++            let close = if labeled { "" } else { "try{for(;" };
++            self.print(format!("),{r};{close}").as_bytes());
++            self.print(format!("!({r}=void 0,{r}=yield {i}.next()).done;){{").as_bytes());
+             self.print_for_loop_init(s.init, ExprFlagSet::empty());
+-            self.print(b"=__bunwasm_r.value;");
++            self.print(format!("={r}.value;").as_bytes());
+             self.print_newline();
+             self.print_stmt(s.body).expect("unreachable");
+             self.print_indent();
+             self.print(b"}");
+             if !labeled {
+-                self.print(b"}finally{if(__bunwasm_r&&!__bunwasm_r.done)yield __bunwasm_m.ac(__bunwasm_i)}}");
++                self.print(format!("}}finally{{if({r}&&!{r}.done)yield {m}.ac({i})}}}}").as_bytes());
+             }
+             self.print_newline();
+         }
+@@ -3472,7 +3469,7 @@ pub(crate) mod __gated_printer {
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(expr.loc);
+                     if bunwasm_register() {
+-                        self.print(b"__bunwasm_m.meta");
++                        self.print(format!("{}.meta", bunwasm_register_names().api).as_bytes());
+                     } else if self.options.module_type == bundle_opts::Format::InternalBakeDev {
+                         debug_assert!(self.options.hmr_ref.is_valid());
+                         self.print_symbol(self.options.hmr_ref);
+@@ -3502,7 +3499,7 @@ pub(crate) mod __gated_printer {
+                     if data.inverted {
+                         self.print(b"!");
+                     }
+-                    self.print(b"__bunwasm_m.meta.main");
++                    self.print(format!("{}.meta.main", bunwasm_register_names().api).as_bytes());
+                 }
+                 ExprData::EImportMetaMain(data) => {
+                     if self.options.module_type == bundle_opts::Format::Esm
+@@ -6795,7 +6792,7 @@ pub(crate) mod __gated_printer {
+ 
+         fn print_dynamic_import(&mut self) {
+             if bunwasm_register() {
+-                self.print(b"__bunwasm_m.import(");
++                self.print(format!("{}.import(", bunwasm_register_names().api).as_bytes());
+                 return;
+             }
+             super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
+@@ -7997,22 +7994,39 @@ fn bunwasm_await_hooks() -> bool {
+ thread_local! {
+     static BUNWASM_REGISTER: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+     static BUNWASM_FN_DEPTH: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
++    static BUNWASM_REGISTER_NAMES: core::cell::RefCell<BunwasmRegisterNames> = core::cell::RefCell::new(BunwasmRegisterNames::default());
++}
++
++/// bun-wasm: the identifiers a registration record body prints for the loader's API
++/// object and a top-level `for await` loop's iterator and step result. The caller
++/// allocates them so they differ from every name the module declares or references.
++#[derive(Clone, Default)]
++pub struct BunwasmRegisterNames {
++    pub api: String,
++    pub iterator: String,
++    pub result: String,
+ }
+ 
+ /// bun-wasm: print an ES module's body for a registration record (the
+ /// runtime's loader for engines without native ES modules, see
+ /// bunwasm-transpiler's `register`): top-level `await x` as `(yield x)`, a
+-/// top-level `for await` as a `yield` loop, `import.meta` as
+-/// `__bunwasm_m.meta` and `import(…)` as `__bunwasm_m.import(…)`.
+-pub fn with_bunwasm_register<T>(f: impl FnOnce() -> T) -> T {
++/// top-level `for await` as a `yield` loop, `import.meta` as `<api>.meta` and
++/// `import(…)` as `<api>.import(…)`, with the identifiers in `names`.
++pub fn with_bunwasm_register<T>(names: BunwasmRegisterNames, f: impl FnOnce() -> T) -> T {
+     let previous = BUNWASM_REGISTER.with(|r| r.replace(true));
+     let depth = BUNWASM_FN_DEPTH.with(|d| d.replace(0));
++    let previous_names = BUNWASM_REGISTER_NAMES.with(|n| n.replace(names));
+     let out = f();
+     BUNWASM_REGISTER.with(|r| r.set(previous));
+     BUNWASM_FN_DEPTH.with(|d| d.set(depth));
++    BUNWASM_REGISTER_NAMES.with(|n| n.replace(previous_names));
+     out
+ }
+ 
++fn bunwasm_register_names() -> BunwasmRegisterNames {
++    BUNWASM_REGISTER_NAMES.with(|n| n.borrow().clone())
++}
++
+ #[inline]
+ fn bunwasm_register() -> bool {
+     BUNWASM_REGISTER.with(|r| r.get())

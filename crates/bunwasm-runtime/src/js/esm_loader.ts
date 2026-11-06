@@ -11,6 +11,11 @@
 // The factory captures every built-in it uses when it is created, which the
 // host does before user code runs, so later changes to globals or prototypes
 // cannot reach module loading.
+//
+// Once `native.active()` turns false (the process exited), nothing new starts:
+// no native load or resolve, no module body, no resumed top-level await and no
+// fulfilment or rejection. The pending promises stay pending, and no module the
+// exit interrupted is marked evaluated.
 type Getter = () => unknown;
 type RecordBody = Generator<unknown, void, unknown>;
 type ModuleRecord = {
@@ -18,6 +23,8 @@ type ModuleRecord = {
   i: [number, string][];
   x: [string, number, string][];
   s: number[];
+  /** Local exports: [export name, local binding]. */
+  e: [string, string][];
   a: boolean;
   f: (api: RegistrationApi) => RecordBody;
 };
@@ -49,7 +56,10 @@ type RegistrationApi = {
     record: ModuleRecord;
     requested: Mod[];
     status: Status;
+    /** Getters of the module's exported local bindings, by local name. */
     locals: Record<string, Getter>;
+    /** Local exports: export name -> local binding. */
+    exports: Map<string, string>;
     bindings: object | null;
     namespace: object | null;
     api: ModuleApi;
@@ -63,11 +73,13 @@ type RegistrationApi = {
     capability: Capability | null;
     error: { value: unknown } | null;
   };
-  // A resolved export: the module and local name that hold the binding, or
-  // the module itself for `export * as ns`.
+  // A resolved export: the module and local binding that hold it, or the
+  // module itself for `export * as ns`.
   type Binding = { module: Mod; name: string | null };
 
   const AMBIGUOUS = "ambiguous" as const;
+  // Thrown to unwind loading or evaluation the exit interrupted; never reaches user code.
+  const EXITED = { exited: true } as const;
   const call = Function.prototype.call;
   const uncurry = <A extends unknown[], R>(method: (...args: A) => R) =>
     call.bind(method) as unknown as (self: unknown, ...args: A) => R;
@@ -107,6 +119,9 @@ type RegistrationApi = {
   const active = (): boolean => native.active === undefined || native.active();
   // A promise for work the host no longer runs: no reaction of user code ever runs for it.
   const abandoned = <T>(): Promise<T> => new NativePromise<T>(() => {});
+  function stillActive(): void {
+    if (!active()) throw EXITED;
+  }
 
   function then(promise: Promise<unknown>, onFulfilled: (value: unknown) => void, onRejected: (error: unknown) => void): void {
     promiseThen(promise, onFulfilled, onRejected);
@@ -193,6 +208,7 @@ type RegistrationApi = {
       requested: [],
       status: "loaded",
       locals: create(null),
+      exports: localExports(record),
       bindings: null,
       namespace: null,
       body: null,
@@ -208,21 +224,30 @@ type RegistrationApi = {
     return mod;
   }
 
+  function localExports(record: ModuleRecord): Map<string, string> {
+    const exports = new NativeMap<string, string>();
+    for (let i = 0; i < record.e.length; i++) mapSet(exports, record.e[i]![0], record.e[i]![1]);
+    return exports;
+  }
+
   // A CommonJS, JSON or built-in module: its enumerable keys and values now,
-  // with the default supplied separately.
+  // with the default supplied separately. Each name is its own local.
   function syntheticRecord(namespace: unknown, defaultValue: unknown): ModuleRecord {
     const getters: Record<string, Getter> = create(null);
+    const exports: [string, string][] = [];
     const source = namespace !== null && (typeof namespace === "object" || typeof namespace === "function") ? namespace : {};
     const names = keys(source);
     for (let i = 0; i < names.length; i++) {
       const key = names[i]!;
       if (key === "default" || key === "__esModule") continue;
       const value = reflectGet(source, key);
-      getters[key] = () => value;
+      defineProperty(getters, key, descriptor({ value: () => value, enumerable: true }));
+      arrayPush(exports, [key, key]);
     }
-    getters.default = () => defaultValue;
+    defineProperty(getters, "default", descriptor({ value: () => defaultValue, enumerable: true }));
+    arrayPush(exports, ["default", "default"]);
     return {
-      r: [], i: [], x: [], s: [], a: false,
+      r: [], i: [], x: [], s: [], e: exports, a: false,
       f: function* (api) { api.l(getters); yield; yield; },
     };
   }
@@ -230,6 +255,7 @@ type RegistrationApi = {
   // Register `name` from its record source and load what it imports. New
   // modules are appended to `added` so a failed load can forget them.
   function register(name: string, added: Mod[]): Mod {
+    stillActive();
     const source = native.load(name);
     const record = "record" in source ? source.record : syntheticRecord(source.namespace, source.default);
     const mod = createModule(name, record);
@@ -240,6 +266,7 @@ type RegistrationApi = {
   }
 
   function load(specifier: string, referrer: string, added: Mod[]): Mod {
+    stillActive();
     const name = native.resolve(specifier, referrer);
     return loadName(name, added);
   }
@@ -310,6 +337,12 @@ type RegistrationApi = {
     mod.namespace = null;
   }
 
+  // The local binding behind the local export `name`, when the module has one.
+  function localBinding(mod: Mod, name: string): string | undefined {
+    const local = mapGet(mod.exports, name);
+    return local !== undefined && hasOwn(mod.locals, local) ? local : undefined;
+  }
+
   function missingExport(mod: Mod, name: string, ambiguous: boolean): SyntaxError {
     const what = ambiguous ? "ambiguous" : "not found";
     return new NativeSyntaxError(`Export named '${name}' ${what} in module '${mod.name}'.`);
@@ -346,7 +379,8 @@ type RegistrationApi = {
   function resolveExport(mod: Mod, name: string, seen: Binding[]): Binding | null | typeof AMBIGUOUS {
     if (seenBefore(seen, mod, name)) return null;
     arrayPush(seen, { module: mod, name });
-    if (hasOwn(mod.locals, name)) return { module: mod, name };
+    const local = localBinding(mod, name);
+    if (local !== undefined) return { module: mod, name: local };
     const reexports = mod.record.x;
     for (let i = 0; i < reexports.length; i++) {
       const reexport = reexports[i]!;
@@ -375,7 +409,10 @@ type RegistrationApi = {
   function exportedNames(mod: Mod, seen: Mod[]): string[] {
     if (arrayIncludes(seen, mod)) return [];
     arrayPush(seen, mod);
-    const names = keys(mod.locals);
+    const names: string[] = [];
+    mapForEach(mod.exports, (local, name) => {
+      if (hasOwn(mod.locals, local)) arrayPush(names, name);
+    });
     const reexports = mod.record.x;
     for (let i = 0; i < reexports.length; i++) arrayPush(names, reexports[i]![0]);
     const stars = mod.record.s;
@@ -499,6 +536,7 @@ type RegistrationApi = {
     try {
       innerEvaluate(mod, stack, 0);
     } catch (error) {
+      if (error === EXITED || !active()) return abandoned();
       for (let i = 0; i < stack.length; i++) {
         stack[i]!.status = "evaluated";
         stack[i]!.error = { value: error };
@@ -506,6 +544,7 @@ type RegistrationApi = {
       cap.reject(error);
       return cap.promise;
     }
+    if (!active()) return abandoned();
     if (mod.asyncOrder === null || mod.asyncOrder === "done") cap.resolve();
     return cap.promise;
   }
@@ -558,6 +597,7 @@ type RegistrationApi = {
   }
 
   function executeSync(mod: Mod): void {
+    stillActive();
     const body = mod.body!;
     mod.body = null;
     generatorNext(body);
@@ -567,6 +607,7 @@ type RegistrationApi = {
   // completion settles a promise whose reaction, one job later, releases the
   // importers (ExecuteAsyncModule). Nothing resumes after the process exited.
   function executeAsync(mod: Mod): void {
+    stillActive();
     const body = mod.body!;
     mod.body = null;
     const done = capability();
@@ -629,7 +670,7 @@ type RegistrationApi = {
   }
 
   function asyncRejected(mod: Mod, error: unknown): void {
-    if (mod.status === "evaluated") return;
+    if (mod.status === "evaluated" || !active()) return;
     mod.error = { value: error };
     mod.status = "evaluated";
     mod.asyncOrder = "done";
@@ -639,8 +680,17 @@ type RegistrationApi = {
 
   // --- entry points --------------------------------------------------------
 
+  // A promise `run` settles. Reactions here never return a promise, so settling one looks up
+  // no `then` that user code could have replaced; only a namespace (as natively) is resolved
+  // with. After the exit nothing is published, neither a namespace nor an error.
+  function settled<T>(run: (resolve: (value: T) => void, reject: (error: unknown) => void) => void): Promise<T> {
+    return new NativePromise<T>((resolve, reject) => {
+      run(value => { if (active()) resolve(value); }, error => { if (active()) reject(error); });
+    });
+  }
+
   function settleNamespace(mod: Mod): Promise<object> {
-    return promiseThen(evaluate(mod), () => namespaceOf(mod)) as Promise<object>;
+    return settled<object>((resolve, reject) => then(evaluate(mod), () => resolve(namespaceOf(mod)), reject));
   }
 
   function track(operation: Promise<object>): Promise<object> {
@@ -650,12 +700,19 @@ type RegistrationApi = {
   // `import()` inside a module: loads in a later job, like a host fetch, once the
   // host has readied the module's graph.
   function dynamicImport(specifier: unknown, referrer: string): Promise<object> {
-    return track(promiseThen(resolvePromise(), () => {
-      if (!active()) return abandoned();
-      const name = native.resolve(NativeString(specifier), referrer);
-      const ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
-      return promiseThen(ready, () => settleGraph(added => loadName(name, added)));
-    }) as Promise<object>);
+    return track(settled<object>((resolve, reject) => then(resolvePromise(), () => {
+      if (!active()) return;
+      let name: string;
+      let ready: Promise<void>;
+      try {
+        name = native.resolve(NativeString(specifier), referrer);
+        ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      then(ready, () => then(settleGraph(added => loadName(name, added)), value => resolve(value as object), reject), reject);
+    }, reject)));
   }
 
   defineProperty(globalThis, "__bunwasm_import", descriptor({
@@ -668,7 +725,7 @@ type RegistrationApi = {
     try {
       return settleNamespace(loadGraph(start));
     } catch (error) {
-      return rejectPromise(error);
+      return error === EXITED || !active() ? abandoned() : rejectPromise(error);
     }
   }
 

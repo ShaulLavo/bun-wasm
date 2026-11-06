@@ -1,6 +1,6 @@
 {
  "modules": {
-  "/main.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;const arrow = () => this;\nconsole.log(this === undefined, typeof this, this === null, this == null, this !== undefined);\nconsole.log(arrow() === undefined, typeof arrow(), (() => typeof this)());\nfunction own() {\n  return this;\n}\nconsole.log(own() === undefined, own.call(5) instanceof Number);\n\nclass C {\n  field = this;\n  static stat = this;\n}\nconsole.log(new C().field instanceof C, C.stat === C);\nconst shape = () => [typeof 1, 1 === 1, \"a\" !== \"b\", 2 == 2, void 0 != 1];\nconsole.log(shape().join(), /typeof 1/.test(String(shape)), /1 === 1/.test(String(shape)), /void 0/.test(String(shape)));\n\n}})"
+  "/main.mjs": "({r:[],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;const arrow = () => this;\nconsole.log(this === undefined, typeof this, this === null, this == null, this !== undefined);\nconsole.log(arrow() === undefined, typeof arrow(), (() => typeof this)());\nfunction own() {\n  return this;\n}\nconsole.log(own() === undefined, own.call(5) instanceof Number);\n\nclass C {\n  field = this;\n  static stat = this;\n}\nconsole.log(new C().field instanceof C, C.stat === C);\nconst shape = () => [typeof 1, 1 === 1, \"a\" !== \"b\", 2 == 2, 1 != void 0];\nconsole.log(shape().join(), /typeof 1/.test(String(shape)), /1 === 1/.test(String(shape)), /void 0/.test(String(shape)));\n\n}}.__bunwasm_cjs__})"
  },
  "cjs": {}
 }

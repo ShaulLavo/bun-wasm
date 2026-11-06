@@ -50,8 +50,8 @@ test("parseEnv constructs own data properties for prototype-like keys", () => {
 
 test("the browser's generic builtin wrapper links Vite's published node:util import", () => {
   const host = readFileSync(join(root, "web/src/engine-host.js"), "utf8");
-  // The wrapper and the key filter it calls close the file.
-  const start = host.indexOf("function wrapperKeys(value) {");
+  // The wrapper, the key filter it calls and the built-ins they captured close the file.
+  const start = host.indexOf("const nativeObjectKeys = Object.keys;");
   if (start < 0 || !host.includes("function wrapperSource(key, value) {", start)) throw new Error("Missing browser builtin wrapper");
   const probe = join(scratch, "published-import.ts");
   writeFileSync(probe, `
