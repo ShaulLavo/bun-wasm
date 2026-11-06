@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { chromium } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_INDEX, TLS_PAGE_WORKERS } from "../../scripts/c1/tls-page.ts";
@@ -55,7 +56,7 @@ async function developmentInputs(options: Options, owner: TlsCleanup, signal: Ab
   const pg: unknown = JSON.parse(await readFile(join(options.pgModules, "pg/package.json"), "utf8"));
   if (!pg || typeof pg !== "object" || !("version" in pg) || pg.version !== "8.16.3") throw new Error("Development fixture requires pg 8.16.3");
   const seeds = new Map((await seedFiles(options.pgModules)).map(path => [`node_modules/${path}`, join(options.pgModules, path)]));
-  const scratch = await acquireOwned(owner, signal, () => mkdtemp("/work/tmp/bwt-"), path => rm(path, { recursive: true, force: true }));
+  const scratch = await acquireOwned(owner, signal, () => mkdtemp(join(tmpdir(), "bwt-")), path => rm(path, { recursive: true, force: true }));
   await record({ kind: "development-scratch", path: scratch });
   const pageRoot = join(scratch, "page");
   await buildBrowserEntries([TLS_PAGE_ENTRY].concat(TLS_PAGE_WORKERS).map(path => join(hostSource, path)), pageRoot, { runtimeWorker: true });
