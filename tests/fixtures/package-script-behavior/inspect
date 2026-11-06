@@ -1,0 +1,1 @@
+console.log("node alias filename", process.argv.slice(2).join("|"));

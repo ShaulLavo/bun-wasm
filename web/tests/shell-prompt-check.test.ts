@@ -111,15 +111,16 @@ const transcriptCallers = [
   "web/tests/browser-installer-links.ts", "web/tests/browser-memory.mjs", "web/tests/browser-module-records.ts", "web/tests/browser-module-retry.ts",
   "web/tests/browser-prepare-context.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
+  "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts",
   "web/tests/shell-stop-check.ts",
 ];
 const nonTranscriptCallers = [
-  "sandbox/tests/startup-cache.mjs", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",
+  "sandbox/tests/startup-cache.mjs", "sandbox/tests/next-dev.ts", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
 ];
-const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts"];
+const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts"];
 
 test("every playground helper reader has a maintained transcript or public-state classification", async () => {
   const root = new URL("../../", import.meta.url).pathname;

@@ -15,11 +15,29 @@ test.each([
   "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/fixtures/webassembly/module.wasm",
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
-  ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
+  ".github/workflows/ci.yml", "scripts/build.sh", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
+});
+
+const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
+
+test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("browser bundling alone skips native gates: $paths", ({ paths }) => {
+  expect(needsRust(paths)).toBe(false);
+  expect(needsJsc(paths)).toBe(false);
+  expect(needsSharedSysroot(paths)).toBe(false);
+});
+
+test.each(browserBuildFiles)("browser bundling with native inputs retains their gates: %s", path => {
+  expect(needsRust([path, "crates/bunwasm-cli/src/main.rs"])).toBe(true);
+  expect(needsJsc([path, "jsc/wasi-jsc.cmake"])).toBe(true);
+  expect(needsSharedSysroot([path, "scripts/build-shared-wasi-libc.sh"])).toBe(true);
+});
+
+test.each(browserBuildFiles)("browser build file %s remains a native input when declared by a probe", path => {
+  expect(needsRust([path], [path])).toBe(true);
 });
 
 test.each([

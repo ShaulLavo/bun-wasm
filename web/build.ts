@@ -4,6 +4,8 @@
 // bash-web guests come from scripts/build-bash-web-shell.sh (BASH_WEB_GUESTS_DIR overrides ../dist).
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
+import { templateFiles } from "../sandbox/template-files";
+import { projectTemplates } from "./src/playground/project-templates";
 import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
@@ -26,6 +28,10 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
+for (const template of projectTemplates) {
+  const files = await templateFiles(resolve(here, "../sandbox", template.directory));
+  await Bun.write(join(out, template.file), JSON.stringify({ files }));
+}
 
 type Metafile = NonNullable<typeof result.metafile>;
 

@@ -6,13 +6,15 @@ import { templateFiles as exportTemplateFiles } from "../../sandbox/template-fil
 import { defaultTemplate, selectTemplate, templates } from "../../sandbox/src/template-catalog";
 import { templateFiles } from "../../sandbox/src/template";
 
+const viteTemplates = templates.filter(template => template.id === "react" || template.id === "vanilla");
+
 const packageJson = JSON.stringify({ scripts: { dev: "framework dev", build: "framework build" } });
 
 test("template selection uses the same catalog as the dropdown and build", () => {
   expect(selectTemplate(null)).toBe(defaultTemplate);
   expect(selectTemplate("unknown")).toBe(defaultTemplate);
   for (const template of templates) expect(selectTemplate(template.id)).toBe(template);
-  expect(templates.map(template => template.id)).toEqual(["react", "vanilla"]);
+  expect(templates.map(template => template.id)).toEqual(["react", "next", "next-app", "vanilla"]);
   expect(templates.map(template => template.label)).not.toContain("Vite");
 });
 
@@ -37,7 +39,7 @@ test("project paths cannot escape or alias the workspace root", () => {
   }
 });
 
-for (const template of templates) {
+for (const template of viteTemplates) {
   test(`${template.label} has a source-only Vite 8 project with real package scripts`, async () => {
     const root = join(import.meta.dir, "../../sandbox", template.directory);
     const files = await exportTemplateFiles(root);
@@ -53,7 +55,7 @@ for (const template of templates) {
 }
 
 test("starter locks preserve the qualified Vite 8 graph", async () => {
-  for (const template of templates) {
+  for (const template of viteTemplates) {
     const path = join(import.meta.dir, "../../sandbox", template.directory, "bun.lock");
     const lock: unknown = Bun.JSONC.parse(await Bun.file(path).text());
     expect(lock).toMatchObject({ packages: { vite: expect.arrayContaining(["vite@8.3.5"]), rolldown: expect.arrayContaining(["rolldown@1.2.16"]) } });
@@ -83,4 +85,20 @@ test("source export preserves special filenames through project parsing", async 
     expect(templateFiles(JSON.stringify({ files }))).toEqual(expected);
     expect(Object.hasOwn(files, "__proto__")).toBe(true);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("Next App Router is a separate source-only template with a client page and server layout", async () => {
+  const template = selectTemplate("next-app");
+  expect(template.id).toBe("next-app");
+  expect(template.editorFile).toBe("app/page.tsx");
+  const files = await exportTemplateFiles(join(import.meta.dir, "../../sandbox", template.directory));
+  expect(templateFiles(JSON.stringify({ files }))).toEqual(files);
+  expect(files[template.editorFile]).toStartWith('"use client";');
+  expect(files["app/layout.tsx"]).toContain('<html lang="en">');
+  expect(files["pages/index.tsx"]).toBeUndefined();
+  expect(JSON.parse(files["package.json"] ?? "null")).toMatchObject({
+    dependencies: { next: "15.5.6", "@next/swc-wasm-nodejs": "15.5.6" },
+    devDependencies: { typescript: expect.any(String), "@types/react": expect.any(String), "@types/node": expect.any(String) },
+  });
 });

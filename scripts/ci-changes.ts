@@ -5,11 +5,11 @@ import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-ch
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
-  "scripts/engine-producer.ts", "scripts/producer-closure.ts", "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "web/build.ts",
+  "scripts/engine-producer.ts", "scripts/producer-closure.ts", "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh", "tests/test-stdout-busy-loop.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
-  "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
+  "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "web/src/script-evaluation.ts",
   "tests/memory-telemetry.test.ts",

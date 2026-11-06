@@ -18,6 +18,7 @@ import { commandChunks } from "../startup-cache";
 import { openTerminal } from "../terminal-mount";
 import { linkLocalUrls } from "../terminal-links";
 import { Editor } from "./editor";
+import { projectTemplate, type ProjectTemplate } from "./project-templates";
 
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
@@ -33,6 +34,7 @@ const HOST_VERSIONS = {};
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
+  readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
   failure?: Failure;
@@ -51,6 +53,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   constructor(search: string) {
     super();
     this.params = new URLSearchParams(search);
+    this.template = projectTemplate(this.params.get("template"));
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
@@ -137,7 +140,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   private async boot(): Promise<void> {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
+    const runtime = createRuntime({ filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" } });
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
       shell: new URL("./programs/shell-engine.wasm", location.href),
@@ -154,7 +157,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       this.changed();
     };
     await fs.mkdirp("/tmp");
-    await seedExamples(fs);
+    if (this.template) {
+      const { loadTemplate } = await import("../../../sandbox/src/template");
+      await loadTemplate(fs, HOME, this.template.file);
+    } else await seedExamples(fs);
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
       void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
@@ -176,13 +182,14 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const editor = this.editor = new Editor(fs, { run: () => this.run(), report: this.report, changed: () => this.changed() });
     this.changed();
     await this.terminalOpen;
-    await editor.open(editor.path);
+    await editor.open(this.template ? `${HOME}/${this.template.editorFile}` : editor.path);
 
     const storage = fs.vfs.persistent ? "persistent browser storage" : "memory-only browser storage";
     const durability = fs.vfs.persistent ? "survive" : "do not survive";
     for (const line of [
       "\x1b[1mBun in your browser\x1b[0m: bun.wasm (wasm32-wasip1) in a Web Worker.",
-      "Try \x1b[32mbun repl\x1b[0m, \x1b[32mbun run index.ts\x1b[0m, or press Run.",
+      this.template ? `${this.template.label}: run bun install, then bun run dev. Open its preview link, edit ${this.template.editorFile}, and save with Ctrl/Cmd-S.`
+        : "Try \x1b[32mbun repl\x1b[0m, \x1b[32mbun run index.ts\x1b[0m, or press Run.",
       `filesystem: ${storage}, preopened at /, cwd ${HOME}; editor saves ${durability} reload`,
       "",
     ]) term.writeln(line);

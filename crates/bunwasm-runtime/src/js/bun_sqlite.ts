@@ -254,8 +254,12 @@
 
     *iterate(...args: unknown[]) {
       const values = this.#values(args);
-      for (let row = sql.next(this.#id, values, true, this.#safeIntegers); row !== null; row = sql.next(this.#id, undefined, false, this.#safeIntegers)) {
-        yield this.#shape(row);
+      try {
+        for (let row = sql.next(this.#id, values, true, this.#safeIntegers); row !== null; row = sql.next(this.#id, undefined, false, this.#safeIntegers)) {
+          yield this.#shape(row);
+        }
+      } finally {
+        sql.reset(this.#id);
       }
     }
 

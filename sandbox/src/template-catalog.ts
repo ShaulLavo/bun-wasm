@@ -1,5 +1,7 @@
 export const templates = [
   { id: "react", label: "React", directory: "template", file: "template.json", editorFile: "src/App.tsx" },
+  { id: "next", label: "Next.js", directory: "template-next", file: "template-next.json", editorFile: "pages/index.tsx" },
+  { id: "next-app", label: "Next.js App Router", directory: "template-next-app", file: "template-next-app.json", editorFile: "app/page.tsx" },
   { id: "vanilla", label: "Vanilla TS", directory: "template-vanilla", file: "template-vanilla.json", editorFile: "src/main.ts" },
 ] as const;
 

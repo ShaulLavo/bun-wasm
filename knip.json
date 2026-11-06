@@ -79,6 +79,7 @@
       "entry": [
         "src/main.ts",
         "src/worker.ts",
+        "src/preview1-worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
         "guest-tests/*.test.ts",
@@ -124,7 +125,8 @@
     "sandbox": {
       "entry": [
         "src/main.ts",
-        "tests/*.{test.ts,mjs,js}"
+        "tests/*.{test.ts,mjs,js}",
+        "tests/next-dev.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
