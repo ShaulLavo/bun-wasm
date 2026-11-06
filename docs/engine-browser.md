@@ -151,6 +151,22 @@ These are Chromium medians of three runs on localhost, from `web/tests/bench-eng
 
 In WebKit the browser engine takes 36/18 ms cold/warm and 131 ms for the micro run. QuickJS takes 911 ms for the micro run and JSC 1155 ms.
 
+### Registration-loader read costs
+
+The following measurements use Node 26.12.1 and V8, the same guest, and the best of five rounds. Each read/call loop runs 20 million iterations and prints a checksum. These are not browser, WebKit, iOS, or private e1 diagnostic results.
+
+| Work | Native modules | Registration records | Ratio |
+|---|---:|---:|---:|
+| Named import reads | 6.28 ms | 32.41 ms | 5.2x |
+| Namespace property reads | 6.28 ms | 280.41 ms | 45x |
+| Imported calls | 30.69 ms | 32.20 ms | 1.05x |
+| 200-module cyclic graph load | 27.5 ms | 68.7 ms | 2.5x |
+| Hello-world process wall time | 160–171 ms | 178–184 ms | about 15 ms extra |
+
+The named-read difference is 26.13 ms per 20 million reads, about 1.31 ns per read. The namespace-read difference is 274.13 ms, about 13.71 ns per read. Named reads use live-binding accessors; namespace reads use the exact-namespace Proxy. This overhead is accepted for the correctness fix, not a semantic exception.
+
+Browser and WebKit startup and graph costs remain **unmeasured**. Node timings do not establish those costs. A bounded desktop follow-up uses existing built artifacts without another guest build or a Mac run.
+
 ## Networking
 
 `startEngineHost` takes `o.net`: the `bun_wasm` host ABI (`docs/host-abi.md`) as the JS functions the runtime's `net.js` calls (`native.hostListen`, `hostRead`, …), the slots it covers, and an `onNews` callback that wakes the loop. Nothing blocks. `pump()` steps net.js's waiters, and keeps the program alive while any are referenced. With `o.net`, `fetch`, `Bun.serve`, `node:http` and `node:net` work as on the wasm engines:

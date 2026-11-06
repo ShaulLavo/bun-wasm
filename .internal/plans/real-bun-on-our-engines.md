@@ -691,3 +691,24 @@ Evidence: `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/lead-debugger/e
 (`RESULT.md`, `records.jsonl` line 5, journal array index 52 with worker
 sequence 16). The projection
 and source references are in `/work/reports/wave-20261105/engines/host-api-allocation-e3/`.
+
+
+## Bounded desktop startup and graph costs after registration loading
+
+Status: Approved. Owner: Engines. This follow-up belongs to PR 482 and the worker-module-loader track. Managing accepted the documented Node read overhead for this correctness fix on November 6, 2026. The acceptance does not cover semantic regressions or establish browser performance.
+
+Measure Chromium and Playwright WebKit on the PC with existing built old/new artifacts. Do not build a new guest or host bundle for this measurement, reserve the Mac, reinstall E2, or consume the private e1 diagnostic build or E3 allowance. If a complete source-bound old/new artifact pair is unavailable, record that prerequisite instead of manufacturing provenance or rebuilding it here.
+
+Before execution, bind each artifact tree, source/build receipt, guest, compressed variant, metadata and browser version. Record all known source differences rather than attributing unrelated changes to the loader. Preserve the artifacts and use owned short scratch paths and local fixture ports. Install teardown before starting services or browsers and verify it on the PC after the run.
+
+Use one fixed pass for each browser, artifact and control condition. Each pass has two sequential guest processes with the same bootstrap and the same 200-module graph. Report every sample, including failure. No reruns for nicer timings and no open-ended tuning. Bound the overall measurement at 15 minutes.
+
+Record asset headers, decoded/compressed identities, response provenance, service-worker registrations, Cache Storage and HTTP cache conditions. A fresh context is context-cold, not proof of a cold OS or compiler cache. Record the second process as a pool-spare/warm case only when the actual worker evidence supports that description.
+
+Measure navigation to published page readiness, command dispatch to executing-guest startup, startup to graph completion, and disposal separately. Emit checksums and worker capability evidence from an acyclic bootstrap before dynamically loading the graph. Retain actual executing-worker control observations and request attribution. An unavailable worker API is not a null controller, and a controlled page or scoped URL is not evidence that its worker is controlled. Keep failed old uncontrolled-cycle imports as failures, not timing successes. Positively prove the controlled-worker case or report that case unproven.
+
+Compare the app-relevant startup and graph phases under like asset/cache conditions. Do not extrapolate the Node 5.2x/45x read ratios, the 27.5-to-68.7 ms graph result, or the roughly 15 ms hello-world difference to either browser.
+
+If normal startup in a genuinely service-worker-controlled worker regresses noticeably, take only the obvious bounded correction: choose one module mode per process from actual worker capability before entry. Use the old fast path only when the required capability exists. Use records when the controller is null or capability is missing/unavailable. Never infer native capability from a worker URL or scope. Do not restore a mixed native/record namespace bridge, pre-await dependency path, version-skew branch or mid-process mode switch.
+
+Any resulting product change requires normal source review and required checks on the changed head before merge or the private diagnostic build. Report remaining costs or an unresolved capability/control observation before widening this follow-up. Keep the one private e1-plus-reviewed-delta build and Nuxt's one later E3 separate.
