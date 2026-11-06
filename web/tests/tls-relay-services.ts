@@ -89,16 +89,17 @@ function track(sockets: Set<Socket>, socket: Socket): void {
  * The lease always ends with its cleanup, so a refused remote cleanup can never keep the driver's event loop alive.
  * An unreconciled remote fixture is left exactly as it is, named in the ledger, and still fails the run.
  */
-export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock") {
-  return fixturePiLane(owner, signal, closed, name => hostToolPath(tools, name), lock);
+export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock", timing?: LeaseCleanupTiming) {
+  return fixturePiLane(owner, signal, closed, name => hostToolPath(tools, name), lock, timing);
 }
+interface LeaseCleanupTiming { readonly exitMs: number; readonly graceMs: number }
 type FixtureTool = "mesh" | "flock" | "sh" | "cat";
 interface FixtureHost {
   readonly hostSource: string;
   readonly tool: (name: FixtureTool) => string;
   readonly recheck: () => Promise<void>;
 }
-async function fixturePiLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tool: FixtureHost["tool"], lock = "/work/tmp/wave-heavy/pi.lock") {
+async function fixturePiLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tool: FixtureHost["tool"], lock = "/work/tmp/wave-heavy/pi.lock", timing: LeaseCleanupTiming = { exitMs: 5000, graceMs: 5000 }) {
   const argv = ["--nonblock", lock, tool("sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", tool("cat")];
   const lease = await acquireOwned(owner, signal, () => {
     const child = spawn(tool("flock"), argv, { detached: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -110,9 +111,9 @@ async function fixturePiLane(owner: TlsCleanup, signal: AbortSignal, closed: () 
     const reconciled = closed();
     child.stdin.end();
     let failure: unknown;
-    try { await deadline(exited, new AbortController().signal, 5000); }
+    try { await deadline(exited, new AbortController().signal, timing.exitMs); }
     catch (error) { failure = error; }
-    await stopConsumerGroup(child);
+    await stopConsumerGroup(child, timing.graceMs);
     await exited.catch(() => {});
     if (!reconciled) throw new Error("Pi lane released with the remote PostgreSQL fixture unreconciled; its named container, volume and scratch stay for reconciliation under a fresh pi.lock", { cause: failure });
     if (failure) throw failure;

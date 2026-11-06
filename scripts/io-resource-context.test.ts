@@ -611,7 +611,7 @@ test("loaded body errors retain the response URL and original cause", async () =
 // Real detached process groups stand in for the web server and Playwright's browser server.
 const owned: ChildProcess[] = [];
 afterEach(async () => {
-  await Promise.all(owned.splice(0).map(stopConsumerGroup));
+  await Promise.all(owned.splice(0).map(child => stopConsumerGroup(child)));
 });
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
