@@ -1191,16 +1191,6 @@ jobs:
           bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
-      # The shell the browser-guest checks' playground needs, beside the guest they test.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bash-web-guests
-          path: |
-            dist/bash-web-shell.wasm
-            dist/bash-web-env.wasm
-            dist/bash-web-guests.json
-          if-no-files-found: error
-          retention-days: 1
 
       - name: Save the completed bash-web shell guest build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
@@ -1233,6 +1223,16 @@ jobs:
           ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm
           ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json
           bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
+      # The playground site the browser-guest checks serve, bundled once from the verified guest
+      # (and the bash-web shell) linked above; each Processes browser leg verifies and serves it.
+      - name: Build the browser-guest site once
+        run: bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-guest-site
+          path: ${{ runner.temp }}/browser-guest-site
+          if-no-files-found: error
+          retention-days: 1
       - name: Blocking Web guest case (JSC)
         if: needs.quality.outputs.jsc == 'true'
         shell: bash
@@ -1594,21 +1594,20 @@ jobs:
         run: |
           bun install --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}
-      # Feature-owned checks (checks/browser-guest-*.json) that run the built playground on the rust
-      # job's receipt-verified guest. Each check verifies the receipt names this checkout and builds
-      # the web output from that guest.
+      # Feature-owned checks (checks/browser-guest-*.json) that serve the playground site the rust
+      # job built once from its receipt-verified guest. Each check verifies the site's closed
+      # inventory, guest and receipt against this checkout before and after the browser runs.
       - uses: actions/download-artifact@v4
         if: needs.rust.result == 'success' && matrix.browser != 'firefox'
         with:
-          name: bash-web-guests
-          path: dist
-      - name: Browser-guest checks on the verified guest
+          name: browser-guest-site
+          path: ${{ runner.temp }}/browser-guest-site
+      - name: Browser-guest checks on the verified site
         if: needs.rust.result == 'success' && matrix.browser != 'firefox'
         env:
+          BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
           TMPDIR: ${{ runner.temp }}
         run: |
           bun install --cwd .. --frozen-lockfile --ignore-scripts
-          ln -s source-cache-browser/bun-browser.wasm ../dist/bun-browser.wasm
-          ln -s source-cache-browser/bun-browser.wasm.build.json ../dist/bun-browser.wasm.build.json
           bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest

@@ -88,6 +88,9 @@ tests/fixtures/esm-create-require/lib.cjs
 tests/fixtures/esm-cycle/even.mjs
 tests/fixtures/esm-cycle/index.mjs
 tests/fixtures/esm-cycle/odd.mjs
+tests/fixtures/esm-loader/binding-writes/dep.mjs
+tests/fixtures/esm-loader/binding-writes/importer.mjs
+tests/fixtures/esm-loader/binding-writes/main.mjs
 tests/fixtures/esm-loader/cjs-interop/lib.cjs
 tests/fixtures/esm-loader/cjs-interop/main.mjs
 tests/fixtures/esm-loader/cycles/a.mjs

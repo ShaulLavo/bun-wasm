@@ -961,6 +961,49 @@ mod tests {
         assert!(report.starts_with("/bad.mjs:1:"), "{report}");
     }
 
+    /// Writing a `const` or an imported binding is valid module syntax that throws a TypeError
+    /// when it runs (ECMA-262 SetMutableBinding): the record prints it as written, raw and after
+    /// the first pass, while an ordinary transpile keeps Bun's diagnostic. Assigning to
+    /// `arguments` or `eval` stays an early error.
+    #[test]
+    fn binding_writes_reach_run_time() {
+        let source = "import { x } from './x.mjs';\nimport * as ns from './x.mjs';\nexport const value = 1;\nexport function change() { value = 2; }\nexport function importWrite() { x = 1; x++; }\nexport function namespaceWrite() { ns = 1; }\nexport function destructure() { [value] = [3]; }\nif (false) value = 4;\n";
+        let raw = register_one(source, "/w.mjs");
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::use_module_records();
+        let first = crate::transpile_with_source_map(source, "/w2.mjs", Loader::Js, false).unwrap();
+        let two = register(&first.code, "/w2.mjs", Loader::Js).unwrap().code;
+        for record in [&raw, &two] {
+            for kept in [
+                "value = 2;",
+                "__bunwasm_ns0_0.x = 1;",
+                "__bunwasm_ns0_0.x++;",
+                "ns = 1;",
+                "[value] = [3];",
+                "value = 4;",
+            ] {
+                assert!(record.contains(kept), "{kept}: {record}");
+            }
+        }
+        drop(_guard);
+        let ordinary = crate::transpile(
+            "const value = 1;\nexport function change() { value = 2; }\n",
+            "/o.mjs",
+            Loader::Js,
+        );
+        assert!(
+            ordinary.is_err_and(|report| report.contains("is a constant")),
+            "ordinary transpiles keep Bun's diagnostic"
+        );
+        for invalid in [
+            "arguments = 1;\n",
+            "eval = 1;\n",
+            "function f() { eval = 1; }\n",
+        ] {
+            syntax_error(invalid, "/early.mjs");
+        }
+    }
+
     /// `new.target` outside every function is an early error in a module (and in a record,
     /// whose generator would accept it); inside functions, methods, class fields and static
     /// blocks it stays.

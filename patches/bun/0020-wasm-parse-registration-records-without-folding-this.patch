@@ -1,4 +1,4 @@
-From c1482ec047e27a76802d730a3ccd8b69ab5b0738 Mon Sep 17 00:00:00 2001
+From 7e8623389cb9953d42c878a0856ebf9d41145ea1 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 6 Nov 2026 03:35:54 +0200
 Subject: [PATCH 20/21] wasm: parse registration records without folding this
@@ -8,17 +8,18 @@ A registration record runs a module's body as a strict generator called
 without a receiver. While bun-wasm parses for one
 (with_bunwasm_register_parse), module-level this stays this instead of
 becoming null or exports, typeof of a primitive literal and literal
-(in)equality are neither folded nor reordered, and an anonymous export
-default function is not given the generated default name. A new.target
-outside every function is noted for the caller, which rejects it in a
-module and keeps it in CommonJS. Ordinary parsing is unchanged.
+(in)equality are neither folded nor reordered, assigning to a const is
+left to throw at run time, and an anonymous export default function is
+not given the generated default name. A new.target outside every function
+is noted for the caller, which rejects it in a module and keeps it in
+CommonJS. Ordinary parsing is unchanged.
 ---
  src/js_parser/lib.rs                | 44 +++++++++++++++++++++++++++++
  src/js_parser/p.rs                  |  2 +-
  src/js_parser/visit/visit_binary.rs | 31 +++++++++++---------
- src/js_parser/visit/visit_expr.rs   |  8 ++++--
+ src/js_parser/visit/visit_expr.rs   | 11 ++++++--
  src/js_parser/visit/visit_stmt.rs   |  4 ++-
- 5 files changed, 71 insertions(+), 18 deletions(-)
+ 5 files changed, 74 insertions(+), 18 deletions(-)
 
 diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
 index 32222685..2bc9d006 100644
@@ -170,7 +171,7 @@ index 5c1ebed7..207041f6 100644
  
                  if p.options.features.minify_syntax {
 diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
-index a5e206bc..cb57adb1 100644
+index a5e206bc..71abb524 100644
 --- a/src/js_parser/visit/visit_expr.rs
 +++ b/src/js_parser/visit/visit_expr.rs
 @@ -87,9 +87,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -188,7 +189,18 @@ index a5e206bc..cb57adb1 100644
      }
  
      fn e_string(_: &mut Self, _e: &mut Expr, _: ExprIn) {
-@@ -1213,7 +1217,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -209,7 +213,10 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+         // Handle assigning to a constant
+         if in_.assign_target != js_ast::AssignTarget::None {
++            // bun-wasm: a registration record runs the module as written, so assigning to a
++            // constant is the run-time TypeError the language specifies, not a parse error.
+             if p.symbols[result.r#ref.inner_index() as usize].kind == js_ast::symbol::Kind::Constant
++                && !crate::bunwasm_register_parse()
+             {
+                 // TODO: silence this for runtime transpiler
+                 let r = js_lexer::range_of_identifier(p.source, expr.loc);
+@@ -1213,7 +1220,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
                      return;
                  }
  

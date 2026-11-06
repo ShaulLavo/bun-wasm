@@ -84,6 +84,28 @@ const cases: Record<string, Case> = {
     expected: "",
     status: 1,
   },
+  // R5 follow-up (reconciliation/CONST-WRITE.json): writing a constant or an imported binding
+  // is valid module syntax that throws a TypeError when it runs, never when it loads.
+  "const write": {
+    files: {
+      "main.mjs": "console.log('boot'); try { const m = await import('./dep.mjs'); console.log('loaded',m.value); try { m.change(); } catch(e) { console.log('call-error',e.constructor.name); } } catch(e) { console.log('import-error',e.constructor.name); }",
+      "dep.mjs": "export const value = 1; export function change() { value = 2; }",
+    },
+    expected: "boot\nloaded 1\ncall-error TypeError\n",
+  },
+  "const write raw eval": {
+    files: {},
+    entry: ["-e", "const a = 1; try { (() => { a = 2; })(); } catch (error) { console.log(error.constructor.name); } console.log(a);"],
+    expected: "TypeError\n1\n",
+  },
+  "import binding writes": {
+    files: {
+      "main.mjs": "const m = await import('./importer.mjs'); for (const name of ['writeImport', 'updateImport', 'writeNamespace', 'neverCalled']) { try { m[name](); console.log(name, 'ok'); } catch (error) { console.log(name, error.constructor.name); } }",
+      "importer.mjs": "import { value } from './dep.mjs'; import * as ns from './dep.mjs'; export function writeImport() { value = 5; } export function updateImport() { value++; } export function writeNamespace() { ns = 6; } export function neverCalled() { if (false) value = 7; }",
+      "dep.mjs": "export const value = 1;",
+    },
+    expected: "writeImport TypeError\nupdateImport TypeError\nwriteNamespace TypeError\nneverCalled ok\n",
+  },
   // R6: `arguments` spelled with escapes, in a file and in raw eval input.
   "escaped arguments": {
     files: { "main.mjs": "globalThis.arguments = 42; console.log(arg\\u0075ments, typeof arg\\u{75}ments, \"é😀\".length);" },
