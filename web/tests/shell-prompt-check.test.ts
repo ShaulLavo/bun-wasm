@@ -111,6 +111,7 @@ const transcriptCallers = [
   "web/tests/browser-installer-links.ts", "web/tests/browser-memory.mjs", "web/tests/browser-module-retry.ts",
   "web/tests/browser-prepare-context.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
+  "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts",
   "web/tests/shell-stop-check.ts",
 ];
 const nonTranscriptCallers = [
@@ -119,7 +120,7 @@ const nonTranscriptCallers = [
   "web/tests/browser-type.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
 ];
-const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts"];
+const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts"];
 
 test("every playground helper reader has a maintained transcript or public-state classification", async () => {
   const root = new URL("../../", import.meta.url).pathname;

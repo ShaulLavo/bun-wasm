@@ -1106,3 +1106,22 @@ until those controls and independent review pass. The implementing lane owns
 all probe processes, result pipes/files and private build scratch on every exit;
 the runtime coordinator owns retained evidence until the follow-up is accepted,
 then removes it. Preserve shared targets and caches.
+
+## CLI cwd flag before the command
+
+Status: Approved.
+
+The Vite terminal regression found an unrelated CLI parser gap. In the Browser
+engine, create `stdin-script/package.json` with `{"scripts":{"probe":"bun run ../stdin-probe.ts"}}`
+and a `stdin-probe.ts` in the parent folder. `bun --cwd stdin-script run probe`
+tries to open `/home/user/stdin-script` as a source file and fails with
+`EISDIR: illegal operation on a directory`. `sh -c 'cd stdin-script && bun run probe'`
+runs the intended script. This reproduced once in desktop Chromium on November 6
+with current main's guest. It is not the terminal EOF bug.
+
+`crates/bunwasm-cli/src/main.rs` has no `--cwd` parser branch. Add the global cwd
+option before command classification, then verify relative module resolution,
+package scripts, missing directories, and passthrough arguments on all engines.
+The terminal regression uses shell `cd` so it does not depend on this unsupported
+flag. The failing command and error above came from the live terminal, before the
+regression was changed to shell `cd`.

@@ -16,6 +16,31 @@ The build gzips each engine's wasm from `../dist` into `dist/<name>.wasm.gz`; th
 it. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
+## Run Vite with React
+
+Open `/playground/?template=vite-react` on the deployed site, or choose **Vite + React**
+in the playground header. This creates a separate workspace from the general examples.
+
+Run these commands in its terminal:
+
+```sh
+bun install
+bun run dev
+```
+
+Open the printed preview link. Edit `src/App.tsx` and save with Ctrl-S or Cmd-S.
+React Fast Refresh updates the preview without losing the counter state.
+
+To test the production output, stop the dev server with Ctrl-C, then run:
+
+```sh
+bun run build
+bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort
+```
+
+The browser regression is `bun web/tests/browser-vite-react.ts` after building `web/`.
+Set `VITE_PLAYGROUND_URL` to test a deployed playground instead of a local build.
+
 ## Engines
 
 The header dropdown (`?engine=`) picks what runs the program:
@@ -196,7 +221,8 @@ process buffers are never reused for another process. Node workers use their rea
 
 Browser children do not share the parent's networking ring. The browser engine
 still has direct host `fetch`; QuickJS/JSC children have no networking slots.
-The playground's root stdin remains EOF, and children inherit it as EOF. Inherited output goes
+Interactive playground commands and their children inherit the shell's live terminal input,
+including through base tools such as `env`. Standalone noninteractive roots keep EOF input. Inherited output goes
 to the root's stdout/stderr through its terminal descriptions.
 
 Run `node --no-warnings web/tests/subprocess.mjs` for Node worker checks, or build

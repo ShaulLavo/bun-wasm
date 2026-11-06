@@ -85,7 +85,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
   let runtimePackage: RuntimePackage | undefined;
   if (options.runtimeWorker) {
     runtimePackage = resolveRuntimePackage(main);
-    entrypoints = entrypoints.concat([runtimePackage.source("waffle/browser/preview1-worker")]);
+    entrypoints = entrypoints.concat([resolve(import.meta.dir, "../web/src/preview1-worker.ts")]);
   }
   return {
     entrypoints, outdir, target: "browser", format: "esm",

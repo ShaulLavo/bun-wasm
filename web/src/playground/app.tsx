@@ -31,6 +31,7 @@ function Header(handle: Handle<Props>) {
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
+        <a class="nav" href={playground.viteReact ? "./" : "?template=vite-react"}>{playground.viteReact ? "Examples" : "Vite + React"}</a>
         <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
         <select
           id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)"
