@@ -24,6 +24,12 @@ for (const syncOnly of [true, false]) {
   });
 }
 
+function evaluateCallbacks({ initialize, controls, syncOnly }: { initialize: string; controls: string; syncOnly: boolean }) {
+  const check = new Function(`${controls}\nreturn checkNativeStreamCallbacks;`)();
+  const install = new Function(initialize);
+  return check(install, syncOnly);
+}
+
 for (const engine of [webkit, chromium]) {
   test(`${engine.name()} native callback returns, ordering and errors`, async () => {
     const browser = await engine.launch({ headless: true });
@@ -33,10 +39,7 @@ for (const engine of [webkit, chromium]) {
       page.on("pageerror", error => errors.push(error.message));
       for (const syncOnly of [true, false]) {
         await page.goto("about:blank");
-        const rows = await page.evaluate(async ({ initialize, controls, syncOnly }) => {
-          const check = new Function(`${controls}\nreturn checkNativeStreamCallbacks;`)();
-          return check(() => new Function(initialize)(), syncOnly);
-        }, { initialize, controls, syncOnly });
+        const rows = await page.evaluate(evaluateCallbacks, { initialize, controls, syncOnly });
         expect(rows).toHaveLength(11);
       }
       expect(errors).toEqual([]);

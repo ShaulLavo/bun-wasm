@@ -98,6 +98,12 @@ async function asynchronous(own: ReturnType<typeof fixture>) {
   invariant(nonCallableReads === 1, "non-callable then getter repeated");
 }
 
+async function checkCallback(own: ReturnType<typeof fixture>, key: string, label: string, syncOnly: boolean) {
+  if (syncOnly) { synchronous(own, label); return; }
+  await thrown(own, key);
+  await asynchronous(own);
+}
+
 export async function checkNativeStreamCallbacks(install: () => () => void, syncOnly = false) {
   const sources = new WeakMap<object, object>();
   globalThis.ReadableStream = capture(ReadableStream, sources);
@@ -109,8 +115,7 @@ export async function checkNativeStreamCallbacks(install: () => () => void, sync
     const cases = callbackCases.flatMap(entry => entry.keys.map(key => ({ name: entry.name, key })));
     for (const { name, key } of cases) {
       const own = fixture(sources, name, key);
-      if (syncOnly) synchronous(own, `${name}.${key}`);
-      else { await thrown(own, key); await asynchronous(own); }
+      await checkCallback(own, key, `${name}.${key}`, syncOnly);
       rows.push(`${name}.${key}`);
     }
   } finally { dispose(); }
