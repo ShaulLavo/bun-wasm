@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 
 const root = resolve(import.meta.dir, '..');
 function run(args: string[], env: Record<string, string> = {}) {
-  const result = Bun.spawnSync(args, { cwd: root, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe', timeout: 120_000 });
+  // Keep the disposable source probe independent of the suite's compiler wrapper.
+  const result = Bun.spawnSync(args, { cwd: root, env: { ...process.env, ...env, RUSTC_WRAPPER: '' }, stdout: 'pipe', stderr: 'pipe', timeout: 120_000 });
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
   return result.stdout.toString();
 }
