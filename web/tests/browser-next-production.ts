@@ -6,6 +6,7 @@ import type { Runtime } from "waffle";
 import type { Previews } from "../src/preview";
 import { playwright, ready, run, session, terminalText } from "./playground.mjs";
 import { stopForeground } from "./foreground";
+import { assertProductionBrowserEvents, finishProduction } from "./next-production-controls";
 
 declare const playground: {
   editor: { path: string };
@@ -93,7 +94,7 @@ async function compiledPage(target: Page, url: string, expectedBuildID: string):
   await target.getByRole("button", { name: "Count: 2", exact: true }).waitFor();
   assert.ok(staticResponses.some(response => /\.js(?:\?|$)/.test(response.url)), "Production JavaScript must load over the preview route");
   assert.deepEqual(staticResponses.filter(response => response.status !== 200), []);
-  assert.deepEqual(events.filter(event => event.includes("pageerror:")), []);
+  assertProductionBrowserEvents(events);
   assert.equal(events.some(event => event.includes("[HMR] connected")), false);
   report("production.html", html);
   if (reports) await target.screenshot({ path: join(reports, "production.png") });
@@ -135,14 +136,34 @@ async function execute(): Promise<void> {
   console.log("PASS next build exited zero, BUILD_ID matches next start HTML, port 5173 serves compiled JavaScript, counter hydrated");
 }
 
-const deadline = setTimeout(() => {
-  failure = `Overall 15-minute deadline during ${operation}`;
-  void task.cleanup().finally(() => {
-    report("browser.log", events.join("\n"));
-    report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, cleanup: true }, null, 2));
+let closing: Promise<void> | undefined;
+let deadlineReached = false;
+
+function closeSession(): Promise<void> {
+  return closing ??= task.cleanup().then(() => { cleanup = true; });
+}
+
+function reportResult(): void {
+  report("browser.log", events.join("\n"));
+  report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, staticResponses, ms: Date.now() - started, cleanup, scratch: task.scratch }, null, 2));
+}
+
+function expired(scope: string): void {
+  if (deadlineReached) return;
+  deadlineReached = true;
+  failure ??= `${scope} deadline during ${operation}`;
+  process.exitCode = 124;
+  const forced = setTimeout(() => {
+    try { reportResult(); } finally { process.exit(124); }
+  }, 5_000);
+  void closeSession().catch(error => events.push(`cleanup error: ${String(error)}`)).finally(() => {
+    clearTimeout(forced);
+    reportResult();
     process.exit(124);
   });
-}, 900_000);
+}
+
+const deadline = setTimeout(() => expired("Overall 15-minute"), 900_000);
 
 try {
   await execute();
@@ -151,21 +172,27 @@ try {
   console.error(`FAIL ${operation}: ${failure}`);
   process.exitCode = 1;
 } finally {
-  clearTimeout(deadline);
+  const teardownDeadline = setTimeout(() => expired("Teardown 15-second"), 15_000);
+  const target = page;
   try {
-    if (page && !page.isClosed()) {
-      report("terminal.log", await terminalText(page));
-      await stopForeground(page);
-      assert.equal(await page.evaluate(() => playground.shell.running), false);
-    }
+    await finishProduction({
+      readTerminal: () => target && !target.isClosed() ? terminalText(target) : Promise.resolve(""),
+      writeTerminal: text => report("terminal.log", text),
+      stopForeground: async () => {
+        if (!target || target.isClosed()) return;
+        await stopForeground(target);
+        assert.equal(await target.evaluate(() => playground.shell.running), false);
+      },
+      close: closeSession,
+    });
+    assertProductionBrowserEvents(events);
   } catch (error) {
     events.push(`cleanup error: ${String(error)}`);
-    failure ??= `Cleanup failed: ${String(error)}`;
+    failure ??= `Finalization failed: ${String(error)}`;
     process.exitCode = 1;
   } finally {
-    await task.cleanup();
-    cleanup = true;
-    report("browser.log", events.join("\n"));
-    report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, staticResponses, ms: Date.now() - started, cleanup, scratch: task.scratch }, null, 2));
+    clearTimeout(teardownDeadline);
+    clearTimeout(deadline);
+    reportResult();
   }
 }
