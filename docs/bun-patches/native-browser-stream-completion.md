@@ -48,6 +48,16 @@ Pending sink abort promises delay completion. Internally acquired native locks,
 such as async iterators and pipeTo, use weak polling with host timers. Session
 exit stops the timers. No private stream state or promise status is invented.
 
+Underlying callbacks that return `null` or a primitive, including the synchronous
+file byte source's `undefined`, now return that value directly to the native
+constructor. They still notify completion observers. Object and function results
+retain native Promise resolution and settlement notification, so then getters
+are read once, then calls run as promise jobs with the original receiver, and
+pending writable aborts still hold the completion barrier. Start throws remain
+synchronous; other throws retain their rejected-promise path and original reason.
+The callback-boundary tests run against real native constructors in Node,
+Chromium and WebKit, alongside the existing completion and direct-stream gate.
+
 Streams created outside the construction bridge, including saved original
 constructors and opaque native factory outputs, support completion observation.
 Their controllers are unavailable through browser APIs, so the error hook cannot

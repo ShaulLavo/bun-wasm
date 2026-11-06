@@ -206,6 +206,10 @@ function algorithm(group: Group, key: PropertyKey, source: object, callback: Fun
     let result;
     try { result = callback === undefined ? undefined : apply(callback, source, args); }
     catch (error) { if (key === "start") throw error; result = reject(error); }
+    if (result === null || typeof result !== "object" && typeof result !== "function") {
+      notify(group);
+      return result;
+    }
     const promise = resolve(result);
     const barrier = key === "abort" && group.kind === "writable";
     if (barrier) group.barriers.add(promise);
