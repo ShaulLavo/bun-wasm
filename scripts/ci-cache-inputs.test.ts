@@ -52,8 +52,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("needs.quality.outputs.rust == 'true'");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps), byId("jsc-artifact", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
