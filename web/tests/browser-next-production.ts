@@ -1,0 +1,171 @@
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Page } from "playwright";
+import type { Runtime } from "waffle";
+import type { Previews } from "../src/preview";
+import { playwright, ready, run, session, terminalText } from "./playground.mjs";
+import { stopForeground } from "./foreground";
+
+declare const playground: {
+  editor: { path: string };
+  fs: Pick<Runtime["filesystem"], "readFile">;
+  previews: Previews;
+  shell: { submit(command: string): Promise<void>; running: boolean; lastExit: number };
+};
+declare const productionServer: { finished: boolean; error: string | null };
+
+const reports = process.env.NEXT_PRODUCTION_REPORTS;
+if (reports) mkdirSync(reports, { recursive: true });
+const task = session("bun-wasm-next-production-");
+const events: string[] = [];
+const stages: { operation: string; ms: number; code: number | null }[] = [];
+const staticResponses: { url: string; status: number }[] = [];
+let operation = "launch Chromium";
+let failure: string | null = null;
+let page: Page | undefined;
+let preview: Page | undefined;
+let buildID: string | null = null;
+let browserVersion: string | undefined;
+let cleanup = false;
+const started = Date.now();
+
+function report(name: string, value: string): void {
+  if (reports) writeFileSync(join(reports, name), value);
+}
+
+function observe(target: Page, label: string): void {
+  target.on("console", message => events.push(`${label} ${message.type()}: ${message.text()}`));
+  target.on("pageerror", error => events.push(`${label} pageerror: ${error.stack ?? error.message}`));
+  target.on("requestfailed", request => events.push(`${label} requestfailed: ${request.url()} ${request.failure()?.errorText}`));
+}
+
+async function command(target: Page, label: string, text: string, timeout: number): Promise<void> {
+  operation = label;
+  console.log(`START ${label}: ${text}`);
+  const result = await run(target, text, timeout);
+  stages.push({ operation: label, code: result.code, ms: result.ms });
+  report(`${label}.log`, result.output);
+  console.log(`END ${label}: exit=${result.code} ms=${Math.round(result.ms)}`);
+  assert.equal(result.code, 0, `${label} failed: ${result.output}`);
+}
+
+async function readGuest(target: Page, path: string): Promise<string | null> {
+  return target.evaluate(async path => {
+    const bytes = await playground.fs.readFile(path);
+    return bytes ? new TextDecoder().decode(bytes) : null;
+  }, path);
+}
+
+async function start(target: Page): Promise<string> {
+  operation = "next start listener on port 5173";
+  await target.evaluate(() => {
+    Object.assign(globalThis, { productionServer: { finished: false, error: null } });
+    void playground.shell.submit("NEXT_TELEMETRY_DISABLED=1 bun run node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 5173")
+      .catch(error => { productionServer.error = String(error); })
+      .finally(() => { productionServer.finished = true; });
+  });
+  await target.waitForFunction(() => productionServer.finished || playground.previews.serves(5173), undefined, { timeout: 120_000 });
+  const state = await target.evaluate(() => ({ ...productionServer, running: playground.shell.running, exit: playground.shell.lastExit }));
+  assert.equal(state.finished, false, `next start exited before listening: ${JSON.stringify(state)}\n${await terminalText(target)}`);
+  assert.equal(state.running, true);
+  operation = "production preview registration";
+  assert.equal(await target.evaluate(() => playground.previews.ready), "ready");
+  assert.equal(await target.evaluate(() => playground.previews.serves(5173)), true);
+  return target.evaluate(() => playground.previews.url(5173));
+}
+
+async function compiledPage(target: Page, url: string, expectedBuildID: string): Promise<void> {
+  operation = "next start compiled page HTTP response";
+  const response = await target.goto(url, { timeout: 120_000 });
+  assert.equal(response?.status(), 200);
+  assert.match(response?.headers()["content-type"] ?? "", /text\/html/);
+  const html = await response?.text();
+  assert.ok(html);
+  assert.doesNotMatch(html, /\/_next\/static\/development\/|\/_next\/webpack-hmr/);
+  const data: unknown = await target.locator("#__NEXT_DATA__").evaluate(element => JSON.parse(element.textContent ?? "null"));
+  assert.ok(data && typeof data === "object" && "buildId" in data);
+  assert.equal(data.buildId, expectedBuildID, "Served HTML must use the guest's production BUILD_ID");
+  await target.getByRole("heading", { name: "Next.js in your browser", exact: true }).waitFor({ timeout: 120_000 });
+  operation = "production counter hydration";
+  await target.getByRole("button", { name: "Count: 0", exact: true }).click();
+  await target.getByRole("button", { name: "Count: 1", exact: true }).click();
+  await target.getByRole("button", { name: "Count: 2", exact: true }).waitFor();
+  assert.ok(staticResponses.some(response => /\.js(?:\?|$)/.test(response.url)), "Production JavaScript must load over the preview route");
+  assert.deepEqual(staticResponses.filter(response => response.status !== 200), []);
+  assert.deepEqual(events.filter(event => event.includes("pageerror:")), []);
+  assert.equal(events.some(event => event.includes("[HMR] connected")), false);
+  report("production.html", html);
+  if (reports) await target.screenshot({ path: join(reports, "production.png") });
+}
+
+async function execute(): Promise<void> {
+  const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? "https://bun.sprockt.dev/playground/?template=next");
+  url.searchParams.set("template", "next");
+  url.searchParams.set("engine", "browser");
+  url.searchParams.set("prompt", "off");
+  url.searchParams.set("mode", "memory");
+  const browser = await task.launch(playwright.chromium);
+  browserVersion = browser.version();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  page = await context.newPage();
+  observe(page, "playground");
+  operation = "live Pages template startup";
+  await page.goto(url.href, { timeout: 120_000 });
+  assert.match(await ready(page), /ready · Browser/);
+  assert.equal(await page.evaluate(() => playground.editor.path), "/home/user/pages/index.tsx");
+  assert.equal(await readGuest(page, "/home/user/.next/BUILD_ID"), null, "Fresh template must not contain a prebuilt application");
+  report("package.json", await readGuest(page, "/home/user/package.json") ?? "missing");
+  report("next.config.ts", await readGuest(page, "/home/user/next.config.ts") ?? "missing");
+  await command(page, "install", "bun install", 180_000);
+  await command(page, "build", "NEXT_TELEMETRY_DISABLED=1 bun run node_modules/next/dist/bin/next build", 600_000);
+  operation = "production BUILD_ID written";
+  const completedBuildID = await readGuest(page, "/home/user/.next/BUILD_ID");
+  assert.ok(completedBuildID && completedBuildID.trim(), "next build exited zero without writing .next/BUILD_ID");
+  buildID = completedBuildID.trim();
+  const previewURL = await start(page);
+  preview = await context.newPage();
+  observe(preview, "preview");
+  preview.on("response", response => {
+    if (new URL(response.url()).pathname.includes("/_next/static/")) staticResponses.push({ url: response.url(), status: response.status() });
+  });
+  await compiledPage(preview, previewURL, completedBuildID.trim());
+  operation = "production process remained alive";
+  assert.equal(await page.evaluate(() => playground.shell.running && !productionServer.finished), true);
+  console.log("PASS next build exited zero, BUILD_ID matches next start HTML, port 5173 serves compiled JavaScript, counter hydrated");
+}
+
+const deadline = setTimeout(() => {
+  failure = `Overall 15-minute deadline during ${operation}`;
+  void task.cleanup().finally(() => {
+    report("browser.log", events.join("\n"));
+    report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, cleanup: true }, null, 2));
+    process.exit(124);
+  });
+}, 900_000);
+
+try {
+  await execute();
+} catch (error) {
+  failure = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.error(`FAIL ${operation}: ${failure}`);
+  process.exitCode = 1;
+} finally {
+  clearTimeout(deadline);
+  try {
+    if (page && !page.isClosed()) {
+      report("terminal.log", await terminalText(page));
+      await stopForeground(page);
+      assert.equal(await page.evaluate(() => playground.shell.running), false);
+    }
+  } catch (error) {
+    events.push(`cleanup error: ${String(error)}`);
+    failure ??= `Cleanup failed: ${String(error)}`;
+    process.exitCode = 1;
+  } finally {
+    await task.cleanup();
+    cleanup = true;
+    report("browser.log", events.join("\n"));
+    report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, staticResponses, ms: Date.now() - started, cleanup, scratch: task.scratch }, null, 2));
+  }
+}
