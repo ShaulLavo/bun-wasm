@@ -41,6 +41,32 @@ bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --str
 The browser regression is `bun web/tests/browser-vite-react.ts` after building `web/`.
 Set `VITE_PLAYGROUND_URL` to test a deployed playground instead of a local build.
 
+## Run Next.js and its production build
+
+Open `/playground/?template=next`, or choose **Next.js** in the playground header.
+The separate workspace contains a Pages Router app and the matching SWC WASM compiler.
+
+```sh
+bun install
+bun run dev
+```
+
+Open the printed preview link. Edit `pages/index.tsx` and save to see hot updates.
+To serve a production build, stop the dev server with Ctrl-C, then run:
+
+```sh
+NEXT_TELEMETRY_DISABLED=1 bun run build
+bun run start
+```
+
+Open the new preview link. The build runs inside the guest; no prebuilt Next output is shipped.
+Stop the production server before starting development again because both use port 5173.
+
+After building `web/`, run `bun web/tests/browser-next-production.ts` for the Chromium check.
+Set `NEXT_PLAYGROUND_URL` to check a deployed playground and `NEXT_PRODUCTION_REPORTS`
+to retain its build log, generated build ID, served HTML, asset responses, and screenshot.
+The check requires hydrated counter clicks and rejects development assets or HMR.
+
 ## Engines
 
 The header dropdown (`?engine=`) picks what runs the program:
@@ -55,8 +81,8 @@ With `browser`, the wasm's `_start` sets the program up and returns; the worker 
 instance to `src/engine-host.js`, which runs the runtime's JS and the user's code on the worker's
 own engine (V8 or JavaScriptCore, with JIT). `bun build`, `--version` and `--help` still finish
 inside `_start`. Networking is the same as on the wasm engines (below), through the same
-`NetHost`. ES modules are served by the service worker's `./__bunwasm/` scope so that imports can
-form cycles (`src/sw.ts`; docs/engine-browser.md). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
+`NetHost`. Browser ES modules load as registration records, so cycles do not need service-worker
+control. The preview still needs its own service worker (`src/sw.ts`; docs/engine-browser.md). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
 `BUN_JSC_*` variable is not a JSC option.)
 
 ## Preview
@@ -80,9 +106,9 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Browser-engine module loading also creates `blob:` URLs for acyclic modules. If the host sets a
+Browser-engine module loading creates `blob:` URLs for module records. If the host sets a
 Content-Security-Policy, its `script-src` must allow `blob:` (alongside the policy's existing
-Wasm and eval permissions). Import cycles use the service worker's same-origin module URLs.
+Wasm and eval permissions). The record loader links import cycles without a per-module service-worker URL.
 
 ## Networking
 
