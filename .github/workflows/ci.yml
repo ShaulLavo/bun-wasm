@@ -24,6 +24,11 @@ jobs:
       jsc: ${{ steps.changes.outputs.jsc }}
       shared: ${{ steps.changes.outputs.shared }}
     steps:
+      - name: Require a ready PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft
+        run: |
+          echo '::error::Mark this PR ready for review to run the required checks.'
+          exit 1
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
