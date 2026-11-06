@@ -36,6 +36,7 @@
       if (!isOriginSite(site)) return null;
       if (site.isNative()) continue;
       const rawFile = site.getScriptNameOrSourceURL?.() || site.getFileName() || evalFile(site);
+      if (!rawFile && !site.isEval?.()) continue;
       const file = internal.displayName ? internal.displayName(rawFile, site.isEval?.() ?? false) : rawFile;
       if (file?.startsWith("bun-wasm:")) continue;
       if (typeof site.getLineNumber() !== "number" || typeof site.getColumnNumber() !== "number") return null;

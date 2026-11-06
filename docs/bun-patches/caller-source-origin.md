@@ -12,7 +12,7 @@ an opaque caller frame instead of reporting a later ES module as the caller. ES 
 in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
 
-The caller-origin helper does not format stack positions or fetch source lines on structured-stack engines. Function construction needs a caller filename, not a rendered stack. This avoids repeatedly decoding large one-line compiler bundles during webpack rebuilds. It preserves module URL display names, eval creation metadata, opaque caller boundaries, and the application formatter. Error stack formatting itself is unchanged.
+The caller-origin helper does not format stack positions or fetch source lines on structured-stack engines. Function construction needs a caller filename, not a rendered stack. This avoids repeatedly decoding large one-line compiler bundles during webpack rebuilds. It preserves module URL display names, eval creation metadata, opaque caller boundaries, and the application formatter. V8 builtin callbacks with no filename and no eval origin are skipped even when their isNative flag is false, as in the existing formatter. Opaque eval frames still stop lookup. Error stack formatting itself is unchanged.
 
 The bootstrap formatter maps a CallSite only when both its line and column are numbers.
 A missing column keeps the filename and line without inventing a column. A missing line

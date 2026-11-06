@@ -234,7 +234,7 @@ for (const engine of ["host", "quickjs"]) {
 for (const file of [null, "<input>"]) {
   test(`structured caller origin stops at opaque user filename ${file}`, () => {
     const state = bootstrap("host");
-    const prepared = installFunctionCaller(state, [callSite({ file }), callSite({ file: "/unrelated.ts" })]);
+    const prepared = installFunctionCaller(state, [callSite({ file, eval: file === null }), callSite({ file: "/unrelated.ts" })]);
     expect(runInContext('new Function("return 42")()', state.context)).toBe(42);
     expect(prepared).toEqual([[["return 42"], "normal", undefined]]);
     expect(state.lookups).toEqual([]);
@@ -252,4 +252,25 @@ test("structured caller origin maps a browser module URL without mapping positio
   expect(prepared).toEqual([[["return 42"], "normal", "/project/source.ts"]]);
   expect(state.mappings).toEqual([]);
   expect(state.lookups).toEqual([]);
+});
+
+test("real V8 builtin callback frames preserve the calling module origin", () => {
+  const code = `
+    import assert from "node:assert/strict";
+    import { pathToFileURL } from "node:url";
+    const factory = (0, eval)(${JSON.stringify(callerOriginSource.stdout.toString() + "\n//# sourceURL=bun-wasm:caller_origin")});
+    globalThis.lookupOrigin = factory({
+      hasNativeStackTrace: true,
+      pathToFileHref: path => pathToFileURL(path).href,
+      displayName: file => file,
+    });
+    const throughBuiltin = (0, eval)(${JSON.stringify("(function fromModule() { return [0].map(globalThis.lookupOrigin)[0]; })\n//# sourceURL=/project/caller.mjs")});
+    const custom = () => "application formatter";
+    Error.prepareStackTrace = custom;
+    assert.equal(throughBuiltin(), pathToFileURL("/project/caller.mjs").href);
+    assert.equal(Error.prepareStackTrace, custom);
+  `;
+  const result = Bun.spawnSync(["node", "--input-type=module", "-e", code], { stdout: "pipe", stderr: "pipe" });
+  expect(result.stderr.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
 });
