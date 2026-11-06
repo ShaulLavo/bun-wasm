@@ -8,6 +8,7 @@
 | `scripts/engine-host-result-bounds.test.ts` | Test fixture | Exercise the production decoder and bridge with controlled exports and real WebAssembly memory. |
 | `scripts/engine-host-wire.test.ts` | Test fixture | Supply the logical end when testing the production reader. |
 | `web/tests/crypto-lifetime-probe.mjs` | Test fixture | Publish the encoded result length alongside its pointer. |
+| `scripts/app-matrix/product-browser.test.ts` | Test fixture | Resolve the Page type through the declared Playwright package. |
 
 These are original bun-wasm adapters and fixtures, not copied or adapted upstream
 source. There is no upstream path or revision. The corrected host source is based
@@ -26,7 +27,9 @@ header and value tag. These checks happen before collection allocation or iterat
 Unknown tags, incomplete values, out-of-bounds regions, and trailing bytes after
 one top-level value throw `RangeError("corrupt native result")`. Tag zero still
 means `undefined`. Valid native error packets decode before status handling and
-keep their error class, message, name, and properties.
+keep their error class, message, name, and properties. Decoded object fields are
+own enumerable, writable, configurable data properties. A field named `__proto__`
+keeps its value without changing the ordinary object's prototype.
 
 Byte values, strings, and object keys retain their independent copies. Result
 storage belongs to the guest and can change on the next call. Memory growth can

@@ -201,6 +201,28 @@ for (const shared of [false, true]) {
       assert.equal(f.call(), scalar);
     }
   });
+  test(`${label} object keys remain own data properties without changing the prototype`, () => {
+    const f = fixture(shared);
+    f.packet(encode({}));
+    const empty = f.call();
+    assert.ok(empty && typeof empty === "object");
+    const prototype = Object.getPrototypeOf(empty);
+    for (const value of ["guest-env-value", { marker: "own value" }, null]) {
+      f.packet(encode({ ["__proto__"]: value, ordinary: "kept" }));
+      const output = f.call();
+      assert.ok(output && typeof output === "object");
+      assert.deepEqual(Object.keys(output), ["__proto__", "ordinary"]);
+      assert.equal(Object.getPrototypeOf(output), prototype);
+      assert.deepEqual(encode(Reflect.get(output, "__proto__")), encode(value));
+      assert.equal(Reflect.get(output, "ordinary"), "kept");
+      const descriptor = Object.getOwnPropertyDescriptor(output, "__proto__");
+      assert.ok(descriptor);
+      assert.equal(descriptor.enumerable, true);
+      assert.equal(descriptor.writable, true);
+      assert.equal(descriptor.configurable, true);
+      assert.equal(Object.hasOwn(descriptor, "get"), false);
+    }
+  });
   test(`${label} native status still decodes and rethrows the native error`, () => {
     const f = fixture(shared);
     f.packet(encode({ kind: "TypeError", message: "\ufeffbad é", name: "NativeFailure", props: { code: "EFAIL", count: 2 } }), 1);

@@ -308,7 +308,9 @@ class Reader {
     const out = {};
     for (let i = 0; i < n; i++) {
       const k = wireFromUtf8.decode(this.raw().slice());
-      out[k] = this.value();
+      Object.defineProperty(out, k, {
+        value: this.value(), enumerable: true, writable: true, configurable: true,
+      });
     }
     return out;
   }
