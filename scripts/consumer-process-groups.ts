@@ -52,6 +52,6 @@ function reapAdopted(row: ProcessIdentity, wait: (pid: number) => number): void 
   if (after?.birth === row.birth && after.parent === process.pid && after.state === "Z") throw new Error(`Cannot reap owned consumer descendant ${row.pid}`);
 }
 
-export function stopConsumerGroup(child: ChildProcess): Promise<void> {
-  return withConsumerGroups([child], () => stopProcessGroup(child));
+export function stopConsumerGroup(child: ChildProcess, graceMs = 5000): Promise<void> {
+  return withConsumerGroups([child], () => stopProcessGroup(child, graceMs));
 }

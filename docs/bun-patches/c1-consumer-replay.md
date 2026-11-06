@@ -129,7 +129,12 @@ whole `result.json`, or why none is readable.
   then ends and reaps the entire group even if a stopped descendant prevents
   normal EOF handling. The original timeout or unreconciled-resource error
   remains a failure after local termination. An unreconciled remote fixture
-  is left as it is, named in the ledger.
+  is left as it is, named in the ledger. Host-only stopped-descendant tests
+  supply 50 ms lease-exit and TERM grace periods at the actual cleanup
+  boundaries. Production keeps both five-second defaults, and the SIGKILL
+  confirmation deadline stays unchanged. The framework process tests retain
+  their default-policy timing assertions with real descendants and unrelated
+  processes.
 - The sealed TLS page keeps a guest's stdout in a closure, drops its stderr
   and throws one generic error for a nonzero exit. `web/tests/tls-relay-browser.ts`
   observes the guest from the host instead, without changing any served byte:
