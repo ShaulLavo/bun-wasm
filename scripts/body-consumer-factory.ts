@@ -26,19 +26,28 @@ export function bodyConsumerFactory(sources: ReturnType<typeof bodyConsumerSourc
       engine: "host", platformInfo: { version: "probe", arch: "probe" }, hostCaps: { fetch: false },
       utf8Encode: (text: string) => encoder.encode(text), utf8Decode: (bytes: Uint8Array) => decoder.decode(bytes),
       timeOrigin: () => 0, now: () => 0,
+      urlParse(input: string, base?: string) {
+        if (!URL.canParse(input, base)) return null;
+        const url = new URL(input, base);
+        return [url.href, url.protocol, url.username, url.password, url.hostname, url.port, url.pathname, url.search, url.hash, url.origin];
+      },
     },
-    web: { Request, Response, Blob, TextDecoder },
     require(name: string): unknown {
       if (!modules.has(name)) throw new Error(`Unexpected module ${name}`);
       return modules.get(name);
     },
   };
-  modules.set("body_streams", new Function(sources.body)()(internal));
+  const body: { values<T>(stream: ReadableStream<T>): AsyncGenerator<T, void, unknown> } = new Function(sources.body)()(internal);
+  modules.set("body_streams", body);
   new Function(sources.web)()(internal);
+  const web: {
+    Response: new (body?: unknown) => Response;
+    Request: new (url: string, init: { method: string; body: unknown; duplex: string }) => Request;
+  } = Reflect.get(internal, "web");
   const consumers: {
     text(stream: unknown): Promise<string>;
     blob(stream: unknown): Promise<Blob>;
     bytes(stream: unknown): Promise<Uint8Array>;
   } = new Function(sources.consumers)()(internal);
-  return { web: internal.web, consumers };
+  return { web, consumers, body };
 }

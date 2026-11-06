@@ -47,6 +47,23 @@
       cancel: reason => reader.cancel(reason),
     });
   }
+  async function finishReader(reader: ReadableStreamDefaultReader<unknown>, cancel: boolean): Promise<void> {
+    try { if (cancel) await reader.cancel(); }
+    finally { reader.releaseLock(); }
+  }
+  async function* values<T>(stream: ReadableStream<T>): AsyncGenerator<T, void, unknown> {
+    const reader = stream.getReader();
+    let state: "reading" | "yielding" = "reading";
+    try {
+      while (true) {
+        state = "reading";
+        const next = await reader.read();
+        if (next.done) return;
+        state = "yielding";
+        yield next.value;
+      }
+    } finally { await finishReader(reader, state === "yielding"); }
+  }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
     if (body.closed) return;
@@ -76,5 +93,5 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, fromAsyncIterable, values, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

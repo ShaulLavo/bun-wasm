@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { bodyConsumerFactory, bodyConsumerSources } from "./body-consumer-factory.ts";
 
 const { web } = bodyConsumerFactory(bodyConsumerSources());
-function readerOnly<T>(source: UnderlyingSource<T> = {}) {
+function readerOnly<T>(source: UnderlyingDefaultSource<T> = {}) {
   const stream = new ReadableStream<T>(source, { highWaterMark: 0 });
   Object.defineProperty(stream, Symbol.asyncIterator, { value: undefined });
   Object.defineProperty(stream, "values", { value: undefined });
@@ -47,7 +47,7 @@ test("reader-only body rejects a locked stream without disturbing its reader", a
 test("invalid body chunks cancel once, release the lock, and retain conversion errors", async () => {
   let cancellations = 0;
   const cancellation = new Error("cancel failed");
-  const stream = readerOnly({ pull(c) { c.enqueue({ invalid: true }); }, cancel(reason) { expect(reason).toBeUndefined(); cancellations++; throw cancellation; } });
+  const stream = readerOnly<unknown>({ pull(c) { c.enqueue({ invalid: true }); }, cancel(reason) { expect(reason).toBeUndefined(); cancellations++; throw cancellation; } });
   await expect(new web.Response(stream).text()).rejects.toThrow("Expected an ArrayBuffer or ArrayBufferView");
   expect(cancellations).toBe(1);
   expect(stream.locked).toBe(false);
@@ -58,4 +58,33 @@ test("body chunks keep string encoding and view boundaries", async () => {
     c.enqueue("α"); c.enqueue(new Uint8Array([0, 65, 0]).subarray(1, 2)); c.enqueue(new DataView(new Uint8Array([0, 66, 0]).buffer, 1, 1)); c.close();
   } });
   expect(await new web.Response(stream).text()).toBe("αAB");
+});
+
+test("reader iteration cancels on early return and preserves cancellation rejection identity", async () => {
+  const { body } = bodyConsumerFactory(bodyConsumerSources());
+  for (const reason of [undefined, null, { marker: "cancel" }]) {
+    let cancellations = 0;
+    const stream = readerOnly({ pull(c) { c.enqueue(bytes("first")); }, cancel(value) { expect(value).toBeUndefined(); cancellations++; return Promise.reject(reason); } });
+    const iterator = body.values(stream);
+    expect((await iterator.next()).value).toEqual(bytes("first"));
+    await expect(iterator.return()).rejects.toBe(reason);
+    expect(cancellations).toBe(1);
+    expect(stream.locked).toBe(false);
+  }
+});
+
+test("reader iteration keeps consumer throw identity when cancellation also rejects", async () => {
+  const { body } = bodyConsumerFactory(bodyConsumerSources());
+  const failure = { marker: "consumer" };
+  const stream = readerOnly({ pull(c) { c.enqueue(1); }, cancel() { throw new Error("cancel"); } });
+  async function consume() { for await (const _chunk of body.values(stream)) throw failure; }
+  await expect(consume()).rejects.toBe(failure);
+  expect(stream.locked).toBe(false);
+});
+
+test("generic async iterable response bodies still close their iterator", async () => {
+  let closed = 0;
+  async function* source() { try { yield bytes("generic"); } finally { closed++; } }
+  expect(await new web.Response(source()).text()).toBe("generic");
+  expect(closed).toBe(1);
 });

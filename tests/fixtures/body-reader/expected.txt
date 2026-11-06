@@ -1,0 +1,5 @@
+response data and bodyUsed
+request data
+read errors retain identity and release locks
+conversion errors cancel and release locks
+generic async iterable body
