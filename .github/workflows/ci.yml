@@ -1048,10 +1048,11 @@ jobs:
       # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
           path: ${{ runner.temp }}/native-quality-artifact
+          digest-mismatch: error
       - name: Import the verified native quality checkpoint
         id: native-import
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}

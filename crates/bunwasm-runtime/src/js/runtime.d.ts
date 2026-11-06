@@ -361,6 +361,9 @@ declare namespace BunWasm {
     builtin(name: string): unknown;
     defineHidden(target: object, values: object): void;
     hasNativeStackTrace: boolean;
+    displayName?(file: string | null, isEval: boolean): string | null;
+    pathToFileHref(path: string): string;
+    require(name: "caller_origin"): () => string | null;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;
