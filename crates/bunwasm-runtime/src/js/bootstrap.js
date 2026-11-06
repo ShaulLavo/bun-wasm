@@ -49,12 +49,14 @@
     return typeof fn === "function" && (fn === Error || fn.prototype instanceof Error);
   }
 
-  // V8 (the host engine in browsers/Node): eval'd code (CommonJS) names its
+  internal.hasNativeStackTrace = internal.require("stack_capability");
+
+  // V8 (the host engine in Chromium/Node): eval'd code (CommonJS) names its
   // file through //# sourceURL, and strict-mode frames hide their function,
   // so top-level code is recognised by its enclosing position (1:1).
-  // Only V8 calls Error.prepareStackTrace among host engines (JavaScriptCore
-  // and SpiderMonkey stacks are parsed in inspect.js).
-  const isV8 = native.engine === "host";
+  // Host JavaScriptCore captures text but ignores prepareStackTrace. Probe before
+  // installing our formatter so native V8 CallSites stay native.
+  const isV8 = native.engine === "host" && internal.hasNativeStackTrace;
   function v8TopLevel(site) {
     return typeof site.getEnclosingLineNumber === "function" && site.getEnclosingLineNumber() === 1 && site.getEnclosingColumnNumber() === 1;
   }

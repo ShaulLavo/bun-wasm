@@ -2,6 +2,7 @@
   "use strict";
   const { native } = internal;
   const capture = Error.captureStackTrace;
+  const parseCapturedStack = native.engine === "jsc" || native.engine === "host" && !internal.hasNativeStackTrace;
   const defaultPrepare = Error.prepareStackTrace;
   const formatted = new WeakMap<object, unknown>();
   let formatting = false;
@@ -71,7 +72,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
-      const sites = custom && native.engine === "jsc"
+      const sites = custom && parseCapturedStack
         ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
         : raw;
       value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
@@ -108,7 +109,7 @@
     });
   }
 
-  if (native.engine === "quickjs" || native.engine === "jsc") {
+  if (native.engine === "quickjs" || parseCapturedStack) {
     internal.defineHidden(Error, {
       captureStackTrace: function captureStackTrace(target: { stack?: unknown }, constructorOpt?: unknown) {
         validateCaptureTarget(target);
