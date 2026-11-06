@@ -42,7 +42,13 @@ test("fs/promises exposes the watch imported by the Deno shim", () => {
 
 function wrapperSource(value: object): string {
   const source = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8");
-  const factory = runInNewContext(source.slice(source.indexOf("function wrapperSource(")) + "\nwrapperSource");
+  const start = source.indexOf("const identifierKey =");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const factory = runInNewContext(source.slice(start) + "\nwrapperSource", {
+    nativeObjectKeys: Object.keys,
+    nativeRegExpExec: Function.prototype.call.bind(RegExp.prototype.exec),
+    nativeArrayPush: Function.prototype.call.bind(Array.prototype.push),
+  });
   return factory("node:fs/promises", value);
 }
 
