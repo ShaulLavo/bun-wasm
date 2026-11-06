@@ -41,6 +41,7 @@ async function projectLinks(page: Page): Promise<void> {
 async function development(page: Page): Promise<void> {
   await page.evaluate(() => { void playground.shell.submit("bun run dev"); });
   await page.waitForFunction(() => playground.previews.serves(5173), undefined, { timeout: 90_000 });
+  assert.equal(await page.evaluate(() => playground.previews.ready), "ready");
   const url = await page.evaluate(() => playground.previews.url(5173));
   const preview = await page.context().newPage();
   preview.on("console", message => events.push(message.text()));

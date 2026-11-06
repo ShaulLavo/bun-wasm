@@ -32,6 +32,7 @@ async function command(page: Page, text: string, timeout = 120000) {
 async function startServer(page: Page, command: string): Promise<string> {
   await page.evaluate(command => { void (globalThis as PlaygroundGlobal).playground.shell.submit(command); }, command);
   await page.waitForFunction(() => (globalThis as PlaygroundGlobal).playground.previews.serves(5173), undefined, { timeout: 60000 });
+  assert.equal(await page.evaluate(() => (globalThis as PlaygroundGlobal).playground.previews.ready), "ready");
   return page.evaluate(() => (globalThis as PlaygroundGlobal).playground.previews.url(5173));
 }
 
