@@ -63,11 +63,13 @@ try {
   await preview.getByRole("heading", { name: heading, exact: true }).waitFor({ timeout: 180_000 });
   timings.render = Math.round(performance.now() - started);
   console.log(`Next rendered in ${timings.render} ms`);
-  await preview.getByRole("button", { name: "Count: 0", exact: true }).click();
-  await preview.getByRole("button", { name: "Count: 1", exact: true }).waitFor();
   const frame = page.frames().find(frame => frame.url().includes("/__preview/"));
   assert.ok(frame, "Next must render inside the playground preview");
   await frame.waitForFunction(() => globalThis.nextFrameworkSocketEvents.some(event => event.type === "open" && event.url.includes("/_next/webpack-hmr")), undefined, { timeout: 30_000 });
+  console.log("Next HMR socket open");
+  await preview.getByRole("button", { name: "Count: 0", exact: true }).click();
+  await preview.getByRole("button", { name: "Count: 1", exact: true }).waitFor();
+  console.log("Next counter hydrated");
   const documentIdentity = await frame.evaluate(() => performance.timeOrigin);
   const original = await page.evaluate(() => sandbox.editor.view.state.doc.toString());
   stopProfile = process.env.NEXT_DEV_PROFILE && reports ? await profileNextWorkers(browser, reports) : undefined;
