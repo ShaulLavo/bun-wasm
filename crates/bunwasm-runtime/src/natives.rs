@@ -597,6 +597,8 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
 
 #[cfg(test)]
 mod mkdir_tests;
+#[cfg(test)]
+mod rm_tests;
 
 fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
     let mut pending = vec![Path::new(path)];
