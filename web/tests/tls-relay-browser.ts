@@ -78,15 +78,32 @@ function guestField(value: unknown, secrets: RunSecrets): GuestField {
 }
 /** One page-level worker's messages during one case: phases, output tails and terminal messages. */
 class WorkerObservation {
+  readonly diagnostics: string[] = [];
+  private pendingLine = "";
+  private lineOverflow = false;
   readonly phases: string[] = [];
   readonly terminal: Record<string, GuestField>[] = [];
   readonly bytes = { stdout: 0, stderr: 0 };
   readonly output: Record<"stdout" | "stderr", ReturnType<RunSecrets["tail"]>>;
-  constructor(readonly worker: number, readonly path: string, secrets: RunSecrets) {
+  constructor(readonly worker: number, readonly path: string, private readonly secrets: RunSecrets) {
     this.output = { stdout: secrets.tail(GUEST_TEXT_LIMIT), stderr: secrets.tail(GUEST_TEXT_LIMIT) };
   }
+  stderr(text: string): void {
+    const lines = text.split("\n");
+    for (const [index, part] of lines.entries()) {
+      if (this.pendingLine.length + part.length > 4096) this.lineOverflow = true;
+      if (!this.lineOverflow) this.pendingLine += part;
+      if (index === lines.length - 1) continue;
+      this.finishLine();
+    }
+  }
+  private finishLine(): void {
+    if (!this.lineOverflow && this.diagnostics.length < 2 && this.pendingLine.startsWith('{"kind":"tls-pg-failure",')) this.diagnostics.push(this.secrets.redact(this.pendingLine));
+    this.pendingLine = "";
+    this.lineOverflow = false;
+  }
   evidence() {
-    return { worker: this.worker, path: this.path, phases: this.phases, terminal: this.terminal,
+    return { worker: this.worker, path: this.path, diagnostics: this.diagnostics, phases: this.phases, terminal: this.terminal,
       stdout: { bytes: this.bytes.stdout, tail: this.output.stdout.read() }, stderr: { bytes: this.bytes.stderr, tail: this.output.stderr.read() } };
   }
 }
@@ -100,7 +117,9 @@ class CaseObservation {
     const observed = this.worker(worker, row.path);
     if (type === "stdout" || type === "stderr") {
       observed.bytes[type] += typeof row.bytes === "number" ? row.bytes : 0;
-      observed.output[type].write(typeof row.text === "string" ? row.text : "");
+      const text = typeof row.text === "string" ? row.text : "";
+      observed.output[type].write(text);
+      if (type === "stderr") observed.stderr(text);
       return;
     }
     if (type !== "phase") {
