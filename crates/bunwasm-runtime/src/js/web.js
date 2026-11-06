@@ -894,7 +894,7 @@
 
   async function streamBytes(stream) {
     const chunks = [];
-    for await (const chunk of bodyStreams.values(stream)) chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk));
+    await bodyStreams.consume(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
     return concatBytes(chunks);
   }
 

@@ -6,13 +6,14 @@
   type Input<T> = AsyncIterable<T> | Iterable<T> | ReadableStream<T>;
   type Parts = Input<BlobPart>;
   type TextParts = Input<string | AllowSharedBufferSource>;
-  function values<T>(stream: Input<T>): AsyncIterable<T> | Iterable<T> {
-    return stream instanceof ReadableStream ? bodyStreams.values(stream) : stream;
+  async function consume<T>(stream: Input<T>, visit: (chunk: T) => void): Promise<void> {
+    if (stream instanceof ReadableStream) return bodyStreams.consume(stream, visit);
+    for await (const chunk of stream) visit(chunk);
   }
 
   async function blob(stream: Parts): Promise<Blob> {
     const chunks: BlobPart[] = [];
-    for await (const chunk of values(stream)) chunks.push(chunk);
+    await consume(stream, chunk => chunks.push(chunk));
     return new Blob(chunks);
   }
 
@@ -32,9 +33,9 @@
   async function text(stream: TextParts): Promise<string> {
     const decoder = new TextDecoder();
     let result = "";
-    for await (const chunk of values(stream)) {
+    await consume(stream, chunk => {
       result += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-    }
+    });
     return result + decoder.decode();
   }
 

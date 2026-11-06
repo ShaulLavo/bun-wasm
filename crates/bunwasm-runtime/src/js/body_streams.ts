@@ -47,37 +47,22 @@
       cancel: reason => reader.cancel(reason),
     });
   }
-  type ReaderState<T> = { reader: ReadableStreamDefaultReader<T> | null };
-  async function nextValue<T>(state: ReaderState<T>): Promise<IteratorResult<T, unknown>> {
-    const reader = state.reader;
-    if (!reader) return { done: true, value: undefined };
-    try {
-      const result = await reader.read();
-      if (result.done) { state.reader = null; reader.releaseLock(); }
-      return result;
-    } catch (error) { state.reader = null; reader.releaseLock(); throw error; }
-  }
-  async function returnValue<T>(state: ReaderState<T>, value: unknown): Promise<IteratorResult<T, unknown>> {
-    const reader = state.reader;
-    if (!reader) return { done: true, value };
-    state.reader = null;
-    try { await reader.cancel(value); }
-    finally { reader.releaseLock(); }
-    return { done: true, value };
-  }
-  function values<T>(stream: ReadableStream<T>) {
-    const state: ReaderState<T> = { reader: stream.getReader() };
-    let ongoing: Promise<unknown> = Promise.resolve();
-    function enqueue(operation: () => Promise<IteratorResult<T, unknown>>) {
-      const result = ongoing.then(operation, operation);
-      ongoing = result;
-      return result;
+  async function visitChunk<T>(reader: ReadableStreamDefaultReader<T>, chunk: T, visit: (chunk: T) => void): Promise<void> {
+    try { visit(chunk); }
+    catch (error) {
+      try { await reader.cancel(); } catch {}
+      throw error;
     }
-    return {
-      next: () => enqueue(() => nextValue(state)),
-      return: (value?: unknown) => enqueue(() => returnValue(state, value)),
-      [Symbol.asyncIterator]() { return this; },
-    };
+  }
+  async function consume<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) return;
+        await visitChunk(reader, next.value, visit);
+      }
+    } finally { reader.releaseLock(); }
   }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
@@ -108,5 +93,5 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, values, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

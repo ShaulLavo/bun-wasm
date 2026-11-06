@@ -37,7 +37,7 @@ export function bodyConsumerFactory(sources: ReturnType<typeof bodyConsumerSourc
       return modules.get(name);
     },
   };
-  const body: { values<T>(stream: ReadableStream<T>): AsyncIterableIterator<T> & { return(value?: unknown): Promise<IteratorResult<T>> } } = new Function(sources.body)()(internal);
+  const body: { consume<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> } = new Function(sources.body)()(internal);
   modules.set("body_streams", body);
   new Function(sources.web)()(internal);
   const web: {

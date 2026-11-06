@@ -41,3 +41,17 @@ console.log("reader-only stream consumers");
 assert(await text(["sync", encode(" iterable")]) === "sync iterable", "sync iterable changed");
 assert(await text(chunks()) === "generic", "async consumer changed");
 console.log("generic stream consumers");
+const cancelStarted = Promise.withResolvers<void>();
+const cancelFinished = Promise.withResolvers<void>();
+const pending = readerOnly<unknown>({ pull(c) { c.enqueue({ invalid: true }); }, cancel() { cancelStarted.resolve(); return cancelFinished.promise; } });
+let observed = false;
+const failed = new Response(pending).text().then(
+  () => { throw new Error("invalid chunk accepted"); },
+  error => { observed = true; return { error, locked: pending.locked }; },
+);
+await cancelStarted.promise;
+assert(!observed && pending.locked, "consumer rejected before cancellation settled");
+cancelFinished.reject(null);
+const failure = await failed;
+assert(failure.error instanceof TypeError && !failure.locked, "consumer error or final lock state changed");
+console.log("cancellation settles before original rejection and lock release");

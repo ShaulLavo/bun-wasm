@@ -11,12 +11,13 @@ the same array-buffer conversion. The upstream file's SHA-256 is
 `5558c0dfc267a1816cbafc3f90a65cddcb031f1e39f23c1ecea5af689894defd`.
 
 Bun's JSC-only `$inheritsReadableStream` checks and native fast paths are omitted.
-Concrete web streams use the original body adapter's default-reader iterator,
+Concrete web streams use the original body adapter's direct default-reader loop,
 including on hosts without ReadableStream async iteration. Node streams and
 generic asynchronous and synchronous iterables still use their existing iteration
 protocols without wrapping or changing chunk semantics. The reader adapter keeps
-Promise-valued chunks intact, preserves rejection identities, cancels on early
-return or consumer failure, and releases its lock on completion or rejection. The existing
+Promise-valued chunks intact and preserves rejection identities. It awaits
+cancellation on consumer failure, then releases its lock before the caller sees
+the original failure. Completion and read rejection release without cancellation. The existing
 Blob, Buffer, and TextDecoder supply byte conversion and UTF-8 decoding. Text is
 decoded incrementally and flushed at EOF. Binary consumers collect parts because
 their result contains the entire body. No Response wrapper or new native codec is

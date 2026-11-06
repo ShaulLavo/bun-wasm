@@ -60,26 +60,15 @@ test("body chunks keep string encoding and view boundaries", async () => {
   expect(await new web.Response(stream).text()).toBe("αAB");
 });
 
-test("reader iteration cancels on early return and preserves cancellation rejection identity", async () => {
+test("reader consumption preserves callback rejection identity when cancellation rejects", async () => {
   const { body } = bodyConsumerFactory(bodyConsumerSources());
-  for (const reason of [undefined, null, { marker: "cancel" }]) {
+  for (const reason of [undefined, null, false, 0, "", { marker: "callback" }]) {
     let cancellations = 0;
-    const stream = readerOnly({ pull(c) { c.enqueue(bytes("first")); }, cancel(value) { expect(value).toBeUndefined(); cancellations++; return Promise.reject(reason); } });
-    const iterator = body.values(stream);
-    expect((await iterator.next()).value).toEqual(bytes("first"));
-    await expect(iterator.return()).rejects.toBe(reason);
+    const stream = readerOnly({ pull(c) { c.enqueue(bytes("first")); }, cancel(value) { expect(value).toBeUndefined(); cancellations++; throw new Error("cancel"); } });
+    await expect(body.consume(stream, () => { throw reason; })).rejects.toBe(reason);
     expect(cancellations).toBe(1);
     expect(stream.locked).toBe(false);
   }
-});
-
-test("reader iteration keeps consumer throw identity when cancellation also rejects", async () => {
-  const { body } = bodyConsumerFactory(bodyConsumerSources());
-  const failure = { marker: "consumer" };
-  const stream = readerOnly({ pull(c) { c.enqueue(1); }, cancel() { throw new Error("cancel"); } });
-  async function consume() { for await (const _chunk of body.values(stream)) throw failure; }
-  await expect(consume()).rejects.toBe(failure);
-  expect(stream.locked).toBe(false);
 });
 
 test("generic async iterable response bodies still close their iterator", async () => {
@@ -103,9 +92,9 @@ test("reader-backed consumers do not unwrap Promise or thenable chunks", async (
   let calls = 0;
   const value = { then(resolve: (value: string) => void) { calls++; resolve("unwrapped"); } };
   const stream = readerOnly({ start(c) { c.enqueue(value); c.close(); } });
-  const iterator = body.values(stream);
-  expect((await iterator.next()).value).toBe(value);
-  await iterator.return();
+  const chunks: unknown[] = [];
+  await body.consume(stream, chunk => chunks.push(chunk));
+  expect(chunks).toEqual([value]);
   expect(calls).toBe(0);
   const promise = Promise.resolve(bytes("not a byte chunk"));
   await expect(consumers.text(readerOnly({ start(c) { c.enqueue(promise); c.close(); } }))).rejects.toBeInstanceOf(TypeError);
@@ -152,21 +141,37 @@ test("generic iterables keep async and sync chunk semantics and cleanup", async 
   await expect(consumers.blob(source)).rejects.toBe(reason);
 });
 
-test("reader iterator queues return behind a pending read and forwards its reason", async () => {
+test("reader consumption owns the lock through a pending read and releases at completion", async () => {
   const { body } = bodyConsumerFactory(bodyConsumerSources());
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const reason = { marker: "return" };
-  const cancellations: unknown[] = [];
-  const stream = readerOnly<Uint8Array>({ start(value) { controller = value; }, cancel(value) { cancellations.push(value); } });
-  const iterator = body.values(stream);
-  const next = iterator.next();
-  const finish = iterator.return(reason);
-  expect(cancellations).toEqual([]);
+  const stream = readerOnly<Uint8Array>({ start(value) { controller = value; } });
+  const chunks: Uint8Array[] = [];
+  const consumed = body.consume(stream, chunk => chunks.push(chunk));
+  expect(stream.locked).toBe(true);
   if (!controller) throw new Error("stream controller missing");
   controller.enqueue(bytes("pending"));
-  expect((await next).value).toEqual(bytes("pending"));
-  expect(await finish).toEqual({ done: true, value: reason });
-  expect(cancellations).toEqual([reason]);
+  controller.close();
+  await consumed;
+  expect(chunks).toEqual([bytes("pending")]);
   expect(stream.locked).toBe(false);
-  expect(await iterator.next()).toEqual({ done: true, value: undefined });
+});
+
+test("cancellation settles before the caller observes the original rejection and unlocked body", async () => {
+  const { body } = bodyConsumerFactory(bodyConsumerSources());
+  for (const cancellation of [undefined, null, false, { marker: "cancel" }]) {
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const original = { marker: "visit" };
+    const stream = readerOnly({ pull(c) { c.enqueue(1); }, cancel() { started.resolve(); return finish.promise; } });
+    let observed = false;
+    const result = body.consume(stream, () => { throw original; }).then(
+      () => { throw new Error("visitor rejection lost"); },
+      error => { observed = true; return { error, locked: stream.locked }; },
+    );
+    await started.promise;
+    expect(observed).toBe(false);
+    expect(stream.locked).toBe(true);
+    finish.reject(cancellation);
+    expect(await result).toEqual({ error: original, locked: false });
+  }
 });
