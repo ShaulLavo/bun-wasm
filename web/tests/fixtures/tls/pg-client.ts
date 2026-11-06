@@ -37,6 +37,23 @@ function diagnosticError(error: unknown, depth = 0): object {
   return { name: field("name", 64), code: field("code", 96), message: field("message", 384),
     cause: cause === undefined ? null : depth < 2 ? diagnosticError(cause, depth + 1) : { truncated: true } };
 }
+function expectedRejection(error: unknown): boolean {
+  try {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const message = error instanceof Error ? error.message : "";
+    return mode === "hostname" ? code === "ERR_TLS_CERT_ALTNAME_INVALID"
+      : mode === "no-extra-ca" ? ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "SELF_SIGNED_CERT_IN_CHAIN"].includes(String(code))
+      : mode === "rejection" ? /does not support SSL/i.test(message)
+      : code === "28000";
+  } catch { return false; }
+}
+function reportFailure(error: unknown, connected: boolean): void {
+  try {
+    process.stderr.write(JSON.stringify({ kind: "tls-pg-failure", mode, connected, error: diagnosticError(error) }) + "\n");
+  } catch {
+    // Diagnostic metadata or output must not replace the latched primary failure.
+  }
+}
 let connected = false;
 let failure: { error: unknown } | undefined;
 try {
@@ -53,15 +70,9 @@ try {
   assert.ok(row.cipher.length > 0 && row.bits >= 128);
   process.stdout.write(JSON.stringify({ kind: "tls-pg-result", mode, ssl: row.ssl, sameBackend: row.same_backend, version: row.version, cipher: row.cipher, bits: row.bits }) + "\n");
 } catch (error) {
-  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-  const message = error instanceof Error ? error.message : "";
-  const expected = mode === "hostname" ? code === "ERR_TLS_CERT_ALTNAME_INVALID"
-    : mode === "no-extra-ca" ? ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "SELF_SIGNED_CERT_IN_CHAIN"].includes(String(code))
-    : mode === "rejection" ? /does not support SSL/i.test(message)
-    : code === "28000";
-  if (connected || mode === "verified" || !expected) {
+  if (connected || mode === "verified" || !expectedRejection(error)) {
     failure = { error };
-    process.stderr.write(JSON.stringify({ kind: "tls-pg-failure", mode, connected, error: diagnosticError(error) }) + "\n");
+    reportFailure(error, connected);
   } else process.stdout.write(JSON.stringify({ kind: "tls-pg-result", mode, rejected: true }) + "\n");
 } finally {
   try { await client.end(); } catch (error) {

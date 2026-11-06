@@ -7,12 +7,12 @@ const source = readFileSync(new URL("../web/tests/fixtures/tls/pg-client.ts", im
 const body = new Bun.Transpiler({ loader: "ts" }).transformSync(source.replaceAll("import.meta.url", '"file:///home/user/query.ts"'))
   .replace(/^import .*;\n/gm, "");
 const execute = new Function("assert", "createRequire", "process", `return (async () => {${body}\n})();`);
-async function fixture(mode: QualificationCase, failure: unknown, connected = false, endFailure?: Error) {
+async function fixture(mode: QualificationCase, failure: unknown, connected = false, endFailure?: Error, stderrFailure?: Error) {
   let ended = false, stdout = "", stderr = "";
   const env = { TLS_PG_CASE: mode, PGPASSWORD: "synthetic-password-for-test-only", NODE_EXTRA_CA_CERTS: mode === "no-extra-ca" ? undefined : "/home/user/tls/ca.pem" };
   const client = { async connect() { if (!connected) throw failure; }, async query() { throw failure; }, async end() { ended = true; if (endFailure) throw endFailure; } };
   const require = (name: string) => name === "pg" ? { Client: class { constructor() { return client; } } } : { version: "8.16.3" };
-  const process = { env, stdout: { write(text: string) { stdout += text; } }, stderr: { write(text: string) { stderr += text; } } };
+  const process = { env, stdout: { write(text: string) { stdout += text; } }, stderr: { write(text: string) { if (stderrFailure) throw stderrFailure; stderr += text; } } };
   const caught = await execute(assert, () => require, process).then(() => undefined, (error: unknown) => error);
   return { caught, stdout, stderr, ended };
 }
@@ -121,4 +121,29 @@ test("JSON escaping cannot overflow the observer diagnostic record bound", async
   expect(row.stderr.length).toBeLessThanOrEqual(4096);
   expect(JSON.parse(row.stderr)).toMatchObject({ kind: "tls-pg-failure", error: { cause: { cause: { cause: { truncated: true } } } } });
   expect(row.caught).toBe(failure);
+});
+
+test.each(["cause", "code", "message", "name"])("a throwing %s getter cannot replace the original pg failure", async key => {
+  const primary = new Error("original pg failure");
+  Object.defineProperty(primary, key, { get() { throw new Error("diagnostic getter failed"); } });
+  const row = await fixture("no-extra-ca", primary);
+  expect(row.caught === primary).toBe(true);
+  expect(row.ended).toBe(true);
+});
+
+test("stderr diagnostic failure cannot replace the original pg failure", async () => {
+  const primary = new Error("original pg failure");
+  const row = await fixture("verified", primary, false, undefined, new Error("stderr failed"));
+  expect(row.caught === primary).toBe(true);
+  expect(row.ended).toBe(true);
+});
+
+test("diagnostic failure leaves cleanup rejection secondary to the original pg failure", async () => {
+  const primary = new Error("original pg failure"), cleanup = new Error("cleanup failed");
+  Object.defineProperty(primary, "cause", { get() { throw new Error("diagnostic getter failed"); } });
+  const row = await fixture("verified", primary, false, cleanup);
+  expect(row.caught).toBeInstanceOf(AggregateError);
+  if (!(row.caught instanceof AggregateError)) throw new Error("Expected aggregate cleanup failure");
+  expect(row.caught.cause === primary).toBe(true);
+  expect(row.caught.errors).toEqual([primary, cleanup]);
 });
