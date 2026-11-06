@@ -52,7 +52,7 @@ function callSite(position: Partial<Position> = {}) {
   };
 }
 
-function bootstrap(engine = "hermes", generated = false, mapped: [number, number] | null = [30, 7]) {
+function bootstrap(engine = "hermes", generated = false, mapped: [number, number] | null = [30, 7], structured = engine === "host") {
   const context = createContext({});
   const mappings: Mapping[] = [];
   const lookups: [string, number][] = [];
@@ -72,6 +72,7 @@ function bootstrap(engine = "hermes", generated = false, mapped: [number, number
     // Only builtins and inspect participate in these tests; unrelated bootstrap factories stay inert.
     loadPolyfill(name: string) {
       if (name === "builtins" || name === "inspect") return runInContext(source(`${name}.js`), context, { filename: `bun-wasm:${name}` });
+      if (name === "stack_capability") return () => structured;
       if (name === "node_url") return () => ({ fileURLToPath });
       if (name === "process") return () => ({ env: {} });
       if (name === "web" || name === "crypto") return () => () => {};
@@ -200,4 +201,12 @@ test("an incomplete user frame stays opaque instead of borrowing a later caller 
   expect(runInContext('Function("return 42")()', state.context)).toBe(42);
   expect(prepared).toEqual([[["return 42"], "normal", undefined]]);
   expect(runInContext('Error.prepareStackTrace()', state.context)).toBe("custom formatter");
+});
+
+
+test("a text-capturing host uses JSC formatting instead of V8 constructor offsets", () => {
+  const state = bootstrap("host", false, [30, 7], false);
+  expect(state.runtime.formatCallSite(callSite())).toBe("run (/source.ts:30:7)");
+  expect(state.lookups).toEqual([]);
+  expect(state.runtime.formatCallSite(callSite({ name: null, functionValue: undefined, line: null, column: null }))).toBe("/source.ts");
 });

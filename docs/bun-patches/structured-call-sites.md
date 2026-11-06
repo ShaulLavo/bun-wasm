@@ -16,6 +16,17 @@ selected lazily by the Error prototype accessor or capture accessor. Successful
 results, including non-string values, are memoized; formatter exceptions propagate
 at access. A holder without a cached reentrant default permits a later read to retry.
 No engine constructor is replaced.
+
+Browser hosts probe native structured capture once before bootstrap installs the
+standard formatter. `stack_capability.ts` installs a temporary marker formatter,
+captures a holder and reads its stack while the hook is still installed, since V8
+formats lazily. A finally block restores the original descriptor and any
+accessor-backed formatter state. The same result selects bootstrap's V8 formatting
+rules and the capture adapter. Browser JavaScriptCore uses the existing parsed
+CallSites; Chromium keeps its native capture function and CallSite objects.
+The source-only browser regression runs the bootstrap stack initialization and the
+depd capture pattern in actual WebKit and Chromium. It also checks lazy formatting,
+error identity, constructor filtering and native Chromium sites.
 The adapter is strict TypeScript. Erased annotations describe raw stack values, mapped
 frames and the engine-owned accessors without changing executable statements.
 Receiver and method metadata unavailable from these engines returns undefined or
@@ -37,6 +48,8 @@ adapters derived from behavior probes, with no Node/V8 implementation copied.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
+| [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and native or browser JSC stack capture. |
+
+| `crates/bunwasm-runtime/src/js/stack_capability.ts` and the stack initialization in `bootstrap.js` | Host feature | Original capability probe and shared formatter/capture selection. |
 
 [Ledger scope and pinned revisions](scope.md).

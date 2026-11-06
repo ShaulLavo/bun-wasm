@@ -57,6 +57,16 @@ function withoutBuiltinLoaderDeltas(source: string) {
     .replace(builtinEvaluation, 'native.evalScript(source, `bun-builtin:${name}`)');
 }
 
+function withoutStackCapabilityDeltas(source: string) {
+  const declaration = '  const parseCapturedStack = native.engine === "jsc" || native.engine === "host" && !internal.hasNativeStackTrace;\n';
+  expect(source.split(declaration)).toHaveLength(2);
+  expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
+  expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
+  return source.replace(declaration, "")
+    .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
+    .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
+}
+
 function stackDescriptorRecords(source: string): { target: string; properties: string[]; nullPrototype: boolean }[] {
   const file = ts.createSourceFile("stack_trace.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const records: { target: string; properties: string[]; nullPrototype: boolean }[] = [];
@@ -104,7 +114,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin the original emitted syntax; stack descriptors, WASI constants and trusted builtin evaluation have explicit deltas.
+// Hashes pin original syntax; stack capability selection, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
@@ -151,7 +161,7 @@ test("null-prototype descriptors ignore synthetic inherited descriptor fields", 
 for (const [name, hash] of Object.entries(originalTokens)) {
   test(`stripped ${name} keeps every original executable token`, () => {
     const source = emit(name);
-    expect(syntaxHash(name === "bun_builtins" ? withoutBuiltinLoaderDeltas(source) : source)).toBe(hash);
+    expect(syntaxHash(name === "bun_builtins" ? withoutBuiltinLoaderDeltas(source) : withoutStackCapabilityDeltas(source))).toBe(hash);
   });
 
   test(`embedded ${name} does not grow after TypeScript erasure`, () => {
@@ -208,7 +218,7 @@ test("emitted builtin loader keeps caches, private symbols and unsupported error
 });
 
 test("emitted stack adapter leaves host hooks intact", () => {
-  const context = { internal: { native: { engine: "host" }, defineHidden: Object.assign } };
+  const context = { internal: { native: { engine: "host" }, hasNativeStackTrace: true, defineHidden: Object.assign } };
   const source = emit("stack_trace", true);
   expect(runInNewContext(`const capture = Error.captureStackTrace; (${source})(internal); Error.captureStackTrace === capture`, context)).toBe(true);
 });
