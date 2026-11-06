@@ -86,14 +86,12 @@ whole `result.json`, or why none is readable.
   a failure and reports the first execution error; later cleanup or empty
   loaded validation errors are diagnostics.
 - Every successful GET the page makes is checked against the sealed web root
-  and named by URL when it is refused. Two kinds of response are made by the
-  page itself rather than loaded from the server, and are counted in
-  `browserMade` instead: the `blob:` content URLs the browser engine gives each
-  guest module, and the `/__bunwasm/m/<run>/<key>` cycle modules the service
-  worker answers from Cache Storage (only when the response really came from
-  the service worker, at the page origin). They never become `loaded` rows,
-  never bind to a member and never satisfy coverage. Server answers, including
-  `.gz`/`.br` representations, are unchanged.
+  and named by URL when it is refused. The `blob:` content URLs the browser
+  engine gives each guest module, cycle members included, are made by the page
+  itself rather than loaded from the server, and are counted in `browserMade`
+  instead. They never become `loaded` rows, never bind to a member and never
+  satisfy coverage. Server answers, including `.gz`/`.br` representations, are
+  unchanged.
 - Chromium cleanup stops the web server's and the browser's process groups
   with the shared `stopProcessGroup` utility and reads `browserClosed` only
   after the browser group is empty. Playwright's own kill waits only for the

@@ -195,8 +195,8 @@ async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<Ar
   await cacheEngine(key, build, new Response(blob, { headers }));
 }
 
-// The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
-// Acyclic modules use blob URLs, including when WebKit starts an uncontrolled worker in the scope.
+// The service worker at ./__bunwasm/ (sw.ts) serves the Bun worker's script with the headers a
+// cross-origin isolated worker needs. Guest modules never depend on it (module-records.ts).
 export const MODULE_SCOPE = "./__bunwasm/";
 
 export async function registerModuleScope(): Promise<boolean> {

@@ -98,7 +98,7 @@ for (const [contractName, contract] of Object.entries(contracts)) for (const [en
     const request = posted.request;
     expect({ args: request.args, env: request.env }).toEqual(contract);
     expect(Object.keys(request.env)).toEqual(Object.keys(contract.env));
-    expect(request).toMatchObject({ engine: "browser", adapter: "preview1", net: null, moduleCache: null });
+    expect(request).toMatchObject({ engine: "browser", adapter: "preview1", net: null });
     expect(request.module).toBe(module);
     expect(request.lookupPort).toBeUndefined();
     expect(request.notifications).toBeUndefined();

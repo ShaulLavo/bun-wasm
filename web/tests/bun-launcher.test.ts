@@ -37,35 +37,19 @@ async function launch(engine: "quickjs" | "jsc" | "browser", workerUrl: string) 
   return launches[0]!;
 }
 
-for (const workerUrl of ["./worker.js", "worker.js", "https://cdn.test/assets/worker.js"]) for (const engine of ["quickjs", "jsc", "browser"] as const) {
-  test(`${engine} with ordinary worker URL ${workerUrl} passes it unchanged and caches nothing`, async () => {
+// Guest modules never depend on the worker's URL or service-worker scope: no launch makes or
+// deletes a module cache.
+const workerUrls = ["./worker.js", "worker.js", "https://cdn.test/assets/worker.js", "/__bunwasm/worker.js", "./__bunwasm/worker.js", "https://example.test/app/__bunwasm/worker.js"];
+for (const workerUrl of workerUrls) for (const engine of ["quickjs", "jsc", "browser"] as const) {
+  test(`${engine} with worker URL ${workerUrl} passes it unchanged and caches nothing`, async () => {
     const launched = await launch(engine, workerUrl);
     expect(launched.workerUrl).toBe(workerUrl);
-    expect(launched.request).toMatchObject({ engine, adapter: "bun", moduleCache: null, args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work", BUNWASM_EXEC_PATH: "/bin/bun" } });
+    expect(launched.request).toMatchObject({ engine, adapter: "bun", args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work", BUNWASM_EXEC_PATH: "/bin/bun" } });
+    expect(launched.request).not.toHaveProperty("moduleCache");
     launched.cleanup!();
     expect(deleted).toEqual([]);
   });
 }
-
-for (const workerUrl of ["/__bunwasm/worker.js", "./__bunwasm/worker.js", "https://example.test/app/__bunwasm/worker.js"]) {
-  test(`browser engine under scoped worker URL ${workerUrl} gets a module cache that cleanup deletes`, async () => {
-    const launched = await launch("browser", workerUrl);
-    expect(launched.workerUrl).toBe(workerUrl);
-    const cache = launched.request.moduleCache as string;
-    expect(cache).toMatch(/^bunwasm-m-[0-9a-f-]{36}$/);
-    expect(deleted).toEqual([]);
-    launched.cleanup!();
-    expect(deleted).toEqual([cache]);
-  });
-  test(`quickjs and jsc under scoped worker URL ${workerUrl} get no module cache`, async () => {
-    for (const engine of ["quickjs", "jsc"] as const) expect((await launch(engine, workerUrl)).request.moduleCache).toBeNull();
-  });
-}
-
-test("each scoped browser launch gets its own cache", async () => {
-  const first = await launch("browser", "/__bunwasm/worker.js"), second = await launch("browser", "/__bunwasm/worker.js");
-  expect(first.request.moduleCache).not.toBe(second.request.moduleCache);
-});
 
 test("browser adapter launches carry a runtime-owned DNS channel", async () => {
   const browser = await launch("browser", "./worker.js");

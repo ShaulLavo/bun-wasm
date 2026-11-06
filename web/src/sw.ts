@@ -1,10 +1,9 @@
 // Service worker for Bun.serve previews and the browser engine's ES modules. The page registers it
 // twice, never over itself (its COOP/COEP headers stay untouched):
 //
-// Scope `<app>/__bunwasm/` controls the bun workers started from `<app>/__bunwasm/worker.js`. The
-// worker puts modules needing a named URL into Cache Storage under
-// `<app>/__bunwasm/m/<run>/<key>`, so import cycles link natively (engine-host.js).
-// Acyclic modules use blob URLs. Other paths under the scope are the app's own files.
+// Scope `<app>/__bunwasm/` controls the bun workers started from `<app>/__bunwasm/worker.js`. Paths
+// under it are the app's own files, served with the headers a worker script needs. Guest ES modules
+// never come from here: the worker loads them as registration records (module-records.ts).
 //
 // Scope `<app>/__preview/` controls only preview tabs:
 // A request for `<app>/__preview/<port>/<path>` is forwarded to the playground window running a
@@ -54,9 +53,8 @@ sw.addEventListener("fetch", event => {
   if (response) event.respondWith(response);
 });
 
-/** `m/<run>/<key>`: a module the worker stored; anything else: the app file of that name. */
+/** The app file of that name. */
 async function moduleScope(request: Request, rest: string): Promise<Response> {
-  if (rest.startsWith("m/")) return (await caches.match(request)) ?? text(404, `bun.wasm: no such module ${rest}\n`);
   const target = new URL(rest, new URL("..", sw.registration.scope));
   target.search = new URL(request.url).search;
   // Tools are cached by the runner only after it verifies the decompressed bytes.

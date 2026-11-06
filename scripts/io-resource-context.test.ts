@@ -547,7 +547,7 @@ function selectedGuest(f: ReturnType<typeof syntheticHandoff>) {
 }
 const unread = async (): Promise<Uint8Array> => { throw new Error("browser-made bodies are never read as delivery evidence"); };
 
-test("guest blob modules and service-worker cycle modules are counted, never guarded or loaded", async () => {
+test("guest blob modules are counted, never guarded or loaded", async () => {
   const f = syntheticHandoff();
   const guest = selectedGuest(f);
   const guarded: string[] = [];
@@ -555,16 +555,16 @@ test("guest blob modules and service-worker cycle modules are counted, never gua
   observer.capture(response(`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`, async () => guest.compressed));
   observer.capture(response(`blob:${PAGE}/1b4e28ba-2fa1-41d2-883f-0016d3cca427`, unread));
   observer.capture(response(`blob:${PAGE}/6f1c2d3e-0000-4000-8000-000000000000`, unread));
-  observer.capture(response(`${PAGE}/__bunwasm/m/1/2f696f2f696e6465782e7473`, unread, undefined, true));
   const observed = await observer.finish();
-  expect(observed.browserMade).toEqual({ "blob": 2, "service-worker-module": 1 });
+  expect(observed.browserMade).toEqual({ "blob": 2 });
   expect(observed.loaded.map(row => row.url)).toEqual([`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`]);
   expect(observed.payloads).toHaveLength(1);
   expect(new Set(guarded)).toEqual(new Set([`${PAGE}/bun-browser.wasm.gz?v=${guest.expected.sha256}`]));
 });
 
 test.each([
-  ["a server answer at the service-worker module path", `${PAGE}/__bunwasm/m/1/0`, false, `no admitted representation: ${PAGE}/__bunwasm/m/1/0`],
+  ["a server answer at the retired module path", `${PAGE}/__bunwasm/m/1/0`, false, `no admitted representation: ${PAGE}/__bunwasm/m/1/0`],
+  ["a service-worker answer at the retired module path", `${PAGE}/__bunwasm/m/1/0`, true, `no admitted representation: ${PAGE}/__bunwasm/m/1/0`],
   ["a service-worker preview response", `${PAGE}/__preview/49152/`, true, `no admitted representation: ${PAGE}/__preview/49152/`],
   ["an unlisted page-origin file", `${PAGE}/favicon.ico`, false, `no admitted representation: ${PAGE}/favicon.ico`],
   ["a blob URL minted by another origin", "blob:http://127.0.0.1:1/6f1c2d3e-0000-4000-8000-000000000000", false, "Browser-made response from another origin"],
@@ -586,7 +586,7 @@ test("service-worker copies of admitted files stay delivery loads with their byt
   observer.capture(response(`${PAGE}/bun-browser.wasm.gz`, async () => guest.compressed));
   for (const name of ["index.html", "worker.js"]) observer.capture(response(`${PAGE}/${name}`, async () => readFileSync(join(f.pinned.handoff.webRoot, name)), undefined, true));
   const observed = await observer.finish();
-  expect(observed.browserMade).toEqual({ "blob": 0, "service-worker-module": 0 });
+  expect(observed.browserMade).toEqual({ "blob": 0 });
   expect(bindLoaded(f.pinned.handoff, "web", parseLoaded(observed.loaded)).map(row => row.route)).toEqual(["web", "web", "web"]);
   const altered = loadedObserver(`${PAGE}/bun-browser.wasm`, guest.expected, path => requireFiveOwnerResponse(f.pinned, path));
   altered.capture(response(`${PAGE}/bun-browser.wasm.gz`, async () => guest.compressed));
@@ -595,13 +595,11 @@ test("service-worker copies of admitted files stay delivery loads with their byt
   expect(() => bindLoaded(f.pinned.handoff, "web", parseLoaded(altered.snapshot().loaded))).toThrow("bytes differ from the admitted member");
 });
 
-test("browser-made classification is exact about scheme, origin and the module prefix", () => {
-  expect(browserMade(`blob:${PAGE}/x`, `${PAGE}/bun-browser.wasm`, false)).toBe("blob");
-  expect(browserMade(`${PAGE}/__bunwasm/m/1/0`, `${PAGE}/bun-browser.wasm`, true)).toBe("service-worker-module");
-  expect(browserMade(`${PAGE}/__bunwasm/m/1/0`, `${PAGE}/bun-browser.wasm`, false)).toBeNull();
-  expect(browserMade(`${PAGE}/__bunwasm/worker.js`, `${PAGE}/bun-browser.wasm`, true)).toBeNull();
-  expect(browserMade(`${PAGE}/__bunwasm/mx/1`, `${PAGE}/bun-browser.wasm`, true)).toBeNull();
-  expect(() => browserMade("blob:null/x", `${PAGE}/bun-browser.wasm`, false)).toThrow("another origin");
+test("browser-made classification is exact about scheme and origin", () => {
+  expect(browserMade(`blob:${PAGE}/x`, `${PAGE}/bun-browser.wasm`)).toBe("blob");
+  expect(browserMade(`${PAGE}/__bunwasm/m/1/0`, `${PAGE}/bun-browser.wasm`)).toBeNull();
+  expect(browserMade(`${PAGE}/__bunwasm/worker.js`, `${PAGE}/bun-browser.wasm`)).toBeNull();
+  expect(() => browserMade("blob:null/x", `${PAGE}/bun-browser.wasm`)).toThrow("another origin");
 });
 
 test("loaded body errors retain the response URL and original cause", async () => {

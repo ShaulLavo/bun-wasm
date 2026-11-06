@@ -50,14 +50,15 @@ test("parseEnv constructs own data properties for prototype-like keys", () => {
 
 test("the browser's generic builtin wrapper links Vite's published node:util import", () => {
   const host = readFileSync(join(root, "web/src/engine-host.js"), "utf8");
-  const start = host.indexOf("function wrapperSource(key, value) {");
-  if (start < 0) throw new Error("Missing browser builtin wrapper");
+  // The wrapper, the key filter it calls and the built-ins they captured close the file.
+  const start = host.indexOf("const nativeObjectKeys = Object.keys;");
+  if (start < 0 || !host.includes("function wrapperSource(key, value) {", start)) throw new Error("Missing browser builtin wrapper");
   const probe = join(scratch, "published-import.ts");
   writeFileSync(probe, `
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 const utility = runInNewContext(readFileSync(${JSON.stringify(output)}, "utf8"))({ native: {} });
-const wrapper = runInNewContext(${JSON.stringify(`(${host.slice(start)})`)});
+const wrapper = runInNewContext(${JSON.stringify(`(() => {\n${host.slice(start)}\nreturn wrapperSource;\n})()`)});
 Reflect.set(globalThis, "__bunwasm_wrap", () => ({ value: utility, default: utility }));
 const builtin = "data:text/javascript," + encodeURIComponent(wrapper("node:util", utility));
 const published = 'import { format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters } from ' + JSON.stringify(builtin) + '; export const loaded = [format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters].every(value => typeof value === "function");';

@@ -3,7 +3,7 @@ import { availableParallelism } from "node:os";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "native", "native-probe"] as const;
+const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
 type Check = { path: string; localRuntime: boolean; batch: string } & (
   | { owner: "native-probe"; inputs: string[] }

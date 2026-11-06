@@ -10,8 +10,16 @@ Add one `checks/<owner>-<feature>.json` file for a new script test or native fix
 }
 ```
 
-Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`
-and `native`. Native paths name a directory under `tests/fixtures/`. Other paths
+Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
+`browser-guest` and `native`. `browser-guest` checks serve the playground site built from
+the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's rust job builds that
+site once from its receipt-verified guest and uploads it with its identities
+(`browser-guest-site`). The Processes job's Chromium and WebKit legs download it and pass it
+in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
+receipt against the checkout before and after the browsers run, and never bundles it again.
+A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
+Native paths name a directory under
+`tests/fixtures/`. Other paths
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.

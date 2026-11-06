@@ -13,6 +13,10 @@ and receipt scopes, native and web loaders, selectors, telemetry, staging, and
 all corresponding gates. Then qualify a fresh exact source and native generation.
 Do not edit old receipts or reinterpret a held release as permission to restart.
 
+## Known engine limitation
+
+The retained Hermes main revision `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`, with our WASI adapter, reports `Object.isSealed(proxy)` and `Object.isFrozen(proxy)` as false even when an empty-handler Proxy wraps a sealed or frozen object. The same result occurs without the module loader. Namespace descriptors, keys and mutation rules pass the focused check, but these introspection results do not. There is no workaround. This narrow known limitation is accepted for the Browser loader correction, not a Hermes qualification or permission to restart its parked engine work.
+
 ## Historical implementation and commands
 
 The withdrawn implementation was a third paired engine program: the common core (`bun-hermes.wasm`, tagged `hermes`)

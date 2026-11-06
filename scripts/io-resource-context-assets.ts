@@ -11,28 +11,22 @@ export interface LoadedAsset extends BytesIdentity {
   readonly encoding: "plain" | "gzip";
   readonly payload: BytesIdentity;
 }
-interface ResponseBytes { url(): string; status(): number; headers(): Record<string, string>; request(): { method(): string }; body(): Promise<Uint8Array>; fromServiceWorker(): boolean }
+interface ResponseBytes { url(): string; status(): number; headers(): Record<string, string>; request(): { method(): string }; body(): Promise<Uint8Array> }
 
 /**
  * Responses the page makes itself, never a load from the web server. The
- * browser engine turns each guest module into a `blob:` content URL, and a
- * module in an import cycle into a named `/__bunwasm/m/<run>/<key>` entry the
- * service worker answers from Cache Storage (web/src/engine-host.js,
- * web/src/sw.ts). Their bytes come from the already-bound guest, so they are
- * counted, never bound to a delivery member, and never count as loaded code.
- * Only those two shapes at the page origin qualify; a server response at the
- * same path still goes through the delivery guard.
+ * browser engine turns each guest module, cycle members included, into a
+ * `blob:` content URL (web/src/engine-host.js, web/src/module-records.ts).
+ * Their bytes come from the already-bound guest, so they are counted, never
+ * bound to a delivery member, and never count as loaded code. Only that shape
+ * at the page origin qualifies; every other URL goes through the delivery guard.
  */
-export type BrowserMade = "blob" | "service-worker-module";
-export function browserMade(url: string, page: string, fromServiceWorker: boolean): BrowserMade | null {
+export type BrowserMade = "blob";
+export function browserMade(url: string, page: string): BrowserMade | null {
   const parsed = new URL(url);
-  const origin = new URL(page).origin;
-  if (parsed.protocol === "blob:") {
-    if (parsed.origin !== origin) throw new Error(`Browser-made response from another origin: ${url}`);
-    return "blob";
-  }
-  if (fromServiceWorker && parsed.origin === origin && parsed.pathname.startsWith("/__bunwasm/m/")) return "service-worker-module";
-  return null;
+  if (parsed.protocol !== "blob:") return null;
+  if (parsed.origin !== new URL(page).origin) throw new Error(`Browser-made response from another origin: ${url}`);
+  return "blob";
 }
 
 function httpEncoding(value: string | undefined): LoadedObservation["encoding"] {
@@ -61,9 +55,9 @@ export function loadedObserver(browserUrl: string, expected: BytesIdentity, guar
   const loaded: LoadedObservation[] = [];
   const pending: Promise<void>[] = [];
   const errors: unknown[] = [];
-  const made: Record<BrowserMade, number> = { "blob": 0, "service-worker-module": 0 };
+  const made: Record<BrowserMade, number> = { "blob": 0 };
   function classify(response: ResponseBytes): BrowserMade | null {
-    try { return browserMade(response.url(), browserUrl, response.fromServiceWorker()); }
+    try { return browserMade(response.url(), browserUrl); }
     catch (error) { errors.push(error); return null; }
   }
   function capture(response: ResponseBytes): void {

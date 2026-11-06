@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./b.mjs\",\"./c.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a\");\n\n}}.__bunwasm_cjs__})",
+  "/b.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b\");\n\n}}.__bunwasm_cjs__})",
+  "/c.mjs": "({r:[],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"c\");\n\n}}.__bunwasm_cjs__})",
+  "/main.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"main\");\n\n}}.__bunwasm_cjs__})"
+ },
+ "cjs": {}
+}

@@ -1,0 +1,7 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[[\"late\",\"late\"]],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"late\":()=>late});yield;const self=__bunwasm_m.ns(0);yield;const attempt = (f) => {\n  try {\n    return String(f());\n  } catch (error) {\n    return error.constructor.name;\n  }\n};\nconsole.log(\"keys\", attempt(() => Object.keys(self).join()));\nconsole.log(\"descriptor\", attempt(() => JSON.stringify(Reflect.getOwnPropertyDescriptor(self, \"late\"))));\nconsole.log(\"define\", attempt(() => Reflect.defineProperty(self, \"late\", {})));\nconsole.log(\"read\", attempt(() => self.late));\nconsole.log(\"own keys\", Reflect.ownKeys(self).map(String).join(), \"late\" in self);\nlet late = 1;\nconsole.log(\"after\", Object.keys(self).join(), self.late);\n\n}}.__bunwasm_cjs__})",
+  "/main.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;\n}}.__bunwasm_cjs__})"
+ },
+ "cjs": {}
+}

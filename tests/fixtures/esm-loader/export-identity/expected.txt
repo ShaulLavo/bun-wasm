@@ -1,0 +1,7 @@
+bump,shadowed,x 1 hub false
+2 2
+1 2 3 4
+__proto__,__proto__x,a-b,constructor,toString,Symbol(Symbol.toStringTag)
+__proto__,__proto__x,a-b,constructor,toString,Symbol(Symbol.toStringTag)
+true {"value":1,"writable":true,"enumerable":true,"configurable":false}
+true true null

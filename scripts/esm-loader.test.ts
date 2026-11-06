@@ -79,7 +79,7 @@ test("record host: entry evaluation errors keep their identity on reimport", () 
   probe(`
     const failure = { marker: "same thrown value" };
     let runs = 0;
-    const record = { r: [], i: [], x: [], s: [], a: false, f: function* (api) {
+    const record = { r: [], i: [], x: [], s: [], e: [], a: false, f: function* (api) {
       api.l({}); yield; yield; runs++; throw failure;
     } };
     const loader = factory({ resolve: specifier => specifier, load: () => ({ record }), initMeta() {} });
@@ -94,7 +94,7 @@ test("record host: entry evaluation errors keep their identity on reimport", () 
 test("record host: import.meta is initialized once through the host", () => {
   probe(`
     let calls = 0;
-    const record = { r: [], i: [], x: [], s: [], a: false, f: function* (api) {
+    const record = { r: [], i: [], x: [], s: [], e: [["url", "url"]], a: false, f: function* (api) {
       api.l({ url: () => api.meta.url }); yield; yield;
       assert.equal(api.meta, api.meta);
     } };
@@ -147,5 +147,160 @@ test("record host: object and function snapshots preserve separately supplied fa
         assert.deepEqual(Object.keys(namespace), ["default", "named"]);
       }
     }
+  `);
+});
+
+// ECMA-262 10.4.6.11 orders namespace keys by UTF-16 code units, integer-like names
+// included. V8's own namespaces list integer-like names first, so this is not a fixture
+// compared with Node.
+test("record host: namespace keys follow code-unit order for integer-like names", () => {
+  probe(`
+    const record = { r: [], i: [], x: [], s: [], e: [["2", "two"], ["b", "b"], ["10", "ten"]], a: false, f: function* (api) {
+      const ten = 10, two = 2;
+      api.l({ two: () => two, b: () => "b", ten: () => ten }); yield; yield;
+    } };
+    const loader = factory({ resolve: specifier => specifier, load: () => ({ record }), initMeta() {} });
+    const namespace = await loader.importName("/keys.mjs");
+    assert.deepEqual(Reflect.ownKeys(namespace), ["10", "2", "b", Symbol.toStringTag]);
+    assert.deepEqual(Object.keys(namespace), ["10", "2", "b"]);
+    assert.equal(namespace["10"], 10);
+  `);
+});
+
+test("record host: a body runs without a receiver", () => {
+  probe(`
+    let receiver = "unset";
+    const record = { r: [], i: [], x: [], s: [], e: [], a: false, f: function* (api) {
+      "use strict";
+      api.l({}); yield; yield; receiver = this;
+    } };
+    const loader = factory({ resolve: specifier => specifier, load: () => ({ record }), initMeta() {} });
+    await loader.importName("/this.mjs");
+    assert.equal(receiver, undefined);
+  `);
+});
+
+test("record host: built-ins changed after the loader exists do not reach module loading", () => {
+  probe(`
+    const record = (body) => ({ r: ["./dep.mjs"], i: [[0, "x"]], x: [], s: [], e: [], a: true, f: body });
+    const records = {
+      "/main.mjs": record(function* (api) { api.l({}); yield; const dep = api.n[0], ns = api.ns(0); yield; yield null; globalThis.seen = [dep.x, ns.x, Object.keys(ns).join()]; }),
+      "/dep.mjs": { r: [], i: [], x: [], s: [], e: [["x", "x"]], a: false, f: function* (api) { const x = 1; api.l({ x: () => x }); yield; yield; } },
+    };
+    const loader = factory({ resolve: specifier => "/" + specifier.slice(2), load: name => ({ record: records[name] }), initMeta() {} });
+    const saved = { push: Array.prototype.push, map: Array.prototype.map, get: Map.prototype.get, then: Promise.prototype.then };
+    const settled = new Promise(resolve => { saved.done = resolve; });
+    // The probe harness has attached its own reaction to this function's promise by now.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    Array.prototype.push = Array.prototype.map = Map.prototype.get = () => { throw new Error("patched"); };
+    Object.prototype.get = Object.prototype.has = Object.prototype.value = () => { throw new Error("polluted"); };
+    Promise.prototype.then = function () { throw new Error("patched then"); };
+    try {
+      saved.then.call(loader.importName("/main.mjs"), saved.done, error => saved.done(error));
+    } finally {
+      Object.assign(Array.prototype, { push: saved.push, map: saved.map });
+      Map.prototype.get = saved.get;
+      delete Object.prototype.get; delete Object.prototype.has; delete Object.prototype.value;
+    }
+    // Reactions the loader queued run with the patched \`then\` still in place.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    Promise.prototype.then = saved.then;
+    const outcome = await settled;
+    assert.equal(outcome instanceof Error ? outcome.message : outcome[Symbol.toStringTag], "Module");
+    assert.deepEqual(globalThis.seen, [1, 1, "x"]);
+  `);
+});
+
+test("record host: an exited host loads, links and resumes nothing", () => {
+  probe(`
+    let running = true, loads = 0, resumed = false, tracked = 0;
+    const records = {
+      "/wait.mjs": { r: [], i: [], x: [], s: [], e: [], a: true, f: function* (api) { api.l({}); yield; yield; yield new Promise(resolve => setTimeout(resolve, 5)); resumed = true; } },
+      "/later.mjs": { r: [], i: [], x: [], s: [], e: [], a: false, f: function* (api) { api.l({}); yield; yield; } },
+    };
+    const loader = factory({
+      resolve: specifier => specifier,
+      load: name => { loads++; return { record: records[name] }; },
+      initMeta() {},
+      active: () => running,
+      track: operation => { tracked++; return operation; },
+    });
+    const waiting = loader.importName("/wait.mjs");
+    const dynamic = loader.dynamicImport("/later.mjs", "/wait.mjs");
+    assert.equal(tracked, 1);
+    running = false;
+    const settled = await Promise.race([waiting.then(() => "settled", () => "rejected"), dynamic.then(() => "settled", () => "rejected"), new Promise(resolve => setTimeout(() => resolve("pending"), 30))]);
+    assert.equal(settled, "pending");
+    assert.equal(resumed, false);
+    assert.equal(loads, 1);
+    assert.equal(await Promise.race([loader.importName("/later.mjs").then(() => "settled"), new Promise(resolve => setTimeout(() => resolve("pending"), 10))]), "pending");
+    assert.equal(loads, 1);
+  `);
+});
+
+// The source review's exit probes: a body that exits stops its later siblings, the root and
+// the namespace's publication; an exit before an import makes no native call; a resolved
+// evaluation published after the exit, and a top-level await rejected after it, settle nothing.
+test("record host: an exit inside a body starts no later module and publishes nothing", () => {
+  probe(`
+    let running = true, loads = 0;
+    const events = [];
+    const empty = { r: [], i: [], x: [], s: [], e: [], a: false };
+    const modules = {
+      root: { ...empty, r: ["exit", "sibling"], f: function* (api) { api.l({}); yield; yield; events.push("root"); } },
+      exit: { ...empty, f: function* (api) { api.l({}); yield; yield; running = false; events.push("exit"); } },
+      sibling: { ...empty, f: function* (api) { api.l({}); yield; yield; events.push("late sibling"); } },
+    };
+    const loader = factory({ resolve: x => x, load: key => { loads++; return { record: modules[key] }; }, initMeta() {}, active: () => running });
+    loader.importName("root").then(() => events.push("late namespace publication"), () => events.push("late rejection"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(events, ["exit"]);
+    loads = 0;
+    loader.importName("other").then(() => events.push("published"), () => events.push("rejected"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(loads, 0);
+    assert.deepEqual(events, ["exit"]);
+  `);
+});
+
+test("record host: an exit after evaluation or during top-level await publishes nothing", () => {
+  probe(`
+    let running = true;
+    const events = [];
+    const empty = { r: [], i: [], x: [], s: [], e: [], a: false };
+    const modules = {
+      done: { ...empty, f: function* (api) { api.l({}); yield; yield; events.push("done body"); } },
+      late: { ...empty, a: true, f: function* (api) { api.l({}); yield; yield; yield null; running = false; throw new Error("after exit"); } },
+    };
+    const loader = factory({ resolve: x => x, load: key => ({ record: modules[key] }), initMeta() {}, active: () => running });
+    const done = loader.importName("done");
+    running = false;
+    done.then(() => events.push("published"), () => events.push("rejected"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(events, ["done body"]);
+    running = true;
+    loader.importName("late").then(() => events.push("late published"), () => events.push("late rejected"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(events, ["done body"]);
+  `);
+});
+
+// Two exports of one local are one binding (ECMA-262 16.2.1.6.3): star exports that reach it
+// through both names are not ambiguous. Equal values in distinct locals still are.
+test("record host: export aliases of one local resolve to one binding", () => {
+  probe(`
+    const record = (fields) => ({ r: [], i: [], x: [], s: [], e: [], a: false, ...fields });
+    const modules = {
+      origin: record({ e: [["a", "local"], ["b", "local"], ["c", "other"]], f: function* (api) { let local = 1, other = 1; api.l({ local: () => local, other: () => other }); yield; yield; globalThis.bump = () => local++; } }),
+      one: record({ r: ["origin"], x: [["x", 0, "a"], ["y", 0, "a"]], f: function* (api) { api.l({}); yield; yield; } }),
+      two: record({ r: ["origin"], x: [["x", 0, "b"], ["y", 0, "c"]], f: function* (api) { api.l({}); yield; yield; } }),
+      hub: record({ r: ["one", "two"], s: [0, 1], f: function* (api) { api.l({}); yield; yield; } }),
+    };
+    const loader = factory({ resolve: x => x, load: key => ({ record: modules[key] }), initMeta() {} });
+    const hub = await loader.importName("hub");
+    assert.deepEqual(Object.keys(hub), ["x"]);
+    assert.equal(hub.x, 1);
+    globalThis.bump();
+    assert.equal(hub.x, 2);
   `);
 });

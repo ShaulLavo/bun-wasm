@@ -48,12 +48,27 @@ fn transpiler() -> Box<dyn Transpiler> {
 
 #[cfg(feature = "bun-transpiler")]
 mod bun_transpiler {
-    use bunwasm_runtime::{Loader, Transpiled, Transpiler};
+    use bunwasm_runtime::{Loader, RecordError, Transpiled, Transpiler};
     use bunwasm_transpiler::Loader as BunLoader;
 
     /// The browser engine (feature engine-host) runs on a host JS engine
     /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
     const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
+
+    /// A registration record and its mappings back to the registered source.
+    fn record(
+        out: Result<bunwasm_transpiler::Transpiled, bunwasm_transpiler::Failure>,
+    ) -> Result<Transpiled, RecordError> {
+        let out = out.map_err(|failure| match failure {
+            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
+            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
+        })?;
+        Ok(Transpiled {
+            code: out.code,
+            mappings: (!out.mappings.is_empty()).then_some(out.mappings),
+            ..Default::default()
+        })
+    }
 
     fn runtime_imports(
         imports: Vec<bunwasm_transpiler::ModuleImport>,
@@ -203,13 +218,20 @@ mod bun_transpiler {
             })
         }
 
-        fn register(&self, source: &str, path: &str) -> Result<Transpiled, String> {
-            let out = bunwasm_transpiler::register(source, path, BunLoader::Js)?;
-            Ok(Transpiled {
-                code: out.code,
-                mappings: (!out.mappings.is_empty()).then_some(out.mappings),
-                ..Default::default()
-            })
+        fn use_module_records(&self) {
+            bunwasm_transpiler::use_module_records();
+        }
+
+        fn register(&self, source: &str, path: &str) -> Result<Transpiled, RecordError> {
+            record(bunwasm_transpiler::register(source, path, BunLoader::Js))
+        }
+
+        fn register_module(&self, source: &str, path: &str) -> Result<Transpiled, RecordError> {
+            record(bunwasm_transpiler::register_module(
+                source,
+                path,
+                BunLoader::Js,
+            ))
         }
 
         fn module_imports(
