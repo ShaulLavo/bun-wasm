@@ -1426,7 +1426,7 @@ test("the JSC guest builds once in the background, overlapping only other builds
   expect(wait).toBeLessThan(rust.indexOf("name: Build the single tools fixture"));
   expect(rust.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
   const launch = workflowString(workflowField(nativeWorkflowStep("name", "Start the JSC Cargo guest build"), "run"));
-  expect(launch).toContain('bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c');
+  expect(launch).toContain('bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c');
   expect(launch).not.toContain('"$!"');
   const cleanup = nativeWorkflowStep("name", "Stop the JSC Cargo guest build");
   expect(workflowField(cleanup, "if")).toBe("${{ always() && needs.quality.outputs.jsc == 'true' }}");
