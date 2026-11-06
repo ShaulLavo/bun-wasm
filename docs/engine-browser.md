@@ -165,7 +165,17 @@ The following measurements use Node 26.12.1 and V8, the same guest, and the best
 
 The named-read difference is 26.13 ms per 20 million reads, about 1.31 ns per read. The namespace-read difference is 274.13 ms, about 13.71 ns per read. Named reads use live-binding accessors; namespace reads use the exact-namespace Proxy. This overhead is accepted for the correctness fix, not a semantic exception.
 
-Browser and WebKit startup and graph costs remain **unmeasured**. Node timings do not establish those costs. A bounded desktop follow-up uses existing built artifacts without another guest build or a Mac run.
+Browser and WebKit **read costs remain unmeasured**. A separate bounded desktop startup experiment used the existing e1 and d313 builds on Linux, headless Chromium 156.0.8078.4 and Playwright WebKit 27.2. Each fresh context ran two sequential commands. These are experimental context-cold observations, not iOS results, cold OS-cache measurements or timings of the later corrected head.
+
+| Work, requested controlled context | Old e1 | New d313 | Worker control |
+|---|---:|---:|---|
+| Chromium trivial command, first invocation | 99.62 ms | 102.29 ms | API unavailable; native probe from network |
+| Chromium trivial command, second invocation | 48.93 ms | 52.38 ms | API unavailable; native probe from network |
+| WebKit trivial command, first invocation | 101.72 ms | 107.68 ms | Controller present; own probe served by service worker |
+| WebKit trivial command, second invocation | 80.18 ms | 81.02 ms | Null controller; own probe from network |
+| WebKit 200-module graph interval, first invocation | 137.96 ms | 188.10 ms | Controller present; own probe served by service worker |
+
+Trivial command times are public shell submission to completion, not worker birth. The graph interval includes dynamic import and checksum computation. This pass found no clear common-startup regression, but the positively controlled WebKit graph cost about 50 ms more. Source differences prevent attributing the whole difference solely to the loader. All eight new graph invocations produced checksum 19900; old uncontrolled failures are not successful graph timings. No capability-based product change was made from these samples.
 
 ## Networking
 

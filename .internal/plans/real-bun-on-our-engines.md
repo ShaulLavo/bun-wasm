@@ -697,6 +697,12 @@ and source references are in `/work/reports/wave-20261105/engines/host-api-alloc
 
 ## Bounded desktop startup and graph costs after registration loading
 
+Status: Completed November 6, 2026. Owner: Engines. The Approved follow-up belongs to PR 482 and the worker-module-loader track. Existing e1/d313 artifacts were measured in desktop Chromium and Playwright WebKit. No clear common trivial-startup regression was observed. Positively controlled WebKit command completion was 101.72 to 107.68 ms; its 200-module graph interval was 137.96 to 188.10 ms. Chromium worker control remained unproven. All eight new graph invocations returned checksum 19900. No capability-gating product change is justified by this bounded pass alone. Browser read costs remain unmeasured.
+
+Results, every sample and the reproducer are in `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/worker-module-loader-fix/implementation/startup-followup/`. Owned browser/server processes and the copied snapshot were removed. This was an experimental Linux headless comparison, not current-head or iOS performance acceptance.
+
+The protocol below is the historical executed measurement plan. Its old private-build/E3 fences do not apply to future development: the November 6 owner development-loop rule permits ordinary builds, tests and retries without custody or intake campaigns. Preserve original admitted artifacts and history, and keep real automated tests, independent review and green CI at merge.
+
 Status: Approved. Owner: Engines. This follow-up belongs to PR 482 and the worker-module-loader track. Managing accepted the documented Node read overhead for this correctness fix on November 6, 2026. The acceptance does not cover semantic regressions or establish browser performance.
 
 Measure Chromium and Playwright WebKit on the PC with existing built old/new artifacts. Do not build a new guest or host bundle for this measurement, reserve the Mac, reinstall E2, or consume the private e1 diagnostic build or E3 allowance. If a complete source-bound old/new artifact pair is unavailable, record that prerequisite instead of manufacturing provenance or rebuilding it here.
