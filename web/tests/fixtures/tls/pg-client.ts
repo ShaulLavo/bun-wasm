@@ -19,7 +19,13 @@ function diagnosticText(value: string, limit: number): string {
   const password = process.env.PGPASSWORD ?? "";
   const forms = password ? [password, JSON.stringify(password).slice(1, -1), encodeURIComponent(password)] : [];
   const safe = forms.reduce((text, form) => text.split(form).join("[redacted run secret]"), value);
-  return safe.length <= limit ? safe : safe.slice(0, limit) + " [truncated]";
+  let bounded = "", encodedLength = 0;
+  for (const character of safe) {
+    encodedLength += JSON.stringify(character).length - 2;
+    if (encodedLength > limit) return bounded + " [truncated]";
+    bounded += character;
+  }
+  return bounded;
 }
 function diagnosticError(error: unknown, depth = 0): object {
   if (!error || typeof error !== "object") return { name: "NonErrorThrow", message: diagnosticText(String(error), 384) };

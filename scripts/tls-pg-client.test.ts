@@ -111,3 +111,14 @@ test("cleanup failure cannot replace the original guest failure", async () => {
   expect(JSON.parse(row.stderr).error.code).toBe("ECONNRESET");
   expect(row.stdout).toBe("");
 });
+
+
+test("JSON escaping cannot overflow the observer diagnostic record bound", async () => {
+  const text = "\u0000".repeat(10000);
+  const failure = Object.assign(new Error(text), { name: text, code: text });
+  failure.cause = failure;
+  const row = await fixture("no-extra-ca", failure);
+  expect(row.stderr.length).toBeLessThanOrEqual(4096);
+  expect(JSON.parse(row.stderr)).toMatchObject({ kind: "tls-pg-failure", error: { cause: { cause: { cause: { truncated: true } } } } });
+  expect(row.caught).toBe(failure);
+});
