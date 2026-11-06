@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Terminal } from "@xterm/xterm";
 import type { Editor } from "../src/editor";
+import { instrumentNextCompilers, profileNextWorkers } from "./next-profile";
 import { observePreviewSockets } from "../../web/tests/next-framework-sockets";
 import { playwright, session } from "../../web/tests/playground.mjs";
 
@@ -13,6 +14,9 @@ declare const sandbox: { editor: Editor; term?: Terminal };
 
 const template = process.env.NEXT_DEV_TEMPLATE ?? "next";
 assert.ok(template === "next" || template === "next-app", "Choose next or next-app");
+const browserName = process.env.NEXT_DEV_BROWSER ?? "chromium";
+assert.ok(browserName === "chromium" || browserName === "webkit" || browserName === "firefox", "Choose a Playwright browser");
+assert.ok(!process.env.NEXT_DEV_PROFILE || browserName === "chromium", "Worker CPU profiling requires Chromium");
 const heading = template === "next-app" ? "Next.js App Router" : "Next.js in your browser";
 const updatedHeading = `${heading} hot update works`;
 const editTimeout = template === "next-app" ? 60_000 : 30_000;
@@ -23,6 +27,7 @@ const events: string[] = [];
 const timings: Record<string, number> = {};
 const started = performance.now();
 let page: import("playwright").Page | undefined;
+let stopProfile: (() => Promise<void>) | undefined;
 const deadline = setTimeout(() => { void task.cleanup().finally(() => process.exit(124)); }, template === "next-app" ? 360_000 : 240_000);
 
 async function terminalText(): Promise<string> {
@@ -44,8 +49,9 @@ try {
   const url = new URL(base);
   url.searchParams.set("template", template);
   url.searchParams.set("engine", "browser");
-  const browser = await task.launch(playwright.chromium);
+  const browser = await task.launch(playwright[browserName]);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  if (process.env.NEXT_DEV_PROFILE) await instrumentNextCompilers(context, template);
   page = await context.newPage();
   await observePreviewSockets(page);
   page.on("console", message => events.push(`${message.type()}: ${message.text()}`));
@@ -64,6 +70,7 @@ try {
   await frame.waitForFunction(() => globalThis.nextFrameworkSocketEvents.some(event => event.type === "open" && event.url.includes("/_next/webpack-hmr")), undefined, { timeout: 30_000 });
   const documentIdentity = await frame.evaluate(() => performance.timeOrigin);
   const original = await page.evaluate(() => sandbox.editor.view.state.doc.toString());
+  stopProfile = process.env.NEXT_DEV_PROFILE && reports ? await profileNextWorkers(browser, reports) : undefined;
   const editStarted = performance.now();
   await page.evaluate(text => sandbox.editor.setText(text), original.replace(heading, updatedHeading));
   await preview.getByRole("heading", { name: updatedHeading, exact: true }).waitFor({ timeout: editTimeout });
@@ -79,8 +86,8 @@ try {
   assert.equal(await frame.evaluate(() => performance.timeOrigin), documentIdentity);
   const errors = events.filter(event => event.startsWith("pageerror:"));
   assert.deepEqual(errors, []);
-  if (reports) writeFileSync(join(reports, "next-dev-result.json"), JSON.stringify({ status: "pass", template, timings }, null, 2));
-  console.log(JSON.stringify({ status: "pass", template, timings }));
+  if (reports) writeFileSync(join(reports, "next-dev-result.json"), JSON.stringify({ status: "pass", template, browser: browserName, timings }, null, 2));
+  console.log(JSON.stringify({ status: "pass", template, browser: browserName, timings }));
 } catch (error) {
   console.error(await terminalText());
   console.error(events.join("\n"));
@@ -92,5 +99,5 @@ try {
     writeFileSync(join(reports, "next-dev-terminal.log"), await terminalText());
     writeFileSync(join(reports, "next-dev-browser.log"), events.join("\n"));
   }
-  await task.cleanup();
+  try { await stopProfile?.(); } finally { await task.cleanup(); }
 }

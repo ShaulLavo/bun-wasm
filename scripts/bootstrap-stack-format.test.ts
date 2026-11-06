@@ -29,6 +29,10 @@ type BootstrapRuntime = {
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const source = (name: string) => readFileSync(new URL(name, directory), "utf8");
 const bootstrapSource = source("bootstrap.js");
+const callerOriginSource = Bun.spawnSync(["node", "--input-type=module", "-e",
+  'import { stripTypeScriptTypes } from "node:module"; let text = ""; for await (const chunk of process.stdin) text += chunk; process.stdout.write(stripTypeScriptTypes(text));'],
+{ stdin: Buffer.from(source("caller_origin.ts")), stdout: "pipe", stderr: "pipe" });
+if (callerOriginSource.exitCode !== 0) throw new Error(callerOriginSource.stderr.toString());
 
 function callSite(position: Partial<Position> = {}) {
   const value: Position = {
@@ -72,6 +76,7 @@ function bootstrap(engine = "hermes", generated = false, mapped: [number, number
     // Only builtins and inspect participate in these tests; unrelated bootstrap factories stay inert.
     loadPolyfill(name: string) {
       if (name === "builtins" || name === "inspect") return runInContext(source(`${name}.js`), context, { filename: `bun-wasm:${name}` });
+      if (name === "caller_origin") return runInContext(callerOriginSource.stdout.toString(), context, { filename: "bun-wasm:caller_origin" });
       if (name === "stack_capability") return () => structured;
       if (name === "node_url") return () => ({ fileURLToPath });
       if (name === "process") return () => ({ env: {} });
@@ -164,9 +169,8 @@ function installFunctionCaller(state: ReturnType<typeof bootstrap>, sites: reado
   state.context.sites = sites;
   state.runtime.prepareFunctionArgs = (strings, kind, path) => { prepared.push([strings, kind, path]); return strings; };
   // Supply incomplete engine CallSites without altering the production formatter or origin parser.
-  runInContext(`globalThis.Error = class extends Error {
+  runInContext(`globalThis.Error = class {
     constructor() {
-      super();
       Object.defineProperty(this, "stack", { get: () => Error.prepareStackTrace(this, sites) });
     }
   }; Error.prepareStackTrace = () => "custom formatter";`, state.context);
@@ -209,4 +213,43 @@ test("a text-capturing host uses JSC formatting instead of V8 constructor offset
   expect(state.runtime.formatCallSite(callSite())).toBe("run (/source.ts:30:7)");
   expect(state.lookups).toEqual([]);
   expect(state.runtime.formatCallSite(callSite({ name: null, functionValue: undefined, line: null, column: null }))).toBe("/source.ts");
+});
+
+for (const engine of ["host", "quickjs"]) {
+  test(`${engine} caller origin reads structured filenames without formatting source positions`, () => {
+    const state = bootstrap(engine, false, [30, 7], true);
+    const prepared = installFunctionCaller(state, [
+      callSite({ file: "bun-wasm:caller_origin", name: "callerSourceOrigin" }),
+      callSite({ file: "/project/webpack.js", name: "compile" }),
+      callSite({ file: "/other.ts", name: "run" }),
+    ]);
+    expect(runInContext('new Function("return 42")()', state.context)).toBe(42);
+    expect(prepared).toEqual([[["return 42"], "normal", "/project/webpack.js"]]);
+    expect(state.mappings).toEqual([]);
+    expect(state.lookups).toEqual([]);
+    expect(runInContext('Error.prepareStackTrace()', state.context)).toBe("custom formatter");
+  });
+}
+
+for (const file of [null, "<input>"]) {
+  test(`structured caller origin stops at opaque user filename ${file}`, () => {
+    const state = bootstrap("host");
+    const prepared = installFunctionCaller(state, [callSite({ file }), callSite({ file: "/unrelated.ts" })]);
+    expect(runInContext('new Function("return 42")()', state.context)).toBe(42);
+    expect(prepared).toEqual([[["return 42"], "normal", undefined]]);
+    expect(state.lookups).toEqual([]);
+  });
+}
+
+test("structured caller origin maps a browser module URL without mapping positions", () => {
+  const state = bootstrap("host", true);
+  state.runtime.displayName = file => file === "blob:registered" ? "/project/source.ts" : file;
+  const prepared = installFunctionCaller(state, [
+    callSite({ file: null, native: true }),
+    callSite({ file: "blob:registered" }),
+  ]);
+  expect(runInContext('Function("return 42")()', state.context)).toBe(42);
+  expect(prepared).toEqual([[["return 42"], "normal", "/project/source.ts"]]);
+  expect(state.mappings).toEqual([]);
+  expect(state.lookups).toEqual([]);
 });
