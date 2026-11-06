@@ -184,13 +184,15 @@ export function constructNativeReadable(target: Function, args: unknown[], newTa
   if (wrapped === null || typeof wrapped !== "object") return Reflect.construct(target, args, newTarget);
   let highWaterMark: unknown;
   const forwarded = args.slice();
-  forwarded[0] = new Proxy({}, { get(_target, key) {
+  const dictionary = {};
+  for (const key of ["autoAllocateChunkSize", "cancel", "pull", "start", "type"]) Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, get() {
     const value: unknown = Reflect.get(wrapped, key, wrapped);
-    // Dispatch at native dictionary conversion, after its strategy reads. Never
-    // probe type early or repeat a getter after native construction rejects it.
+    // Dispatch at native conversion, including repeated type reads.
     if (key === "type" && value === "direct") throw direct;
+    if (typeof value === "function" && key !== "type" && key !== "autoAllocateChunkSize") Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, writable: true, value });
     return value;
   } });
+  forwarded[0] = dictionary;
   const strategy = args[1];
   if (strategy !== null && typeof strategy === "object") {
     forwarded[1] = new Proxy({}, { get(_target, key) {

@@ -218,9 +218,21 @@ function algorithm(group: Group, key: PropertyKey, source: object, callback: Fun
     return promise;
   };
 }
+function readableDictionary(source: object, methods: readonly PropertyKey[], group: Group) {
+  const own = {};
+  for (const key of methods.concat(["autoAllocateChunkSize", "type"])) Object.defineProperty(own, key, { configurable: true, enumerable: true, get() {
+    const method = Reflect.get(source, key, source);
+    if (!methods.includes(key) || method === undefined && key !== "start" || method !== undefined && typeof method !== "function") return method;
+    const value = algorithm(group, key, source, method);
+    Object.defineProperty(own, key, { configurable: true, enumerable: true, writable: true, value });
+    return value;
+  } });
+  return own;
+}
 function dictionary(input: unknown, methods: readonly PropertyKey[], group: Group) {
   const source = input === undefined ? {} : input;
   if (source === null || typeof source !== "object" && typeof source !== "function") return source;
+  if (group.kind === "readable") return readableDictionary(source, methods, group);
   return new Proxy({}, {
     has(target, key) { return key === "start" || Reflect.has(source, key); },
     ownKeys() { const keys = Reflect.ownKeys(source); return keys.includes("start") ? keys : keys.concat(["start"]); },
