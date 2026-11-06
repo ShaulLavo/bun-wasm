@@ -1123,5 +1123,5 @@ with current main's guest. It is not the terminal EOF bug.
 option before command classification, then verify relative module resolution,
 package scripts, missing directories, and passthrough arguments on all engines.
 The terminal regression uses shell `cd` so it does not depend on this unsupported
-flag. Original failure is in
-`/work/reports/wave-20261106/vite-react-hmr/terminal-cwd-failure.log`.
+flag. The failing command and error above came from the live terminal, before the
+regression was changed to shell `cd`.
