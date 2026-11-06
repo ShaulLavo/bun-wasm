@@ -23,6 +23,10 @@ for (const template of projectTemplates) {
 test("Next ships TypeScript and the official WASM compiler without npm bootstrap", async () => {
   const path = resolve(import.meta.dir, "../../sandbox/template-next/package.json");
   const manifest = await Bun.file(path).json();
+  expect(manifest.scripts).toMatchObject({
+    build: "next build",
+    start: "NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1 --port 5173",
+  });
   expect(manifest.dependencies["@next/swc-wasm-nodejs"]).toBe(manifest.dependencies.next);
   expect(manifest.devDependencies.typescript).toBeDefined();
   expect(manifest.devDependencies["@types/react"]).toBeDefined();

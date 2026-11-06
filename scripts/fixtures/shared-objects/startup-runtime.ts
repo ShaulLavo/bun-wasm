@@ -54,12 +54,12 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
     transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
-    tlsDispose() {}, closeAllDirs() {}, mapPosition() { return null; },
+    tlsDispose() {}, closeAllDirs() {}, mapPosition() { return null; }, hostUseModuleRecords() {},
     writeStderr(text: string) { failures.push(text); },
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare") throw new Error(`Unexpected startup module ${name}`);
+      if (name !== "stack_capability" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare") throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },
@@ -73,7 +73,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     wasm: { describe: () => ({ entry: { kind: "run", main: "/entry.ts" } }) },
     buildNative(this: { valueNatives(): object }) { return Object.assign(this.valueNatives(), native); },
     evalPolyfill() { return bootstrapInternal; },
-    installGlobals() {}, wrapPromiseJobs() {}, watchRejections() {}, flush() {},
+    installGlobals() {}, wrapPromiseJobs() {}, createRecords() { return null; }, watchRejections() {}, flush() {},
     schedule(delay: number) { wakeups.push(delay); },
     uncaught(this: { exit(code: number): void }, error: unknown) { failures.push(error); this.exit(1); },
     resolveDone: done.resolve,

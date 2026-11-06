@@ -33,10 +33,13 @@ function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: 
 }
 
 function runtimeContext() {
-  return createContext({
+  const context = createContext({
     process, URL, createScriptEvaluation, NativeString: String, transferArrayBuffers: () => {},
     isWasmMemoryBuffer: () => false, nativePromiseHasInstance: () => false,
   });
+  // engine-host.js captures its context's evaluator when it loads.
+  context.nativeEval = runInContext("globalThis.eval", context);
+  return context;
 }
 
 export function productionHostEvaluation(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation {

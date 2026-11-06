@@ -6,12 +6,12 @@ import type { SharedObjectService } from "./shared-objects/service";
 export interface EngineHostOptions {
   /** The bun-browser.wasm instance, after `_start` returned. */
   instance: WebAssembly.Instance;
-  /** How ES modules are loaded: blob: URLs in browsers, data: URLs in Node. */
+  /** The URLs native ES modules get with a module store: blob: URLs in browsers, data: URLs in Node. */
   moduleUrls: "blob" | "data";
   /**
-   * A module store: named URLs that the host's module loader serves from what was put (the
-   * service worker in the playground, module hooks in Node). Needed for import cycles; without it
-   * modules get `moduleUrls` URLs.
+   * A module store: named URLs that the host's module loader serves from what was put (module
+   * hooks in Node). With it, ES modules load natively; without it, every ES module of the process
+   * loads as a registration record (module-records.ts), import cycles included.
    */
   modules?: { url(key: string): string; put(url: string, source: string): void | Promise<void> };
   /** The attached terminal session's input mode, when this process reads keyboard input. Returns

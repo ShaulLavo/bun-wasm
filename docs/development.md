@@ -85,3 +85,31 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 | How it all fits | [Architecture](concepts/architecture.md) |
 
 The repository takes no GitHub issues. [Agent instructions](../AGENTS.md) hold the conventions agents follow.
+
+## Diagnose a browser PostgreSQL TLS control
+
+For ordinary development, run one control against the existing private Pi
+PostgreSQL fixture and loopback relay. This builds the current TLS page and
+worker, uses your existing browser guest, and seeds unmodified `pg` 8.16.3 from
+an installed dependency directory. It does not consume or rewrite release
+handoffs, deliveries, or historical results.
+
+```sh
+source env.sh
+bun web/tests/tls-development.ts \
+  --wasm /work/path/to/bun-browser.wasm \
+  --pg-modules /work/path/to/pg-project/node_modules \
+  --output /work/tmp/bun-wasm-tls-result
+```
+
+The default case is `no-extra-ca`. `--case` also accepts `verified`, `hostname`,
+`rejection`, and `plaintext`. Use the fleet runner's `browser` class on the PC.
+The Pi owner-busy check and shared lane lock still apply. The fixture image
+must already be prepared. The driver creates only its uniquely named container,
+volume and scratch, and closes them on completion or interruption.
+
+Read `result.json` for the guest's original error, bounded diagnostic records,
+observer delivery and cleanup. Only the exact expected certificate or protocol
+rejection passes a negative control. A connection closing without that error
+is a failure, not evidence of certificate verification. These development runs
+do not establish application TLS acceptance.

@@ -89,10 +89,20 @@ function track(sockets: Set<Socket>, socket: Socket): void {
  * The lease always ends with its cleanup, so a refused remote cleanup can never keep the driver's event loop alive.
  * An unreconciled remote fixture is left exactly as it is, named in the ledger, and still fails the run.
  */
-export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock") {
-  const argv = ["--nonblock", lock, hostToolPath(tools, "sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", hostToolPath(tools, "cat")];
+export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tools: HostTools, lock = "/work/tmp/wave-heavy/pi.lock", timing?: LeaseCleanupTiming) {
+  return fixturePiLane(owner, signal, closed, name => hostToolPath(tools, name), lock, timing);
+}
+interface LeaseCleanupTiming { readonly exitMs: number; readonly graceMs: number }
+type FixtureTool = "mesh" | "flock" | "sh" | "cat";
+interface FixtureHost {
+  readonly hostSource: string;
+  readonly tool: (name: FixtureTool) => string;
+  readonly recheck: () => Promise<void>;
+}
+async function fixturePiLane(owner: TlsCleanup, signal: AbortSignal, closed: () => boolean, tool: FixtureHost["tool"], lock = "/work/tmp/wave-heavy/pi.lock", timing: LeaseCleanupTiming = { exitMs: 5000, graceMs: 5000 }) {
+  const argv = ["--nonblock", lock, tool("sh"), "-c", "printf 'locked\\n'; exec \"$1\" >/dev/null", "sh", tool("cat")];
   const lease = await acquireOwned(owner, signal, () => {
-    const child = spawn(hostToolPath(tools, "flock"), argv, { detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(tool("flock"), argv, { detached: true, stdio: ["pipe", "pipe", "pipe"] });
     child.stderr.resume();
     const exited = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", code => code === 0 ? resolve() : reject(new Error("Pi lane lock unavailable"))); });
     void exited.catch(() => {});
@@ -101,9 +111,9 @@ export async function piLane(owner: TlsCleanup, signal: AbortSignal, closed: () 
     const reconciled = closed();
     child.stdin.end();
     let failure: unknown;
-    try { await deadline(exited, new AbortController().signal, 5000); }
+    try { await deadline(exited, new AbortController().signal, timing.exitMs); }
     catch (error) { failure = error; }
-    await stopConsumerGroup(child);
+    await stopConsumerGroup(child, timing.graceMs);
     await exited.catch(() => {});
     if (!reconciled) throw new Error("Pi lane released with the remote PostgreSQL fixture unreconciled; its named container, volume and scratch stay for reconciliation under a fresh pi.lock", { cause: failure });
     if (failure) throw failure;
@@ -122,12 +132,12 @@ export function stderrTail(stream: NodeJS.ReadableStream, secrets: RunSecrets, l
   stream.on("data", (chunk: string) => { tail.write(chunk); });
   return () => tail.read();
 }
-async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, tools: HostTools, secrets: RunSecrets) {
-  const mesh = hostToolPath(tools, "mesh");
+async function database(owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, host: FixtureHost, secrets: RunSecrets) {
+  const mesh = host.tool("mesh");
   signal.throwIfAborted();
   if (options.databaseMachine !== "pi") throw new Error("TLS PostgreSQL fixture requires the approved Pi host");
   let remoteClosed = true;
-  const lease = await piLane(owner, signal, () => remoteClosed, tools);
+  const lease = await fixturePiLane(owner, signal, () => remoteClosed, host.tool);
   await record({ kind: "pi-lane-lock", path: "/work/tmp/wave-heavy/pi.lock", holderPid: lease.pid, acquired: true });
   const home = execFileSync(mesh, ["ssh", options.databaseMachine, "--", "sh", "-c", 'printf "%s" "$HOME"'], { encoding: "utf8", timeout: 15_000 }).trim();
   const plan = piPostgresPlan(home, randomBytes(12).toString("hex"), options.databaseAddress, options.relayAddress + "/32");
@@ -189,10 +199,14 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   };
 }
 export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, secrets: RunSecrets) {
+  return startTlsFixtureServices({ hostSource: intake.hostSource, tool: name => hostToolPath(intake.hostTools, name), recheck: () => recheckDependencies(intake) }, owner, options, signal, record, secrets);
+}
+/** Ordinary development uses the same private fixture owners without a release handoff. */
+export async function startTlsFixtureServices(host: FixtureHost, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, secrets: RunSecrets) {
   signal.throwIfAborted();
-  await recheckDependencies(intake);
+  await host.recheck();
   signal.throwIfAborted();
-  const db = await database(owner, options, signal, record, intake.hostTools, secrets);
+  const db = await database(owner, options, signal, record, host, secrets);
   let selected: PgCase = "verified";
   const audits = new Map<PgCase, PgWireAudit[]>();
   const sockets = new Set<Socket>();
@@ -217,9 +231,9 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   const secret = randomBytes(32);
   secrets.add(secret);
   owner.add(() => { secret.fill(0); });
-  const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(intake.hostSource, "web"))).href;
+  const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(host.hostSource, "web"))).href;
   signal.throwIfAborted();
-  await recheckDependencies(intake);
+  await host.recheck();
   signal.throwIfAborted();
   const adapter: unknown = await import(entry);
   const module = object(adapter, "released relay module");
@@ -238,7 +252,7 @@ export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, opt
   await record({ kind: "relay", port: options.relayPort, destinationPort: proxyPort });
   await listen(server, options.relayPort, signal);
   signal.throwIfAborted();
-  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync("waffle-relay/token", join(intake.hostSource, "web"))).href), "relay token module");
+  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync("waffle-relay/token", join(host.hostSource, "web"))).href), "relay token module");
   if (typeof tokenModule.mintRelayToken !== "function") throw new Error("Missing relay token signer");
   const mint = tokenModule.mintRelayToken;
   return {

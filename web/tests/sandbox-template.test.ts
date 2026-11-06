@@ -102,3 +102,13 @@ test("Next App Router is a separate source-only template with a client page and 
     devDependencies: { typescript: expect.any(String), "@types/react": expect.any(String), "@types/node": expect.any(String) },
   });
 });
+
+test("both Next templates can start their production build", async () => {
+  for (const template of templates.filter(template => template.id === "next" || template.id === "next-app")) {
+    const path = join(import.meta.dir, "../../sandbox", template.directory, "package.json");
+    expect((await Bun.file(path).json()).scripts).toMatchObject({
+      build: "next build",
+      start: "NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1 --port 5173",
+    });
+  }
+});

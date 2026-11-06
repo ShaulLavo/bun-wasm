@@ -360,6 +360,7 @@ declare namespace BunWasm {
     builtin(name: "node:os" | "node:crypto" | "node:zlib"): { readonly constants: object };
     builtin(name: string): unknown;
     defineHidden(target: object, values: object): void;
+    hasNativeStackTrace: boolean;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;

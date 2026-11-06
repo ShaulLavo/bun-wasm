@@ -124,6 +124,13 @@ test("each discovery group retains one command owner and browser deadlines stay 
   const web = readFileSync(join(root, "scripts/test-web-host.sh"), "utf8");
   expect(web.match(/bun \.\.\/scripts\/test-checks.ts web\n/g)).toHaveLength(1);
   expect(web).toContain("browser_test bun ../scripts/test-checks.ts web-browser");
+  // Browser-guest checks run once per real browser on the one site the rust job bundles from its
+  // verified guest: built once, downloaded and verified per leg, never bundled there.
+  expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest\n/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
+  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(2);
+  expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
+  expect(workflow).not.toContain("web/build.ts");
   const runtime = readFileSync(join(root, "scripts/check-runtime.sh"), "utf8");
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" local-runtime');

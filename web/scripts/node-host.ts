@@ -37,6 +37,9 @@ interface Settings {
   /** `native`: Node's AsyncLocalStorage carries guest frames. `hooks`: the printed
    * async-context hooks do, as in a browser (docs/engine-browser.md). */
   context: "native" | "hooks";
+  /** `--modules records`: no module store, so every ES module loads as a registration record,
+   * as in a browser worker (module-records.ts). Default `store`: native modules from Node's hooks. */
+  modules: "store" | "records";
 }
 interface GuestData {
   module: WebAssembly.Module;
@@ -49,9 +52,13 @@ function contextMode(value: string | undefined): Settings["context"] {
   if (value !== "native" && value !== "hooks") throw new Error("--context requires native or hooks");
   return value;
 }
+function modulesMode(value: string | undefined): Settings["modules"] {
+  if (value !== "store" && value !== "records") throw new Error("--modules requires store or records");
+  return value;
+}
 function settings(): Settings {
   const argv = nodeProcess.argv.slice(2);
-  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native" };
+  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native", modules: "store" };
   let i = 0;
   for (; i < argv.length; i++) {
     const arg = argv[i];
@@ -65,6 +72,7 @@ function settings(): Settings {
     else if (arg === "--net") result.withNet = true;
     else if (arg === "--context") result.context = contextMode(argv[++i]);
     else if (arg?.startsWith("--context=")) result.context = contextMode(arg.slice("--context=".length));
+    else if (arg === "--modules") result.modules = modulesMode(argv[++i]);
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
     else if (arg === "--dir") {
       const [host, guest = host] = argv[++i]!.split("::");
@@ -195,7 +203,7 @@ async function run(data: GuestData) {
     const modules = { url: (key: string) => prefix + encodeURIComponent(key), put: (url: string, source: string) => void sources.set(url, source) };
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
-    await startEngineHost({ instance, moduleUrls: "data", modules, fetch: nodeFetch,
+    await startEngineHost({ instance, moduleUrls: "data", modules: config.modules === "store" ? modules : undefined, fetch: nodeFetch,
       asyncContext: config.context === "native" ? createNodeAsyncContext() : undefined,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,

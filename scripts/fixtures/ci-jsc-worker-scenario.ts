@@ -109,7 +109,9 @@ async function stalePid() {
 async function unregisteredState() {
   const state = join(scratch, "jsc-guest");
   if (scenario === "failed-supervisor") {
+    const started = performance.now();
     const starting = await run("Start the JSC Cargo guest build", { NODE_OPTIONS: `--import=${join(scratch, "missing-preload.mjs")}` });
+    assert(performance.now() - started < 5000, "failed supervisor waited for the ten-second registration deadline");
     assert.notEqual(starting.code, 0);
     assert.match(starting.stderr, /did not register its identity/);
     assert.match(starting.stderr, /ERR_MODULE_NOT_FOUND/);

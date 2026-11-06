@@ -7,6 +7,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
+const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}";
 
 test("native quality has a bounded checkpoint before the unchanged final native gate", () => {
   expect(record(jobs["native-quality"])["timeout-minutes"]).toBe(45);
@@ -71,7 +72,7 @@ test("producer attempt and manifest admission come from that producer, not the c
   expect(record(step("rust", unpackName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ needs.native-quality.outputs.producer-attempt }}");
   const download = steps("rust").filter(step => step.uses === "actions/download-artifact@v4").map(step => record(step.with).name);
   expect(download).toContain("native-quality-${{ needs.native-quality.outputs.producer-attempt }}");
-  for (const [job, name] of [["native-quality", packName], ["rust", unpackName]]) expect(step(job!, name!).shell).toBe("bash");
+  for (const [job, name] of [["native-quality", packName], ["rust", unpackName]]) expect(step(job!, name!).shell).toBe(boatShell);
   expect(script("rust", unpackName)).not.toContain("github.run_attempt");
 });
 

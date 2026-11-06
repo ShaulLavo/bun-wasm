@@ -39,15 +39,6 @@ function base(): string {
   return globalThis.location?.href ?? import.meta.url;
 }
 
-/**
- * The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles. Only the
- * classification resolves the URL; the worker is started with the string exactly as given, so a
- * relative URL resolves as the browser resolves it.
- */
-function scopedWorker(workerUrl: string): boolean {
-  return new URL(workerUrl, base()).pathname.endsWith("/__bunwasm/worker.js");
-}
-
 /** A worker bundled beside the Bun worker in the same output directory. */
 export function siblingWorkerUrl(workerUrl: string, name: string): string {
   return new URL(`./${name}`, new URL(workerUrl, base())).href;
@@ -63,7 +54,6 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let helper: RuntimeNetworkHelper | undefined;
   let relay: Awaited<ReturnType<typeof runtimeRelay>>;
   let socketRoot: Awaited<ReturnType<ProcessRuntime["filesystem"]["directoryHandle"]>> | undefined;
-  let moduleCache: string | null = null;
   let lookupChannel: BroadcastChannel | undefined;
   let disposeLookup: (() => void) | undefined;
   let released = false;
@@ -84,8 +74,6 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     sharedRoute?.close();
     disposeLookup?.();
     lookupChannel = undefined;
-    const cacheStore = globalThis.caches;
-    if (moduleCache && cacheStore) void cacheStore.delete(moduleCache);
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, "Bun launch cleanup failed");
   };
@@ -121,7 +109,6 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     if (!active()) throw new Error("Bun process launch was revoked");
     const session = helper;
     dispatch = message => dispatchBunNetwork(session, message);
-    moduleCache = engine === "browser" && scopedWorker(options.workerUrl) ? `bunwasm-m-${crypto.randomUUID()}` : null;
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
     const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job));
     return service.launchWorker<RunRequest>(context, {
@@ -130,7 +117,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
-        trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
+        trace: false, net: ring, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
       },
       cleanup,

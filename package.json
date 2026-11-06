@@ -63,6 +63,7 @@
     "web/src/native-stream-state.ts",
     "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
+    "web/src/module-records.ts",
     "web/src/net",
     "src/executable-paths.ts",
     "web/src/bun-launcher.ts",

@@ -45,7 +45,7 @@ for (const type of ["error", "unhandledrejection"] as const) {
     };
     const request: RunRequest = {
       engine: "browser", module: guest, args: ["bun"], env: {}, filesystem: connection.client,
-      runtimeProcess, trace: false, net: null, moduleCache: null, slots: "off",
+      runtimeProcess, trace: false, net: null, slots: "off",
     };
     let context!: WorkerSetupContext<RunRequest>;
     const completions = () => messages.filter(message => message.type === "exit" || message.type === "error");

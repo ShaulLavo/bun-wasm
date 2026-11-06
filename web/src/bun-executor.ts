@@ -27,11 +27,6 @@ export interface RunRequest extends RuntimeWorkerRequest {
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
-  /**
-   * Browser engine: the Cache Storage cache for import cycles, served by the service worker
-   * under ./m/. Acyclic modules use blob URLs. Null disables import cycles.
-   */
-  moduleCache: string | null;
   /** Bun-owned DNS lookup requests are served by the page runtime. */
   lookupPort?: MessagePort;
   /** Browser-engine DNS lookup channel name used by adapter-launched workers. */
@@ -48,25 +43,6 @@ export interface RunRequest extends RuntimeWorkerRequest {
 }
 
 export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapshot: MemorySnapshot } | { type: "net"; req: NetRequest } | BunSharedConnection;
-
-// The browser engine's polyfills replace globalThis.Response; Cache.put needs the real one.
-const NativeResponse = Response;
-
-/** Named module URLs for engine-host.js, stored where the service worker (sw.ts) serves them. */
-function moduleStore(cacheName: string, location: { href: string }) {
-  const run = cacheName.replace(/^bunwasm-m-/, "");
-  const base = new URL(`./m/${run}/`, location.href).href;
-  const openCache = caches.open.bind(caches, cacheName);
-  let cache: Promise<Cache> | undefined;
-  return {
-    url: (key: string) => base + encodeURIComponent(key),
-    put: async (url: string, source: string) => {
-      const headers = { "content-type": "text/javascript; charset=utf-8" };
-      const store = await (cache ??= openCache());
-      await store.put(url, new NativeResponse(source, { headers }));
-    },
-  };
-}
 
 export type SleepMode = "atomics" | "busy-wait";
 
@@ -171,9 +147,10 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         onNews() {},
       } : undefined) : undefined;
       const nativeFetch = host.fetch.bind(host);
+      // No module store: every ES module loads as a registration record (module-records.ts),
+      // with or without a service worker controlling this worker.
       return startEngineHost({
         instance, moduleUrls: "blob",
-        modules: req.moduleCache ? moduleStore(req.moduleCache, host.location) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });

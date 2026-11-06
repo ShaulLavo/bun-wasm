@@ -86,14 +86,12 @@ whole `result.json`, or why none is readable.
   a failure and reports the first execution error; later cleanup or empty
   loaded validation errors are diagnostics.
 - Every successful GET the page makes is checked against the sealed web root
-  and named by URL when it is refused. Two kinds of response are made by the
-  page itself rather than loaded from the server, and are counted in
-  `browserMade` instead: the `blob:` content URLs the browser engine gives each
-  guest module, and the `/__bunwasm/m/<run>/<key>` cycle modules the service
-  worker answers from Cache Storage (only when the response really came from
-  the service worker, at the page origin). They never become `loaded` rows,
-  never bind to a member and never satisfy coverage. Server answers, including
-  `.gz`/`.br` representations, are unchanged.
+  and named by URL when it is refused. The `blob:` content URLs the browser
+  engine gives each guest module, cycle members included, are made by the page
+  itself rather than loaded from the server, and are counted in `browserMade`
+  instead. They never become `loaded` rows, never bind to a member and never
+  satisfy coverage. Server answers, including `.gz`/`.br` representations, are
+  unchanged.
 - Chromium cleanup stops the web server's and the browser's process groups
   with the shared `stopProcessGroup` utility and reads `browserClosed` only
   after the browser group is empty. Playwright's own kill waits only for the
@@ -131,7 +129,12 @@ whole `result.json`, or why none is readable.
   then ends and reaps the entire group even if a stopped descendant prevents
   normal EOF handling. The original timeout or unreconciled-resource error
   remains a failure after local termination. An unreconciled remote fixture
-  is left as it is, named in the ledger.
+  is left as it is, named in the ledger. Host-only stopped-descendant tests
+  supply 50 ms lease-exit and TERM grace periods at the actual cleanup
+  boundaries. Production keeps both five-second defaults, and the SIGKILL
+  confirmation deadline stays unchanged. The framework process tests retain
+  their default-policy timing assertions with real descendants and unrelated
+  processes.
 - The sealed TLS page keeps a guest's stdout in a closure, drops its stderr
   and throws one generic error for a nonzero exit. `web/tests/tls-relay-browser.ts`
   observes the guest from the host instead, without changing any served byte:

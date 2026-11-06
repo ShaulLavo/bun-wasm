@@ -19,7 +19,7 @@ globalThis.onmessage = async (event: MessageEvent) => {
   const request: RunRequest = {
     engine: "browser", adapter: "bun", module: guest(0), args: ["bun"], env: {},
     filesystem: connection.client, runtimeProcess: createWorkerProcessTransport({ pid: 1, job: 1 }),
-    trace: false, net: null, moduleCache: null, slots: "off", sharedObjects: { owner: event.data },
+    trace: false, net: null, slots: "off", sharedObjects: { owner: event.data },
   };
   const executor = createBunExecutor(request, host);
   try {
