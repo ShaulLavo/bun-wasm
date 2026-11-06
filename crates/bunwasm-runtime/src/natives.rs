@@ -694,7 +694,7 @@ fn install_fs(t: &mut Table) {
         let path = a.str(0)?;
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
-            Err(_) if a.bool(2) => return ok(),
+            Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
             Err(e) => return Err(io_error(e, "rm", Some(path))),
         };
         let result = match (meta.is_dir(), a.bool(1)) {
