@@ -1,15 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { bodyConsumerFactory, bodyConsumerSources } from "./body-consumer-factory.ts";
 
-const out = resolve(process.argv[2] ?? "/work/reports/wave-20261106/engines/ssr-body-consumer/capability-reader-consumers");
+const destination = process.argv[2];
+if (!destination) throw new Error("Usage: bun scripts/build-body-consumer-probe.ts OUTPUT [BASELINE_COMMIT]");
+const out = resolve(destination);
+if (existsSync(out) && readdirSync(out).length) throw new Error("Output directory must be empty; preserve packets already in use");
+const revision = process.argv[3] ?? "3e5fb36d9a22ffd59c40bc4d9552fcf07faa6d71";
 mkdirSync(out, { recursive: true });
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 const controls = await Bun.file(new URL("../web/tests/body-consumer-capability.ts", import.meta.url)).text();
 const factory = transpiler.transformSync(bodyConsumerFactory.toString());
 const baseline = bodyConsumerSources();
-const readBase = (file: string) => execFileSync("git", ["show", `3e5fb36d9a22ffd59c40bc4d9552fcf07faa6d71:crates/bunwasm-runtime/src/js/${file}`], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+const readBase = (file: string) => execFileSync("git", ["show", `${revision}:crates/bunwasm-runtime/src/js/${file}`], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
 baseline.web = `return (\n${readBase("web.js")}\n);`;
 baseline.consumers = transpiler.transformSync(`const factory = ${readBase("stream_consumers.ts")};`) + "\nreturn factory;";
 baseline.body = transpiler.transformSync(`const factory = ${readBase("body_streams.ts")};`) + "\nreturn factory;";

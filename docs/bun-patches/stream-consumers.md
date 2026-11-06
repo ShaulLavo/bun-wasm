@@ -54,3 +54,8 @@ including missing iteration, errors, locks, cancellation and generic iterables.
 `build-body-consumer-probe.ts` emits portable baseline and candidate page and worker
 controls without patching any host prototype. `body-reader` is the focused guest
 fixture for the same reader-backed paths across QuickJS, JSC and Browser guests.
+
+Generate new portable controls into an empty directory with
+`bun scripts/build-body-consumer-probe.ts OUTPUT [BASELINE_COMMIT]`.
+The default baseline is `3e5fb36d9a22ffd59c40bc4d9552fcf07faa6d71`.
+The tool refuses to overwrite packets that another run may still consume.
