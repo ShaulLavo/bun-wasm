@@ -149,3 +149,82 @@ test("record host: object and function snapshots preserve separately supplied fa
     }
   `);
 });
+
+// ECMA-262 10.4.6.11 orders namespace keys by UTF-16 code units, integer-like names
+// included. V8's own namespaces list integer-like names first, so this is not a fixture
+// compared with Node.
+test("record host: namespace keys follow code-unit order for integer-like names", () => {
+  probe(`
+    const record = { r: [], i: [], x: [], s: [], a: false, f: function* (api) {
+      const ten = 10, two = 2;
+      api.l({ "2": () => two, b: () => "b", "10": () => ten }); yield; yield;
+    } };
+    const loader = factory({ resolve: specifier => specifier, load: () => ({ record }), initMeta() {} });
+    const namespace = await loader.importName("/keys.mjs");
+    assert.deepEqual(Reflect.ownKeys(namespace), ["10", "2", "b", Symbol.toStringTag]);
+    assert.deepEqual(Object.keys(namespace), ["10", "2", "b"]);
+    assert.equal(namespace["10"], 10);
+  `);
+});
+
+test("record host: a body runs without a receiver", () => {
+  probe(`
+    let receiver = "unset";
+    const record = { r: [], i: [], x: [], s: [], a: false, f: function* (api) {
+      "use strict";
+      api.l({}); yield; yield; receiver = this;
+    } };
+    const loader = factory({ resolve: specifier => specifier, load: () => ({ record }), initMeta() {} });
+    await loader.importName("/this.mjs");
+    assert.equal(receiver, undefined);
+  `);
+});
+
+test("record host: built-ins changed after the loader exists do not reach module loading", () => {
+  probe(`
+    const record = (body) => ({ r: ["./dep.mjs"], i: [[0, "x"]], x: [], s: [], a: true, f: body });
+    const records = {
+      "/main.mjs": record(function* (api) { api.l({}); yield; const dep = api.n[0], ns = api.ns(0); yield; yield null; globalThis.seen = [dep.x, ns.x, Object.keys(ns).join()]; }),
+      "/dep.mjs": { r: [], i: [], x: [], s: [], a: false, f: function* (api) { const x = 1; api.l({ x: () => x }); yield; yield; } },
+    };
+    const loader = factory({ resolve: specifier => "/" + specifier.slice(2), load: name => ({ record: records[name] }), initMeta() {} });
+    const saved = { push: Array.prototype.push, map: Array.prototype.map, get: Map.prototype.get, then: Promise.prototype.then };
+    Array.prototype.push = Array.prototype.map = Map.prototype.get = () => { throw new Error("patched"); };
+    Object.prototype.get = Object.prototype.has = Object.prototype.value = () => { throw new Error("polluted"); };
+    try {
+      await loader.importName("/main.mjs");
+    } finally {
+      Object.assign(Array.prototype, { push: saved.push, map: saved.map });
+      Map.prototype.get = saved.get;
+      delete Object.prototype.get; delete Object.prototype.has; delete Object.prototype.value;
+    }
+    assert.deepEqual(globalThis.seen, [1, 1, "x"]);
+  `);
+});
+
+test("record host: an exited host loads, links and resumes nothing", () => {
+  probe(`
+    let running = true, loads = 0, resumed = false, tracked = 0;
+    const records = {
+      "/wait.mjs": { r: [], i: [], x: [], s: [], a: true, f: function* (api) { api.l({}); yield; yield; yield new Promise(resolve => setTimeout(resolve, 5)); resumed = true; } },
+      "/later.mjs": { r: [], i: [], x: [], s: [], a: false, f: function* (api) { api.l({}); yield; yield; } },
+    };
+    const loader = factory({
+      resolve: specifier => specifier,
+      load: name => { loads++; return { record: records[name] }; },
+      initMeta() {},
+      active: () => running,
+      track: operation => { tracked++; return operation; },
+    });
+    const waiting = loader.importName("/wait.mjs");
+    const dynamic = loader.dynamicImport("/later.mjs", "/wait.mjs");
+    assert.equal(tracked, 1);
+    running = false;
+    const settled = await Promise.race([waiting.then(() => "settled", () => "rejected"), dynamic.then(() => "settled", () => "rejected"), new Promise(resolve => setTimeout(() => resolve("pending"), 30))]);
+    assert.equal(settled, "pending");
+    assert.equal(resumed, false);
+    assert.equal(loads, 1);
+    assert.equal(await Promise.race([loader.importName("/later.mjs").then(() => "settled"), new Promise(resolve => setTimeout(() => resolve("pending"), 10))]), "pending");
+    assert.equal(loads, 1);
+  `);
+});

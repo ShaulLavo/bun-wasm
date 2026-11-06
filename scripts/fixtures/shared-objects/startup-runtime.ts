@@ -54,7 +54,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
     transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
-    tlsDispose() {}, closeAllDirs() {}, mapPosition() { return null; },
+    tlsDispose() {}, closeAllDirs() {}, mapPosition() { return null; }, hostUseModuleRecords() {},
     writeStderr(text: string) { failures.push(text); },
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
@@ -73,7 +73,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     wasm: { describe: () => ({ entry: { kind: "run", main: "/entry.ts" } }) },
     buildNative(this: { valueNatives(): object }) { return Object.assign(this.valueNatives(), native); },
     evalPolyfill() { return bootstrapInternal; },
-    installGlobals() {}, wrapPromiseJobs() {}, watchRejections() {}, flush() {},
+    installGlobals() {}, wrapPromiseJobs() {}, createRecords() { return null; }, watchRejections() {}, flush() {},
     schedule(delay: number) { wakeups.push(delay); },
     uncaught(this: { exit(code: number): void }, error: unknown) { failures.push(error); this.exit(1); },
     resolveDone: done.resolve,

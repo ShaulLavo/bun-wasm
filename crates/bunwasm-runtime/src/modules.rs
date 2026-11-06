@@ -320,13 +320,21 @@ fn read_stdin() -> std::io::Result<Vec<u8>> {
 }
 
 impl State {
-    #[cfg(feature = "engine-split")]
-    pub fn module_record(&self, name: &str, code: &str) -> Result<String, NativeError> {
+    /// The registration record of the ES module `name` (its prepared `code`), as a script
+    /// expression or, `as_module`, as an ES module default-exporting it.
+    #[cfg(any(feature = "engine-split", feature = "engine-host"))]
+    pub fn module_record(
+        &self,
+        name: &str,
+        code: &str,
+        as_module: bool,
+    ) -> Result<String, NativeError> {
         let source = esm_source(self, name, code);
-        let out = self
-            .transpiler
-            .register(&source, name)
-            .map_err(|message| build_error(&message, &source))?;
+        let out = match as_module {
+            true => self.transpiler.register_module(&source, name),
+            false => self.transpiler.register(&source, name),
+        }
+        .map_err(|message| build_error(&message, &source))?;
         self.positions
             .borrow_mut()
             .entry(name.to_owned())
@@ -734,7 +742,7 @@ mod tests {
         let state = State::new(Vec::new(), Box::new(RecordTranspiler));
         let source = "console.log(require('fs'), import.meta.url);";
         assert_eq!(
-            state.module_record("/m.mjs", source).unwrap(),
+            state.module_record("/m.mjs", source, false).unwrap(),
             esm_source(&state, "/m.mjs", source)
         );
         assert!(state.positions.borrow()["/m.mjs"].record.is_some());

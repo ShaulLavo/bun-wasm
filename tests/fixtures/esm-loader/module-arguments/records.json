@@ -1,0 +1,6 @@
+{
+ "modules": {
+  "/main.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;const attempt = (f) => {\n  try {\n    return String(f());\n  } catch (error) {\n    return error.constructor.name;\n  }\n};\nconst lexical = () => __bunwasm_m.gt();\nconsole.log(__bunwasm_m.gt(), attempt(() => __bunwasm_m.ga()), lexical());\nglobalThis.arguments = function(value) {\n  return [this === undefined, value].join();\n};\nconsole.log(__bunwasm_m.gt(), __bunwasm_m.ga()(\"called\"), lexical(), __bunwasm_m.ga().name);\nfunction own() {\n  return arguments.length;\n}\nconsole.log(own(1, 2, 3));\ndelete globalThis.arguments;\nconsole.log(__bunwasm_m.gt(), attempt(() => __bunwasm_m.ga()));\n\n}})"
+ },
+ "cjs": {}
+}

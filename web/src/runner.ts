@@ -149,7 +149,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let networkOwner: Awaited<ReturnType<typeof createPreview1Network>> | undefined;
   let socketRoot: Awaited<ReturnType<typeof options.runtime.filesystem.directoryHandle>> | undefined;
   let disposeLookup: (() => void) | undefined;
-  const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
   // worker, its children and the shell all spawn through the same service; its transport and
   // client chunks load on first use rather than with the page.
@@ -170,7 +169,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
       net: ring,
-      moduleCache,
       lookupPort: lookupChannel?.port2,
       slots: slotsMode(),
     };
@@ -226,7 +224,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       networkOwner = undefined;
       socketRoot?.release();
       socketRoot = undefined;
-      if (moduleCache) void caches.delete(moduleCache);
     }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };

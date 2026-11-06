@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./b.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"fromA\":()=>fromA});yield;const nsB=__bunwasm_m.ns(0);yield;const fromA = \"A\";\nconsole.log(\"a-start\");\nglobalThis.reentry = __bunwasm_m.import(\"./b.mjs\").then((m) => console.log(\"a-dyn\", m.fromB, m === nsB, m === globalThis.bSelf));\n\n}})",
+  "/b.mjs": "({r:[\"./b.mjs\",\"./a.mjs\"],i:[[1,\"fromA\"]],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"fromB\":()=>fromB,\"readA\":()=>readA});yield;const self=__bunwasm_m.ns(0),__bunwasm_ns1_1=__bunwasm_m.n[1];yield;const fromB = \"B\";\nconst readA = () => __bunwasm_ns1_1.fromA;\nglobalThis.bSelf = self;\nconsole.log(\"b\");\n\n}})",
+  "/main.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:true,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;const a=__bunwasm_m.ns(0);yield;const again = (yield __bunwasm_m.import(\"./a.mjs\"));\n(yield globalThis.reentry);\nconsole.log(\"main\", again === a, a.fromA);\n\n}})"
+ },
+ "cjs": {}
+}

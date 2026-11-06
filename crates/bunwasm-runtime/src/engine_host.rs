@@ -296,6 +296,13 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("hostModuleSource", move |a| module_source(&st, a.str(0)?));
     let st = state.clone();
+    t.add("hostUseModuleRecords", move |_| {
+        st.transpiler.use_module_records();
+        Ok(Val::Undefined)
+    });
+    let st = state.clone();
+    t.add("hostModuleRecord", move |a| module_record(&st, a.str(0)?));
+    let st = state.clone();
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
         let (code, _) = st.load_source(path)?;
@@ -415,6 +422,27 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
         .set("format", "esm")
         .set("code", source)
         .set("imports", Val::Array(imports))
+        .into())
+}
+
+/// The registration record a file becomes (`crates/bunwasm-transpiler/src/register.rs`),
+/// for a host that runs every ES module through the record loader (`esm_loader.ts`):
+/// `{format: "esm", record}`, an ES module default-exporting the record, which the host
+/// evaluates as a module so the record's functions keep a script URL in stack traces.
+/// Other formats only report the format, as in [`module_source`]; the host builds their
+/// records from the CommonJS handoff.
+fn module_record(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
+    if resolve::builtin_name(path).is_some() {
+        return Ok(Record::new().set("format", "builtin").into());
+    }
+    let (code, format) = state.load_source(path)?;
+    if format != modules::Format::Esm {
+        return Ok(Record::new().set("format", format.name()).into());
+    }
+    let record = state.module_record(path, &code, true)?;
+    Ok(Record::new()
+        .set("format", "esm")
+        .set("record", record)
         .into())
 }
 

@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./b.mjs\",\"./c.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a\");\n\n}})",
+  "/b.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b\");\n\n}})",
+  "/c.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"c\");\n\n}})",
+  "/main.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"main\");\n\n}})"
+ },
+ "cjs": {}
+}

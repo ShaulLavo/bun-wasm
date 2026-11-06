@@ -6,6 +6,7 @@ import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
+import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
@@ -20,9 +21,11 @@ import { bindSharedObjectHost } from "./shared-objects/host.ts";
 // - implements the natives that need engine values (module loading, eval, promise/proxy
 //   introspection) on the host engine,
 // - evaluates the runtime's JS polyfills (src/js/*.js, served by the wasm) natively,
-// - loads ES modules natively: each file becomes a blob: (browser) or data: (Node) URL whose
-//   import specifiers point at its dependencies' URLs, so live bindings, top-level await and
-//   import.meta are the engine's own,
+// - loads ES modules: with a module store (Node's module hooks), natively, each file a named or
+//   data: URL whose import specifiers point at its dependencies' URLs; without one (a browser
+//   worker, controlled by a service worker or not), as registration records linked and
+//   evaluated by the runtime's esm_loader (module-records.ts), so import cycles need no URL
+//   before their source exists,
 // - and drives the runtime's event loop from the host's (timers on setTimeout/MessageChannel,
 //   microtasks native).
 //
@@ -375,7 +378,6 @@ class EngineHost {
     this.immediate = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
-    this.building = new Set();
     // promise -> {state, value}, for console.log and Bun.peek.
     this.promiseStates = new WeakMap();
     // New writes to o.modules, moved to `writing` by the next import(). `writing` keeps each
@@ -383,11 +385,13 @@ class EngineHost {
     this.storing = [];
     this.writing = new Set();
     this.paths = new Map();
-    this.contentModules = o.moduleUrls === "blob" ? new ContentModules({
+    this.contentModules = o.modules && o.moduleUrls === "blob" ? new ContentModules({
       named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
       paths: this.paths, storing: this.storing,
     }) : null;
     this.handoffs = new Map();
+    // Without a module store: the record loader for every ES module (createRecords).
+    this.records = null;
     this.asyncContext = undefined;
     this.wakeArmed = false;
     if (NativeMessageChannel) {
@@ -404,6 +408,8 @@ class EngineHost {
     this.entry = d.entry;
     const native = this.buildNative(d);
     this.native = native;
+    // Before any module is read: the wasm then prepares every module for its record.
+    if (!this.o.modules) native.hostUseModuleRecords();
     let internal;
     try {
       const factory = this.evalPolyfill("bootstrap");
@@ -420,13 +426,17 @@ class EngineHost {
       if (typeof file !== "string") return file;
       const generated = native.preparedSourceName(file);
       if (generated !== undefined) return generated;
-      const path = this.paths.get(file);
+      const fragment = file.indexOf("#");
+      const path = this.paths.get(fragment < 0 ? file : file.slice(0, fragment));
       if (path) return path;
       if (evalFrame) return file;
       return /^(blob:|data:|file:|https?:|node:internal\/)/.test(file) ? `bun-wasm:host` : file;
     };
     this.installGlobals();
     this.wrapPromiseJobs();
+    // After the promise wrapper (the loader's reactions carry AsyncLocalStorage), before
+    // user code (the loader captures the built-ins it uses).
+    if (!this.o.modules) this.records = this.createRecords();
     this.watchRejections();
     this.startEntry();
     this.schedule(0);
@@ -585,17 +595,34 @@ class EngineHost {
     return (0, eval)(`${code}\n//# sourceURL=${filename}`);
   }
 
+  /** The record loader for every ES module of a host without a module store. */
+  createRecords() {
+    const host = this;
+    return createModuleRecords({
+      record: key => host.native.hostModuleRecord(key),
+      // A module URL the URL -> path table maps back to the file in stack traces.
+      evaluate: (code, key) => import(host.url(code, key)).then(namespace => namespace.default),
+      handoff: (key, format) => host.handoff(key, format),
+      keys: wrapperKeys,
+      initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
+      resolve: (specifier, referrer) => host.native.resolve(specifier, referrer, false),
+      active: () => !host.exited,
+      track: operation => host.track(operation),
+    }, this.evalPolyfill("esm_loader"));
+  }
+
   // --- ES modules ---
 
+  // The fragment names the file: fetching ignores it, but a V8 stack frame's URL (and
+  // CallSite#getFileName) then ends with the module's path. WebKit drops the fragment,
+  // so the table keys the URL without it (displayName strips it). A data: URL also
+  // encodes parentheses, which stack-trace eval origins use as delimiters.
   url(source, key) {
-    let url;
-    if (this.o.moduleUrls === "blob" && nativeCreateObjectURL) {
-      url = nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }));
-    } else {
-      url = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
-    }
-    this.paths.set(url, key);
-    return url;
+    const base = this.o.moduleUrls === "blob" && nativeCreateObjectURL
+      ? nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }))
+      : `data:text/javascript;charset=utf-8,${encodeURIComponent(source).replace(/[()]/g, escapeParenthesis)}`;
+    this.paths.set(base, key);
+    return `${base}#${encodeURIComponent(key)}`;
   }
 
   importKey(key) {
@@ -604,6 +631,7 @@ class EngineHost {
 
   /** Builds module `key` and its static dependencies, waits until the store has them, imports it. */
   async importReady(key) {
+    if (this.records) return this.records.importKey(key);
     const url = this.ensureModule(key);
     for (const write of this.storing.splice(0)) this.watchWrite(write);
     if (this.writing.size > 0) await Promise.all(this.writing);
@@ -616,43 +644,30 @@ class EngineHost {
     write.then(settled, settled);
   }
 
-  /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
+  /**
+   * The URL of module `key` (a path or a builtin name) in the module store, built with its
+   * dependencies. Only a host with a store gets here; the others load records.
+   */
   ensureModule(key) {
     if (this.contentModules) return this.contentModules.ensure(key);
     const cached = this.urls.get(key);
     if (cached) return cached;
+    // A named URL is known before its source exists, so import cycles link
+    // natively, with live bindings, like in Bun.
     const store = this.o.modules;
-    if (store) {
-      // A named URL is known before its source exists, so import cycles link
-      // natively, with live bindings, like in Bun.
-      const url = store.url(key);
-      this.urls.set(key, url);
-      this.paths.set(url, key);
-      let source;
-      try {
-        source = this.moduleSource(key);
-      } catch (err) {
-        this.urls.delete(key);
-        throw err;
-      }
-      const write = store.put(url, source);
-      if (write) this.storing.push(write);
-      return url;
-    }
-    // Content URLs (blob:/data:) exist only once their source is final: no cycles.
-    if (this.building.has(key)) {
-      const err = new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`);
-      err.code = "ERR_CIRCULAR_IMPORT";
+    const url = store.url(key);
+    this.urls.set(key, url);
+    this.paths.set(url, key);
+    let source;
+    try {
+      source = this.moduleSource(key);
+    } catch (err) {
+      this.urls.delete(key);
       throw err;
     }
-    this.building.add(key);
-    try {
-      const url = this.url(this.moduleSource(key), key);
-      this.urls.set(key, url);
-      return url;
-    } finally {
-      this.building.delete(key);
-    }
+    const write = store.put(url, source);
+    if (write) this.storing.push(write);
+    return url;
   }
 
   moduleSource(key) {
@@ -660,16 +675,19 @@ class EngineHost {
     if (info.format === "esm") return this.linkEsm(key, info);
     // CommonJS, JSON, text and builtins: evaluated now (sharing require's
     // cache), re-exported by a small wrapper.
-    let value;
-    let def;
-    if (info.format === "builtin") {
-      value = this.internal.builtin(key);
-      def = value && typeof value === "object" && value.__esModule ? value.default : value;
-    } else {
-      [value, def] = this.internal.importNonEsm(key, info.format);
+    const handoff = this.handoff(key, info.format);
+    this.handoffs.set(key, handoff);
+    return wrapperSource(key, handoff.value);
+  }
+
+  /** A non-ES module's exports, run (or reused) through require's cache, and its default. */
+  handoff(key, format) {
+    if (format === "builtin") {
+      const value = this.internal.builtin(key);
+      return { value, default: value && typeof value === "object" && value.__esModule ? value.default : value };
     }
-    this.handoffs.set(key, { value, default: def });
-    return wrapperSource(key, value);
+    const [value, def] = this.internal.importNonEsm(key, format);
+    return { value, default: def };
   }
 
   linkEsm(key, info) {
@@ -707,8 +725,9 @@ class EngineHost {
     hidden("__bunwasm_meta", (meta, path) => {
       host.internal.initImportMeta(meta, path, path === host.internal.mainPath);
     });
-    hidden("__bunwasm_dynamicImport", (from) => (spec) =>
-      host.track(
+    hidden("__bunwasm_dynamicImport", (from) => (spec) => host.records
+      ? host.records.importFrom(spec, from)
+      : host.track(
         (async () => host.importReady(host.native.resolve(NativeString(spec), from, false)))(),
       ),
     );
@@ -1188,15 +1207,22 @@ class EngineHost {
   }
 }
 
+function escapeParenthesis(character) {
+  return character === "(" ? "%28" : "%29";
+}
+
+/** The named exports a non-ES module's namespace gets: its own enumerable identifier keys. */
+function wrapperKeys(value) {
+  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? Object.keys(value) : [];
+  return keys.filter(k => k !== "default" && k !== "__esModule" && /^[\p{L}\p{N}_$]+$/u.test(k));
+}
+
 /** ES module re-exporting a CommonJS/JSON/builtin module's exports (handed over by __bunwasm_wrap). */
 function wrapperSource(key, value) {
-  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? Object.keys(value) : [];
   let src = `const h = globalThis.__bunwasm_wrap(${JSON.stringify(key)}); const m = h.value; export default h.default;\n`;
-  const exports = [];
-  keys.forEach((k, i) => {
-    if (k === "default" || k === "__esModule" || !/^[\p{L}\p{N}_$]+$/u.test(k)) return;
+  const exports = wrapperKeys(value).map((k, i) => {
     src += `const e${i} = m[${JSON.stringify(k)}];\n`;
-    exports.push(`e${i} as ${JSON.stringify(k)}`);
+    return `e${i} as ${JSON.stringify(k)}`;
   });
   if (exports.length) src += `export { ${exports.join(", ")} };\n`;
   return src;

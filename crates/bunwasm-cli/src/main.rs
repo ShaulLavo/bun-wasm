@@ -55,6 +55,15 @@ mod bun_transpiler {
     /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
     const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
 
+    /// A registration record and its mappings back to the registered source.
+    fn record(out: bunwasm_transpiler::Transpiled) -> Result<Transpiled, String> {
+        Ok(Transpiled {
+            code: out.code,
+            mappings: (!out.mappings.is_empty()).then_some(out.mappings),
+            ..Default::default()
+        })
+    }
+
     fn runtime_imports(
         imports: Vec<bunwasm_transpiler::ModuleImport>,
     ) -> Vec<bunwasm_runtime::transpiler::ModuleImport> {
@@ -203,13 +212,20 @@ mod bun_transpiler {
             })
         }
 
+        fn use_module_records(&self) {
+            bunwasm_transpiler::use_module_records();
+        }
+
         fn register(&self, source: &str, path: &str) -> Result<Transpiled, String> {
-            let out = bunwasm_transpiler::register(source, path, BunLoader::Js)?;
-            Ok(Transpiled {
-                code: out.code,
-                mappings: (!out.mappings.is_empty()).then_some(out.mappings),
-                ..Default::default()
-            })
+            record(bunwasm_transpiler::register(source, path, BunLoader::Js)?)
+        }
+
+        fn register_module(&self, source: &str, path: &str) -> Result<Transpiled, String> {
+            record(bunwasm_transpiler::register_module(
+                source,
+                path,
+                BunLoader::Js,
+            )?)
         }
 
         fn module_imports(

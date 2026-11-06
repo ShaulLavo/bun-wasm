@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./a.mjs\"],i:[],x:[],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"v\":()=>v,\"inc\":()=>inc});yield;const self=__bunwasm_m.ns(0);yield;globalThis.evaluations = (globalThis.evaluations ?? 0) + 1;\nlet v = 0;\nfunction inc() {\n  v++;\n}\nglobalThis.inside = self;\n\n}})",
+  "/main.mjs": "({r:[\"./a.mjs\",\"./r.mjs\"],i:[[0,\"inc\"],[0,\"v\"]],x:[],s:[],a:true,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;const nsA=__bunwasm_m.ns(0),r=__bunwasm_m.ns(1),__bunwasm_ns0_2=__bunwasm_m.n[0];yield;const dyn = (yield __bunwasm_m.import(\"./a.mjs\"));\nconsole.log(globalThis.inside === nsA, r.nsA === nsA, r.again === nsA, dyn === nsA, (yield __bunwasm_m.import(\"./r.mjs\")) === r);\nconst before = __bunwasm_ns0_2.v;\n(0, __bunwasm_ns0_2.inc)();\nconsole.log(\"live\", before, __bunwasm_ns0_2.v, nsA.v, globalThis.evaluations);\n\n}})",
+  "/r.mjs": "({r:[\"./a.mjs\"],i:[],x:[[\"nsA\",0,\"*\"],[\"again\",0,\"*\"]],s:[],a:false,f:function*__bunwasm_cjs__(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;const again=__bunwasm_m.ns(0);yield;\n}})"
+ },
+ "cjs": {}
+}

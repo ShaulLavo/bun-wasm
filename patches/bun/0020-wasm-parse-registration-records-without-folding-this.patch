@@ -1,0 +1,160 @@
+From 6860d25d31bb382de5c0b6132d9f8e3d76f58100 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Fri, 6 Nov 2026 03:35:54 +0200
+Subject: [PATCH 20/20] wasm: parse registration records without folding this
+ or literals
+
+A registration record runs a module's body as a strict generator called
+without a receiver. While bun-wasm parses for one
+(with_bunwasm_register_parse), module-level this stays this instead of
+becoming null or exports, typeof of a primitive literal and literal
+(in)equality are not folded, and an anonymous export default function is
+not given the generated default name. Ordinary parsing is unchanged.
+---
+ src/js_parser/lib.rs                | 23 +++++++++++++++++++++++
+ src/js_parser/p.rs                  |  2 +-
+ src/js_parser/visit/visit_binary.rs | 26 +++++++++++++-------------
+ src/js_parser/visit/visit_expr.rs   |  2 +-
+ src/js_parser/visit/visit_stmt.rs   |  4 +++-
+ 5 files changed, 41 insertions(+), 16 deletions(-)
+
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index 32222685..bde53420 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -790,6 +790,29 @@ pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>)
+ 
+ thread_local! {
+     static BUNWASM_DYNAMIC_IMPORTS: core::cell::RefCell<Option<Vec<usize>>> = const { core::cell::RefCell::new(None) };
++    static BUNWASM_REGISTER_PARSE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++}
++
++/// bun-wasm: parse a module for a registration record, whose body runs as a strict
++/// generator called without a receiver. Module-level `this` stays `this` instead of
++/// becoming `null` or `exports`, `typeof` of a primitive literal and literal (in)equality
++/// are not folded, and an anonymous `export default function` stays anonymous, so the
++/// record keeps the module's expressions and names as written. The guard restores the
++/// outer mode on unwind.
++pub fn with_bunwasm_register_parse<T>(f: impl FnOnce() -> T) -> T {
++    struct Restore(bool);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_REGISTER_PARSE.with(|mode| mode.set(self.0));
++        }
++    }
++    let _restore = Restore(BUNWASM_REGISTER_PARSE.with(|mode| mode.replace(true)));
++    f()
++}
++
++/// True while parsing for a registration record (see [`with_bunwasm_register_parse`]).
++pub(crate) fn bunwasm_register_parse() -> bool {
++    BUNWASM_REGISTER_PARSE.with(|mode| mode.get())
+ }
+ 
+ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
+diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
+index 34889e62..800a50f9 100644
+--- a/src/js_parser/p.rs
++++ b/src/js_parser/p.rs
+@@ -6096,7 +6096,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             // CommonJS substitution below would emit a reference to an
+             // undefined `exports`. Leaving `E::This` in place lets the arrow
+             // inherit `this` from the enclosing (global) scope at runtime.
+-            if self.options.repl_mode {
++            if self.options.repl_mode || crate::bunwasm_register_parse() {
+                 return None;
+             }
+             if self.has_es_module_syntax && self.commonjs_named_exports.count() == 0 {
+diff --git a/src/js_parser/visit/visit_binary.rs b/src/js_parser/visit/visit_binary.rs
+index 5c1ebed7..51ff820e 100644
+--- a/src/js_parser/visit/visit_binary.rs
++++ b/src/js_parser/visit/visit_binary.rs
+@@ -258,9 +258,9 @@ impl BinaryExpressionVisitor {
+                         p.ignore_usage(p.module_ref);
+                         return p.value_for_import_meta_main(false, v.loc);
+                     }
+-                    Equality::Equal => return p.new_expr(E::Boolean { value: true }, v.loc),
+-                    Equality::NotEqual => return p.new_expr(E::Boolean { value: false }, v.loc),
+-                    Equality::Unknown => {}
++                    Equality::Equal if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: true }, v.loc),
++                    Equality::NotEqual if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: false }, v.loc),
++                    Equality::Equal | Equality::NotEqual | Equality::Unknown => {}
+                 }
+ 
+                 if p.options.features.minify_syntax {
+@@ -288,9 +288,9 @@ impl BinaryExpressionVisitor {
+                         p.ignore_usage_of_runtime_require();
+                         return p.value_for_import_meta_main(false, v.loc);
+                     }
+-                    Equality::Equal => return p.new_expr(E::Boolean { value: true }, v.loc),
+-                    Equality::NotEqual => return p.new_expr(E::Boolean { value: false }, v.loc),
+-                    Equality::Unknown => {}
++                    Equality::Equal if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: true }, v.loc),
++                    Equality::NotEqual if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: false }, v.loc),
++                    Equality::Equal | Equality::NotEqual | Equality::Unknown => {}
+                 }
+ 
+                 if p.options.features.minify_syntax {
+@@ -311,9 +311,9 @@ impl BinaryExpressionVisitor {
+                         p.ignore_usage_of_runtime_require();
+                         return p.value_for_import_meta_main(true, v.loc);
+                     }
+-                    Equality::Equal => return p.new_expr(E::Boolean { value: false }, v.loc),
+-                    Equality::NotEqual => return p.new_expr(E::Boolean { value: true }, v.loc),
+-                    Equality::Unknown => {}
++                    Equality::Equal if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: false }, v.loc),
++                    Equality::NotEqual if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: true }, v.loc),
++                    Equality::Equal | Equality::NotEqual | Equality::Unknown => {}
+                 }
+                 if p.options.features.minify_syntax {
+                     // "typeof x != 'undefined'" => "typeof x < 'u'"
+@@ -327,7 +327,7 @@ impl BinaryExpressionVisitor {
+                 // TODO: warn about typeof string
+ 
+                 // "x != void 0" => "x != null"
+-                if matches!(e_.right.data, ExprData::EUndefined(_)) {
++                if !crate::bunwasm_register_parse() && matches!(e_.right.data, ExprData::EUndefined(_)) {
+                     e_.right = p.new_expr(E::Null {}, e_.right.loc);
+                 }
+             }
+@@ -338,9 +338,9 @@ impl BinaryExpressionVisitor {
+                         p.ignore_usage_of_runtime_require();
+                         return p.value_for_import_meta_main(true, v.loc);
+                     }
+-                    Equality::Equal => return p.new_expr(E::Boolean { value: false }, v.loc),
+-                    Equality::NotEqual => return p.new_expr(E::Boolean { value: true }, v.loc),
+-                    Equality::Unknown => {}
++                    Equality::Equal if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: false }, v.loc),
++                    Equality::NotEqual if !crate::bunwasm_register_parse() => return p.new_expr(E::Boolean { value: true }, v.loc),
++                    Equality::Equal | Equality::NotEqual | Equality::Unknown => {}
+                 }
+ 
+                 if p.options.features.minify_syntax {
+diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
+index a5e206bc..9d381ece 100644
+--- a/src/js_parser/visit/visit_expr.rs
++++ b/src/js_parser/visit/visit_expr.rs
+@@ -1213,7 +1213,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                     return;
+                 }
+ 
+-                if let Some(typeof_) = SideEffects::typeof_(&e_.value.data) {
++                if let Some(typeof_) = SideEffects::typeof_(&e_.value.data).filter(|_| !crate::bunwasm_register_parse()) {
+                     *e = p.new_expr(
+                         E::String {
+                             data: typeof_.into(),
+diff --git a/src/js_parser/visit/visit_stmt.rs b/src/js_parser/visit/visit_stmt.rs
+index f3995507..03ee9f4b 100644
+--- a/src/js_parser/visit/visit_stmt.rs
++++ b/src/js_parser/visit/visit_stmt.rs
+@@ -585,7 +585,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         let name: &'a [u8] = if let Some(func_loc) = func.func.name {
+                             p.load_name_from_ref(func_loc.ref_)
+                         } else {
+-                            func.func.name = Some(data.default_name);
++                            if !crate::bunwasm_register_parse() {
++                                func.func.name = Some(data.default_name);
++                            }
+                             js_ast::ClauseItem::DEFAULT_ALIAS
+                         };
+ 

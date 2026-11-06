@@ -87,7 +87,7 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
     }
     if mode == "record" {
         let record = if format == modules::Format::Esm {
-            state.module_record(name, &code)?
+            state.module_record(name, &code, false)?
         } else {
             String::new()
         };

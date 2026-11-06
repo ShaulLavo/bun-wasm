@@ -8,15 +8,20 @@ Class **Host feature**. The registration pass and loader are original bun-wasm a
 
 The core owns lowering, source maps, resolution, and source preparation. `ModuleHost` exposes the factory source, record loading, and script lowering to the engine adapter. Native ES module engines continue to use `load` and wrapper handoffs. Record mappings compose before the existing prologue and transpiler mappings.
 
-Known differences from native modules remain. Namespace properties are accessors. Lexical exports read before initialization depend on the script engine's generator environment. Anonymous default functions and classes take Bun's internal name. Assignment to a namespace import is not rejected as a module early error. The test262 runner records these limits rather than treating them as conformance passes.
+The browser engine uses the same loader for every ES module of a process without a module store, which is every browser worker ([The browser engine](../engine-browser.md#es-modules-records-with-live-bindings)). `web/src/module-records.ts` prepares a graph level by level, evaluates each record as an `export default (…)` module from a `blob:` or `data:` URL so stack frames keep a script URL, and hands CommonJS, JSON, text and builtin keys to `require`. `crates/bunwasm-transpiler/src/record_fixup.rs` rewrites the printed global `arguments` to the loader's `ga()`/`gt()` reads and maps imported calls, which V8 reports at the argument list, back to the call.
 
-`scripts/esm-loader-*.ts` and `tests/fixtures/esm-loader/` compare the loader with Node. At test262 revision `0b4e0812022b18236b5276d2804948fdd9f71603`, the module-code run on Node reported 390 passes, 20 failures, 7 transform errors, and 182 skipped tests. The transform errors include eager parsing of intentionally invalid dependency fixtures. The 15 focused fixture cases pass.
+The loader captures the built-ins it uses when it is created, after the promise-job wrapper and before user code. Its namespace object is a Proxy over a sealed target with one writable, non-configurable data property per export, so descriptors, `Object.keys`, `in`, identity and TDZ errors match a native namespace. Named imports read accessors on an internal bindings object with an ordinary prototype, which V8 keeps in fast mode. Patch [0020](0020-registration-record-parsing.md) keeps module `this`, literal comparisons and anonymous defaults as written.
+
+Known differences from native modules remain. `Function.prototype.toString` returns the printed record, with names and structure but not the file's formatting, comments or literal spelling. Assignment to a namespace import is not rejected as a module early error. On Node's V8, a named import read costs about five times a native one and a namespace property read about 45 times, because they go through an accessor and a Proxy trap. Imported calls cost about the same as native calls.
+
+`scripts/esm-loader-*.ts` and `tests/fixtures/esm-loader/` compare the loader with Node. At test262 revision `0b4e0812022b18236b5276d2804948fdd9f71603`, the module-code run on Node reports 410 passes, no failures, 7 transform errors, and 182 skipped tests. The transform errors are eager parsing of intentionally invalid dependency fixtures. The 25 focused fixture cases pass.
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `crates/bunwasm-transpiler/src/register.rs`, `crates/bunwasm-runtime/src/js/esm_loader.ts`, and the paired source-preparation hooks | Host feature | Original adapters for live module bindings, cycles, top-level await, dynamic imports, and source maps on script engines. |
+| `web/src/module-records.ts`, `crates/bunwasm-transpiler/src/record_fixup.rs`, and the `hostUseModuleRecords`/`hostModuleRecord` natives | Host feature | Original adapters that run every browser-engine ES module through the loader without a module store or service worker. |
 | `scripts/esm-loader-*.ts`, `tests/fixtures/esm-loader/`, and the `transpile --register` example | Host feature | Original test harness and record regeneration tools restored from the coherent J1 handoff `2a12f721f58b7a4f461dd039c4ee50a5696ce9ad`; CI discovers the loader tests through `checks/quality-esm-loader.json`. |
 
 [Ledger scope and pinned revisions](scope.md).

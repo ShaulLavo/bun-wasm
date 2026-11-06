@@ -37,6 +37,8 @@
 #                       (web/scripts/node-host.mjs; docs/engine-browser.md)
 #     --context hooks   with --engine browser: carry AsyncLocalStorage with the printed
 #                       hooks instead of Node's, as a browser does
+#     --modules records with --engine browser: no module store, so every ES module loads
+#                       as a registration record, as in a browser worker
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +51,7 @@ build=1
 update=0
 engine=quickjs
 context=native
+modules=store
 names=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     --engine=*) engine="${1#--engine=}" ;;
     --context) context="$2"; shift ;;
     --context=*) context="${1#--context=}" ;;
+    --modules) modules="$2"; shift ;;
+    --modules=*) modules="${1#--modules=}" ;;
     *) names+=("$1") ;;
   esac
   shift
@@ -271,7 +276,7 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" --modules "$modules" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else

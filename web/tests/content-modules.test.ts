@@ -71,6 +71,7 @@ test("a failed enclosing graph preserves a reentrant import's identity", async (
   let generated = 0;
   let independent: Promise<{ value: object }> | undefined;
   const modules = new ContentModules({
+    named: { url() { throw new Error("module requires HTTP"); }, put() { throw new Error("module requires Cache Storage"); } },
     paths: new Map(), storing: [],
     contentUrl: source => contentUrl(`${source}\n// URL ${generated++}`),
     source(key) {
@@ -136,9 +137,4 @@ test("cyclic modules retain native hoisting through a named back edge", async ()
   expect(imported.stdout.trim()).toBe("ab");
   expect(named).toEqual(["a"]);
   expect(paths.get(entry)).toBe("a");
-});
-
-test("cycles without a named store still report ERR_CIRCULAR_IMPORT", () => {
-  const modules = new ContentModules({ paths: new Map(), storing: [], contentUrl, source: key => modules.ensure(key) });
-  expect(() => modules.ensure("a")).toThrow(expect.objectContaining({ code: "ERR_CIRCULAR_IMPORT" }));
 });

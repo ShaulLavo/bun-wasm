@@ -71,9 +71,11 @@ An error result is `{kind, message, name, props}`, which `nativeError()` turns b
 
 ### Host-only natives
 
-`install_host_natives` adds four natives:
+`install_host_natives` adds six natives:
 
-- **`hostModuleSource(path)`:** the transpiled ESM source, plus the byte spans of every static and dynamic import specifier, each resolved to a module key or an error. See below.
+- **`hostUseModuleRecords()`:** makes this process parse every module, including its first preparation pass, in record mode. A host without a module store calls it once, before the entry.
+- **`hostModuleRecord(path)`:** the module's registration record (`{format: "esm", record}`), or the format of a CommonJS, JSON, text or builtin key. See below.
+- **`hostModuleSource(path)`:** the transpiled ESM source, plus the byte spans of every static and dynamic import specifier, each resolved to a module key or an error. Used with a module store.
 - **`hostCjsSource(path)`:** the CommonJS-wrapped source. It is the same wrapper the other engines use, named `__bunwasm_cjs__`.
 - **`polyfillSource(name)`:** the embedded runtime JS (`bootstrap`, `builtins`, …).
 - **`flushOutput()`:** writes buffered stdout/stderr through WASI.
@@ -100,23 +102,29 @@ The host engine owns the microtask queue and the worker's task loop, so the runt
 - **`process.nextTick`:** the tick queue is drained by a native microtask. Bun runs ticks before promise jobs that were queued earlier, but the host's job queue can't be reordered. Instead, `Promise.prototype.then` is wrapped, and each callback drains pending ticks before it runs. `queueMicrotask` goes through `then`, so the fixtures' orderings match Bun. The same wrapper restores the AsyncLocalStorage context the callback was registered in.
 - **Uncaught errors and rejections** go to the polyfill's `handleUncaught`/`handleRejection`, so `process.on("uncaughtException")` and Bun's error printing behave as on the other engines. They come in from the worker's `error`/`unhandledrejection` events, or Node's `process` events headlessly.
 
-## ES modules: native, with live bindings
+## ES modules: records, with live bindings
 
-Every user module is a real host ES module, so bindings are live, top-level await works, and `import.meta` is native:
+A process without a module store loads every ES module as a registration record, which the runtime's loader (`crates/bunwasm-runtime/src/js/esm_loader.ts`, driven by `web/src/module-records.ts`) links and evaluates. Browser workers have no store, so module loading never depends on service-worker control:
+
+1. `hostUseModuleRecords()` switches the guest's transpiler to record parsing before the entry runs. `hostModuleRecord(key)` then returns the module's record (`crates/bunwasm-transpiler/src/register.rs`): its requests, export names and a generator body whose imports read live bindings from the loader. CommonJS, JSON, text and builtin keys come back as their format and run through `require`, as below.
+2. Each record is printed as `export default (…)` and imported from a `blob:` (browser) or `data:` (Node) URL. The URL ends in `#<path>`, and the URL → path table maps stack frames back to the file in V8 and WebKit. Fetching never sees the fragment, so no module request reaches the server or a service worker.
+3. The loader links the whole graph before evaluation, so cycles, hoisted functions, TDZ errors, top-level await, `import.meta`, exact namespace objects and dynamic `import()` behave as in Bun. It captures the built-ins it uses when the process starts, so user code that changes `Promise`, `Map` or `Array` prototypes does not change module loading.
+4. The record's printed source maps back through the source map, including calls through imported bindings and the global `arguments`.
+
+Records differ from Bun in one place: `Function.prototype.toString` of module code returns the printed record's text, with the file's names and structure but not its formatting, comments or literal spelling.
+
+A host with a module store (the Node host's `--modules store`) loads native host ES modules instead:
 
 1. `ensureModule(key)` asks the wasm for `hostModuleSource(key)`. That is the transpiled code plus cached semantic import spans. Bun's existing print pass records emitted string ranges and dynamic-import keywords for transformed code. Unchanged JavaScript reuses the AST and original dynamic-import locations from the parse already required to classify module syntax, and skips printing. For `.mjs` and `.cjs`, the extension already decides the format, so Bun's scan-only parser supplies imports instead. An absence check for `import` and `from` skips scanning when no import or re-export is possible. Eval sources use Bun's scan-only parser once, with a cheap absence check for both `import` and `from`. Imports inside template substitutions use the same semantic hooks. Property names, strings, comments, regex literals, and template text remain untouched. Each static specifier is resolved in Rust, with Bun's resolver semantics.
 2. `linkEsm` replaces each static specifier span with the URL of the dependency, created recursively. Replacement runs on UTF-8 bytes from the end. Each dynamic `import(` becomes `globalThis.__bunwasm_dynamicImport(<referrer>)(`, which resolves at call time, creates the module URL and is tracked by the loop.
-3. The browser makes a `blob:` URL from each module's finished source. A cycle instead reserves a named URL before the source exists. This lets imports link natively, with live bindings and hoisted functions callable before their module has evaluated, as in Bun (fixture `esm-cycle`). The URL → path table records both kinds of URL.
-   - **Playground:** the service worker (`web/src/sw.ts`) has a second scope, `./__bunwasm/`. Bun workers start from `./__bunwasm/worker.js`. Acyclic imports need no HTTP request, even when WebKit starts a worker outside service-worker control. A cycle stores the reserved module in a per-run Cache Storage cache, served at `./__bunwasm/m/<run>/<key>`. Cycles still need service-worker control. The page deletes the cache when the run ends.
-   - **Node:** in-thread module hooks (`module.registerHooks`) serve `bunwasm:/m/<key>` from memory.
-   - **Without a store** (no service workers): `blob:` (browser) or `data:` (Node) URLs made from the finished source. These can't express cycles, so a cycle is an `ERR_CIRCULAR_IMPORT` error.
+3. Each module's finished source gets a content URL. A cycle instead reserves a named URL in the store before the source exists, so imports link natively, with live bindings and hoisted functions callable before their module has evaluated (fixture `esm-cycle`). On Node, in-thread module hooks (`module.registerHooks`) serve `bunwasm:/m/<key>` from memory. The URL → path table records both kinds of URL.
 4. A prologue line (`globalThis.__bunwasm_meta(import.meta, "/path")`) gives `import.meta` Bun's `path`, `dir`, `file`, `main`, `resolve` and `require`. It is one line, and the source map's line offset accounts for it (`PositionMap.line_offset`).
 
 CommonJS, JSON, text and builtin (`node:*`, `bun:*`) imports are evaluated through the polyfill `require` machinery, so they share `require.cache`. A wrapper module re-exports the result: `export default` plus one named export per enumerable key at import time, which is Bun's CJS interop. CommonJS itself is compiled by indirect `eval` of the wrapped source, with `//# sourceURL=<path>`. Its `import(…)` calls are routed through the same dynamic-import hook as in ES modules.
 
 **`require()` of an ES module** can't evaluate the host ES module synchronously. Instead, Bun's bundler converts the file (`Transpiler::esm_to_cjs`: format `cjs`, every import external, inline source map), and the result runs as CommonJS. Its imports become `require()` calls read through live getters, and stack positions map back to the file. As in Bun, top-level await in such a module is an error. A file that is both required and imported runs twice: once as the converted CommonJS copy, once as the ES module.
 
-The entry is `import(url)` of the main module. `bun -e` code goes through the same path, as a virtual `[eval]` module. `bun test` loads each test file as a module under the polyfill test runner.
+The entry is an import of the main module, through the records or the store. `bun -e` code goes through the same path, as a virtual `[eval]` module. `bun test` loads each test file as a module under the polyfill test runner.
 
 ## Stack traces and source maps
 
@@ -197,7 +205,8 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
 | AsyncLocalStorage | Carried across `await`, rejected awaits, async generators and `for await` by the transpiler hooks, with the gaps listed above. Runtime-built constructor/eval/vm/module code is prepared as described below; unwrapped native job entry remains separate. |
 | `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
-| Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
+| Import cycles | Linked by the module records, with or without a service worker. |
+| `Function.prototype.toString` of module code | The printed record's text: names and structure as written, formatting, comments and literal spelling may differ. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |
 | `process.memoryUsage()` | `performance.memory` where available (Chromium), else zeros. `rss` equals `heapUsed`. |
 | Stack strings | `err.stack` read directly is V8's `    at f (url:line:col)` or JSC's `f@url:line:col`, with module URLs. Bun-style printing (uncaught errors, `console.log(err)`, `bun test`) is mapped and matches the other engines. |
