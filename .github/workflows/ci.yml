@@ -85,7 +85,10 @@ jobs:
     name: JSC C/C++ prebuild
     needs: quality
     if: needs.quality.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: boat-large
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     # A cold prebuild took up to 1739s on the slower runner class; setup, the sysroot
     # and the hand-off add a few minutes.
     timeout-minutes: 45
@@ -108,8 +111,8 @@ jobs:
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
              command -v ruby && command -v gperf && command -v bison &&
              ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
@@ -231,7 +234,7 @@ jobs:
             jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-
       - name: Build or verify the JSC prebuild
         id: jsc-producer
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         env:
           CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
         run: |
@@ -317,7 +320,10 @@ jobs:
     needs: [quality, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boat-large
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
@@ -387,8 +393,8 @@ jobs:
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
              command -v ruby && command -v gperf && command -v bison &&
              ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
@@ -467,7 +473,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned wasm-tools
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -494,7 +500,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned Wasmtime
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -685,7 +691,7 @@ jobs:
           TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           run_native_checks() {
             source env.sh
@@ -737,7 +743,7 @@ jobs:
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', 'scripts/build-wasi-sysroot.ts') }}
       - name: Package the verified native quality checkpoint
         id: native-artifact
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         env:
           NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
@@ -761,7 +767,10 @@ jobs:
     needs: [quality, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boat-large
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -821,8 +830,8 @@ jobs:
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
              command -v ruby && command -v gperf && command -v bison &&
              ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
@@ -901,7 +910,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned wasm-tools
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -928,7 +937,7 @@ jobs:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned Wasmtime
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
           mkdir -p "$WASM_TOOLS"
@@ -1039,7 +1048,7 @@ jobs:
           path: ${{ runner.temp }}/native-quality-artifact
       - name: Import the verified native quality checkpoint
         id: native-import
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         env:
           NATIVE_QUALITY_MANIFEST_SHA256: ${{ needs.native-quality.outputs.manifest-sha256 }}
           NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ needs.native-quality.outputs.producer-attempt }}
@@ -1217,7 +1226,7 @@ jobs:
           key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
 
       - name: Blocking Web guest cases (QuickJS and host engine)
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm
@@ -1235,7 +1244,7 @@ jobs:
           retention-days: 1
       - name: Blocking Web guest case (JSC)
         if: needs.quality.outputs.jsc == 'true'
-        shell: bash
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
@@ -1254,7 +1263,10 @@ jobs:
 
   package:
     name: Browser adapter package
-    runs-on: ubuntu-latest
+    runs-on: boat
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -1280,7 +1292,10 @@ jobs:
     name: Shared PIC sysroot proof
     needs: quality
     if: needs.quality.outputs.shared == 'true'
-    runs-on: ubuntu-latest
+    runs-on: boat-large
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 30
     env:
       WASI_LIBC_JOBS: "2"
@@ -1412,10 +1427,11 @@ jobs:
 
   web:
     name: Web host
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 10
     defaults:
       run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         working-directory: web
     steps:
       - uses: actions/checkout@v4
@@ -1433,18 +1449,19 @@ jobs:
         run: bash ../scripts/test-web-host.sh --unit
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
-          sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
           if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-            sudo sed -i 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
           fi
-          test -s /etc/apt/apt-mirrors.txt
-          cat /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
       # The apt list comes from `playwright install-deps`, so key on Playwright's version,
       # not the whole lock: a Waffle pin move must not refetch ~60 debs serially.
       - name: Identify browser setup cache inputs
         id: browser-image
         run: |
-          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+          source /etc/os-release
+          echo "image=boat-$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
           playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
           [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
           echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
@@ -1497,7 +1514,7 @@ jobs:
     needs: [quality, rust, process-bundles]
     if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
     name: Processes (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -1505,6 +1522,7 @@ jobs:
         browser: [chromium, firefox, webkit]
     defaults:
       run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         working-directory: web
     steps:
       - uses: actions/checkout@v4
@@ -1522,18 +1540,19 @@ jobs:
       - run: bun install --frozen-lockfile --linker=isolated
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
-          sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
           if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-            sudo sed -i 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
           fi
-          test -s /etc/apt/apt-mirrors.txt
-          cat /etc/apt/apt-mirrors.txt
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
       # The apt list comes from `playwright install-deps`, so key on Playwright's version,
       # not the whole lock: a Waffle pin move must not refetch ~60 debs serially.
       - name: Identify browser setup cache inputs
         id: browser-image
         run: |
-          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+          source /etc/os-release
+          echo "image=boat-$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
           playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
           [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
           echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
