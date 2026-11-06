@@ -88,3 +88,26 @@ test("generic async iterable response bodies still close their iterator", async 
   expect(await new web.Response(source()).text()).toBe("generic");
   expect(closed).toBe(1);
 });
+
+test("actual text and blob consumers read native streams without iteration", async () => {
+  const { consumers } = bodyConsumerFactory(bodyConsumerSources());
+  for (const consume of [consumers.text, async (stream: unknown) => (await consumers.blob(stream)).text()]) {
+    const stream = readerOnly({ start(c) { c.enqueue(bytes("body")); c.close(); } });
+    expect(await consume(stream)).toBe("body");
+    expect(stream.locked).toBe(false);
+  }
+});
+
+test("reader-backed consumers do not unwrap Promise or thenable chunks", async () => {
+  const { consumers, body } = bodyConsumerFactory(bodyConsumerSources());
+  let calls = 0;
+  const value = { then(resolve: (value: string) => void) { calls++; resolve("unwrapped"); } };
+  const stream = readerOnly({ start(c) { c.enqueue(value); c.close(); } });
+  const iterator = body.values(stream);
+  expect((await iterator.next()).value).toBe(value);
+  await iterator.return();
+  expect(calls).toBe(0);
+  const promise = Promise.resolve(bytes("not a byte chunk"));
+  await expect(consumers.text(readerOnly({ start(c) { c.enqueue(promise); c.close(); } }))).rejects.toBeInstanceOf(TypeError);
+  await expect(new web.Response(readerOnly({ start(c) { c.enqueue(promise); c.close(); } })).text()).rejects.toBeInstanceOf(TypeError);
+});
