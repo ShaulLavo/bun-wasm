@@ -120,10 +120,31 @@ whole `result.json`, or why none is readable.
   outside every producer stage and the sealed page) keeps each Podman
   failure's subcommand, exit code or signal and stderr, removes the container
   and the volume independently (the volume without `--force`, so Podman
-  itself refuses one still in use), and prints its failures on stderr. The
+  itself refuses one still in use), and prints its failures on stderr.
+  `podman volume rm` takes no `--ignore` (Podman 5.4.2 on the Pi exits 125 on
+  it), so the volume step asks `volume exists` first: an absent volume, from
+  partial setup or an earlier removal, is left alone; a present one gets plain
+  `volume rm <name>`, whose in-use refusal (exit 2) keeps its stderr; absence
+  is checked again afterwards. Images are never touched. The
   driver records that stderr, redacted, in the remote cleanup ledger row. The
   Pi lane lease has its own detached process group. Cleanup closes stdin,
   then ends and reaps the entire group even if a stopped descendant prevents
   normal EOF handling. The original timeout or unreconciled-resource error
   remains a failure after local termination. An unreconciled remote fixture
   is left as it is, named in the ledger.
+- The sealed TLS page keeps a guest's stdout in a closure, drops its stderr
+  and throws one generic error for a nonzero exit. `web/tests/tls-relay-browser.ts`
+  observes the guest from the host instead, without changing any served byte:
+  a Playwright init script, installed before the page's own scripts, adds one
+  more `message` and `error` listener to every page-level `Worker` and sends
+  the fields of waffle's `RuntimeWorkerMessage` that carry evidence (phase,
+  stdout, stderr, exit, error, cleanup-error) to a host binding in order. The
+  page's own handlers still receive every event. Its positive control is the
+  guest root worker's own `worker-start` phase, which waffle posts on the same
+  channel before the guest runs: the relay token is issued only after that
+  control was seen for the current case, so no PostgreSQL connection is made
+  through an unarmed observer. A failed case becomes `TlsGuestCaseFailure`
+  with the page's error as its cause and a `guest` field: the case, each
+  worker's phases, exit and error messages and redacted stdout and stderr
+  tails (secrets removed before bounding), the page's sent count and any
+  records the host did not receive.

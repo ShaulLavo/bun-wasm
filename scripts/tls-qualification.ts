@@ -28,7 +28,8 @@ function errorDetails(error: unknown, secrets: RunSecrets, depth = 0): Details {
   if (!(error instanceof Error)) return { name: "NonErrorThrow", value: safeText(String(error), secrets) };
   const details: Details = { name: error.name, message: safeText(error.message, secrets) };
   if (error.stack) details.stack = safeText(error.stack, secrets);
-  for (const key of ["code", "errno", "syscall", "path", "status", "signal"]) {
+  // guest: a failed browser case's observed guest exit, error and output (TlsGuestCaseFailure).
+  for (const key of ["code", "errno", "syscall", "path", "status", "signal", "guest"]) {
     const value: unknown = Reflect.get(error, key);
     if (typeof value === "string") details[key] = safeText(value, secrets);
     if (typeof value === "number" || value === null) details[key] = value;
@@ -140,7 +141,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       serviceObservation = services.lifecycle;
       await record(services.resources);
       return { intake, services, owner };
-    }), first.guard(async ({ intake, services, owner }) => { phase = "browser"; return runTlsBrowser(intake, services, owner, options.engine, abort.signal); }), abort.signal);
+    }), first.guard(async ({ intake, services, owner }) => { phase = "browser"; return runTlsBrowser(intake, services, owner, options.engine, abort.signal, secrets); }), abort.signal);
     abort.signal.throwIfAborted();
     if (!output) throw new Error("TLS output was never claimed");
     phase = "cleanup-receipt";
