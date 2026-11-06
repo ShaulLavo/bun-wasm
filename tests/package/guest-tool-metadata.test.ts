@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hash } from "../../scripts/guest-source-manifest.ts";
 import { receiptCli, withCliReceiptFixture } from "./guest-receipt-fixture.ts";
@@ -26,6 +26,30 @@ const metadataMarker = await Bun.file(linker + ".env").text();
 run([linker, "--fixture-link", "input.o", "-o", "output.wasm"], process.cwd());
 console.log(JSON.stringify({ tool: manifest.tools.find(tool => tool.name === "rust-lld"), afterMetadata, metadataArgs, metadataMarker, afterLink: await Bun.file(reproduce).text() }));
 `;
+
+test("qualified guests retain the pinned cache wrapper and fingerprint its executable", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const bin = join(fixture.root, "private/cache-bin");
+    const wrapper = join(bin, "sccache");
+    await mkdir(bin);
+    await writeFile(wrapper, "#!/bin/sh\nprintf 'sccache 0.19.0\\n'\n");
+    await chmod(wrapper, 0o700);
+    fixture.env.PATH = `${bin}:${fixture.env.PATH}`;
+    fixture.env.RUSTC_WRAPPER = wrapper;
+    const environment = receiptCli(fixture, "environment");
+    expect(environment.exitCode, environment.stderr.toString()).toBe(0);
+    expect(environment.stdout.toString()).toContain(`export RUSTC_WRAPPER='${wrapper}'`);
+    const inputs = receiptCli(fixture, "inputs", "browser");
+    expect(inputs.exitCode, inputs.stderr.toString()).toBe(0);
+    expect(JSON.parse(inputs.stdout.toString()).sourceManifest.tools).toContainEqual({
+      name: "sccache", path: wrapper, version: "sccache 0.19.0", sha256: hash(await readFile(wrapper)),
+    });
+    await writeFile(wrapper, "#!/bin/sh\nprintf 'sccache 0.18.0\\n'\n");
+    const unsupported = receiptCli(fixture, "environment");
+    expect(unsupported.exitCode).not.toBe(0);
+    expect(unsupported.stderr.toString()).toContain("Only sccache 0.19.0 is supported");
+  });
+});
 
 test("tool metadata preserves the linker reproducer and caller environment while link commands retain it", async () => {
   await withCliReceiptFixture(async fixture => {

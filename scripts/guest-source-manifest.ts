@@ -269,10 +269,18 @@ async function checkedHeaderPath(path: string, directory: string, options: Sourc
   throw new Error(`JSC helper header input escapes inventoried roots: ${path}`);
 }
 
+function rustCacheTool(repository: string): string {
+  const wrapper = process.env.RUSTC_WRAPPER;
+  if (!wrapper) return "";
+  const sccache = Bun.which("sccache");
+  if (!sccache || realpathSync(wrapper) !== realpathSync(sccache)
+    || run([sccache, "--version"], repository) !== "sccache 0.19.0") throw new Error("Only sccache 0.19.0 is supported as RUSTC_WRAPPER for qualified guest receipts");
+  return realpathSync(sccache);
+}
+
 function rustTools(repository: string) {
-  for (const name of ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]) {
-    if (process.env[name]) throw new Error(`${name} is not supported for qualified guest receipts`);
-  }
+  if (process.env.RUSTC_WORKSPACE_WRAPPER) throw new Error("RUSTC_WORKSPACE_WRAPPER is not supported for qualified guest receipts");
+  rustCacheTool(repository);
   for (const name of ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS"]) {
     if (/linker\s*=/.test(process.env[name] ?? "")) throw new Error(`${name} linker override is not supported for qualified guest receipts`);
   }
@@ -303,7 +311,7 @@ export function guestToolEnvironment(repository: string): string {
     `export RUSTC=${quote(tools.rustc)}`,
     `export GUEST_CARGO=${quote(tools.cargo)}`,
     `export CARGO_TARGET_WASM32_WASIP1_LINKER=${quote(tools["rust-lld"])}`,
-    "export RUSTC_WRAPPER='' RUSTC_WORKSPACE_WRAPPER=''",
+    `export RUSTC_WRAPPER=${quote(rustCacheTool(repository))} RUSTC_WORKSPACE_WRAPPER=''`,
     `export PATH=${quote(dirname(node))}:"$PATH"`,
   ].join("\n");
 }
@@ -316,6 +324,8 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
   if (process.env.WASI_SDK && realpathSync(process.env.WASI_SDK) !== realpathSync(sdk)) throw new Error("WASI_SDK must match WASI_SDK_PATH for a guest manifest");
   const rust = rustTools(repository);
   const tools: Record<string, string> = { ...rust, node: nodeExecutable(repository), bun: process.execPath };
+  const cache = rustCacheTool(repository);
+  if (cache) tools.sccache = cache;
   for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld"]) tools[name] = join(sdk, "bin", name);
   const optimizer = guestBuilds[build].optimizer;
   for (const name of ["cmake", "ninja", "wasm-opt"]) {

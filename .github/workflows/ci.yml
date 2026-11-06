@@ -368,6 +368,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -697,7 +698,7 @@ jobs:
           TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           run_native_checks() {
             source env.sh
@@ -809,6 +810,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -1121,6 +1123,7 @@ jobs:
       - name: Install the Web host dependencies
         run: bun install --cwd web --frozen-lockfile
       - name: Build the common engine core once
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
@@ -1134,8 +1137,9 @@ jobs:
           JOBS: "2"
           CAGE: ""
         run: |
-          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
+          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1145,6 +1149,7 @@ jobs:
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
       - name: Build one host-engine guest for real-browser source cache acceptance
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1198,6 +1203,7 @@ jobs:
           if-no-files-found: error
 
       - name: Blocking native fixture checks
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1217,6 +1223,7 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
           key: ${{ steps.shell-cache.outputs.cache-primary-key }}
       - name: Build the single tools fixture in the existing native target
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh

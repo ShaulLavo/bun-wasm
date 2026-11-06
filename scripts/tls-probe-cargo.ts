@@ -139,7 +139,9 @@ export async function recordCargo(command: readonly string[], abi: TlsAbi, env: 
   mkdirSync(directory, { recursive: true });
   const path = join(directory, `${abi}.json`);
   rmSync(path, { force: true });
-  const before = await captureContext(env);
+  // TLS records bind the selected compiler directly, outside the Rust object cache.
+  const recordingEnv = { ...env, RUSTC_WRAPPER: "" };
+  const before = await captureContext(recordingEnv);
   assert.equal(directory, join(before.target, "tls-probe", "cargo"));
   const target = command.indexOf("--target");
   assert.ok(abi === "host" ? target === -1 && !env.CARGO_BUILD_TARGET : target >= 0 && command[target + 1] === abi, "Cargo command ABI mismatch");
@@ -147,7 +149,7 @@ export async function recordCargo(command: readonly string[], abi: TlsAbi, env: 
   const separator = command.indexOf("--");
   const at = separator < 0 ? command.length : separator;
   const args = command.slice(1, at).concat(["--message-format=json-render-diagnostics"], command.slice(at));
-  const producerEnv = { ...env, RUSTUP_TOOLCHAIN: before.rustToolchain, RUSTC: checkedTool(before, "rustc") };
+  const producerEnv = { ...recordingEnv, RUSTUP_TOOLCHAIN: before.rustToolchain, RUSTC: checkedTool(before, "rustc") };
   const child = spawn(checkedTool(before, "cargo"), args, { env: producerEnv, stdio: ["inherit", "pipe", "inherit"] });
   child.stdout.on("data", (chunk: Buffer) => messages.feed(chunk));
   const result = await new Promise<{ status: number | null; signal: string | null }>((resolve, reject) => {
@@ -157,6 +159,6 @@ export async function recordCargo(command: readonly string[], abi: TlsAbi, env: 
   if (result.status !== 0) throw new Error(`${command[0]} failed: ${result.signal ?? result.status}`);
   const build = messages.end();
   const output = await inspectCryptoOutput(before, abi, build);
-  assert.deepEqual(await captureContext(env), before, "TLS inputs changed during Cargo producer");
+  assert.deepEqual(await captureContext(recordingEnv), before, "TLS inputs changed during Cargo producer");
   atomicJson(path, { context: before, command: [checkedTool(before, "cargo")].concat(args), output });
 }
