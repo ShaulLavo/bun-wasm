@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,7 +34,7 @@ function status(state: string): number | undefined {
   if (!/^\d+\n?$/.test(value) || Number(value) > 255) throw new Error("Invalid JSC supervisor completion status");
   return Number(value);
 }
-async function wait(state: string, starting = false): Promise<number> {
+async function wait(state: string, starting?: ChildProcess): Promise<number> {
   const startupDeadline = performance.now() + 10000;
   for (;;) {
     const record = identity(state);
@@ -43,7 +43,7 @@ async function wait(state: string, starting = false): Promise<number> {
     if (completed !== undefined) return completed;
     if (record && !live) throw new Error("JSC supervisor identity is no longer live and no completion status was written");
     if (starting && record) return 0;
-    if (!record && (!starting || performance.now() >= startupDeadline)) throw new Error("JSC supervisor did not register its identity");
+    if (!record && (!starting || starting.exitCode !== null || starting.signalCode !== null || performance.now() >= startupDeadline)) throw new Error("JSC supervisor did not register its identity");
     await delay(50);
   }
 }
@@ -69,7 +69,7 @@ async function start(state: string, args: string[]): Promise<number> {
     const child = spawn("node", [supervisor, "--state", state].concat(args), { detached: true, stdio: ["ignore", log, log] });
     child.unref();
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
-    await wait(state, true);
+    await wait(state, child);
     return 0;
   } catch (error) {
     writeFileSync(join(state, "stop"), "stop\n");
