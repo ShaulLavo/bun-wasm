@@ -59,7 +59,7 @@ function fixture(shared: boolean, grow = false) {
   let received: unknown;
   function put() {
     if (grow) memory.grow(1);
-    new Uint8Array(memory.buffer).set(packet, pointer);
+    if (packet.length) new Uint8Array(memory.buffer).set(packet, pointer);
     return status;
   }
   const caller = bridge({

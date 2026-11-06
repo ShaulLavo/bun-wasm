@@ -229,25 +229,34 @@ class Writer {
 }
 
 class Reader {
-  constructor(bytes, view, pos) {
+  constructor(bytes, view, pos, end) {
     this.bytes = bytes;
     this.view = view;
     this.pos = pos;
+    this.end = end;
+  }
+  need(n) {
+    if (n > this.end - this.pos) throw new RangeError("corrupt native result");
   }
   u32() {
+    this.need(4);
     const n = this.view.getUint32(this.pos, true);
     this.pos += 4;
     return n;
   }
   raw() {
     const n = this.u32();
+    this.need(n);
     const s = this.bytes.subarray(this.pos, this.pos + n);
     this.pos += n;
     return s;
   }
   value() {
+    this.need(1);
     const tag = this.bytes[this.pos++];
     switch (tag) {
+      case T.UNDEFINED:
+        return undefined;
       case T.NULL:
         return null;
       case T.FALSE:
@@ -255,16 +264,19 @@ class Reader {
       case T.TRUE:
         return true;
       case T.NUM: {
+        this.need(8);
         const n = this.view.getFloat64(this.pos, true);
         this.pos += 8;
         return n;
       }
       case T.BIGINT: {
+        this.need(8);
         const n = this.view.getBigInt64(this.pos, true);
         this.pos += 8;
         return n;
       }
       case T.BIGUINT: {
+        this.need(8);
         const n = this.view.getBigUint64(this.pos, true);
         this.pos += 8;
         return n;
@@ -274,24 +286,31 @@ class Reader {
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
-      case T.ARRAY: {
-        const n = this.u32();
-        const out = new Array(n);
-        for (let i = 0; i < n; i++) out[i] = this.value();
-        return out;
-      }
-      case T.OBJECT: {
-        const n = this.u32();
-        const out = {};
-        for (let i = 0; i < n; i++) {
-          const k = wireFromUtf8.decode(this.raw().slice());
-          out[k] = this.value();
-        }
-        return out;
-      }
+      case T.ARRAY:
+        return this.array();
+      case T.OBJECT:
+        return this.object();
       default:
-        return undefined;
+        throw new RangeError("corrupt native result");
     }
+  }
+  array() {
+    const n = this.u32();
+    this.need(n);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = this.value();
+    return out;
+  }
+  object() {
+    const n = this.u32();
+    // Each field needs a four-byte key length and at least a value tag.
+    this.need(n * 5);
+    const out = {};
+    for (let i = 0; i < n; i++) {
+      const k = wireFromUtf8.decode(this.raw().slice());
+      out[k] = this.value();
+    }
+    return out;
   }
 }
 
@@ -300,8 +319,15 @@ class Reader {
 function wasmCaller(exports) {
   const memory = memoryViews(exports.memory);
   const result = () => {
-    const ptr = exports.bunwasm_result_ptr();
-    return new Reader(memory.bytes(), memory.view(), ptr).value();
+    const ptr = exports.bunwasm_result_ptr() >>> 0;
+    const len = exports.bunwasm_result_len() >>> 0;
+    const bytes = memory.bytes();
+    const end = ptr + len;
+    if (end > bytes.byteLength) throw new RangeError("corrupt native result");
+    const reader = new Reader(bytes, memory.view(), ptr, end);
+    const value = reader.value();
+    if (reader.pos !== end) throw new RangeError("corrupt native result");
+    return value;
   };
   function call(index, args) {
     const w = new Writer();
