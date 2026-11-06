@@ -3,17 +3,21 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { enableSubreaper } from "../linux-subreaper.mts";
+import { testSubreaper } from "../test-subreaper.ts";
 import { ProcessOwner, linuxProcess } from "../process-owner.mts";
 import { StageFailed, UnsafeDrain, runOwned } from "./process.ts";
 
 const quick = { graceMs: 300, forceMs: 3000 };
 let scratch = "";
+let restoreSubreaper = () => {};
 beforeAll(async () => {
-  await enableSubreaper();
+  restoreSubreaper = await testSubreaper(true);
   scratch = mkdtempSync(join(tmpdir(), "bun-wasm-c1-process-"));
 });
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+afterAll(() => {
+  try { rmSync(scratch, { recursive: true, force: true }); }
+  finally { restoreSubreaper(); }
+});
 
 const bun = process.execPath;
 const env = { PATH: process.env.PATH ?? "/usr/bin:/bin" };
