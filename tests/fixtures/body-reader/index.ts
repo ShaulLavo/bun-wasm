@@ -1,3 +1,4 @@
+import { text, blob } from "node:stream/consumers";
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 function readerOnly<T>(source: UnderlyingDefaultSource<T>) {
   const stream = new ReadableStream<T>(source, { highWaterMark: 0 });
@@ -33,3 +34,10 @@ console.log("conversion errors cancel and release locks");
 async function* chunks() { yield encode("generic"); }
 assert(await new Response(chunks()).text() === "generic", "async iterable changed");
 console.log("generic async iterable body");
+
+assert(await text(readerOnly({ start(c) { c.enqueue(encode("text")); c.close(); } })) === "text", "consumer text");
+assert(await (await blob(readerOnly({ start(c) { c.enqueue(encode("blob")); c.close(); } }))).text() === "blob", "consumer blob");
+console.log("reader-only stream consumers");
+assert(await text(["sync", encode(" iterable")]) === "sync iterable", "sync iterable changed");
+assert(await text(chunks()) === "generic", "async consumer changed");
+console.log("generic stream consumers");

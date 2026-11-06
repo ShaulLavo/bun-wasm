@@ -111,3 +111,62 @@ test("reader-backed consumers do not unwrap Promise or thenable chunks", async (
   await expect(consumers.text(readerOnly({ start(c) { c.enqueue(promise); c.close(); } }))).rejects.toBeInstanceOf(TypeError);
   await expect(new web.Response(readerOnly({ start(c) { c.enqueue(promise); c.close(); } })).text()).rejects.toBeInstanceOf(TypeError);
 });
+
+for (const name of ["text", "blob"] as const) {
+  test(`${name} preserves reader errors and locks without cancelling read failures`, async () => {
+    const { consumers } = bodyConsumerFactory(bodyConsumerSources());
+    for (const reason of [undefined, null, { marker: name }]) {
+      let cancellations = 0;
+      const stream = readerOnly({ pull(c) { c.error(reason); }, cancel() { cancellations++; } });
+      await expect(consumers[name](stream)).rejects.toBe(reason);
+      expect(cancellations).toBe(0);
+      expect(stream.locked).toBe(false);
+    }
+    const stream = readerOnly({ start(c) { c.close(); } });
+    const reader = stream.getReader();
+    try { await expect(consumers[name](stream)).rejects.toBeInstanceOf(TypeError); expect(stream.locked).toBe(true); }
+    finally { reader.releaseLock(); }
+  });
+}
+
+test("text cancels on conversion error without masking it with a cancellation error", async () => {
+  const { consumers } = bodyConsumerFactory(bodyConsumerSources());
+  let cancellations = 0;
+  const stream = readerOnly({ pull(c) { c.enqueue(123); }, cancel(reason) { expect(reason).toBeUndefined(); cancellations++; throw new Error("cancel"); } });
+  await expect(consumers.text(stream)).rejects.toBeInstanceOf(TypeError);
+  expect(cancellations).toBe(1);
+  expect(stream.locked).toBe(false);
+});
+
+test("generic iterables keep async and sync chunk semantics and cleanup", async () => {
+  const { consumers } = bodyConsumerFactory(bodyConsumerSources());
+  expect(await consumers.text([Promise.resolve(bytes("sync"))])).toBe("sync");
+  expect(await (await consumers.blob([bytes("a"), "b"])).text()).toBe("ab");
+  let closed = 0;
+  async function* invalid() { try { yield 123; } finally { closed++; } }
+  await expect(consumers.text(invalid())).rejects.toBeInstanceOf(TypeError);
+  expect(closed).toBe(1);
+  const reason = { marker: "next" };
+  const source = { [Symbol.asyncIterator]() { return this; }, next() { return Promise.reject(reason); }, return() { throw new Error("must not close rejected next"); } };
+  await expect(consumers.text(source)).rejects.toBe(reason);
+  await expect(consumers.blob(source)).rejects.toBe(reason);
+});
+
+test("reader iterator queues return behind a pending read and forwards its reason", async () => {
+  const { body } = bodyConsumerFactory(bodyConsumerSources());
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const reason = { marker: "return" };
+  const cancellations: unknown[] = [];
+  const stream = readerOnly<Uint8Array>({ start(value) { controller = value; }, cancel(value) { cancellations.push(value); } });
+  const iterator = body.values(stream);
+  const next = iterator.next();
+  const finish = iterator.return(reason);
+  expect(cancellations).toEqual([]);
+  if (!controller) throw new Error("stream controller missing");
+  controller.enqueue(bytes("pending"));
+  expect((await next).value).toEqual(bytes("pending"));
+  expect(await finish).toEqual({ done: true, value: reason });
+  expect(cancellations).toEqual([reason]);
+  expect(stream.locked).toBe(false);
+  expect(await iterator.next()).toEqual({ done: true, value: undefined });
+});

@@ -47,22 +47,37 @@
       cancel: reason => reader.cancel(reason),
     });
   }
-  async function finishReader(reader: ReadableStreamDefaultReader<unknown>, cancel: boolean): Promise<void> {
-    try { if (cancel) await reader.cancel(); }
-    finally { reader.releaseLock(); }
-  }
-  async function* values<T>(stream: ReadableStream<T>): AsyncGenerator<T, void, unknown> {
-    const reader = stream.getReader();
-    let state: "reading" | "yielding" = "reading";
+  type ReaderState<T> = { reader: ReadableStreamDefaultReader<T> | null };
+  async function nextValue<T>(state: ReaderState<T>): Promise<IteratorResult<T, unknown>> {
+    const reader = state.reader;
+    if (!reader) return { done: true, value: undefined };
     try {
-      while (true) {
-        state = "reading";
-        const next = await reader.read();
-        if (next.done) return;
-        state = "yielding";
-        yield next.value;
-      }
-    } finally { await finishReader(reader, state === "yielding"); }
+      const result = await reader.read();
+      if (result.done) { state.reader = null; reader.releaseLock(); }
+      return result;
+    } catch (error) { state.reader = null; reader.releaseLock(); throw error; }
+  }
+  async function returnValue<T>(state: ReaderState<T>, value: unknown): Promise<IteratorResult<T, unknown>> {
+    const reader = state.reader;
+    if (!reader) return { done: true, value };
+    state.reader = null;
+    try { await reader.cancel(value); }
+    finally { reader.releaseLock(); }
+    return { done: true, value };
+  }
+  function values<T>(stream: ReadableStream<T>) {
+    const state: ReaderState<T> = { reader: stream.getReader() };
+    let ongoing: Promise<unknown> = Promise.resolve();
+    function enqueue(operation: () => Promise<IteratorResult<T, unknown>>) {
+      const result = ongoing.then(operation, operation);
+      ongoing = result;
+      return result;
+    }
+    return {
+      next: () => enqueue(() => nextValue(state)),
+      return: (value?: unknown) => enqueue(() => returnValue(state, value)),
+      [Symbol.asyncIterator]() { return this; },
+    };
   }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {

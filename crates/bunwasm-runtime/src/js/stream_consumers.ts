@@ -2,12 +2,17 @@
   "use strict";
   const { Buffer } = internal.require("buffer");
   const JSONParse = JSON.parse;
-  type Parts = AsyncIterable<BlobPart> | Iterable<BlobPart>;
-  type TextParts = AsyncIterable<string | AllowSharedBufferSource> | Iterable<string | AllowSharedBufferSource>;
+  const bodyStreams = internal.require("body_streams");
+  type Input<T> = AsyncIterable<T> | Iterable<T> | ReadableStream<T>;
+  type Parts = Input<BlobPart>;
+  type TextParts = Input<string | AllowSharedBufferSource>;
+  function values<T>(stream: Input<T>): AsyncIterable<T> | Iterable<T> {
+    return stream instanceof ReadableStream ? bodyStreams.values(stream) : stream;
+  }
 
   async function blob(stream: Parts): Promise<Blob> {
     const chunks: BlobPart[] = [];
-    for await (const chunk of stream) chunks.push(chunk);
+    for await (const chunk of values(stream)) chunks.push(chunk);
     return new Blob(chunks);
   }
 
@@ -27,7 +32,7 @@
   async function text(stream: TextParts): Promise<string> {
     const decoder = new TextDecoder();
     let result = "";
-    for await (const chunk of stream) {
+    for await (const chunk of values(stream)) {
       result += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
     }
     return result + decoder.decode();
