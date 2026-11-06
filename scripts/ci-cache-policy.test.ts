@@ -76,7 +76,7 @@ test("PRs retain all heavy restore paths and native/JSC checks remain blocking",
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  expect(source).toContain("if: needs.quality.outputs.rust == 'true'");
+  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
   expect(source).toContain("name: Blocking native quality checks");
   expect(source).toContain("name: Blocking native fixture checks");
   expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.quality.outputs.jsc == 'true'");

@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -84,7 +85,7 @@ jobs:
   jsc-prebuild:
     name: JSC C/C++ prebuild
     needs: quality
-    if: needs.quality.outputs.rust == 'true'
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     # A cold prebuild took up to 1739s on the slower runner class; setup, the sysroot
     # and the hand-off add a few minutes.
@@ -316,7 +317,7 @@ jobs:
     name: Native quality checkpoint
     needs: [quality, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -760,7 +761,7 @@ jobs:
     name: Rust workspace tests (QuickJS host)
     needs: [quality, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -1243,6 +1244,7 @@ jobs:
 
 
   package:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Browser adapter package
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1269,7 +1271,7 @@ jobs:
   shared-sysroot:
     name: Shared PIC sysroot proof
     needs: quality
-    if: needs.quality.outputs.shared == 'true'
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1401,6 +1403,7 @@ jobs:
           bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
 
   web:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1461,6 +1464,7 @@ jobs:
         run: bash ../scripts/test-web-host.sh --browser
 
   process-bundles:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Shared process browser bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1485,7 +1489,7 @@ jobs:
 
   browser-process:
     needs: [quality, rust, process-bundles]
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
     name: Processes (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 10

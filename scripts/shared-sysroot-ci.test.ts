@@ -12,7 +12,7 @@ const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0
 
 test("the dedicated shared profile gate is blocking and never invokes an engine build", () => {
   expect(shared).toContain("needs: quality");
-  expect(shared).toContain("if: needs.quality.outputs.shared == 'true'");
+  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}");
   expect(shared).toContain("node-version: '26'");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");

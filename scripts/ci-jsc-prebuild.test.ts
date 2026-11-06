@@ -45,17 +45,6 @@ const guardName = "Require the JSC prebuild job's output";
 
 // GitHub job conditions: without a status function the condition is implicitly
 // `success() && ...`, so a failed or skipped need skips the job.
-function clause(text: string, needs: Readonly<Record<string, Need>>, cancelled: boolean): boolean {
-  if (text === "!cancelled()") return !cancelled;
-  const group = /^\((.*)\)$/.exec(text);
-  if (group) return group[1]!.split(" || ").some(option => clause(option, needs, cancelled));
-  const match = /^needs\.([\w-]+)\.(result|outputs\.([\w-]+)) == '([^']*)'$/.exec(text);
-  if (!match) throw new Error(`Unsupported job condition: ${text}`);
-  const need = needs[match[1]!];
-  if (!need) throw new Error(`Condition reads an undeclared need: ${match[1]}`);
-  const value = match[3] ? need.outputs?.[match[3]] ?? "" : need.result;
-  return value === match[4];
-}
 
 function jobRuns(job: Job, needs: Readonly<Record<string, Need>>, cancelled: boolean): boolean {
   const declared = typeof job.needs === "string" ? [job.needs] : Array.isArray(job.needs) ? job.needs : [];
@@ -63,7 +52,13 @@ function jobRuns(job: Job, needs: Readonly<Record<string, Need>>, cancelled: boo
   const condition = typeof job.if === "string" ? job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "") : "";
   const explicit = /\b(?:success|failure|always|cancelled)\(\)/.test(condition);
   const implicit = explicit || (!cancelled && Object.values(needs).every(need => need.result === "success"));
-  return implicit && (!condition || condition.split(" && ").every(part => clause(part, needs, cancelled)));
+  const expression = condition.replaceAll("!cancelled()", String(!cancelled))
+    .replaceAll("github.event_name", JSON.stringify("pull_request"))
+    .replaceAll("github.event.pull_request.draft", "false")
+    .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
+  const result: unknown = new Function(`return (${expression})`)();
+  if (typeof result !== "boolean") throw new Error("Non-boolean condition");
+  return implicit && result;
 }
 
 function guard(result: string): number | null {
@@ -74,7 +69,7 @@ function guard(result: string): number | null {
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
   expect(producer.needs).toBe("quality");
-  expect(producer.if).toBe("needs.quality.outputs.rust == 'true'");
+  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
   expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
   expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.

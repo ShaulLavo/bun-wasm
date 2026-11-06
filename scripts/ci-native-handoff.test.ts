@@ -81,6 +81,8 @@ function runs(job: Record<string, unknown>, needs: Record<string, Need>, cancell
   expect(Object.keys(needs).sort()).toEqual(Array.isArray(declared) ? declared.toSorted() : []);
   if (typeof job.if !== "string") throw new Error("Expected explicit native selection");
   const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "").replaceAll("!cancelled()", String(!cancelled))
+    .replaceAll("github.event_name", JSON.stringify("pull_request"))
+    .replaceAll("github.event.pull_request.draft", "false")
     .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Non-boolean condition");
