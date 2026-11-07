@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { assertProductionBrowserEvents, finishProduction } from "./next-production-controls";
+import { assertAppProductionBuildID, assertProductionBrowserEvents, finishProduction, productionTemplate } from "./next-production-controls";
 
 test("production acceptance rejects React hydration console errors", () => {
   expect(() => assertProductionBrowserEvents(["preview error: Hydration failed because the server rendered HTML did not match the client."])).toThrow();
@@ -60,3 +60,48 @@ test("normal production teardown records the transcript before stopping and clos
   });
   expect(calls).toEqual(["transcript", "stop", "close"]);
 });
+
+test("production template selection keeps Pages as the default and selects App explicitly", () => {
+  expect(productionTemplate(undefined)).toEqual({ id: "next", editorPath: "/home/user/pages/index.tsx", heading: "Next.js in your browser" });
+  expect(productionTemplate("next")).toEqual(productionTemplate(undefined));
+  expect(productionTemplate("next-app")).toEqual({ id: "next-app", editorPath: "/home/user/app/page.tsx", heading: "Next.js App Router" });
+  expect(() => productionTemplate("typo")).toThrow();
+});
+
+function flight(payload: string): string {
+  return `self.__next_f.push(${JSON.stringify([1, payload])})`;
+}
+
+test("App production build identity comes from streamed Flight data, including split records", () => {
+  const scripts = [
+    '(self.__next_f=self.__next_f||[]).push([0]);',
+    flight('1:I[123,[],"default"]\n0:{"b":"fresh-'),
+    flight('build","f":[]}\n'),
+    'self.__next_f.push([2,null])',
+  ];
+  expect(() => assertAppProductionBuildID(scripts, "fresh-build")).not.toThrow();
+});
+
+for (const [name, scripts] of [
+  ["missing stream", []],
+  ["stale build", [flight('0:{"b":"stale"}\n')]],
+  ["missing build ID", [flight('0:{"f":[]}\n')]],
+  ["build ID in another record only", [flight('1:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
+  ["unrelated script text", ['const data = {"b":"fresh-build"}']],
+  ["Pages bootstrap only", ['<script id="__NEXT_DATA__">{"buildId":"fresh-build"}</script>']],
+  ["malformed root record", [flight('0:not-json\n')]],
+  ["root inside length-prefixed text before stale root", [flight('1:T23,not the root\n0:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
+  ["root inside length-prefixed text without actual root", [flight('1:T23,not the root\n0:{"b":"fresh-build"}\n')]],
+  ["commented push call", [`/* ${flight('0:{"b":"fresh-build"}\n')} */`]],
+  ["line-commented push call", [`// ${flight('0:{"b":"fresh-build"}\n')}`]],
+  ["quoted push call", [JSON.stringify(flight('0:{"b":"fresh-build"}\n'))]],
+  ["commented fresh root before stale root", [`/* ${flight('0:{"b":"fresh-build"}\n')} */`, flight('0:{"b":"stale"}\n')]],
+  ["duplicate root", [flight('0:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
+  ["executable commented-prefix stale call", [`/* comment */${flight('0:{"b":"stale"}\n')}`, flight('0:{"b":"fresh-build"}\n')]],
+  ["executable suffixed stale call", [`${flight('0:{"b":"stale"}\n')};void 0;`, flight('0:{"b":"fresh-build"}\n')]],
+  ["leading-zero root before fresh root", [flight('00:{"b":"stale"}\n0:{"b":"fresh-build"}\n')]],
+] satisfies [string, string[]][]) {
+  test(`App production acceptance rejects ${name}`, () => {
+    expect(() => assertAppProductionBuildID(scripts, "fresh-build")).toThrow();
+  });
+}
