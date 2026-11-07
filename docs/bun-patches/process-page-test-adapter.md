@@ -2,7 +2,8 @@
 
 Class **Host feature**, **original test adapters** in
 `web/tests/process-ios-adapter.ts`, `process-page-suite.ts`,
-`process-page-adapter.ts` and `process-page-assets.ts`.
+`process-page-adapter.ts`, `process-page-assets.ts`, and
+`process-diagnostic-adapter.ts`.
 No upstream Bun, Node or WebKit implementation is copied or patched.
 
 The page wraps the original command in one callable envelope. Hosted list and
@@ -65,3 +66,27 @@ No native or whole-suite acceptance is implied. The earlier iOS result at Bun
 `04d9f359fc815aeb05785e6427e21f46383f2c6f` with unpublished Waffle `cf1972e3`
 remains an assertion failure at the fourth filesystem-segment constructor.
 This dependency adoption does not change or explain that result.
+
+## Optional same-document diagnostics
+
+A diagnostic entry can install the test-only synchronous
+`window.__bunProcessPageDiagnostic` callback before importing the original page
+entry. `createProcessPageSuite` accepts that callback as its optional third
+argument. It runs only after `runCases` resolves, including its awaited finalizer.
+List and finish never invoke it. Without the callback, the result is unchanged.
+
+The diagnostic envelope nests the exact `processResultForTransport` value under
+`processResult`. It separately carries a `captured` JSON snapshot or an `error`.
+Capture errors, unserializable values, and diagnostics over 16 KiB become
+secondary errors rather than rejecting the case. The shared page runner still
+limits the entire result to 48 KiB. The callback must be synchronous and read-only.
+It must not mutate the original result, throw page events, or start background work.
+
+`processDiagnosticAdapter` preserves the original adapter settings and delegates
+its policy check to the original check with the nested result. It does not copy
+or relax any process assertions. Use this adapter only with the diagnostic entry.
+After the shared host writes the primary result, `writeProcessDiagnostics` writes
+its separate diagnostic through the public `writeResult`. It returns write errors
+as secondary data. The caller must retain the primary exit code, including when
+the diagnostic sink fails. Neither a captured diagnostic nor a sink failure is a
+new verdict on the original process case.

@@ -1,6 +1,24 @@
 import { cleanupStorage, type PageSuite } from "waffle/testing/page-runner/page";
 import { processCommandId, processResultForTransport, type ProcessObservation, type ProcessRequest } from "./process-page-adapter";
 
+export type ProcessPageDiagnostic = () => unknown;
+export type ProcessDiagnostic = { status: "captured"; value: unknown } | { status: "error"; error: string };
+
+declare global {
+  interface Window { __bunProcessPageDiagnostic?: ProcessPageDiagnostic }
+}
+
+function captureDiagnostic(collect: ProcessPageDiagnostic): ProcessDiagnostic {
+  try {
+    const encoded = JSON.stringify(collect());
+    if (encoded === undefined) throw new Error("diagnostic must be JSON serializable");
+    if (new TextEncoder().encode(encoded).byteLength > 16_384) throw new Error("diagnostic exceeds 16 KiB UTF-8 limit");
+    return { status: "captured", value: JSON.parse(encoded) };
+  } catch (error) {
+    return { status: "error", error: String(error).slice(0, 1024) };
+  }
+}
+
 type CommandResult = Pick<ProcessObservation, "result" | "progress">;
 
 export function observeProcessPageErrors(): string[] {
@@ -14,13 +32,15 @@ export function observeProcessPageErrors(): string[] {
   return errors;
 }
 
-export function createProcessPageSuite(runCases: (databaseName: string) => Promise<CommandResult>, errors: readonly string[]) {
+export function createProcessPageSuite(runCases: (databaseName: string) => Promise<CommandResult>, errors: readonly string[], diagnostic?: ProcessPageDiagnostic) {
   return {
     list: async () => ({ ids: [processCommandId] }),
     async run(request, allocate) {
       await allocate({ kind: "indexeddb", name: request.databaseName });
       const result = await runCases(request.databaseName);
-      return processResultForTransport({ ...result, pageErrors: errors });
+      const processResult = processResultForTransport({ ...result, pageErrors: errors });
+      if (!diagnostic) return processResult;
+      return { kind: "bun-process-diagnostic", processResult, diagnostic: captureDiagnostic(diagnostic) };
     },
     finish: cleanupStorage,
   } satisfies PageSuite<ProcessRequest>;
