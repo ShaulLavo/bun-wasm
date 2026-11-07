@@ -25,7 +25,7 @@ export function processDiagnosticAdapter<R>(adapter: SuiteAdapter<R>): SuiteAdap
     ...adapter,
     policy: {
       ...adapter.policy,
-      check: (id, value) => adapter.policy.check?.(id, readProcessDiagnosticEnvelope(value).processResult),
+      check: (id, value) => adapter.policy.check(id, readProcessDiagnosticEnvelope(value).processResult),
     },
   };
 }

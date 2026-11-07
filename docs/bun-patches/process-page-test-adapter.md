@@ -64,7 +64,8 @@ finalizer have frozen printer hashes in `process-page-adapter.test.ts`, so the
 preservation check also works in shallow CI checkouts.
 No native or whole-suite acceptance is implied. The earlier iOS result at Bun
 `04d9f359fc815aeb05785e6427e21f46383f2c6f` with unpublished Waffle `cf1972e3`
-remains an assertion failure at the fourth filesystem-segment constructor.
+remains a failure at the fourth case, `cpu-default-signal-13-status-141`.
+The filesystem-segment refusal has no recorded constructor ordinal or cause.
 This dependency adoption does not change or explain that result.
 
 ## Optional same-document diagnostics
@@ -74,6 +75,7 @@ A diagnostic entry can install the test-only synchronous
 entry. `createProcessPageSuite` accepts that callback as its optional third
 argument. It runs only after `runCases` resolves, including its awaited finalizer.
 List and finish never invoke it. Without the callback, the result is unchanged.
+A missing original result stays missing and does not invoke the callback.
 
 The diagnostic envelope nests the exact `processResultForTransport` value under
 `processResult`. It separately carries a `captured` JSON snapshot or an `error`.

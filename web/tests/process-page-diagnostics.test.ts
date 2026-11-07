@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { automaticChecks } from "../../scripts/test-checks";
 import { createProcessPageSuite } from "./process-page-suite";
 import { processAdapter } from "./process-ios-adapter";
 import { processDiagnosticAdapter, readProcessDiagnosticEnvelope, writeProcessDiagnostics } from "./process-diagnostic-adapter";
@@ -101,4 +102,15 @@ test("secondary result writer preserves primary file on success and sink failure
       .toEqual({ status: "error", error: "Error: sink failed" });
     expect(await Bun.file(resultPath).text()).toBe(primary);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a missing original result stays missing instead of becoming an envelope", async () => {
+  let calls = 0;
+  const suite = createProcessPageSuite(async () => ({ result: undefined, progress: {} }), [], () => { calls++; return null; });
+  expect(await suite.run({ databaseName: "bun-process-unit" }, async () => {})).toBeUndefined();
+  expect(calls).toBe(0);
+});
+
+test("diagnostic controls keep the existing automatic Web owner", () => {
+  expect(automaticChecks()).toContainEqual({ owner: "web", path: "web/tests/process-page-diagnostics.test.ts" });
 });

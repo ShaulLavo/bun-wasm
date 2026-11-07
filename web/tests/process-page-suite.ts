@@ -39,7 +39,7 @@ export function createProcessPageSuite(runCases: (databaseName: string) => Promi
       await allocate({ kind: "indexeddb", name: request.databaseName });
       const result = await runCases(request.databaseName);
       const processResult = processResultForTransport({ ...result, pageErrors: errors });
-      if (!diagnostic) return processResult;
+      if (!diagnostic || processResult === undefined) return processResult;
       return { kind: "bun-process-diagnostic", processResult, diagnostic: captureDiagnostic(diagnostic) };
     },
     finish: cleanupStorage,
