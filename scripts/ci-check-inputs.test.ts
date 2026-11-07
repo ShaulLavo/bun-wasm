@@ -99,7 +99,7 @@ test("deleted native ownership still gates a renamed input in a later PR commit"
 
 test.each([
   "crates/bunwasm-runtime/src/js/process.ts", "crates/bunwasm-runtime/src/host.rs",
-  "web/src/engine-host.js", "web/scripts/node-host.ts", "web/src/native-direct-stream.ts",
+  "web/src/engine-host.js", "web/scripts/node-host.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts",
 ])("actual runtime and host glue %s still selects Rust and JSC", path => {
   expect(needsRust([path])).toBe(true);
   expect(needsJsc([path])).toBe(true);

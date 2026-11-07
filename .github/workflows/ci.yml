@@ -149,9 +149,9 @@ jobs:
           {
             for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
               command -v "$tool"
-              "$tool" --version | head -n 2
+              "$tool" --version | sed -n '1,2p'
             done
-            ldd --version | head -n 1
+            ldd --version | sed -n '1p'
             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
           } > "$report"
           cat "$report"
@@ -432,9 +432,9 @@ jobs:
           {
             for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
               command -v "$tool"
-              "$tool" --version | head -n 2
+              "$tool" --version | sed -n '1,2p'
             done
-            ldd --version | head -n 1
+            ldd --version | sed -n '1p'
             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
           } > "$report"
           cat "$report"
@@ -870,9 +870,9 @@ jobs:
           {
             for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
               command -v "$tool"
-              "$tool" --version | head -n 2
+              "$tool" --version | sed -n '1,2p'
             done
-            ldd --version | head -n 1
+            ldd --version | sed -n '1p'
             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
           } > "$report"
           cat "$report"

@@ -671,6 +671,27 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   expect(browsers).toContain("--frozen-lockfile --linker=isolated");
 });
 
+for (const job of ["jsc-prebuild", "native-quality", "rust"]) {
+  test(`${job} host version reports drain producers and preserve their failures`, () => {
+    const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
+    const steps = workflowField(workflowField(jobs, job), "steps");
+    if (!Array.isArray(steps)) throw new Error("Missing workflow steps");
+    const step = steps.find((step: unknown) => typeof step === "object" && step !== null && "id" in step && step.id === "host-tools");
+    const source = workflowString(workflowField(step, "run"));
+    for (const [prefix, expected] of [['"$tool" --version |', "first\nsecond\n"], ["ldd --version |", "first\n"]] as const) {
+      const pipeline = source.split("\n").find(line => line.trim().startsWith(prefix));
+      if (!pipeline) throw new Error("Missing version report pipeline");
+      const setup = "version() { printf 'first\\nsecond\\n'; sleep 0.02; printf 'later\\n'; return \"$RESULT\"; }; tool=version; ldd() { version; }; ";
+      const success = spawnSync("bash", ["-euo", "pipefail", "-c", setup + pipeline], { encoding: "utf8", env: { ...process.env, RESULT: "0" } });
+      expect(success.status, success.stderr).toBe(0);
+      expect(success.stdout).toBe(expected);
+      const failure = spawnSync("bash", ["-euo", "pipefail", "-c", setup + pipeline], { encoding: "utf8", env: { ...process.env, RESULT: "7" } });
+      expect(failure.status).toBe(7);
+      expect(failure.stdout).toBe(expected);
+    }
+  });
+}
+
 test("Rust build caches follow host tool versions, not the runner image", () => {
   expect(rust).not.toContain("ImageVersion");
   const step = rust.indexOf("name: Identify host build tools");
