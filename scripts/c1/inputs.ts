@@ -178,7 +178,7 @@ export function admitWebkit(source: string, jsc: string, scratch: string): void 
   const objects = join(scratch, "webkit", "objects");
   const env = { GIT_INDEX_FILE: index, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: resolve(webkit, git(webkit, ["rev-parse", "--git-path", "objects"])) };
   try { git(webkit, ["diff", "--quiet", expected, "--"], env); }
-  catch { fail("WebKit working tree differs from the patched pin, or a needed object is missing"); }
+  catch (cause) { throw new AdmissionError("WebKit working tree differs from the patched pin, or a needed object is missing", { cause }); }
 }
 function admitJsc(source: string, native: NativeRoot, roots: readonly string[], scratch: string): void {
   requireEntries(native.root, JSC_PATHS, "JSC root");

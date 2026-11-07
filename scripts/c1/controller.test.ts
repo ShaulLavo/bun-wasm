@@ -9,7 +9,7 @@ import { handoffMemberPaths } from "../producer-closure.ts";
 import { SYSROOT_PROBE, Staging, environmentDifferences, nativeWitness, requireCanonicalBuildTools, requireNativeEntry, requireStagedWaffle } from "./admission.ts";
 import { FIXTURE_SOURCE, FIXTURE_TUPLE } from "./contract-fixture.ts";
 import { sha256 } from "./identity.ts";
-import { admitWebkit } from "./inputs.ts";
+import { AdmissionError, admitWebkit } from "./inputs.ts";
 import { Invocation, operationSucceeded, rehearse, treeWitness, type Cleanup } from "./operations.ts";
 import { publicationMatrix, restage, smokeInputs, verifyMatrixScratch } from "./publication.ts";
 import { STAGES, blockReason, runStages, validateStages, type Stage, type StageContext } from "./stages.ts";
@@ -298,7 +298,16 @@ test("sparse WebKit admission still refuses changed required source without fetc
   const fixture = sparseWebkitFixture(fresh("webkit-sparse-changed"));
   write(join(fixture.webkit, "a.txt"), "changed required source\n");
   const before = gitWitness(join(fixture.webkit, ".git"));
-  expect(() => admitWebkit(fixture.source, fixture.jsc, fresh("webkit-sparse-changed-scratch"))).toThrow("working tree differs");
+  let failure: unknown;
+  try { admitWebkit(fixture.source, fixture.jsc, fresh("webkit-sparse-changed-scratch")); }
+  catch (error) { failure = error; }
+  if (!(failure instanceof AdmissionError)) throw new Error("Expected working-tree admission failure", { cause: failure });
+  expect(failure.message).toContain("working tree differs");
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.cause).toMatchObject({ status: 1 });
+  expect(failure.cause).toHaveProperty("stdout");
+  expect(failure.cause).toHaveProperty("stderr");
+  if (failure.cause instanceof Error) expect(failure.cause.message).toContain("diff --quiet");
   expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
 });
 
@@ -334,7 +343,7 @@ function maintainedWebkitCheck(fixture: ReturnType<typeof webkitFixture>, native
   mkdirSync(bin, { recursive: true });
   // Sourcing common.sh resolves wasm-opt, but this read-only check must never execute it.
   write(join(bin, "wasm-opt"), "#!/bin/sh\nexit 99\n", 0o755);
-  const script = 'source "$1/jsc/common.sh"\nWEBKIT_DIR="$2"\nJSC_SRC="$3"\nWEBKIT_COMMIT="$4"\ncheck_jsc_webkit_tree\n';
+  const script = 'set -x\nsource "$1/jsc/common.sh"\nWEBKIT_DIR="$2"\nJSC_SRC="$3"\nWEBKIT_COMMIT="$4"\ncheck_jsc_webkit_tree\n';
   const pin = fixture.git("rev-parse", "HEAD~0");
   return spawnSync("/usr/bin/bash", ["-c", script, "webkit-check", repository, fixture.webkit, join(fixture.source, "jsc"), pin],
     { encoding: "utf8", env: { ...process.env, WASM_TOOLS: tools, PATH: `${bin}:/usr/bin:/bin`, JSC_BUILD_DIR: native, TMPDIR: fresh(`webkit-tmp-${Math.random().toString(36).slice(2)}`) } });
@@ -348,7 +357,7 @@ test("the maintained WebKit check writes neither the native root nor the reposit
   const before = gitWitness(native);
   const rootBefore = lstatSync(native, { bigint: true }).mtimeNs;
   const result = maintainedWebkitCheck(fixture, native);
-  expect(result.status, result.stderr).toBe(0);
+  expect({ status: result.status, signal: result.signal, stderr: result.stderr, stdout: result.stdout, error: result.error }).toMatchObject({ status: 0 });
   expect(gitWitness(native)).toEqual(before);
   expect(lstatSync(native, { bigint: true }).mtimeNs).toBe(rootBefore);
 });
