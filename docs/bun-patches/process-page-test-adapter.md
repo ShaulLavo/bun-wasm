@@ -3,7 +3,7 @@
 Class **Host feature**, **original test adapters** in
 `web/tests/process-ios-adapter.ts`, `process-page-suite.ts`,
 `process-page-adapter.ts`, `process-page-assets.ts`, and
-`process-diagnostic-adapter.ts`.
+`process-diagnostic-adapter.ts` and its `process-diagnostic-error.ts` helper.
 No upstream Bun, Node or WebKit implementation is copied or patched.
 
 The page wraps the original command in one callable envelope. Hosted list and
@@ -80,12 +80,18 @@ A missing original result stays missing and does not invoke the callback.
 The diagnostic envelope nests the exact `processResultForTransport` value under
 `processResult`. It separately carries a `captured` JSON snapshot or an `error`.
 Capture errors, unserializable values, and diagnostics over 16 KiB become
-secondary errors rather than rejecting the case. The shared page runner still
-limits the entire result to 48 KiB. The callback must be synchronous and read-only.
+secondary errors rather than rejecting the case. The consumer snapshots the primary
+JSON once and checks the complete serialized envelope against the shared page
+runner's unchanged 48 KiB limit. If necessary it replaces diagnostics with a small
+secondary omission error. When even that envelope cannot fit, it returns the exact
+serialized primary without a wrapper and the diagnostic adapter delegates it
+unchanged. It never truncates the primary or increases the shared limit. Error
+formatting uses a bounded constant fallback if the thrown value cannot be printed. The callback must be synchronous and read-only.
 It must not mutate the original result, throw page events, or start background work.
 
 `processDiagnosticAdapter` preserves the original adapter settings and delegates
-its policy check to the original check with the nested result. It does not copy
+its policy check to the original check with the nested result, or the original
+unwrapped result when diagnostic metadata cannot fit. It does not copy
 or relax any process assertions. Use this adapter only with the diagnostic entry.
 After the shared host writes the primary result, `writeProcessDiagnostics` writes
 its separate diagnostic through the public `writeResult`. It returns write errors

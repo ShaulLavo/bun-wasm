@@ -114,3 +114,71 @@ test("a missing original result stays missing instead of becoming an envelope", 
 test("diagnostic controls keep the existing automatic Web owner", () => {
   expect(automaticChecks()).toContainEqual({ owner: "web", path: "web/tests/process-page-diagnostics.test.ts" });
 });
+
+const resultLimit = 49_152;
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+for (const variant of variants) {
+  test(`${variant.label} suppresses diagnostics before the combined result exceeds the public bound`, async () => {
+    const run = async () => ({ result: { ...variant.result, pad: "p".repeat(40_000) }, progress: {} });
+    const request = { databaseName: "bun-process-unit" };
+    const allocate = async () => {};
+    const original = await createProcessPageSuite(run, variant.errors).run(request, allocate);
+    const returned = await createProcessPageSuite(run, variant.errors, () => "d".repeat(10_000)).run(request, allocate);
+    expect(jsonBytes(original)).toBeLessThan(resultLimit);
+    expect(jsonBytes(returned)).toBeLessThanOrEqual(resultLimit);
+    const envelope = readProcessDiagnosticEnvelope(returned);
+    expect(JSON.stringify(envelope.processResult)).toBe(JSON.stringify(original));
+    expect(envelope.diagnostic.status).toBe("error");
+    expect(verdict(() => processDiagnosticAdapter(processAdapter).policy.check(processCommandId, returned)))
+      .toBe(verdict(() => processAdapter.policy.check(processCommandId, original)));
+  });
+
+  test(`${variant.label} preserves a primary at the exact public bound when envelope metadata cannot fit`, async () => {
+    const result = { ...variant.result, pad: "" };
+    const run = async () => ({ result, progress: {} });
+    const request = { databaseName: "bun-process-unit" };
+    const allocate = async () => {};
+    const suite = createProcessPageSuite(run, variant.errors);
+    result.pad = "p".repeat(resultLimit - jsonBytes(await suite.run(request, allocate)));
+    const original = await suite.run(request, allocate);
+    const returned = await createProcessPageSuite(run, variant.errors, () => null).run(request, allocate);
+    expect(jsonBytes(original)).toBe(resultLimit);
+    expect(JSON.stringify(returned)).toBe(JSON.stringify(original));
+    expect(verdict(() => processDiagnosticAdapter(processAdapter).policy.check(processCommandId, returned)))
+      .toBe(verdict(() => processAdapter.policy.check(processCommandId, original)));
+  });
+}
+
+const unprintableErrors: unknown[] = [Object.create(null), { get toString() { throw new Error("coercion getter"); } }];
+for (const [index, reason] of unprintableErrors.entries()) {
+  test(`unprintable diagnostic error ${index} cannot replace a primary result`, async () => {
+    for (const variant of variants) {
+      const run = async () => ({ result: variant.result, progress: {} });
+      const request = { databaseName: "bun-process-unit" };
+      const original = await createProcessPageSuite(run, variant.errors).run(request, async () => {});
+      const callback = () => { throw reason; };
+      const serialization = () => ({ get value() { throw reason; } });
+      const callbackResult = await createProcessPageSuite(run, variant.errors, callback).run(request, async () => {});
+      const serializationResult = await createProcessPageSuite(run, variant.errors, serialization).run(request, async () => {});
+      expect(JSON.stringify(readProcessDiagnosticEnvelope(callbackResult).processResult)).toBe(JSON.stringify(original));
+      expect(JSON.stringify(readProcessDiagnosticEnvelope(serializationResult).processResult)).toBe(JSON.stringify(original));
+      expect(verdict(() => processDiagnosticAdapter(processAdapter).policy.check(processCommandId, callbackResult)))
+        .toBe(verdict(() => processAdapter.policy.check(processCommandId, original)));
+      expect(verdict(() => processDiagnosticAdapter(processAdapter).policy.check(processCommandId, serializationResult)))
+        .toBe(verdict(() => processAdapter.policy.check(processCommandId, original)));
+    }
+  });
+
+  test(`unprintable diagnostic sink error ${index} remains secondary`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "process-diagnostic-"));
+    try {
+      const resultPath = join(root, "primary.json");
+      const primary = JSON.stringify({ results: { [processCommandId]: { kind: "bun-process-diagnostic", processResult: success, diagnostic: { status: "captured", value: null } } } });
+      await Bun.write(resultPath, primary);
+      const result = await writeProcessDiagnostics(resultPath, join(root, "diagnostic.json"), async () => { throw reason; });
+      expect(result.status).toBe("error");
+      expect(await Bun.file(resultPath).text()).toBe(primary);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}

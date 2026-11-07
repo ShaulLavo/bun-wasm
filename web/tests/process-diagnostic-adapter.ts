@@ -1,5 +1,6 @@
 import { writeResult, type SuiteAdapter } from "waffle/testing/page-runner";
 import { processCommandId } from "./process-page-adapter";
+import { processDiagnosticError } from "./process-diagnostic-error";
 import type { ProcessDiagnostic } from "./process-page-suite";
 
 type DiagnosticEnvelope = { kind: "bun-process-diagnostic"; processResult: unknown; diagnostic: ProcessDiagnostic };
@@ -25,7 +26,8 @@ export function processDiagnosticAdapter<R>(adapter: SuiteAdapter<R>): SuiteAdap
     ...adapter,
     policy: {
       ...adapter.policy,
-      check: (id, value) => adapter.policy.check(id, readProcessDiagnosticEnvelope(value).processResult),
+      check: (id, value) => adapter.policy.check(id,
+        record(value) && value.kind === "bun-process-diagnostic" ? readProcessDiagnosticEnvelope(value).processResult : value),
     },
   };
 }
@@ -40,6 +42,6 @@ export async function writeProcessDiagnostics(resultPath: string, diagnosticPath
     await sink(diagnosticPath, envelope.diagnostic);
     return { status: "written", path: diagnosticPath };
   } catch (error) {
-    return { status: "error", error: String(error) };
+    return { status: "error", error: processDiagnosticError(error) };
   }
 }
