@@ -48,7 +48,7 @@ function assertStopped(pids: number[]) {
 }
 async function prepare() {
   mkdirSync(join(scratch, "scripts"));
-  writeFileSync(join(scratch, "env.sh"), 'export CARGO_TARGET_DIR="$RUNNER_TEMP/target"\n');
+  writeFileSync(join(scratch, "env.sh"), 'export CARGO_TARGET_DIR="$RUNNER_TEMP/target"\nexport BUILD_CACHE=0\n');
   writeFileSync(join(scratch, "scripts/build-bun-jsc.sh"), `${scenario === "early-failure" ? "echo early-build-failure; exit 7\n" : ""}echo "$$" > "$RUNNER_TEMP/build.pid"
 echo build >> "$RUNNER_TEMP/invocations"
 sleep 60 &
@@ -57,7 +57,7 @@ setsid bash -c '${scenario === "stubborn-descendant" ? 'trap "" TERM; ' : ""}ech
 while [[ ! -f "$RUNNER_TEMP/release" ]]; do sleep 0.01; done
 exit "${scenario === "build-failure" ? 7 : 0}"
 `);
-  for (const file of ["ci-jsc-worker.ts", "run-with-timeout.mts", "process-owner.mts", "linux-subreaper.mts"]) {
+  for (const file of ["ci-jsc-worker.ts", "run-with-timeout.mts", "process-owner.mts", "linux-subreaper.mts", "with-build-cache.sh"]) {
     const source = readFileSync(join(root, "scripts", file), "utf8");
     writeFileSync(join(scratch, "scripts", file), source);
   }
@@ -109,7 +109,9 @@ async function stalePid() {
 async function unregisteredState() {
   const state = join(scratch, "jsc-guest");
   if (scenario === "failed-supervisor") {
+    const started = performance.now();
     const starting = await run("Start the JSC Cargo guest build", { NODE_OPTIONS: `--import=${join(scratch, "missing-preload.mjs")}` });
+    assert(performance.now() - started < 5000, "failed supervisor waited for the ten-second registration deadline");
     assert.notEqual(starting.code, 0);
     assert.match(starting.stderr, /did not register its identity/);
     assert.match(starting.stderr, /ERR_MODULE_NOT_FOUND/);

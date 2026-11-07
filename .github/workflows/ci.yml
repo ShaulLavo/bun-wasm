@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -23,6 +24,11 @@ jobs:
       jsc: ${{ steps.changes.outputs.jsc }}
       shared: ${{ steps.changes.outputs.shared }}
     steps:
+      - name: Require a ready PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft
+        run: |
+          echo '::error::Mark this PR ready for review to run the required checks.'
+          exit 1
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -84,7 +90,7 @@ jobs:
   jsc-prebuild:
     name: JSC C/C++ prebuild
     needs: quality
-    if: needs.quality.outputs.rust == 'true'
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
     runs-on: boat-large
     defaults:
       run:
@@ -319,7 +325,7 @@ jobs:
     name: Native quality checkpoint
     needs: [quality, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: boat-large
     defaults:
       run:
@@ -362,6 +368,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -691,7 +698,7 @@ jobs:
           TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
           NATIVE_HOST_TOOLS_HASH: ${{ steps.host-tools.outputs.hash }}
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           run_native_checks() {
             source env.sh
@@ -766,7 +773,7 @@ jobs:
     name: Rust workspace tests (QuickJS host)
     needs: [quality, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: boat-large
     defaults:
       run:
@@ -803,6 +810,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -1042,10 +1050,11 @@ jobs:
       # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
           path: ${{ runner.temp }}/native-quality-artifact
+          digest-mismatch: error
       - name: Import the verified native quality checkpoint
         id: native-import
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1114,6 +1123,7 @@ jobs:
       - name: Install the Web host dependencies
         run: bun install --cwd web --frozen-lockfile
       - name: Build the common engine core once
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
@@ -1127,8 +1137,9 @@ jobs:
           JOBS: "2"
           CAGE: ""
         run: |
-          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
+          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1138,6 +1149,7 @@ jobs:
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
       - name: Build one host-engine guest for real-browser source cache acceptance
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1191,6 +1203,7 @@ jobs:
           if-no-files-found: error
 
       - name: Blocking native fixture checks
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
@@ -1210,6 +1223,7 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
           key: ${{ steps.shell-cache.outputs.cache-primary-key }}
       - name: Build the single tools fixture in the existing native target
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh
@@ -1262,6 +1276,7 @@ jobs:
 
 
   package:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Browser adapter package
     runs-on: boat
     defaults:
@@ -1291,7 +1306,7 @@ jobs:
   shared-sysroot:
     name: Shared PIC sysroot proof
     needs: quality
-    if: needs.quality.outputs.shared == 'true'
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}
     runs-on: boat-large
     defaults:
       run:
@@ -1426,6 +1441,7 @@ jobs:
           bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
 
   web:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: boat
     timeout-minutes: 10
@@ -1488,6 +1504,7 @@ jobs:
         run: bash ../scripts/test-web-host.sh --browser
 
   process-bundles:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Shared process browser bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1512,7 +1529,7 @@ jobs:
 
   browser-process:
     needs: [quality, rust, process-bundles]
-    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
     name: Processes (${{ matrix.browser }})
     runs-on: boat
     timeout-minutes: 10

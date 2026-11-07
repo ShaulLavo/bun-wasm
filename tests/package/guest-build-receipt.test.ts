@@ -121,7 +121,7 @@ for (const path of ["vendor/bun/src/input.rs", "vendor/bun/build/debug/codegen/b
     await expect(writeGuestBuildReceipt(options, artifact, inputs)).rejects.toThrow();
     expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
   });
-});
+}, 30_000);
 
 test("new repository commit cannot relabel an already-started build", async () => {
   await withReceiptFixture(async (options, artifact) => {

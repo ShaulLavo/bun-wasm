@@ -249,12 +249,23 @@ for (const abi of ["host", "wasm32-wasip1"] as const) test(`recorded ${abi} Carg
     const directory = join(f.context.target, "tls-probe/cargo");
     const env = { ...process.env, GITHUB_WORKSPACE: f.context.workspace, BUNWASM_TLS_CARGO_RECORD_DIR: directory,
       FIXTURE_MESSAGES: fixtureMessages(build), FIXTURE_EXPECT_TOOLCHAIN: f.context.rustToolchain,
-      FIXTURE_EXPECT_RUSTC: f.context.tools.rustc!.executable, RUSTUP_TOOLCHAIN: "foreign", RUSTC: "foreign" };
+      FIXTURE_EXPECT_RUSTC: f.context.tools.rustc!.executable, FIXTURE_EXPECT_DIRECT_RUSTC: "1",
+      RUSTUP_TOOLCHAIN: "foreign", RUSTC: "foreign", RUSTC_WRAPPER: "foreign-cache-wrapper",
+      CMAKE_C_COMPILER_LAUNCHER: "sccache", CMAKE_CXX_COMPILER_LAUNCHER: "sccache" };
     const command = ["cargo", abi === "host" ? "test" : "clippy", "--locked"].concat(abi === "host" ? [] : ["--target", abi]);
-    await recordCargo(command, abi, env, async () => f.context);
+    let captures = 0;
+    await recordCargo(command, abi, env, async recordingEnv => {
+      expect(recordingEnv?.RUSTC_WRAPPER).toBe("");
+      expect(recordingEnv?.CMAKE_C_COMPILER_LAUNCHER).toBe("sccache");
+      expect(recordingEnv?.CMAKE_CXX_COMPILER_LAUNCHER).toBe("sccache");
+      captures++;
+      return f.context;
+    });
+    expect(captures).toBe(2);
     expect(await Bun.file(join(directory, `${abi}.json`)).exists()).toBe(true);
     expect(env.RUSTUP_TOOLCHAIN).toBe("foreign");
     expect(env.RUSTC).toBe("foreign");
+    expect(env.RUSTC_WRAPPER).toBe("foreign-cache-wrapper");
   } finally { f.remove(); }
 });
 

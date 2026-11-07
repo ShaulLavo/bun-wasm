@@ -8,7 +8,7 @@ function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
   }
 }
 
-export async function stopProcessGroup(child: ChildProcess): Promise<void> {
+export async function stopProcessGroup(child: ChildProcess, graceMs = 5000): Promise<void> {
   const pid = child.pid;
   if (!pid) return;
   if (pid === process.pid) throw new Error("Refusing to stop the runner's own process group");
@@ -16,7 +16,7 @@ export async function stopProcessGroup(child: ChildProcess): Promise<void> {
     ? Promise.resolve()
     : new Promise<void>(resolve => child.once("exit", () => resolve()));
   if (!signalGroup(pid, "SIGTERM")) { await exited; return; }
-  const until = Date.now() + 5000;
+  const until = Date.now() + graceMs;
   while (signalGroup(pid, 0) && Date.now() < until) await Bun.sleep(20);
   if (!signalGroup(pid, 0)) { await exited; return; }
   signalGroup(pid, "SIGKILL");

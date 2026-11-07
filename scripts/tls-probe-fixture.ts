@@ -33,6 +33,7 @@ export async function tlsFixture() {
   fixturePut(cargo, `#!${process.execPath}\nimport { writeSync } from "node:fs";
 if (process.env.FIXTURE_EXPECT_TOOLCHAIN && process.env.RUSTUP_TOOLCHAIN !== process.env.FIXTURE_EXPECT_TOOLCHAIN) throw new Error("Cargo lost the selected Rustup toolchain");
 if (process.env.FIXTURE_EXPECT_RUSTC && process.env.RUSTC !== process.env.FIXTURE_EXPECT_RUSTC) throw new Error("Cargo lost the selected compiler");
+if (process.env.FIXTURE_EXPECT_DIRECT_RUSTC && process.env.RUSTC_WRAPPER) throw new Error("TLS Cargo retained a compiler wrapper");
 const text = process.env.FIXTURE_MESSAGES ?? "";
 for (const char of text) writeSync(1, char);
 process.stderr.write("fixture stderr\\n");

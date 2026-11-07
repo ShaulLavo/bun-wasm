@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "NEXT_TELEMETRY_DISABLED=1 next dev --hostname 127.0.0.1 --port 5173",
-    "build": "next build"
+    "build": "next build",
+    "start": "NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1 --port 5173"
   },
   "dependencies": {
     "@next/swc-wasm-nodejs": "15.5.6",

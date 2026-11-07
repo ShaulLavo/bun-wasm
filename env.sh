@@ -7,7 +7,8 @@ export WASI_SDK_PATH=${WASI_SDK_PATH:-$WASM_TOOLS/wasi-sdk}
 # the SDK/Rust libc as a fallback. The receipt rejects changed build inputs.
 export BUN_WASM_SYSROOT=${BUN_WASM_SYSROOT:-$WASM_TOOLS/bun-wasm-sysroot-patched}
 export PATH=$WASM_TOOLS/cmake/bin:$WASM_TOOLS/ninja:$CARGO_HOME/bin:$WASM_TOOLS/wasmtime:$WASM_TOOLS/binaryen/bin:$WASM_TOOLS/wasm-tools-bin:$WASI_SDK_PATH/bin:$PATH
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-/work/tmp/bun-wasm-target}
+# Each checkout keeps its own stable artifacts and Cargo lock.
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/target}
 # This workstation's scratch policy belongs in its environment, not in consumers.
 export TMPDIR=${TMPDIR:-/work/tmp}
 export CC_wasm32_wasip1=$WASI_SDK_PATH/bin/clang

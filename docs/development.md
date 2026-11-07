@@ -19,6 +19,24 @@ The native build runs on Linux x86_64. The CI job "Rust workspace tests (QuickJS
 
 ## Build the guests and the launcher
 
+Dev builds and tests keep function names and file/line backtraces with
+`line-tables-only` debug info. For local-variable inspection, set
+`CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_TEST_DEBUG=2` before the command.
+Release profiles are unchanged.
+
+Run a build through `bash scripts/with-build-cache.sh <command...>` to use
+sccache when it is installed. The wrapper also works inside the heavy runner:
+
+```sh
+bun /work/heavy-runner/current/run.js --class build bun-host -- bash scripts/with-build-cache.sh cargo build -j 2 -p bunwasm-host
+```
+
+Each checkout defaults to its own `target/`. Rust dependencies and CMake C/C++
+objects share the disk object cache (`/work/cache/sccache` on the maintainer's
+mounted data drive, or sccache's native default elsewhere). Each invocation owns
+and stops a private sccache server; local crates keep Cargo's incremental builds.
+Set `SCCACHE_DIR` to choose another cache or `BUILD_CACHE=0` to bypass it.
+
 Run each command from the repository root.
 
 ```sh

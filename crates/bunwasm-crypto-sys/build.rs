@@ -46,6 +46,8 @@ fn crypto(manifest: &Path, out: &Path) {
         "BUNWASM_BORINGSSL_BUILD",
         "WASI_SDK_PATH",
         "BUN_WASM_SYSROOT",
+        "CMAKE_C_COMPILER_LAUNCHER",
+        "CMAKE_CXX_COMPILER_LAUNCHER",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -83,6 +85,11 @@ fn crypto(manifest: &Path, out: &Path) {
                 "-DOPENSSL_NO_ASM=1",
                 "-DBUILD_TESTING=OFF",
             ]);
+        for language in ["C", "CXX"] {
+            let name = format!("CMAKE_{language}_COMPILER_LAUNCHER");
+            let launcher = std::env::var(&name).unwrap_or_default();
+            configure.arg(format!("-D{name}={launcher}"));
+        }
         if wasm {
             let flags = format!(
                 "-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK{}",

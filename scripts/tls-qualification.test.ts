@@ -1042,14 +1042,14 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     if (!found) throw new Error(`test needs a local ${name}`);
     return { ...fileIdentity(realpathSync(found)), version: { args: ["--version"], line: "" } };
   }
-  async function lane(reconciled: boolean) {
+  async function lane(reconciled: boolean, timing?: Parameters<typeof piLane>[5]) {
     const root = await mkdtemp(join(tmpdir(), "bun-wasm-pi-lane-"));
     scratch.push(root);
     const tools: HostTools = { ...fixtureHostTools(join(root, "tools")), flock: localTool("flock"), sh: localTool("sh"), cat: localTool("cat") };
     const lock = join(root, "pi.lock");
     const owner = new TlsCleanup();
     leases.push(owner);
-    const lease = await piLane(owner, new AbortController().signal, () => reconciled, tools, lock);
+    const lease = await piLane(owner, new AbortController().signal, () => reconciled, tools, lock, timing);
     return { owner, lease, lock: { path: lock, flock: tools.flock.path } };
   }
   /** Whether another holder could take the lock now, without waiting. */
@@ -1088,11 +1088,13 @@ describe("Pi lane lease and remote owner evidence (host-only, a scratch lock fil
     throw new Error("Owned lease shell did not exec cat within the control deadline");
   }
   test.each([true, false])("a stopped lease descendant is gone and its lock released after timeout, reconciled=%s", async reconciled => {
-    const { owner, lease, lock } = await lane(reconciled);
+    const { owner, lease, lock } = await lane(reconciled, { exitMs: 50, graceMs: 50 });
     if (!lease.pid) throw new Error("Expected an owned lease PID");
     const member = await catDescendant(lease.pid);
     process.kill(member, "SIGSTOP");
+    const started = performance.now();
     const failure = await owner.close().catch(error => error);
+    expect(performance.now() - started).toBeLessThan(5000);
     expect(failure).toBeInstanceOf(AggregateError);
     expect(String(failure.errors[0])).toContain(reconciled ? "deadline" : "unreconciled");
     if (!reconciled) expect(String(failure.errors[0].cause)).toContain("deadline");

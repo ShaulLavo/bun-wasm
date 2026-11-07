@@ -720,3 +720,19 @@ Compare the app-relevant startup and graph phases under like asset/cache conditi
 If normal startup in a genuinely service-worker-controlled worker regresses noticeably, take only the obvious bounded correction: choose one module mode per process from actual worker capability before entry. Use the old fast path only when the required capability exists. Use records when the controller is null or capability is missing/unavailable. Never infer native capability from a worker URL or scope. Do not restore a mixed native/record namespace bridge, pre-await dependency path, version-skew branch or mid-process mode switch.
 
 Any resulting product change requires normal source review and required checks on the changed head before merge or the private diagnostic build. Report remaining costs or an unresolved capability/control observation before widening this follow-up. Keep the one private e1-plus-reviewed-delta build and Nuxt's one later E3 separate.
+
+## Later: unoptimized WASI guest link
+
+Status: Approved, deferred. Keep the supported guest at dev opt-level 1.
+At `3b46c7fb6cc4eef1fb5493d05ebf16a90473d396` on the PC, nightly-2026-09-15,
+`CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo build --locked --offline -j 2 --target wasm32-wasip1 -p bunwasm-cli`
+(after sourcing `env.sh` and preparing the matched Bun sources/sysroot) fails
+with `undefined symbol: highway_memmem16` from `bun_bundler` and `bun_paths`.
+The matched Bun `src/highway/lib.rs:34` declares it and `memmem16` at line 380
+calls it. Our `crates/bunwasm-glue/src/bun_native.rs:529` defines
+`highway_memmem`, but has no `highway_memmem16` implementation. Optimization
+appears to remove the missing path at opt-level 1 and in release builds, which
+both link. Implement and test the portable 16-bit search later, then rerun the
+opt-level 0 link and the supported profiles. Original reproduction and full
+linker output: `/work/reports/wave-20261106/rust-build-speed/bench.py run bun-guest opt0`
+and `bun-guest-opt0-clean.log` beside that script. No fix is included here.

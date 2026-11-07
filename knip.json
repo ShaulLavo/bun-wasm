@@ -4,6 +4,7 @@
     ".": {
       "entry": [
         "scripts/app-matrix/run.mjs",
+        "scripts/build-body-consumer-probe.ts",
         "scripts/app-matrix/engine-memory-hook.ts",
         "scripts/engine-producer.ts",
         "scripts/c1-controller.ts",
@@ -84,6 +85,7 @@
         "guest-tests/*.test.ts",
         "tests/browser-*.{ts,mjs}",
         "tests/ten-app-finishline.ts",
+        "tests/body-consumer-capability.ts",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
         "src/notification-worker.ts",

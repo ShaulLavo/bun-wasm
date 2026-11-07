@@ -570,30 +570,7 @@
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
-      callerSourceOrigin() {
-        const prepare = Error.prepareStackTrace;
-        let stack;
-        try {
-          Error.prepareStackTrace = internal.defaultPrepareStackTrace;
-          stack = new Error().stack;
-        } finally {
-          Error.prepareStackTrace = prepare;
-        }
-        const lines = String(stack || "").split("\n").slice(1);
-        const inspector = internal.require("inspect");
-        for (const raw of lines) {
-          const line = raw.trim();
-          if (!line || line === "Error") continue;
-          const frame = inspector.parseStack(line)[0];
-          if (frame) {
-            if (frame.file.startsWith("/")) return internal.pathToFileHref(frame.file);
-            return /^[a-z][a-z0-9+.-]*:/i.test(frame.file) ? frame.file : null;
-          }
-          if (/^(?:at (?:.* \()?|[^@]*@)bun-wasm:/.test(line) || /\(native\)$|@\[native code\]$/.test(line)) continue;
-          return null;
-        }
-        return null;
-      },
+      callerSourceOrigin: internal.require("caller_origin"),
       gcAndSweep: () => native.gc(),
       fullGC: () => native.gc(),
       edenGC: () => native.gc(),
