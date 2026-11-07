@@ -46,7 +46,10 @@ than a fabricated declaration. Isolated bootstrap fixtures receive issued
 control grants and ledger-charged pipe registries through public APIs. The
 artifact-free runtime-proc browser page registers its original byte-encoded
 modules through the same source-known fixture helper, including foreground-stop
-modules, without changing their bytes or assertions.
+modules, without changing their bytes or assertions. The filesystem and signal-clock
+fixtures use that helper too. The network and transfer pages use the production
+streaming loader, and the interruption candidate loader records the bytes it
+already fetched. No raw compiled fixture is labeled memory-free.
 `tests/helpers/process-reservations.ts` obtains reservations from the public
 `processHost` hook and disposes its memory-filesystem owner after its borrowers.
 Bun test commands resolve the invoking consumer's public package entries; browser

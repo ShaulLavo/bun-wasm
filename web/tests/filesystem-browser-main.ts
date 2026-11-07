@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { createRuntime, type RuntimeFilesystem, type Runtime } from "waffle";
 import { startRun } from "../src/runner";
 
@@ -44,7 +45,7 @@ try {
   equal(read?.length, large.length, "large response length");
   equal(read?.every(byte => byte === 37), true, "large response bytes");
   // Production run bootstrap, including the transferred connection and descriptor disposal.
-  const module = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,5,3,1,0,1,7,19,2,6,109,101,109,111,114,121,2,0,6,95,115,116,97,114,116,0,0,10,4,1,2,0,11]));
+  const module = fixtureModule(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,5,3,1,0,1,7,19,2,6,109,101,109,111,114,121,2,0,6,95,115,116,97,114,116,0,0,10,4,1,2,0,11]));
   const run = startRun({ engine: "quickjs", module, args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
   const result = await run.done;
   if (result.error) throw new Error(result.error);

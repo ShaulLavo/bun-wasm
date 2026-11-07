@@ -1,3 +1,4 @@
+import { loadWasm } from "../src/engine-loader.ts";
 import { memoryDeclarations } from "../../src/program-memory.ts";
 import { createRuntime, type RuntimeNetworkHelper } from "waffle";
 import { startRun, type Run } from "../src/runner";
@@ -121,7 +122,7 @@ Reflect.set(globalThis, "networkConsumer", {
   previews,
   async prepare() {
     check(crossOriginIsolated, "isolation");
-    module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
+    module = (await loadWasm("./bun-guest.wasm", () => {})).module;
     await runtime.filesystem.mkdirp("/home/user");
     await runtime.filesystem.writeFile("/home/user/child.ts", source(ports.child, ports.sibling));
     await runtime.filesystem.writeFile("/home/user/sibling.ts", source(ports.sibling, ports.child));
@@ -148,7 +149,7 @@ process.exit(0);
     return { ports, parentExit: 0, backpressure, collision, lifetime, listeners: Array.from(listeners.keys()), stdout, stderr };
   },
   async isolated() {
-    module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
+    module = (await loadWasm("./bun-guest.wasm", () => {})).module;
     await runtime.filesystem.mkdirp("/home/user");
     root(source(ports.child, ports.child));
     await until(() => listeners.has(ports.child), "independent runtime binds the same port");
@@ -161,7 +162,7 @@ process.exit(0);
   },
   async publicAdapter() {
     check(await previews.ready === "ready", "service worker ready");
-    module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
+    module = (await loadWasm("./bun-guest.wasm", () => {})).module;
     await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
     const installation = await installBunAdapters(runtime, { workerUrl: new URL("./worker.js", location.href), notificationWorkerUrl: new URL("./notification-worker.js", location.href), module, network });
     const service = await runtime.processes();

@@ -1,3 +1,5 @@
+import { fixtureModule } from "./process-module-fixture.ts";
+import { recordProgramMemory } from "../../src/program-memory.ts";
 import { programKind, programProfile } from "../../src/engine-kind";
 import { prepareProgram } from "../../src/assets";
 import { observedAtomics } from "./engine-interruption-atomics";
@@ -473,7 +475,7 @@ async function testSleepSyncSignals(module: WebAssembly.Module, engine: Engine):
   });
 }
 async function testPreview1Clock(root: boolean): Promise<void> {
-  const module = new WebAssembly.Module(preview1SignalClockGuest());
+  const module = fixtureModule(preview1SignalClockGuest());
   async function runTrial(suppressNotify: boolean) {
     let owned: Awaited<ReturnType<typeof scope>> | undefined;
     let run: Run | undefined;
@@ -603,7 +605,7 @@ async function loadCandidate(engine: Engine, name: string, prefix = "/") {
   const kind = programKind(candidate);
   const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
   truth(kind === expected, `${engine} core declaration mismatch`);
-  if (kind === "single") return { module: candidate, hash, artifacts };
+  if (kind === "single") { recordProgramMemory(candidate, bytes); return { module: candidate, hash, artifacts }; }
   const sideName = programProfile(kind).side;
   const responseSide = await fetch(`${prefix}${sideName}`); truth(responseSide.ok, `fresh artifact ${sideName}: HTTP ${responseSide.status}`);
   const side = new Uint8Array(await responseSide.arrayBuffer());

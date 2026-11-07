@@ -1,3 +1,4 @@
+import { loadWasm } from "../src/engine-loader.ts";
 import { createRuntime } from "waffle";
 import { startRun } from "../src/runner.ts";
 import { installRuntimeSharedObjects } from "../src/shared-objects/runtime.ts";
@@ -22,7 +23,7 @@ try {
     await runtime.filesystem.writeFile(`/home/user/${file.path}`, file.source);
   }
   await runtime.filesystem.flush();
-  const module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
+  const { module } = await loadWasm("./bun-guest.wasm", () => {});
   run = startRun({ engine: "browser", module, args: ["run", "/home/user/index.ts"], env: { PWD: "/home/user" }, runtime, moduleScope: false }, {
     stdout(bytes) { stdout += new TextDecoder().decode(bytes); },
     stderr(bytes) { stderr += new TextDecoder().decode(bytes); },
