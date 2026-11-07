@@ -228,7 +228,7 @@ for (const path of [
   "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
   "tests/fixtures/strings-above-512mib/index.ts", "crates/bunwasm-cli/max-memory.txt",
   "web/scripts/node-host.ts", "web/scripts/node-worker.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
-  "web/src/native-direct-stream.ts",
+  "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
   "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
 ]) {

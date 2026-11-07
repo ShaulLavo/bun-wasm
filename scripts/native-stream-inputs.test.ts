@@ -21,6 +21,19 @@ test("browser interop inputs include executable typed streams without loading Pl
   if (!("streams" in sources) || typeof sources.streams !== "string") throw new Error("Missing streams source");
   expect(sources.streams).toContain('"use strict";');
   expect(runInNewContext(`typeof ${sources.streams}`)).toBe("function");
+  const load = Bun.spawnSync(["node", "--input-type=module", "-e", `
+    import { readFileSync } from "node:fs";
+    const { hostBridge } = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    const restore = new Function(hostBridge)();
+    if (typeof restore !== "function") throw new Error("Missing stream bridge disposer");
+    restore();
+    const direct = new Function(hostBridge.replace("return installNativeStreamState();", "return constructNativeReadable;"))();
+    const source = { type: "direct", pull(controller) { controller.write("bridge"); controller.end(); } };
+    const stream = direct(ReadableStream, [source], ReadableStream, source, () => {});
+    if (await new Response(stream).text() !== "bridge") throw new Error("Direct stream bridge failed");
+  `, dump]);
+  expect(load.stderr.toString()).toBe("");
+  expect(load.exitCode).toBe(0);
 });
 
 test("package archive carries the native stream bridge and its direct helper", () => {
@@ -34,5 +47,6 @@ test("package archive carries the native stream bridge and its direct helper", (
     const files = listed.stdout.toString().split("\n");
     expect(files).toContain("package/web/src/native-stream-state.ts");
     expect(files).toContain("package/web/src/native-direct-stream.ts");
+    expect(files).toContain("package/web/src/native-readable-iterator.ts");
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
