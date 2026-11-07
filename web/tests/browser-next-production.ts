@@ -4,14 +4,13 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import type { Runtime } from "waffle";
 import type { Previews } from "../src/preview";
-import { templateFiles } from "../../sandbox/template-files";
 import { playwright, ready, run, session, terminalText } from "./playground.mjs";
 import { stopForeground } from "./foreground";
 import { assertAppProductionBuildID, assertProductionBrowserEvents, finishProduction, productionTemplate } from "./next-production-controls";
 
 declare const playground: {
-  editor: { path: string; open(path: string): Promise<void> };
-  fs: Runtime["filesystem"];
+  editor: { path: string };
+  fs: Pick<Runtime["filesystem"], "readFile">;
   previews: Previews;
   shell: { submit(command: string): Promise<void>; running: boolean; lastExit: number };
 };
@@ -110,8 +109,7 @@ async function compiledPage(target: Page, url: string, expectedBuildID: string):
 
 async function execute(): Promise<void> {
   const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? await task.serve());
-  // The terminal playground supplies the shell; the source-only App fixture replaces its Pages seed below.
-  url.searchParams.set("template", "next");
+  url.searchParams.set("template", template.id);
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
   url.searchParams.set("mode", "memory");
@@ -124,15 +122,6 @@ async function execute(): Promise<void> {
   await page.goto(url.href, { timeout: 120_000 });
   assert.match(await ready(page), /ready · Browser/);
   if (template.id === "next-app") {
-    operation = "load source-only App Router template into terminal workspace";
-    const files = await templateFiles(new URL("../../sandbox/template-next-app", import.meta.url).pathname);
-    await page.evaluate(async files => {
-      await playground.fs.remove("/home/user");
-      await playground.fs.mkdirp("/home/user");
-      for (const [path, text] of Object.entries(files)) await playground.fs.writeFile(`/home/user/${path}`, text);
-      await playground.editor.open("/home/user/app/page.tsx");
-      await playground.fs.flush();
-    }, files);
     assert.equal(await readGuest(page, "/home/user/pages/index.tsx"), null, "App fixture must not retain a Pages route");
   }
   assert.equal(await page.evaluate(() => playground.editor.path), template.editorPath);

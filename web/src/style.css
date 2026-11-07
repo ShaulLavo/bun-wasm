@@ -241,9 +241,10 @@ main {
 
   header .workspace-nav {
     gap: 6px;
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    flex-wrap: wrap;
   }
 
   header .workspace-nav a.nav {
@@ -253,7 +254,7 @@ main {
   header #status {
     display: block;
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 4;
     width: 100%;
   }
 
@@ -264,7 +265,7 @@ main {
 
   header #engine {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;
     min-width: 0;
     max-width: 100%;
     justify-self: start;
@@ -272,7 +273,7 @@ main {
 
   header #run {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 3;
     min-height: 34px;
   }
 

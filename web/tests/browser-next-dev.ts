@@ -6,8 +6,16 @@ import type { Editor } from "../src/playground/editor";
 import type { Previews } from "../src/preview";
 import { playwright, ready, run, session, terminalText } from "./playground.mjs";
 import { stopForeground } from "./foreground";
+import { projectTemplate, projectTemplates } from "../src/playground/project-templates";
+import { observePreviewSockets } from "./next-framework-sockets";
 
 declare const playground: { editor: Editor; previews: Previews; shell: { submit(command: string): Promise<void> } };
+
+const selected = projectTemplate(process.env.NEXT_DEV_TEMPLATE ?? "next");
+assert.ok(selected && (selected.id === "next" || selected.id === "next-app"), "Choose next or next-app");
+const template = selected;
+const heading = template.id === "next-app" ? "Next.js App Router" : "Next.js in your browser";
+const editedHeading = `${heading} hot update works`;
 
 const task = session("bun-wasm-next-playground-");
 const reports = process.env.NEXT_DEV_REPORTS;
@@ -24,16 +32,45 @@ async function setSource(page: Page, text: string): Promise<void> {
   }, text);
 }
 
+async function projectLinkBoxes(page: Page) {
+  return page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => {
+    const { left, right, top, bottom } = link.getBoundingClientRect();
+    return { left, right, top, bottom };
+  }));
+}
+
+async function headerControlBoxes(page: Page) {
+  return page.locator("header h1, header #engine, header #run").evaluateAll(controls => controls.map(control => {
+    const { left, right, top, bottom } = control.getBoundingClientRect();
+    return { left, right, top, bottom, width: control.clientWidth, contentWidth: control.scrollWidth };
+  }));
+}
+
+function assertSeparateLinks(boxes: Awaited<ReturnType<typeof projectLinkBoxes>>): void {
+  for (let index = 0; index < boxes.length; index++) {
+    for (let other = index + 1; other < boxes.length; other++) {
+      const a = boxes[index], b = boxes[other];
+      assert.ok(a && b);
+      assert.ok(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, "Project links must not overlap");
+    }
+  }
+}
+
 async function projectLinks(page: Page): Promise<void> {
+  const links = page.getByRole("navigation", { name: "Projects" }).getByRole("link");
+  const others = projectTemplates.filter(project => project.id !== template.id);
+  assert.deepEqual(await links.allTextContents(), ["Examples"].concat(others.map(project => project.label), ["Sandbox"]));
+  assert.deepEqual(await links.evaluateAll(links => links.map(link => link.getAttribute("href"))), ["./"].concat(others.map(project => `?template=${project.id}`), ["../"]));
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
-    const boxes = await page.getByRole("navigation", { name: "Projects" }).getByRole("link").evaluateAll(links => links.map(link => {
-      const { left, right, top, bottom } = link.getBoundingClientRect();
-      return { left, right, top, bottom };
-    }));
-    assert.equal(boxes.length, 3);
-    assert.ok(boxes.every(box => box.left >= 0 && box.right <= width));
-    assert.ok(boxes.every((box, index) => index === 0 || box.left >= (boxes[index - 1]?.right ?? Infinity)), "Project links must not overlap");
+    const boxes = await projectLinkBoxes(page);
+    assert.equal(boxes.length, projectTemplates.length + 1);
+    if (reports) await page.screenshot({ path: join(reports, `next-playground-links-${width}.png`) });
+    assert.ok(boxes.every(box => box.left >= 0 && box.right <= width), JSON.stringify({ width, boxes }));
+    const controls = await headerControlBoxes(page);
+    assert.equal(controls.length, 3);
+    assert.ok(controls.every(control => control.width > 0 && control.contentWidth <= control.width), JSON.stringify({ width, controls }));
+    assertSeparateLinks(boxes.concat(controls));
   }
   await page.setViewportSize({ width: 1280, height: 800 });
 }
@@ -44,23 +81,24 @@ async function development(page: Page): Promise<void> {
   assert.equal(await page.evaluate(() => playground.previews.ready), "ready");
   const url = await page.evaluate(() => playground.previews.url(5173));
   const preview = await page.context().newPage();
+  await observePreviewSockets(preview);
   preview.on("console", message => events.push(message.text()));
   preview.on("pageerror", error => events.push(`pageerror: ${error.message}`));
   try {
-    const connected = preview.waitForEvent("console", { predicate: message => message.text().includes("[HMR] connected"), timeout: 120_000 });
-    const [response] = await Promise.all([preview.goto(url, { timeout: 120_000 }), connected]);
+    const response = await preview.goto(url, { timeout: 120_000 });
     assert.equal(response?.status(), 200);
-    await preview.getByRole("heading", { name: "Next.js in your browser", exact: true }).waitFor({ timeout: 120_000 });
+    await preview.waitForFunction(() => globalThis.nextFrameworkSocketEvents.some(event => event.type === "open" && event.url.includes("/_next/webpack-hmr")), undefined, { timeout: 120_000 });
+    await preview.getByRole("heading", { name: heading, exact: true }).waitFor({ timeout: 120_000 });
     await preview.getByRole("button", { name: "Count: 0", exact: true }).click();
     const documentIdentity = await preview.evaluate(() => performance.timeOrigin);
     const original = await page.evaluate(() => playground.editor.view.state.doc.toString());
-    await setSource(page, original.replace("Next.js in your browser", "Next.js hot update works"));
-    await preview.getByRole("heading", { name: "Next.js hot update works", exact: true }).waitFor({ timeout: 60_000 });
+    await setSource(page, original.replace(heading, editedHeading));
+    await preview.getByRole("heading", { name: editedHeading, exact: true }).waitFor({ timeout: 60_000 });
     await preview.getByRole("button", { name: "Count: 1", exact: true }).waitFor();
     assert.equal(await preview.evaluate(() => performance.timeOrigin), documentIdentity);
     if (reports) await preview.screenshot({ path: join(reports, "next-playground-hmr.png") });
     await setSource(page, original);
-    await preview.getByRole("heading", { name: "Next.js in your browser", exact: true }).waitFor({ timeout: 60_000 });
+    await preview.getByRole("heading", { name: heading, exact: true }).waitFor({ timeout: 60_000 });
     await preview.getByRole("button", { name: "Count: 1", exact: true }).waitFor();
     assert.equal(await preview.evaluate(() => performance.timeOrigin), documentIdentity);
     assert.deepEqual(events.filter(event => event.startsWith("pageerror:")), []);
@@ -70,7 +108,7 @@ async function development(page: Page): Promise<void> {
 
 try {
   const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? await task.serve());
-  url.searchParams.set("template", "next");
+  url.searchParams.set("template", template.id);
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
   url.searchParams.set("mode", "memory");
@@ -79,7 +117,7 @@ try {
   page.on("pageerror", error => events.push(`pageerror: ${error.message}`));
   await page.goto(url.href);
   assert.match(await ready(page), /ready · Browser/);
-  assert.equal(await page.evaluate(() => playground.editor.path), "/home/user/pages/index.tsx");
+  assert.equal(await page.evaluate(() => playground.editor.path), `/home/user/${template.editorFile}`);
   await projectLinks(page);
   const installed = await run(page, "bun install", 180_000);
   assert.equal(installed.code, 0, installed.output);
