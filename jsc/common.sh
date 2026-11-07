@@ -116,7 +116,8 @@ check_jsc_webkit_tree() (
   git_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-dir) || return 1
   common_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-common-dir) || return 1
   mkdir "$scratch/objects" || return 1
-  cp -- "$git_dir/index" "$scratch/worktree-index" || return 1
+  # Git uses this timestamp as its racy-clean cutoff, not just as file metadata.
+  cp --preserve=timestamps -- "$git_dir/index" "$scratch/worktree-index" || return 1
   export GIT_OBJECT_DIRECTORY="$scratch/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$common_dir/objects" GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0
   GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
   GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1

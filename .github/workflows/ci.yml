@@ -1462,7 +1462,17 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Web host unit, CLI shim, type and bundle gates
+        env:
+          C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
         run: bash ../scripts/test-web-host.sh --unit
+      - name: Retain first C1 WebKit admission failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c1-webkit-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/c1-webkit-failures
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
           if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
