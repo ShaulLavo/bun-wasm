@@ -8,19 +8,39 @@ export function productionTemplate(value: string | undefined) {
   return { id: "next-app", editorPath: "/home/user/app/page.tsx", heading: "Next.js App Router" } as const;
 }
 
-export function assertAppProductionBuildID(scripts: readonly string[], expectedBuildID: string): void {
+function flightText(scripts: readonly string[]): string {
   const chunks: string[] = [];
   for (const script of scripts) {
-    for (const match of script.matchAll(/self\.__next_f\.push\((\[1,"(?:\\.|[^"\\])*"\])\)/g)) {
-      const chunk: unknown = JSON.parse(match[1] ?? "null");
-      assert.ok(Array.isArray(chunk) && chunk[0] === 1 && typeof chunk[1] === "string");
-      chunks.push(chunk[1]);
-    }
+    const call = /^self\.__next_f\.push\((\[.*\])\);?$/.exec(script.trim());
+    if (!call) continue;
+    const chunk: unknown = JSON.parse(call[1] ?? "null");
+    assert.ok(Array.isArray(chunk));
+    if (chunk[0] !== 1) continue;
+    assert.ok(chunk.length === 2 && typeof chunk[1] === "string");
+    chunks.push(chunk[1]);
   }
-  const root = /^0:(.+)$/m.exec(chunks.join(""));
-  assert.ok(root, "App Router HTML must contain a streamed Flight root record");
-  const data: unknown = JSON.parse(root[1] ?? "null");
-  assert.ok(data && typeof data === "object" && "b" in data);
+  return chunks.join("");
+}
+
+function jsonFlightRoot(text: string): unknown {
+  let root: unknown;
+  for (const line of text.split("\n")) {
+    if (line === "") continue;
+    const record = /^([0-9a-f]+):(.*)$/.exec(line);
+    assert.ok(record, "Unsupported Flight record framing");
+    const payload = record[2] ?? "";
+    // This source-only fixture emits JSON and import records, never length-prefixed text or binary records.
+    const value: unknown = JSON.parse(payload.startsWith("I") ? payload.slice(1) : payload);
+    if (record[1] !== "0") continue;
+    assert.equal(root, undefined, "Flight stream must not repeat its root record");
+    root = value;
+  }
+  return root;
+}
+
+export function assertAppProductionBuildID(scripts: readonly string[], expectedBuildID: string): void {
+  const data = jsonFlightRoot(flightText(scripts));
+  assert.ok(data && typeof data === "object" && "b" in data, "App Router HTML must contain a streamed Flight root record");
   assert.equal(data.b, expectedBuildID, "Served Flight HTML must use the guest's production BUILD_ID");
 }
 

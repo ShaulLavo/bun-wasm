@@ -90,6 +90,13 @@ for (const [name, scripts] of [
   ["unrelated script text", ['const data = {"b":"fresh-build"}']],
   ["Pages bootstrap only", ['<script id="__NEXT_DATA__">{"buildId":"fresh-build"}</script>']],
   ["malformed root record", [flight('0:not-json\n')]],
+  ["root inside length-prefixed text before stale root", [flight('1:T23,not the root\n0:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
+  ["root inside length-prefixed text without actual root", [flight('1:T23,not the root\n0:{"b":"fresh-build"}\n')]],
+  ["commented push call", [`/* ${flight('0:{"b":"fresh-build"}\n')} */`]],
+  ["line-commented push call", [`// ${flight('0:{"b":"fresh-build"}\n')}`]],
+  ["quoted push call", [JSON.stringify(flight('0:{"b":"fresh-build"}\n'))]],
+  ["commented fresh root before stale root", [`/* ${flight('0:{"b":"fresh-build"}\n')} */`, flight('0:{"b":"stale"}\n')]],
+  ["duplicate root", [flight('0:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
 ] satisfies [string, string[]][]) {
   test(`App production acceptance rejects ${name}`, () => {
     expect(() => assertAppProductionBuildID(scripts, "fresh-build")).toThrow();
