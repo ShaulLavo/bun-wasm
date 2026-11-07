@@ -39,7 +39,7 @@ async function consumerRoot(runtime: Runtime) {
   const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem: runtime.filesystem.createIdentity() };
   const output: string[] = [];
-  await service.adoptRuntimeRoot(transport, { output: (_fd, bytes) => output.push(new TextDecoder().decode(bytes)) });
+  await service.adoptRuntimeRoot(transport, { memory: [], output: (_fd, bytes) => output.push(new TextDecoder().decode(bytes)) });
   const descriptors = new DescriptorTable();
   const write = (chunks: readonly Uint8Array[]) => {
     for (const bytes of chunks) output.push(new TextDecoder().decode(bytes));

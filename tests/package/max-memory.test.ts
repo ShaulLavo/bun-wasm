@@ -127,3 +127,15 @@ test("memory telemetry's limit is the core's declared maximum", () => {
   expect(read("web/src/bun-executor.ts")).toContain("memoryMaximumBytes(req.linkPlan.core.source) ?? null");
   expect(read("web/src/memory-telemetry.ts")).toContain("memoryLimitBytes: allocator ? limitBytes : null");
 });
+
+test("root admission reads every actual memory including non-env imports", async () => {
+  const { memoryDeclarations } = await import("../../src/program-memory.ts");
+  const { pages } = await import("waffle");
+  const defined = module(section(5, [1, 1, 1, 3]));
+  const shared = module(section(2, [1].concat(name("host"), name("private-name"), [2, 3, 1, 5])));
+  for (const source of [defined, shared]) expect(WebAssembly.validate(source)).toBe(true);
+  expect(memoryDeclarations(defined)).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(3) }]);
+  expect(memoryDeclarations(shared)).toEqual([{ kind: "shared", origin: "imported", initialPages: pages(1), maximumPages: pages(5) }]);
+  expect(memoryDeclarations(module(section(5, [1, 0, 1])))).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(65_536) }]);
+  expect(memoryDeclarations(module())).toEqual([]);
+});

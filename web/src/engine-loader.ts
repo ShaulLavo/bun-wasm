@@ -1,3 +1,4 @@
+import { recordProgramMemory } from "../../src/program-memory.ts";
 import { pairedEngines, programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
@@ -109,6 +110,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
     const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
     return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
   }
+  recordProgramMemory(module, new Uint8Array(await new Blob(chunks).arrayBuffer()));
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
@@ -117,7 +119,9 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
 async function compileCached(response: Response, key: string) {
   try {
     const bytes = new Uint8Array(await response.arrayBuffer());
-    return { bytes, module: await WebAssembly.compile(bytes) };
+    const module = await WebAssembly.compile(bytes);
+    recordProgramMemory(module, bytes);
+    return { bytes, module };
   } catch {
     await evictEngine(key);
     return null;

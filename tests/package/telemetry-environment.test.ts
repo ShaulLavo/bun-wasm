@@ -1,3 +1,4 @@
+import { fixtureModule } from "../../web/tests/process-module-fixture.ts";
 import { prepareProgram } from "../../src/assets.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
@@ -11,7 +12,7 @@ import { connectFilesystemIdentity, createFilesystemIdentity, revokeFilesystem, 
 import { WorkerProcessClient, createWorkerProcessTransport } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
 
-const module = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+const module = fixtureModule(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
 const workerUrl = new URL("../../web/tests/fixtures/telemetry-environment-worker.ts", import.meta.url).href;
 const notificationWorkerUrl = new URL("../../src/notification-worker-entry.ts", import.meta.url).href;
 
@@ -74,7 +75,7 @@ async function admittedEnvironment(env: Record<string, string>, engine: "browser
     const pid = fixture.runtime.identities.pid();
     const transport = createWorkerProcessTransport({ pid, job: fixture.runtime.identities.job(), identity: fixture.runtime.identities.buffer });
     transport.data = { filesystem: createFilesystemIdentity(fixture.identity) };
-    await service.adoptRuntimeRoot(transport, { output(_fd, data) { chunks.push(data); } });
+    await service.adoptRuntimeRoot(transport, { memory: [], output(_fd, data) { chunks.push(data); } });
     const rootData = transport.data;
     if (!rootData || typeof rootData !== "object" || !("pipeRegistry" in rootData)) throw new Error("root pipe registry required");
     const client = new WorkerProcessClient({ transport, descriptors,

@@ -49,11 +49,16 @@ function readName(cursor: Cursor): string {
   return new TextDecoder().decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
 }
 
-function readLimits(cursor: Cursor): { shared: boolean; maximum: number | undefined } {
+function readMemoryLimits(cursor: Cursor): { initial: number; shared: boolean; maximum: number | undefined } {
   const flags = readUnsigned(cursor);
   if (flags > 3) throw new TypeError("Unsupported memory or table limits");
-  readUnsigned(cursor);
-  return { shared: (flags & 2) !== 0, maximum: flags & 1 ? readUnsigned(cursor) : undefined };
+  const initial = readUnsigned(cursor);
+  return { initial, shared: (flags & 2) !== 0, maximum: flags & 1 ? readUnsigned(cursor) : undefined };
+}
+
+function readLimits(cursor: Cursor): { shared: boolean; maximum: number | undefined } {
+  const { shared, maximum } = readMemoryLimits(cursor);
+  return { shared, maximum };
 }
 
 /** Skip one non-memory import descriptor. */
@@ -63,6 +68,7 @@ function skipImport(cursor: Cursor, kind: number | undefined): void {
     cursor.at++;
     readLimits(cursor);
   } else if (kind === 3) cursor.at += 2;
+  else if (kind === 4) { readUnsigned(cursor); readUnsigned(cursor); }
   else throw new TypeError(`Unsupported import kind ${kind}`);
 }
 
@@ -101,6 +107,35 @@ function memoryImport(imports: Cursor): { shared: boolean; maximum: number | und
     else readLimits(imports);
   }
   return undefined;
+}
+
+type MemoryLimits = ReturnType<typeof readMemoryLimits> & { origin: "defined" | "imported" };
+function memoryDeclaration(cursor: Cursor, origin: MemoryLimits["origin"]): MemoryLimits {
+  return { ...readMemoryLimits(cursor), origin };
+}
+
+function importedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): void {
+  for (let count = readUnsigned(cursor); count > 0; count--) {
+    readName(cursor); readName(cursor);
+    const kind = cursor.bytes[cursor.at++];
+    if (kind === 2) declarations.push(memoryDeclaration(cursor, "imported"));
+    else skipImport(cursor, kind);
+  }
+}
+
+/** Read all actual memories, including non-env imports and unexported definitions. */
+export function wasmMemoryLimits(bytes: Uint8Array): readonly MemoryLimits[] {
+  const module: Cursor = { bytes, at: 8 };
+  const declarations: MemoryLimits[] = [];
+  while (module.at < bytes.length) {
+    const id = bytes[module.at++];
+    const size = readUnsigned(module);
+    const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };
+    module.at += size;
+    if (id === 2) importedDeclarations(section, declarations);
+    if (id === 5) for (let count = readUnsigned(section); count > 0; count--) declarations.push(memoryDeclaration(section, "defined"));
+  }
+  return declarations;
 }
 
 export function programKind(module: WebAssembly.Module): ProgramKind {

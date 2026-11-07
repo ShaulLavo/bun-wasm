@@ -24,7 +24,7 @@ for (const admission of ["this-broker", "other-broker", "runtime"] as const) tes
   }
   else registering.register(executable, { adapter: "preview1", bytes });
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(state.client.pid, { executable, argv: ["tool"], env: {}, cwd: "/", job: -1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, state.client.pid);
     for (let turn = 0; turn < 100 && !requests.length; turn++) await new Promise(resolve => setTimeout(resolve, 0));

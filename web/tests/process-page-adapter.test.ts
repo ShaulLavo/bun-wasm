@@ -20,7 +20,8 @@ const pageAST = ts.createSourceFile("process-browser-main.ts", pageSource, ts.Sc
 const envelope = pageAST.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "runProcessCases");
 const pageTry = envelope && ts.isFunctionDeclaration(envelope) ? envelope.body?.statements.find(ts.isTryStatement) : undefined;
 if (!pageTry?.finallyBlock) throw new Error("original process command finally missing");
-const finallySource = pageTry.finallyBlock.getText(pageAST);
+const commandFinalizer = pageTry.finallyBlock;
+const finallySource = commandFinalizer.getText(pageAST);
 
 function success(): ProcessObservation {
   return { result: { ok: true, checks: processCheckLabels.slice(), errors: [], cleanup: { activeWorkers: 0 } }, progress: { currentTest: processCheckLabels.at(-1) }, pageErrors: [] };
@@ -264,4 +265,35 @@ test("native dispatch precedes desktop-only Playwright value imports and allocat
   expect(dispatch).toBeLessThan(runnerSource.indexOf('await import("playwright")'));
   expect(dispatch).toBeLessThan(runnerSource.indexOf("await freePort()"));
   expect(runnerSource).not.toContain('import { chromium, firefox, webkit');
+});
+
+function originalBodyFingerprints() {
+  const printer = ts.createPrinter({ removeComments: false });
+  const callbacks: string[] = [], scopeFinalizers: string[] = [];
+  function collect(node: ts.Node): void {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "test") {
+      const callback = node.arguments[1];
+      if (!callback || !ts.isArrowFunction(callback)) throw new Error("process case callback missing");
+      callbacks.push(printer.printNode(ts.EmitHint.Unspecified, callback.body, pageAST));
+    }
+    if (ts.isTryStatement(node) && node.finallyBlock?.getText(pageAST).includes("await s.dispose()")) scopeFinalizers.push(printer.printNode(ts.EmitHint.Unspecified, node.finallyBlock, pageAST));
+    ts.forEachChild(node, collect);
+  }
+  collect(pageAST);
+  const digest = (value: unknown) => new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex");
+  return {
+    callbacks: callbacks.length, callbackHash: digest(callbacks),
+    scopeFinalizers: scopeFinalizers.length, scopeFinalizerHash: digest(scopeFinalizers),
+    commandFinallyHash: digest(printer.printNode(ts.EmitHint.Unspecified, commandFinalizer, pageAST)),
+  };
+}
+
+test("the original case bodies, assertions and awaited finalizers remain unchanged", () => {
+  // TypeScript printer hashes from 3b46c7fb6cc4eef1fb5493d05ebf16a90473d396,
+  // including optional artifact bodies. CI needs no historical Git objects.
+  expect(originalBodyFingerprints()).toEqual({
+    callbacks: 16, callbackHash: "3cc1fdae9d9e01a0d4b735f6aac694b6a5ae93de3025967330921ec0f345baec",
+    scopeFinalizers: 17, scopeFinalizerHash: "ae3ab78b586f0d36ac1bdefad3d9cce789f421deb9da774a622f0c812ec664a7",
+    commandFinallyHash: "0696b53c2746ea07ddba78ea7d30f4c24ad69b3bdc0b4e9999efc975e739dc07",
+  });
 });

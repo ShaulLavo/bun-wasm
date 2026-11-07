@@ -1,3 +1,4 @@
+import { memoryDeclarations } from "../../src/program-memory.ts";
 import { createRuntime, type RuntimeNetworkHelper } from "waffle";
 import { startRun, type Run } from "../src/runner";
 import { Previews } from "../src/preview";
@@ -169,15 +170,18 @@ process.exit(0);
     const connection = runtime.filesystem.fork();
     const { port, ...filesystem } = connection;
     transport.data = { filesystem };
-    const fixture = new WebAssembly.Module(bunRuntimeProcFixture({ name: "network-consumer", commands: [{ source: source(ports.child, ports.child) }], stdout: "" }));
+    const fixtureBytes = bunRuntimeProcFixture({ name: "network-consumer", commands: [{ source: source(ports.child, ports.child) }], stdout: "" });
+    const fixture = new WebAssembly.Module(fixtureBytes);
     let rootWorker: Worker | undefined;
-    await service.adoptRuntimeRoot(transport, { filesystem, output: (fd, bytes) => (fd === 2 ? hooks.stderr : hooks.stdout)(bytes), stop: () => rootWorker?.terminate() });
+    await service.adoptRuntimeRoot(transport, { memory: memoryDeclarations(fixtureBytes), filesystem, output: (fd, bytes) => (fd === 2 ? hooks.stderr : hooks.stdout)(bytes), stop: () => { rootWorker?.terminate(); if (!runtime.disposed) service.rootStopped(state.pid); } });
     rootWorker = new Worker(new URL("./preview1-worker.js", location.href), { type: "module" });
     rootWorker.onmessage = ({ data }: MessageEvent<RuntimeWorkerMessage>) => {
+      if (runtime.disposed) return;
+      if (data.type === "shared-control-allocation") { service.rootControlAllocated(state.pid, data.buffer); return; }
       if (data.type === "runtime-proc") { void service.runtimeMessage(data, state.pid); return; }
       if (data.type === "stdout" || data.type === "stderr") (data.type === "stderr" ? hooks.stderr : hooks.stdout)(data.data);
     };
-    rootWorker.postMessage({ module: fixture, args: ["shell"], env: { PWD: "/home/user", PATH: "/bin" }, filesystem: connection, runtimeProcess: transport }, [port]);
+    rootWorker.postMessage({ controlGrant: service.rootControlGrant(state.pid), module: fixture, args: ["shell"], env: { PWD: "/home/user", PATH: "/bin" }, filesystem: connection, runtimeProcess: transport }, [port]);
     await until(() => listeners.has(ports.child), "public adapter child listening");
     installation.dispose(); installation.dispose();
     await service.rootExit(state.pid, 0);

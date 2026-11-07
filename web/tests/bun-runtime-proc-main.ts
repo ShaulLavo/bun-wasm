@@ -1,3 +1,4 @@
+import { memoryDeclarations } from "../../src/program-memory.ts";
 import { createRuntime, type Runtime, type ProcessService } from "waffle";
 import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { installBunAdapters, type BunAdapterOptions } from "../../src/bun-adapter.js";
@@ -92,7 +93,8 @@ try {
   const supervisor = await service.ready();
   supervisor.onChildExit(event => confirmedExits.push({ pid: event.pid, parentPid: event.parentPid, job: event.job,
     status: event.result.status, kind: event.result.kind }));
-  const module = name === "generic-control" ? new WebAssembly.Module(runtimeProcFixture()) : undefined;
+  const genericBytes = name === "generic-control" ? runtimeProcFixture() : undefined;
+  const module = genericBytes ? new WebAssembly.Module(genericBytes) : undefined;
   if (module) {
     runtime.registerAdapter("preview1", (context, processes) => processes.launchWorker(context, {
       workerUrl: new URL("./preview1-worker.js", location.href).href,
@@ -124,7 +126,8 @@ try {
       module: () => { throw new Error("bun-runtime-proc-start-failed-control"); },
     });
   }
-  const rootModule = module ?? new WebAssembly.Module(bunRuntimeProcFixture(scenario!));
+  const rootBytes = genericBytes ?? bunRuntimeProcFixture(scenario!);
+  const rootModule = module ?? new WebAssembly.Module(rootBytes);
   const pid = runtime.identities.pid(), job = runtime.identities.job();
   const transport = createWorkerProcessTransport({ pid, job, identity: runtime.identities.buffer });
   rootConnection = runtime.filesystem.fork();
@@ -136,12 +139,14 @@ try {
     else stdout += new TextDecoder().decode(bytes);
   };
   const completion = Promise.withResolvers<{ code: number; error?: string }>();
-  await service.adoptRuntimeRoot(transport, { filesystem: identity, acknowledged: () => acknowledged,
+  await service.adoptRuntimeRoot(transport, { memory: memoryDeclarations(rootBytes), filesystem: identity, acknowledged: () => acknowledged,
     output,
-    stop: () => { rootWorker?.terminate(); completion.resolve({ code: 137 }); },
+    stop: () => { rootWorker?.terminate(); if (runtime?.disposed === false) service?.rootStopped(pid); completion.resolve({ code: 137 }); },
   });
   rootWorker = new Worker(new URL("./preview1-worker.js", location.href), { type: "module" });
   rootWorker.onmessage = ({ data }) => {
+    if (runtime?.disposed !== false) return;
+    if (data.type === "shared-control-allocation") { service!.rootControlAllocated(pid, data.buffer); return; }
     if (data.type === "runtime-proc") {
       void service.runtimeMessage(data as WorkerProcessMessage, pid).catch(completion.reject); return;
     }
@@ -150,11 +155,11 @@ try {
     if (data.type !== "exit" && data.type !== "error") return;
     acknowledged = true;
     void service.rootExit(pid, data.code).then(() => {
-      rootWorker?.terminate(); completion.resolve({ code: data.code, error: data.type === "error" ? data.message : undefined });
+      rootWorker?.terminate(); if (runtime?.disposed === false) service?.rootStopped(pid); completion.resolve({ code: data.code, error: data.type === "error" ? data.message : undefined });
     }, completion.reject);
   };
   rootWorker.onerror = event => { event.preventDefault(); completion.reject(new Error(event.message)); };
-  rootWorker.postMessage({ module: rootModule, args: ["external-shell", "root"], env: { PWD: "/home/user" },
+  rootWorker.postMessage({ controlGrant: service.rootControlGrant(pid), module: rootModule, args: ["external-shell", "root"], env: { PWD: "/home/user" },
     filesystem: rootConnection, runtimeProcess: transport }, [port]);
   await actOnTree(service);
   if (!disposedWhileLive) {

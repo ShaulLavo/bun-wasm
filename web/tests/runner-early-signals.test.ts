@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { expect, test } from "bun:test";
 import type { RuntimeNetworkHelper } from "waffle";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
@@ -80,7 +81,7 @@ function fixture(explicit = true, deferNetwork = false) {
   };
   const ready = runtime.processes().then(service => service.ready());
   void ready.catch(() => {});
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   return {
     runtime, signals, admission, admitting, activation, activating, fence, posts, events,
     allocations: () => allocations, releases: () => releases, stops: () => stops,

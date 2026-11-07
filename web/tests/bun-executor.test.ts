@@ -1,10 +1,11 @@
+import { workerControlFixture } from "./worker-control-fixture.ts";
 import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit, type Wasi } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
-import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
+import { bootstrap, type RuntimeWorkerHost, type WorkerSetupContext } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
@@ -65,10 +66,10 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true,
     location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch(input) { fetched.push(String(input)); return new Response("ok"); },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: options.engine ?? "browser", adapter: options.adapter, module: guest(options.ready ?? 1),
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
     trace: false, net: options.net ?? null, slots: options.slots,
@@ -85,6 +86,7 @@ async function bootstrapBun(request: RunRequest, host: BunExecutorHost & Runtime
   const launched = bridge ? { ...request, notifications: bridge.connection } : request;
   const executor = createBunExecutor(launched, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(launched, { ...executor, setup(context) {
       context.fs.preopen = () => 1;
       context.fs.retain = () => {};
@@ -101,10 +103,10 @@ async function runCapturingSignals(capture: (signals: ReturnType<typeof workerPr
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
     runtimeProcess, trace: false, net };
   try { await bootstrapBun(request, host); }
   finally { connection.client.port.close(); connection.server.port.close(); }
@@ -112,48 +114,48 @@ async function runCapturingSignals(capture: (signals: ReturnType<typeof workerPr
 }
 const exits = (messages: WorkerMessage[]) => messages.filter(message => message.type === "exit" || message.type === "error");
 
-test("a networked Bun process without a notification scope fails its launch", async () => {
+test("a networked Bun process without a notification scope fails its launch", controlled(async () => {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
     runtimeProcess, trace: false, net: createRing(), slots: "imports" };
   startEngineHost.mockClear();
   try { await bootstrapBun(request, host, false); }
   finally { connection.client.port.close(); connection.server.port.close(); }
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(JSON.stringify(exits(messages))).toContain("notificationWorkerUrl");
-});
+}));
 
-test("importing the executor module installs no worker message handler", () => {
+test("importing the executor module installs no worker message handler", controlled(() => {
   expect((globalThis as { onmessage?: unknown }).onmessage ?? null).toBeNull();
-});
+}));
 
-test("a ready browser guest exits with the status its engine host reports", async () => {
+test("a ready browser guest exits with the status its engine host reports", controlled(async () => {
   startEngineHost.mockClear();
   startEngineHost.mockImplementationOnce(async options => { (options.onExit as (code: number) => void)(5); return 0; });
   const { messages } = await run();
   expect(startEngineHost).toHaveBeenCalledTimes(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],
   ["a preview1 run", { adapter: "preview1" as const }],
   ["a guest that is not ready", { ready: 0 }],
-] as const) test(`${label} never starts the browser engine host`, async () => {
+] as const) test(`${label} never starts the browser engine host`, controlled(async () => {
   startEngineHost.mockClear();
   const { messages } = await run(options);
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
-test("the engine host gets the page's networking surface only when slots are on", async () => {
+test("the engine host gets the page's networking surface only when slots are on", controlled(async () => {
   startEngineHost.mockClear();
   await run({ slots: "off" });
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
@@ -161,9 +163,9 @@ test("the engine host gets the page's networking surface only when slots are on"
   await run();
   // No networking ring was supplied, so there is no host to advertise.
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
-});
+}));
 
-test("the browser engine host receives the runtime-owned DNS provider", async () => {
+test("the browser engine host receives the runtime-owned DNS provider", controlled(async () => {
   startEngineHost.mockClear();
   const channel = new MessageChannel();
   let serverCalls = 0;
@@ -181,10 +183,10 @@ test("the browser engine host receives the runtime-owned DNS provider", async ()
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true,
     location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
     runtimeProcess, trace: false, net: createRing(), slots: "imports", lookupPort: channel.port2,
   };
@@ -204,9 +206,9 @@ test("the browser engine host receives the runtime-owned DNS provider", async ()
   }
   expect(serverCalls).toBe(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
-for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, async () => {
+for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, controlled(async () => {
   startEngineHost.mockClear();
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   const fetched: string[] = [];
@@ -228,7 +230,7 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch(input) {
       // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       receiver = this;
@@ -236,7 +238,7 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
       return new Response("ok");
     },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
     runtimeProcess, trace: false, net: null };
   try { await bootstrapBun(request, host); }
   finally { connection.client.port.close(); connection.server.port.close(); }
@@ -254,9 +256,9 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
   expect(fetched).toEqual(["https://example.test/live"]);
   expect(readOutcome(signals.outcome)).toEqual({ kind, code, status });
   expect(exits(messages)).toEqual([{ type: "exit", code: status, signal: kind === "signaled" ? code : undefined, sleep: "atomics" }]);
-});
+}));
 
-test("every network slot refuses to run once the process has a fatal outcome", async () => {
+test("every network slot refuses to run once the process has a fatal outcome", controlled(async () => {
   const { SLOT_NAMES } = actualTrampoline;
   const { createRing } = await import("../src/net/ring");
   installed.length = 0;
@@ -277,19 +279,19 @@ test("every network slot refuses to run once the process has a fatal outcome", a
   const result = await runCapturingSignals(options => { signals = options; }, createRing());
   expect(installed).toHaveLength(1);
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
-});
+}));
 
-for (const kind of ["exited", "signaled"] as const) test(`every process import checks authoritative ${kind} admission before guest memory or service access`, async () => {
+for (const kind of ["exited", "signaled"] as const) test(`every process import checks authoritative ${kind} admission before guest memory or service access`, controlled(async () => {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const signals = workerProcessState(runtimeProcess).signals;
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { throw new Error("a dead process must not fetch"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(0, PROCESS_IMPORTS.map(name => ({ namespace: "runtime_proc", name }))), args: ["/bin/bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, PROCESS_IMPORTS.map(name => ({ namespace: "runtime_proc", name }))), args: ["/bin/bun"], env: {},
     filesystem: connection.client, runtimeProcess, trace: false, net: null };
   const executor = createBunExecutor(request, host);
   const refused = new Map<string, unknown>();
@@ -297,6 +299,7 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
   let memoryReads = 0;
   let serviceMessages = 0;
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor,
       setup(context) {
         context.fs.preopen = () => 1;
@@ -346,13 +349,13 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
   expect(serviceMessages).toBe(0);
   expect(exits(messages)).toEqual([{ type: "exit", code: kind === "signaled" ? 143 : 23,
     signal: kind === "signaled" ? 15 : undefined, sleep: "atomics" }]);
-});
+}));
 
-test("without a networking ring no slots are installed", async () => {
+test("without a networking ring no slots are installed", controlled(async () => {
   installed.length = 0;
   await run();
   expect(installed).toEqual([]);
-});
+}));
 
 // These tests invoke the actual linked imports. Descriptor readiness and the existing
 // exported controlWait boundary are test-only observation/injection points; neither the
@@ -361,17 +364,17 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   const importName = route === "runtime_proc" ? "poll" : "poll_oneoff";
   for (const stage of ["before", "after"] as const) {
     for (const terminal of (stage === "before" ? ["exited", "revoked"] : ["exited", "signaled", "revoked"]) as ("exited" | "signaled" | "revoked")[]) {
-      test(`${route} checks ${terminal} liveness ${stage} its native wait`, async () => {
+      test(`${route} checks ${terminal} liveness ${stage} its native wait`, controlled(async () => {
         const connection = createFilesystemConnection();
         const transport = createWorkerProcessTransport();
         const state = workerProcessState(transport);
         const messages: WorkerMessage[] = [];
         const host: BunExecutorHost & RuntimeWorkerHost = {
           crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-          postMessage(message: WorkerMessage) { messages.push(message); },
+          postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
           async fetch() { throw new Error("unexpected fetch"); },
         };
-        const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+        const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
           args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
           trace: false, net: null };
         const executor = createBunExecutor(request, host);
@@ -383,11 +386,9 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           else claimOutcome(state.signals.outcome, { kind: terminal, code: terminal === "signaled" ? 15 : 23 });
         };
         try {
+          control.attach(request.runtimeProcess);
           await bootstrap(request, { ...executor,
-            setup(context) {
-              context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
-              executor.setup?.(context);
-            },
+            setup: context => setupLocalFilesystem(context, executor),
             imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
             run({ instance, wasi }) {
               const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
@@ -414,11 +415,11 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           expect(exits(messages)).toContainEqual({ type: "exit", code: terminal === "signaled" ? 143 : terminal === "exited" ? 23 : 1,
             signal: terminal === "signaled" ? 15 : undefined, sleep: "atomics" });
         } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
-      });
+      }));
     }
   }
 
-  test(`${route} passes the original pre-scan readiness snapshot to native wait`, async () => {
+  test(`${route} passes the original pre-scan readiness snapshot to native wait`, controlled(async () => {
     const connection = createFilesystemConnection();
     const transport = createWorkerProcessTransport();
     const state = workerProcessState(transport);
@@ -426,7 +427,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
       postMessage() {}, async fetch() { throw new Error("unexpected fetch"); },
     };
-    const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+    const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
       args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
       trace: false, net: null };
     const executor = createBunExecutor(request, host);
@@ -436,11 +437,9 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
     let nativeResult: ReturnType<typeof actualControl.controlWait> | undefined;
     let original = -1;
     try {
+      control.attach(request.runtimeProcess);
       await bootstrap(request, { ...executor,
-        setup(context) {
-          context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
-          executor.setup?.(context);
-        },
+        setup: context => setupLocalFilesystem(context, executor),
         imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
         run({ instance, wasi }) {
           const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
@@ -476,10 +475,10 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       expect(nativeResult).toBe("not-equal");
       expect(result).toBe(route === "runtime_proc" ? 1 : 0);
     } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
-  });
+  }));
 }
 
-for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, async () => {
+for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programLinkPlan } = await import("../../src/assets");
   const pair = quickjsPair("quickjs");
@@ -487,7 +486,7 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
   const channel = createMemoryChannel();
   const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel };
   const connection = createFilesystemConnection();
-  const request: RunRequest = { engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off", memoryTelemetry };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
@@ -506,11 +505,9 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
   } });
   const executor = createBunExecutor(request, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor,
-      setup(context) {
-        context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
-        executor.setup?.(context);
-      },
+      setup: context => setupLocalFilesystem(context, executor),
       instantiated(context) { originalImports = context.wasi.imports; },
       run(context) {
         if (typeof observed !== "function") throw new Error("side instance did not receive its wait import");
@@ -531,16 +528,16 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
     executor.beforeFinish?.();
     connection.client.port.close(); connection.server.port.close();
   }
-});
+}));
 
-for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, async () => {
+for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programLinkPlan } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
@@ -556,6 +553,7 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
       instantiatedModules.push(args[0]);
       return new Target(...args);
     } });
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor,
       setup(context) { context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {}; },
       async instantiated(context) { instance = context.instance; await executor.instantiated?.(context); },
@@ -574,7 +572,7 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
     expect(messages.some(message => message.type === "exit" && message.code === 0)).toBe(true);
     expect(messages.some(message => message.type === "error")).toBe(false);
   } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
-});
+}));
 async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
   const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
   const messages: WorkerMessage[] = [];
@@ -590,7 +588,7 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       route.attach(message.port);
     },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: "browser", adapter: "bun", module: guest(1), args: ["bun"], env: {},
     filesystem: connection.client, runtimeProcess: createWorkerProcessTransport({ pid: 1, job: 1 }),
     trace: false, net: null, slots: "off", sharedObjects: { owner: route.id },
@@ -603,6 +601,7 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
     return 0;
   });
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, setup(context) {
       context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
       executor.setup?.({ ...context, checkActive() {
@@ -619,17 +618,17 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
   }
 }
 
-test("real bootstrap exports a Bun-owned native setup port and closes engine service on finish", async () => {
+test("real bootstrap exports a Bun-owned native setup port and closes engine service on finish", controlled(async () => {
   const result = await runSharedSetup("normal");
   expect(result.exported).toBe(true);
   expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(result.bound?.inspect()).toEqual({ buffers: 0, pending: 0, staged: 0, closed: true });
   expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(exits(result.messages)[0]?.type).toBe("exit");
-});
+}));
 
 for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as const) {
-  test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, async () => {
+  test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, controlled(async () => {
     const result = await runSharedSetup(mode);
     expect(result.exported).toBe(true);
     expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
@@ -638,7 +637,7 @@ for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as
     expect(result.retained.waiting).toBe(0);
     if (mode !== "send-failure") expect(result.retained.clients).toBe(0);
     if (result.bound) expect(result.bound.inspect().closed).toBe(true);
-  });
+  }));
 }
 
 const keepFixtureReference = () => {};
@@ -650,7 +649,7 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection(), lookup = new MessageChannel();
   const broker = createSharedObjectBroker(), route = kind === "quickjs" ? broker.register() : undefined;
-  const request: RunRequest = { engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null,
     slots: "off", sharedObjects: route ? { owner: route.id } : undefined, lookupPort: lookup.port2 };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
@@ -666,6 +665,7 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
   const expected = new Error(`${failure} cleanup failed`);
   let restoreClose = () => {};
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, beforeFinish() {},
       setup(context) {
         context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
@@ -697,10 +697,10 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
 
 for (const kind of ["quickjs", "jsc"] as const) {
   const failures = kind === "jsc" ? ["none", "linked", "lookup"] as const : ["none", "linked", "shared", "lookup"] as const;
-  for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, () => assertComposedCleanup(failure, kind));
+  for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, controlled(() => assertComposedCleanup(failure, kind)));
 }
 
-for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, async () => {
+for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programLinkPlan } = await import("../../src/assets");
   const pair = quickjsPair(engine);
@@ -713,12 +713,13 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
   linkedDisposals = 0; linkedSideReads = 0;
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, fetch: globalThis.fetch };
   const executor = createBunExecutor(request, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, setup(context) {
       context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
       executor.setup?.(context);
@@ -737,13 +738,13 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
     linkedAllocatorCore = undefined; linkedInitializationFailure = undefined;
     connection.client.port.close(); connection.server.port.close();
   }
-});
+}));
 
-test("each armed JSC instance gets a fresh allocation-boundary generation; others keep their environment", () => {
+test("each armed JSC instance gets a fresh allocation-boundary generation; others keep their environment", controlled(() => {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const inherited = { BUN_WASM_JSC_ALLOCATION_BOUNDARY: "1", BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" };
-  const request = (engine: RunRequest["engine"], env: Record<string, string>): RunRequest => ({ engine, module: guest(1), args: ["bun"], env,
+  const request = (engine: RunRequest["engine"], env: Record<string, string>): RunRequest => ({ controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env,
     filesystem: connection.client, runtimeProcess, trace: false, net: null });
   try {
     const env = (req: RunRequest) => createBunExecutor(req).env?.(req);
@@ -757,4 +758,23 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
     expect(env(request("quickjs", inherited))).toEqual(inherited);
     expect(env(request("jsc", { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" }))).toEqual({ BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" });
   } finally { connection.client.port.close(); connection.server.port.close(); }
-});
+}));
+
+let control: Awaited<ReturnType<typeof workerControlFixture>>;
+
+
+function controlled(run: () => unknown) {
+  return async () => {
+    const owned = await workerControlFixture();
+    control = owned;
+    try { await run(); }
+    finally { await owned.dispose(); }
+  };
+}
+
+function setupLocalFilesystem(context: WorkerSetupContext<RunRequest>, executor: ReturnType<typeof createBunExecutor>): void {
+  context.fs.preopen = () => 1;
+  context.fs.retain = () => {};
+  context.fs.release = () => {};
+  executor.setup?.(context);
+}

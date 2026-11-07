@@ -1,3 +1,4 @@
+import { fixtureReservations } from "../../tests/helpers/process-reservations.ts";
 const { createRuntimeNetwork }: typeof import("../../node_modules/waffle/browser/net/runtime.ts") = await import(
   new URL("./browser/net/runtime.ts", import.meta.resolve("waffle/package.json")).href
 );
@@ -13,9 +14,9 @@ import { createProcessIdentity } from "waffle/browser/process-context";
 import type { GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 
-/** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
- * Production composition is covered by the runtime facade tests; these inject explicit owners
- * so legacy transport regressions can independently control filesystem and activation barriers.
+/** Process-service fixture with injected filesystem and activation barriers.
+ * Genuine reservations come lazily from a test-owned memory Runtime through its public host
+ * hook. The last borrower disposes that owner; no persistent storage or browser cache is used.
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
@@ -27,6 +28,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     lookup: unused, readFile: unused, listFiles: unused, directoryHandle: unused,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
   };
+  let ownedReservations: ReturnType<typeof fixtureReservations> | undefined;
   const identities = new ProcessIdentityAllocator();
   const files = new MemFS();
   filesystem = Object.assign(Object.create(filesystem), {
@@ -84,8 +86,9 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     },
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
-      return activation ??= Promise.resolve().then(() => {
-        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, hostIdentity: null, activate: options.activate,
+      const owner = ownedReservations ??= fixtureReservations();
+      return activation ??= owner.ready.then(reservations => {
+        broker = new BrowserProcessBroker({ reservations, filesystem, identities, registry, table, hostIdentity: null, activate: options.activate,
           launch: context => {
             const launch = adapters.get(context.adapter);
             if (!launch) throw new Error(`Unknown adapter: ${context.adapter}`);
@@ -127,6 +130,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           if (failures.length) await broker?.quiesce();
           else await broker?.dispose();
         } catch (error) { errors.push(error); }
+        try { await ownedReservations?.dispose(); } catch (error) { errors.push(error); }
         const failuresAndErrors = errors.concat(failures);
         if (failuresAndErrors.length === 1) throw failuresAndErrors[0];
         if (failuresAndErrors.length) throw new AggregateError(failuresAndErrors, "Process fixture disposal failed");

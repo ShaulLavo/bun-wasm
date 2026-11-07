@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity } from "waffle/fs";
 import { NetHost } from "waffle/browser/net/host";
@@ -41,7 +42,7 @@ function fixture(constructionFailure = false, directory?: Promise<{ handle: numb
     revoke() {}, reap() {}, quiesce: () => gate.promise,
     async directoryHandle() { directoryRequested.resolve(); return directory ?? { handle: 17, release() { events.push("directory-release"); } }; },
   });
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   return {
     runtime, gate, posted, events, directoryRequested, get worker() { return workers[0]; },
     start(listening?: (port: number, helper: RuntimeNetworkHelper) => void) {

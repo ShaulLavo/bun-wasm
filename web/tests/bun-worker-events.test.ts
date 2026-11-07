@@ -1,3 +1,4 @@
+import { workerControlFixture } from "./worker-control-fixture.ts";
 import { afterAll, expect, mock, test } from "bun:test";
 import { bootstrap, type RuntimeWorkerHost, type WorkerSetupContext } from "waffle/browser/worker";
 import { createFilesystemConnection } from "waffle/fs";
@@ -29,7 +30,7 @@ function terminalEvent(type: "error" | "unhandledrejection", error: unknown): Ev
 }
 
 for (const type of ["error", "unhandledrejection"] as const) {
-  test(`asynchronous Bun DefaultSignal on worker ${type} is prevented and completes once with its signal`, async () => {
+  test(`asynchronous Bun DefaultSignal on worker ${type} is prevented and completes once with its signal`, controlled(async () => {
     const connection = createFilesystemConnection();
     const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
     const outcome = workerProcessState(runtimeProcess).signals.outcome;
@@ -40,10 +41,10 @@ for (const type of ["error", "unhandledrejection"] as const) {
       location: { href: "https://example.test/worker.js" },
       addEventListener: events.addEventListener.bind(events),
       removeEventListener: events.removeEventListener.bind(events),
-      postMessage(message: WorkerMessage) { messages.push(message); },
+      postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
       async fetch() { throw new Error("unexpected fetch"); },
     };
-    const request: RunRequest = {
+    const request: RunRequest = { controlGrant: control.grant,
       engine: "browser", module: guest, args: ["bun"], env: {}, filesystem: connection.client,
       runtimeProcess, trace: false, net: null, slots: "off",
     };
@@ -69,6 +70,7 @@ for (const type of ["error", "unhandledrejection"] as const) {
     });
     const executor = createBunExecutor(request, host);
     try {
+      control.attach(request.runtimeProcess);
       await bootstrap(request, { ...executor, setup(value) {
         context = value;
         // No service shares this thread; the tiny guest does not make filesystem calls.
@@ -97,5 +99,17 @@ for (const type of ["error", "unhandledrejection"] as const) {
       connection.client.port.close();
       connection.server.port.close();
     }
-  });
+  }));
+}
+
+let control: Awaited<ReturnType<typeof workerControlFixture>>;
+
+
+function controlled(run: () => unknown) {
+  return async () => {
+    const owned = await workerControlFixture();
+    control = owned;
+    try { await run(); }
+    finally { await owned.dispose(); }
+  };
 }

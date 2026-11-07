@@ -6,7 +6,11 @@ Classification: original consumer adapters.
 The Bun launcher, manual runner, subprocess broker and network helper pass the
 released networking owners and transferable bindings to their process workers.
 They import the runtime and relay packages rather than copying their implementation.
-Root, web and sandbox select runtime 0.0.109; root and web select relay 0.0.109.
+The original integration selected runtime 0.0.109 in root, web and sandbox, and
+relay 0.0.109 in root and web. The process-host adoption now selects published
+runtime and relay 0.0.111 from `96acfb246bb565cd008ad498e08230829c3a773a`.
+This keeps the supported optional relay and runtime from the same release. It
+changes dependency pins, not networking source or historical qualification.
 Programs 0.0.15, manifest schema 2 and host interface 1 remain unchanged.
 
 Relay revocation is recorded independently of client creation. Disposal during

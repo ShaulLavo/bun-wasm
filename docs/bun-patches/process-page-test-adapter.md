@@ -23,7 +23,7 @@ The runtime filesystem uses the supported `name` option without changing its
 IndexedDB fast default. The shared `ownedDatabase("bun-process")` policy accepts
 only `bun-process-${run}`. The page awaits its allocation ACK before opening any
 runtime. Sequential scopes reuse that exact name after disposal. Finish uses the
-shared exact-ledger cleanup. The controller-root setup supplies the candidate
+shared exact-ledger cleanup. The controller-root setup supplies the published
 runtime's required `memory: []` declaration; it is a JavaScript controller, not a
 registered guest program.
 
@@ -48,6 +48,17 @@ The `delayed-finish` regression defers finish entry initialization by 500 ms;
 it does not change command budgets or any original case. The late-error control
 also permits the shared host's existing single interrupted-finish cleanup document,
 never another execution of the case body.
-No native or whole-suite acceptance is implied. This checkpoint uses an explicitly
-authorized unpublished Waffle fixture locally; publication and durable dependency
-updates remain gated on coordinated delivery.
+The consumer uses published Waffle 0.0.111, source
+`96acfb246bb565cd008ad498e08230829c3a773a`, through public tarball pins.
+The page-suite object uses `satisfies PageSuite<ProcessRequest>` so its callable
+page-owned run method stays narrow while the shared type also permits host-owned
+cases. No private Waffle checkout or future `HostCase.allocateDatabase` API is used.
+`checks/web-browser-process-page-hosted.json` gives the real Chromium and WebKit
+controls to the existing browser gate. Source controls use the existing automatic
+Web test owner. The original 16 callback bodies, 17 scope finalizers and command
+finalizer have frozen printer hashes in `process-page-adapter.test.ts`, so the
+preservation check also works in shallow CI checkouts.
+No native or whole-suite acceptance is implied. The earlier iOS result at Bun
+`04d9f359fc815aeb05785e6427e21f46383f2c6f` with unpublished Waffle `cf1972e3`
+remains an assertion failure at the fourth filesystem-segment constructor.
+This dependency adoption does not change or explain that result.

@@ -14,7 +14,7 @@ export function observeProcessPageErrors(): string[] {
   return errors;
 }
 
-export function createProcessPageSuite(runCases: (databaseName: string) => Promise<CommandResult>, errors: readonly string[]): PageSuite<ProcessRequest> {
+export function createProcessPageSuite(runCases: (databaseName: string) => Promise<CommandResult>, errors: readonly string[]) {
   return {
     list: async () => ({ ids: [processCommandId] }),
     async run(request, allocate) {
@@ -23,5 +23,5 @@ export function createProcessPageSuite(runCases: (databaseName: string) => Promi
       return processResultForTransport({ ...result, pageErrors: errors });
     },
     finish: cleanupStorage,
-  };
+  } satisfies PageSuite<ProcessRequest>;
 }
