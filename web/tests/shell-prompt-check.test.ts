@@ -117,7 +117,7 @@ const transcriptCallers = [
 const nonTranscriptCallers = [
   "sandbox/tests/startup-cache.mjs", "sandbox/tests/next-dev.ts", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
-  "web/tests/browser-type.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
+  "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts"];
