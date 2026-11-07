@@ -41,7 +41,10 @@ artifact and benchmark branches and their bounds remain unchanged.
 
 `browser-process-hosted.ts` uses the public shared host and Playwright driver for
 local diagnostics, including seeded foreign-data survival and errors before
-retirement. Its seeded database belongs only to each fresh control profile.
+retirement. It supplies the platform temporary directory as the shared host
+scratch root, so the local browser controls do not require a `/work` mount.
+The controls also run with an unusable inherited scratch root to verify that
+this explicit caller option wins without changing storage or cleanup policy. Its seeded database belongs only to each fresh control profile.
 List checks database absence before execution. Finish checks absence only after
 acknowledged completion, under the existing combined 10-second observation bound.
 The `delayed-finish` regression defers finish entry initialization by 500 ms;

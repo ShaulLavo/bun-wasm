@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { isAbsolute } from "node:path";
+import { tmpdir } from "node:os";
 import { runPageSuite, writeResult, type DriverCleanup, type RunOptions } from "waffle/testing/page-runner";
 import { PlaywrightDriver } from "waffle/testing/page-runner/playwright";
 import { processAdapter } from "./process-ios-adapter";
@@ -150,7 +151,7 @@ export async function runHostedProcess(engine: Engine, resultPath: string, port:
       };
     },
   };
-  const options: RunOptions = { resultPath, startedAt, port };
+  const options: RunOptions = { resultPath, startedAt, port, scratchRoot: tmpdir() };
   const result = await runPageSuite(adapter, scratch => new ObservedProcessDriver(engine, scratch, observations, control), options);
   await writeResult(`${resultPath}.controls.json`, observations);
   const expectedExit = control === "assertion" ? 1 : control === "late-error" ? 2 : 0;

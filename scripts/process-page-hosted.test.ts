@@ -16,6 +16,7 @@ let producer: Promise<void> | undefined;
 const preparation = new AbortController();
 beforeAll(async () => {
   output = await mkdtemp(join(tmpdir(), "bpp-"));
+  await Bun.write(join(output, "not-a-directory"), "not a scratch directory");
   producer = prepareProcessBundle(join(output, "bundles/supervisor"), preparation.signal);
   await producer;
 }, 30_000);
@@ -39,7 +40,7 @@ for (const { engine, control, exit } of controls) {
     if (!output) throw new Error("Process control assets not prepared");
     const resultPath = join(output, `${engine}-${control}.json`);
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "../web/tests/browser-process-hosted.ts"), engine, "--result", resultPath, control], {
-      env: { ...process.env, PROCESS_SMOKE_PORT: String(availablePort()), BUN_WASM_PROCESS_BUNDLES: join(output, "bundles") },
+      env: { ...process.env, PROCESS_SMOKE_PORT: String(availablePort()), STORAGE_SCRATCH_ROOT: join(output, "not-a-directory"), BUN_WASM_PROCESS_BUNDLES: join(output, "bundles") },
       stdout: "pipe", stderr: "pipe",
     });
     try {
