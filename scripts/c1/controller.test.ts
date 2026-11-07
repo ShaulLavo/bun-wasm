@@ -263,10 +263,34 @@ function gitWitness(path: string): string[] {
   }).sort();
 }
 
+function reportWebkitFailure(fixture: ReturnType<typeof webkitFixture>, privateRoot: string, error: unknown): void {
+  const roots = [fixture.webkit, fixture.source, privateRoot];
+  const files = roots.flatMap(root => readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile() && !join(entry.parentPath, entry.name).includes("/.git/hooks/"))
+    .map(entry => {
+      const path = join(entry.parentPath, entry.name);
+      const stat = lstatSync(path, { bigint: true });
+      return { path, mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs), ino: String(stat.ino), dev: String(stat.dev),
+        mode: String(stat.mode), size: String(stat.size), bytes: readFileSync(path).toString("base64") };
+    }));
+  const record = JSON.stringify({ pid: process.pid, bun: Bun.version, error, files }, (_key, value: unknown) =>
+    value instanceof Error ? Object.fromEntries(Object.getOwnPropertyNames(value).map(key => [key, Reflect.get(value, key)])) : value);
+  const directory = process.env.C1_WEBKIT_FAILURE_DIRECTORY;
+  if (!directory) { console.error(record); return; }
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, `${process.pid}.json`);
+  if (!existsSync(path)) writeFileSync(path, record, { flag: "wx" });
+  console.error(`First WebKit admission failure saved to ${path}`);
+}
+function admitFixtureWebkit(fixture: ReturnType<typeof webkitFixture>, privateRoot: string): void {
+  try { admitWebkit(fixture.source, fixture.jsc, privateRoot); }
+  catch (error) { reportWebkitFailure(fixture, privateRoot, error); throw error; }
+}
+
 test("WebKit admission uses a private index and object store and never writes the original repository", () => {
   const fixture = webkitFixture(fresh("webkit-ok"));
   const before = gitWitness(join(fixture.webkit, ".git"));
-  admitWebkit(fixture.source, fixture.jsc, fresh("webkit-ok-scratch"));
+  admitFixtureWebkit(fixture, fresh("webkit-ok-scratch"));
   expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
 });
 
@@ -289,7 +313,7 @@ function sparseWebkitFixture(root: string) {
 test("sparse WebKit admission accepts an absent unused blob without fetching or original writes", () => {
   const fixture = sparseWebkitFixture(fresh("webkit-sparse"));
   const before = gitWitness(join(fixture.webkit, ".git"));
-  admitWebkit(fixture.source, fixture.jsc, fresh("webkit-sparse-scratch"));
+  admitFixtureWebkit(fixture, fresh("webkit-sparse-scratch"));
   expect(readFileSync(join(fixture.webkit, "a.txt"), "utf8")).toBe("two\n");
   expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
 });
@@ -357,6 +381,7 @@ test("the maintained WebKit check writes neither the native root nor the reposit
   const before = gitWitness(native);
   const rootBefore = lstatSync(native, { bigint: true }).mtimeNs;
   const result = maintainedWebkitCheck(fixture, native);
+  if (result.status !== 0) reportWebkitFailure(fixture, fixture.source, result);
   expect({ status: result.status, signal: result.signal, stderr: result.stderr, stdout: result.stdout, error: result.error }).toMatchObject({ status: 0 });
   expect(gitWitness(native)).toEqual(before);
   expect(lstatSync(native, { bigint: true }).mtimeNs).toBe(rootBefore);
