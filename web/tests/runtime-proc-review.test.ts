@@ -75,7 +75,7 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
   const state = fixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
   try {
     state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "child launch");
@@ -134,7 +134,7 @@ for (const failure of ["error-event", "initial-post-message"] as const) test(`ge
   const state = fixture(undefined, failure === "initial-post-message");
   try {
     state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "failed child launch");
@@ -153,7 +153,7 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
   const state = fixture(undefined, false, () => fence.promise);
   try {
     state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     await until(() => state.workers.length === 1, "child launch");
@@ -180,7 +180,7 @@ test("generic worker loaded after first watcher tick still confirms a caught def
   const state = fixture();
   try {
     state.broker.register("/bin/slow", { adapter: "preview1", cooperative: true, module: async () => { await loading.promise; return emptyModule(); } });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.parent.spawn(1, { executable: "/bin/slow", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     // Let the initial four-millisecond watcher fire while module loading has no worker yet.
@@ -204,7 +204,7 @@ test("already-published background spawn survives root exit during lazy supervis
   const state = fixture({ activate: async () => { activating = true; await activation.promise; return import("waffle/proc"); } });
   try {
     state.broker.register("/bin/child", { adapter: "preview1", cooperative: true, module: emptyModule() });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.parent.spawn(1, { executable: "/bin/child", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const admitted = state.broker.runtimeMessage(state.messages[0]!, 1);
     // Attach rejection immediately: the assertion below, not an unhandled rejection, owns it.

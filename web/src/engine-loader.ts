@@ -1,3 +1,4 @@
+import { recordProgramMemory } from "../../src/program-memory.ts";
 import { pairedEngines, programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
@@ -105,19 +106,22 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
   const kind = programKind(module);
-  if (kind !== "single") {
-    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
-    return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
-  }
+  const source = new Blob(chunks);
+  chunks.length = 0;
+  const bytes = new Uint8Array(await source.arrayBuffer());
+  if (kind !== "single") return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
+  recordProgramMemory(module, bytes);
   const engine = { module, size };
-  if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
+  if (build) setTimeout(() => void cacheIfExpected(key, build, source, bytes), 0);
   return { ...engine, build };
 }
 
 async function compileCached(response: Response, key: string) {
   try {
     const bytes = new Uint8Array(await response.arrayBuffer());
-    return { bytes, module: await WebAssembly.compile(bytes) };
+    const module = await WebAssembly.compile(bytes);
+    recordProgramMemory(module, bytes);
+    return { bytes, module };
   } catch {
     await evictEngine(key);
     return null;
@@ -186,13 +190,12 @@ async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expe
 }
 
 /** Caches the downloaded engine only if its bytes are the build the page expects. */
-async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<ArrayBuffer>[], size: number): Promise<void> {
-  const blob = new Blob(chunks);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+async function cacheIfExpected(key: string, build: string, source: Blob, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   if (hex !== build) return;
-  const headers = { "content-type": "application/wasm", "content-length": String(size) };
-  await cacheEngine(key, build, new Response(blob, { headers }));
+  const headers = { "content-type": "application/wasm", "content-length": String(source.size) };
+  await cacheEngine(key, build, new Response(source, { headers }));
 }
 
 // The service worker at ./__bunwasm/ (sw.ts) serves the Bun worker's script with the headers a

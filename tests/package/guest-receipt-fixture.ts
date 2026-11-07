@@ -32,7 +32,7 @@ export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint
 
 export function fixtureGit(root: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", root].concat(args), { stdin: "ignore" });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  if (result.exitCode !== 0) throw new Error(`Fixture git failed with status ${result.exitCode}: ${args.join(" ")}\n${result.stderr.toString()}`, { cause: result });
   return result.stdout.toString().trim();
 }
 

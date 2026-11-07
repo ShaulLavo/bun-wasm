@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit, type Page } from "playwright";
 import { terminalText } from "./playground.mjs";
+import { browserBuildConfig } from "../../scripts/browser-build";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const engine = process.argv[2] ?? "chromium";
@@ -240,12 +241,11 @@ try {
     const prefix = app === "web" ? "/playground" : "/sandbox";
     const outdir = join(scratch, app);
     let filesystemOwners = 0;
+    const config = browserBuildConfig([join(root, app, "src/main.ts"), join(root, "web/src/fs-worker.ts")], outdir);
     const build = await Bun.build({
-      outdir,
-      entrypoints: [join(root, app, "src/main.ts"), join(root, "web/src/fs-worker.ts")],
-      target: "browser", format: "esm", splitting: true, metafile: true,
-      naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
-      plugins: [{
+      ...config,
+      minify: false,
+      plugins: ([{
         name: "artifact-free-editor-host",
         setup(build) {
           // Keep the page runtime and real filesystem worker. Pause the filesystem it
@@ -274,7 +274,7 @@ try {
             export class Previews { ready = Promise.resolve("disabled in editor test"); }
           ` }));
         },
-      }],
+      }] satisfies Bun.BunPlugin[]).concat(config.plugins ?? []),
     });
     assert.equal(build.success, true, build.logs.map(String).join("\n"));
     assert.equal(filesystemOwners, 1, `${app}: startup gate must instrument the runtime-owned filesystem`);

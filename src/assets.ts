@@ -1,3 +1,4 @@
+import { recordProgramMemory } from "./program-memory.ts";
 import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
 import { engineLinkPlan } from "./quickjs-program.ts";
 import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
@@ -171,13 +172,17 @@ const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
 
 export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
   if (files.kind === "single") {
-    const module = await WebAssembly.compile(Uint8Array.from(files.core));
+    const source = Uint8Array.from(files.core);
+    const module = await WebAssembly.compile(source);
     if (programKind(module) !== "single") throw new BunWasmAssetError("Paired core requires its matching prepared side module");
+    recordProgramMemory(module, source);
     return module;
   }
   try {
     const plan = await prepareLinkPlan(await engineLinkPlan(files));
-    programs.set(plan.entryModule, plan.toSource());
+    const source = plan.toSource();
+    programs.set(plan.entryModule, source);
+    recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;
   } catch (error) {
     if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {

@@ -202,3 +202,14 @@ test("paired preparation never compiles synchronously, which browser main thread
     Reflect.set(WebAssembly, "Module", Module);
   }
 });
+
+test("prepared roots retain source-derived memory declarations", async () => {
+  const { programMemory } = await import("../../src/program-memory.ts");
+  const { pages } = await import("waffle");
+  const core = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 5, 4, 1, 1, 1, 7]);
+  const module = await prepareProgram({ kind: "single", core });
+  core.fill(0);
+  expect(programMemory(module)).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(7) }]);
+  expect(() => programMemory(new WebAssembly.Module(wasm))).toThrow("source memory declarations");
+  expect(programMemory(await prepareProgram({ kind: "single", core: wasm }))).toEqual([]);
+});

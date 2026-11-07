@@ -49,9 +49,9 @@ function hostCheckout(root: string): SourceIdentity {
   return { head: git(root, "rev-parse", "HEAD"), tree: git(root, "rev-parse", "HEAD^{tree}") };
 }
 /** Donor node_modules installed from the host's frozen files, and their staged copies in the host. */
-function hostDonors(root: string, host: string) {
+function hostDonors(root: string, host: string, tuple: ReleaseTuple) {
   const trees = { rootDependencies: { directory: "", modules: { "playwright/package.json": json({ version: "synthetic" }) } },
-    webDependencies: { directory: "web", modules: { "waffle/package.json": json({ version: "0.0.110" }), "waffle-relay/package.json": json({ version: "0.0.109" }), "waffle-relay/node.ts": "export {};\n" } } };
+    webDependencies: { directory: "web", modules: { "waffle/package.json": json({ version: tuple.runtime }), "waffle-relay/package.json": json({ version: tuple.relay }), "waffle-relay/node.ts": "export {};\n" } } };
   return Object.fromEntries(Object.entries(trees).map(([name, tree]) => {
     const project = join(root, "donors", name);
     for (const [file, content] of Object.entries(projectFiles)) put(join(project, file), content);
@@ -95,17 +95,17 @@ const syntheticPageBuilder: PageBuilder = async (entries, outdir) => {
   return { metafile: { inputs: Object.fromEntries(inputs.map(path => [path, {}])) } };
 };
 
-export async function qualificationFixture(overrides: FixtureOverrides = {}) {
+export async function qualificationFixture(overrides: FixtureOverrides = {}, tuple: ReleaseTuple = FIXTURE_TUPLE) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-tls-parser-"));
   ledger({ created: root, kind: "synthetic-parser-only" });
-  try { return await prepare(root, overrides); }
+  try { return await prepare(root, overrides, tuple); }
   catch (error) { removeFixture(root); throw error; }
 }
-async function prepare(root: string, overrides: FixtureOverrides) {
+async function prepare(root: string, overrides: FixtureOverrides, tuple: ReleaseTuple) {
   const host = join(root, "host");
   const source = hostCheckout(host);
-  const donors = hostDonors(root, host);
-  const base = fixtureInputManifest(join(root, "input-files"));
+  const donors = hostDonors(root, host, tuple);
+  const base = fixtureInputManifest(join(root, "input-files"), tuple);
   const dependencies = fixtureDependencies(join(root, "dependencies"));
   const manifest: InputManifest = { ...base, source, donors: { ...base.donors, ...donors }, consumers: { ...dependencies, tls: { status: "resolved", value: pgProject(root) } } };
   const inputs = (overrides.inputs ?? (value => value))(manifest);
@@ -122,7 +122,7 @@ async function prepare(root: string, overrides: FixtureOverrides) {
   rmSync(join(deliveryRoot, "tls"), { recursive: true });
   await prepareTlsPage(host, overrides.deliverySource ?? source, join(deliveryRoot, "tls"), syntheticPageBuilder);
   for (const [path, content] of Object.entries({ ...consistentMembers(inputs, configBytes, inputsBytes), ...overrides.members })) put(join(deliveryRoot, path), content);
-  const manifestIdentity = sealDelivery(deliveryRoot, { source: overrides.deliverySource ?? source, tuple: overrides.tuple ?? FIXTURE_TUPLE, configSha256: sha256(configBytes), inputsSha256: sha256(inputsBytes) });
+  const manifestIdentity = sealDelivery(deliveryRoot, { source: overrides.deliverySource ?? source, tuple: overrides.tuple ?? tuple, configSha256: sha256(configBytes), inputsSha256: sha256(inputsBytes) });
   const delivery = readSealedDelivery(deliveryRoot);
   const intake: ParentIntake = { schema: "bun-wasm.c1-intake/1", kind: "independent-parent-byte-admission", owner: "synthetic TLS fixture parent", at: "2026-11-05T00:00:00.000Z",
     deliveryRoot, delivery: manifestIdentity, source: delivery.manifest.source, tuple: delivery.manifest.tuple, members: delivery.manifest.files.length, admitted: true };

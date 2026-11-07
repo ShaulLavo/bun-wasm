@@ -36,7 +36,7 @@ test("spawn requests keep their explicit executable without root-specific rewrit
   state.broker.register("/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "browser" });
   state.broker.register("/opt/bun/jsc/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "jsc" });
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     for (const executable of ["/bin/bun", "/opt/bun/jsc/bin/bun"]) {
       const pid = state.client.spawn(state.client.pid, { executable, argv: ["bun"], env: { PATH: "/opt/bun/quickjs/bin:/bin" }, cwd: "/", job: -1, fds: [] });
       await state.broker.runtimeMessage(state.messages.at(-1)!, state.client.pid);
@@ -55,17 +55,17 @@ test("spawn requests keep their explicit executable without root-specific rewrit
 test("disposing a run twice is harmless and closes it to a new root", async () => {
   const state = rootFixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     state.broker.dispose();
     state.broker.dispose();
-    expect(state.broker.adoptRuntimeRoot(state.root)).rejects.toThrow("disposed");
+    expect(state.broker.adoptRuntimeRoot(state.root, [])).rejects.toThrow("disposed");
   } finally { await state.dispose(); }
 });
 
 for (const delivery of ["kill", "killJob"] as const) test(`${delivery} selects the default outcome synchronously once the service is active`, async () => {
   const state = rootFixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const shared = workerProcessState(state.root);
     const sent = delivery === "kill" ? state.broker.kill(shared.pid, 15) : state.broker.killJob(shared.job, 15);
     // The outcome is published before the promise can be observed, so revocation callbacks never race it.
@@ -77,7 +77,7 @@ for (const delivery of ["kill", "killJob"] as const) test(`${delivery} selects t
 for (const delivery of ["kill", "killJob"] as const) test(`${delivery} only queues a handled signal and leaves the process alive`, async () => {
   const state = rootFixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const shared = workerProcessState(state.root);
     setSignalDisposition(shared.signals.signalState, 2, 2);
     const before = controlLoad(shared.wake, 0);
@@ -100,12 +100,14 @@ test("rootExit before a root is adopted is a no-op, and after adoption confirms 
   const state = rootFixture();
   try {
     expect(state.broker.rootExit(0)).toBeUndefined();
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const shared = workerProcessState(state.root);
     const root = (await state.broker.ready()).get(shared.pid)!;
     await state.broker.rootExit(7);
     expect(root.result).toEqual({ kind: "exited", code: 7, status: 7 });
     expect(root.jobSafe).toBe(true);
+    expect(controlLoad(shared.confirmed, 0)).toBe(1);
+    state.broker.rootStopped();
     expect(() => controlLoad(shared.confirmed, 0)).toThrow("collected");
   } finally { await state.dispose(); }
 });

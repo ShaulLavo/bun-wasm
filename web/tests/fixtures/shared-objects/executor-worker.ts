@@ -1,3 +1,4 @@
+import { workerControlFixture } from "../../worker-control-fixture.ts";
 import { bootstrap } from "waffle/browser/worker";
 import { createFilesystemConnection } from "waffle/fs";
 import { createWorkerProcessTransport } from "waffle/proc/worker-client";
@@ -16,13 +17,15 @@ globalThis.onmessage = async (event: MessageEvent) => {
   if (event.data === "finish") { resume?.(); return; }
   if (typeof event.data !== "string") throw new Error("Expected route owner");
   const connection = createFilesystemConnection();
-  const request: RunRequest = {
+  const control = await workerControlFixture();
+  const request: RunRequest = { controlGrant: control.grant,
     engine: "browser", adapter: "bun", module: guest(0), args: ["bun"], env: {},
     filesystem: connection.client, runtimeProcess: createWorkerProcessTransport({ pid: 1, job: 1 }),
     trace: false, net: null, slots: "off", sharedObjects: { owner: event.data },
   };
   const executor = createBunExecutor(request, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, setup(context) {
       context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
       executor.setup?.(context);
@@ -32,6 +35,7 @@ globalThis.onmessage = async (event: MessageEvent) => {
     } }, host);
   } finally {
     connection.client.port.close(); connection.server.port.close();
+    await control.dispose();
     globalThis.postMessage({ type: "fixture-cleaned" });
   }
 };

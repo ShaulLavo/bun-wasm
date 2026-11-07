@@ -85,7 +85,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
       discard() { throw new Error("unexpected non-terminal test token"); },
     } });
     service = await runtime.processes();
-    await service.adoptRuntimeRoot(root, { output(fd, bytes) {
+    await service.adoptRuntimeRoot(root, { memory: [], output(fd, bytes) {
       if (!active) throw new Error("generic output has no test-owned child");
       if (fd === 2) active.stderr += decoder.decode(bytes); else active.stdout += decoder.decode(bytes);
     } });

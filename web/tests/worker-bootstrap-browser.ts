@@ -31,7 +31,7 @@ try {
   for (const name of names) assert.ok(name in types && existsSync(types[name as keyof typeof types].executablePath()), `cached browser required: ${name}`);
   scratch = await (creatingScratch = mkdtemp("/work/tmp/bw-boot-")); process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { created: [scratch, "ephemeral listener", "browser/profile"], downloads: "none", existing: "installed packages and shared browser caches" } }));
-  await buildBrowserEntries([join(import.meta.dir, "worker-bootstrap-browser-main.ts"), resolve(import.meta.dir, "../src/worker.ts")], scratch, { runtimeWorker: true });
+  await buildBrowserEntries([join(import.meta.dir, "worker-bootstrap-browser-main.ts"), resolve(import.meta.dir, "../src/worker.ts"), resolve(import.meta.dir, "../src/fs-worker.ts")], scratch, { runtimeWorker: true });
   await Bun.write(join(scratch, "index.html"), '<!doctype html><script type="module" src="./worker-bootstrap-browser-main.js"></script>');
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url), headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };

@@ -1,3 +1,4 @@
+import { workerControlFixture } from "./worker-control-fixture.ts";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
 import { DescriptorTable, OpenDescription } from "waffle/core/descriptors";
@@ -27,6 +28,7 @@ export async function inheritedFilesystemControl() {
   const backend = new MemoryBackend(), service = new FilesystemService(backend);
   const root = createFilesystemConnection(); service.connect(root.server);
   const fs = new FilesystemClient(root.client), parent = new DescriptorTable();
+  const control = await workerControlFixture();
   let childConnection: ReturnType<typeof connectFilesystemIdentity> | undefined;
   let workerTable: DescriptorTable | undefined;
   let launched = false, reads = "", finalOffset = 0;
@@ -56,7 +58,8 @@ export async function inheritedFilesystemControl() {
     const identity = (child.data as { filesystem: Parameters<typeof connectFilesystemIdentity>[0] }).filesystem;
     childConnection = connectFilesystemIdentity(identity); service.connect(childConnection.server);
     const messages: RuntimeWorkerMessage[] = [];
-    await bootstrap({ module, args: [], env: {}, filesystem: childConnection.client, runtimeProcess: child }, {
+    control.attach(child);
+    await bootstrap({ controlGrant: control.grant, module, args: [], env: {}, filesystem: childConnection.client, runtimeProcess: child }, {
       setup({ fs: workerFs }) { workerFs.preopen = () => directory; },
       async run({ wasi, instance }) {
         launched = true; workerTable = wasi.descriptors;
@@ -85,6 +88,7 @@ export async function inheritedFilesystemControl() {
       },
     }, { crossOriginIsolated: true, postMessage(message) {
       if (message.type === "stdout") check(new TextDecoder().decode(message.data) === "stdio snapshot", "WASI stdio decoding failed");
+      if (message.type === "shared-control-allocation") control.allocated(message.buffer);
       messages.push(message);
     } });
     const terminal = messages.find(message => message.type === "exit" || message.type === "error" || message.type === "cleanup-error");
@@ -96,7 +100,7 @@ export async function inheritedFilesystemControl() {
     check(outcome?.kind === "exited" && outcome.code === 0, "child outcome was not published");
     return { reads, finalOffset, sharedDescription: true, preservedRights: true, unlinkedOpenRead: true, released: true, startupStatus: 0 };
   } finally {
-    try { workerTable?.dispose(); parent.dispose(); fs.dispose(); }
+    try { workerTable?.dispose(); parent.dispose(); fs.dispose(); await control.dispose(); }
     finally {
       childConnection?.client.port.close(); childConnection?.server.port.close();
       root.client.port.close(); root.server.port.close(); service.dispose();

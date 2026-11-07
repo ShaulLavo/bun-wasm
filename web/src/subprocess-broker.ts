@@ -5,7 +5,7 @@ import { pairedEngines } from "../../src/engine-kind.ts";
 import type { ProcessExit } from "waffle/proc";
 import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
-import type { ProcessService, RuntimeSupervisor } from "waffle";
+import type { ProcessService, RuntimeSupervisor, MemoryDeclaration, SharedControlGrant } from "waffle";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
@@ -34,6 +34,7 @@ export class SubprocessBroker {
   private disposed = false;
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
+  private releaseRootLease?: () => void;
   constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
     installBunAdapters(runtime, workerUrl, options.loadTools, options.network, options.preview1);
   }
@@ -72,7 +73,7 @@ export class SubprocessBroker {
   }
 
   /** Roots this run's process tree at a worker the page started with `transport`. */
-  async adoptRuntimeRoot(transport: WorkerProcessTransport, cancelled?: () => boolean): Promise<boolean> {
+  async adoptRuntimeRoot(transport: WorkerProcessTransport, memory: readonly MemoryDeclaration[], cancelled?: () => boolean): Promise<SharedControlGrant | undefined> {
     if (this.disposed) throw new Error("Process broker is disposed");
     const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
@@ -80,12 +81,27 @@ export class SubprocessBroker {
     const service = await this.processService();
     if (this.disposed) throw new Error("Process broker is disposed");
     // Marker preparation may outlive a worker error and its already-confirmed run.
-    if (cancelled?.()) return false;
+    if (cancelled?.()) return;
     await service.adoptRuntimeRoot(transport, {
+      memory,
       filesystem: this.options.rootFilesystem, acknowledged: this.options.rootAcknowledged,
-      output: this.options.output, stop: this.options.stopRoot,
+      output: this.options.output, stop: this.options.stopRoot, retired: () => this.releaseRoot(),
     });
-    return true;
+    this.releaseRootLease = service.retainRoot(state.pid);
+    return service.rootControlGrant(state.pid);
+  }
+  rootControlAllocated(buffer: SharedArrayBuffer): void {
+    if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
+  }
+  rootStopped(): void {
+    if (!this.root || this.runtime.disposed) return;
+    this.service?.rootStopped(this.root.pid);
+    this.releaseRoot();
+  }
+  private releaseRoot(): void {
+    const release = this.releaseRootLease;
+    this.releaseRootLease = undefined;
+    release?.();
   }
   async runtimeMessage(message: WorkerProcessMessage, senderPid: number): Promise<void> {
     return (await this.processService()).runtimeMessage(message, senderPid);

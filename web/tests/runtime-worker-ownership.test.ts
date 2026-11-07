@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { controlLoad } from "waffle/proc/control";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { expect, test } from "bun:test";
@@ -11,7 +12,7 @@ import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notifica
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
-const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 function fixture() {
   const originalWorker = globalThis.Worker;
   const workers = new Map<number, FakeWorker>();
@@ -63,7 +64,7 @@ function fixture() {
 test("generic worker root and child use the same lazy supervisor and exact shared signal views", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: ["/bin/fixture"], env: {}, cwd: "/", job: 1, fds: [] });
     await state.dispatch();
     const supervisor = await state.broker.ready();
@@ -87,7 +88,7 @@ test("generic worker root and child use the same lazy supervisor and exact share
 test("generic worker kills quiesce the filesystem before physical termination", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.dispatch();
     await (await state.broker.ready()).start(pid);
@@ -107,7 +108,7 @@ test("generic host failure confirms after its filesystem fence before physical t
   let releasePhysical!: () => void;
   const physicalTermination = new Promise<void>(resolve => { releasePhysical = resolve; });
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const transport = state.messages[0]!.transport;
     await state.dispatch();
@@ -143,7 +144,7 @@ test("generic host failure confirms after its filesystem fence before physical t
 test("generic process and job confirmation both wait for the filesystem fence", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const transport = state.messages[0]!.transport;
     await state.dispatch();
@@ -177,7 +178,7 @@ test("an unlaunched generic job is fenced before becoming empty", async () => {
   const loading = new Promise<void>(resolve => { release = resolve; });
   state.broker.register("/bin/slow", { module: async () => { await loading; return module; }, adapter: "preview1", cooperative: true });
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/slow", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const transport = state.messages[0]!.transport;
     await state.dispatch();
@@ -200,7 +201,7 @@ test("an unlaunched generic job is fenced before becoming empty", async () => {
 test("rejecting a repeated spawn cannot revoke or safe-confirm an already admitted independent child", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const repeated = structuredClone(state.messages[0]!);
     await state.dispatch();
@@ -222,7 +223,7 @@ test("rejecting a repeated spawn cannot revoke or safe-confirm an already admitt
 for (const dispatch of ["runtime", "rejected"] as const) test(`a committed job reap reaches host cleanup after sender fatal selection (${dispatch})`, async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const transport = state.messages[0]!.transport;
     await state.dispatch();
@@ -247,7 +248,7 @@ for (const dispatch of ["runtime", "rejected"] as const) test(`a committed job r
 test("a killed generic child cannot queue a new spawn capability", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     const spawn = state.messages[0]!;
     await state.dispatch();
@@ -345,7 +346,7 @@ for (const beforeAdmission of [false, true]) test(`job kill reaches reserved gen
   const loading = new Promise<void>(resolve => { release = resolve; });
   state.broker.register("/bin/slow", { module: async () => { await loading; return module; }, adapter: "preview1", cooperative: true });
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/slow", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     const pending = state.messages[0]!.transport;
     if (!beforeAdmission) await state.dispatch();
@@ -361,7 +362,7 @@ for (const beforeAdmission of [false, true]) test(`job kill reaches reserved gen
 test("generic child workers route cloned descendant messages back through the shared supervisor", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     const transport = state.messages[0]!.transport;
     await state.dispatch();
@@ -383,7 +384,7 @@ test("generic child workers route cloned descendant messages back through the sh
 test("an admitted generic job survives ordinary parent teardown before its queued spawn is handled", async () => {
   const state = fixture();
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     claimOutcome(workerProcessState(state.root).signals.outcome, { kind: "exited", code: 0 });
     revokeFilesystem((state.root.data as { filesystem: FilesystemIdentity }).filesystem);

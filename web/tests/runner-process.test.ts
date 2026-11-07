@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
@@ -80,7 +81,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   } as unknown as SharedFilesystem;
   const runtime = processRuntimeFixture(filesystem, options);
   prepare?.(runtime);
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const run = startRun({ engine, module: moduleOverride ?? module, args, env: {}, runtime, moduleScope: false }, {
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {}, phase(name) { phases.push(name); },
   });
@@ -221,7 +222,7 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
   const original = mutable[failure];
   if (failure !== "fork") mutable[failure] = () => { throw new Error(`${failure} failed`); };
   try {
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
     expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
     expect(lookups).toHaveLength(1);
@@ -388,7 +389,7 @@ test("concurrent roots on one runtime inherit independent engine PATHs without r
     Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
     globalThis.Worker = FakeWorker as unknown as typeof Worker;
     for (const engine of engines) {
-      runs.push(startRun({ engine, module: new WebAssembly.Module(wasm), args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} }));
+      runs.push(startRun({ engine, module: fixtureModule(wasm), args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} }));
     }
     const roots = workers.slice();
     for (const worker of roots) {
@@ -472,8 +473,8 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
     Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
     Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
     globalThis.Worker = FakeWorker as unknown as typeof Worker;
-    const first = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-    const second = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]));
+    const first = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const second = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]));
     const a = await launch(first), b = await launch(second);
     expect(a.worker.request!.module).not.toBe(b.worker.request!.module);
     a.worker.exit(); b.worker.exit();
@@ -895,7 +896,7 @@ for (const terminal of [{ code: 0 }, { code: 143, signal: 15 }]) test(`worker cl
 
 test("process runtime fixture releases program registrations idempotently", async () => {
   const runtime = processRuntimeFixture({} as SharedFilesystem);
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const program = { adapter: "fixture", module, cooperative: true } as const;
   const unregisterAdapter = runtime.registerAdapter("fixture", async () => { throw new Error("unused launcher"); });
   try {
@@ -973,4 +974,56 @@ test("worker failure before deferred executable markers cannot adopt a late runn
     const supervisor = await (await state.runtime.processes()).ready();
     expect(supervisor.get(1)).toBeUndefined();
   } finally { gate.resolve(); await state.dispose(); }
+});
+
+test("manual roots declare the posted module and keep their grant through physical stop", async () => {
+  const { createSharedControlAllocator, pages } = await import("waffle");
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 4, 1, 1, 1, 3]));
+  const admission = spyOn(SubprocessBroker.prototype, "adoptRuntimeRoot");
+  const state = isolatedRoot(false, "browser", {}, [], undefined, module);
+  const stopped = Promise.withResolvers<void>();
+  try {
+    await state.ready;
+    const service = await state.runtime.processes();
+    const pid = pidOf(state.request);
+    const grant = service.rootControlGrant(pid);
+    expect(admission.mock.calls[0]?.[1]).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(3) }]);
+    expect(state.request.module).toBe(module);
+    expect(state.request.controlGrant).toBe(grant);
+    const allocated = spyOn(service, "rootControlAllocated");
+    const received = Promise.withResolvers<void>();
+    const stop = service.rootStopped.bind(service);
+    const physicalStop = spyOn(service, "rootStopped").mockImplementation(pid => { stop(pid); received.resolve(); });
+    const terminate = spyOn(state.worker, "terminate").mockImplementation(() => stopped.promise);
+    try {
+      const allocate = createSharedControlAllocator(grant, buffer => state.worker.onmessage?.(new MessageEvent("message", { data: { type: "shared-control-allocation", buffer } })));
+      const buffer = allocate(24);
+      expect(allocated).toHaveBeenCalledWith(pid, buffer);
+      state.worker.exit(0);
+      expect(await state.run.done).toEqual({ code: 0 });
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(physicalStop).not.toHaveBeenCalled();
+      expect(service.rootControlGrant(pid)).toBe(grant);
+      const late = allocate(16);
+      expect(allocated).toHaveBeenCalledWith(pid, late);
+      expect(allocated).toHaveBeenCalledTimes(2);
+      stopped.resolve();
+      await received.promise;
+      expect(physicalStop).toHaveBeenCalledTimes(1);
+      expect(() => service.rootControlGrant(pid)).toThrow("not admitted");
+    } finally { stopped.resolve(); terminate.mockRestore(); allocated.mockRestore(); physicalStop.mockRestore(); }
+  } finally { admission.mockRestore(); await state.dispose(); }
+});
+
+test("a source-unknown compiled root fails before admission or worker dispatch", async () => {
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const admission = spyOn(SubprocessBroker.prototype, "adoptRuntimeRoot");
+  const state = isolatedRoot(false, "browser", {}, [], undefined, module);
+  try {
+    state.release();
+    expect(await state.run.done).toMatchObject({ code: 126, error: "TypeError: Compiled root requires source memory declarations" });
+    expect(state.request).toBeUndefined();
+    expect(admission).not.toHaveBeenCalled();
+    expect(state.worker.terminated).toBe(1);
+  } finally { admission.mockRestore(); await state.dispose(); }
 });

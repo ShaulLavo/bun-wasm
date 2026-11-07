@@ -1,3 +1,4 @@
+import { programMemory } from "../../src/program-memory.ts";
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { pairedEngines } from "../../src/engine-kind.ts";
 import { programLinkPlan } from "../../src/assets.js";
@@ -28,6 +29,14 @@ function loadTools(): Promise<WebAssembly.Module> {
   return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
     .then(result => result.module)
     .catch(error => { toolsModule = undefined; throw error; });
+}
+
+function physicalStop(worker: Worker | undefined, stopped: () => void): Promise<void> {
+  return new Promise<void>(resolve => {
+    const completion: unknown = worker?.terminate();
+    if (completion === undefined) { stopped(); resolve(); return; }
+    resolve(Promise.resolve(completion).then(stopped));
+  });
 }
 
 export interface RunOptions {
@@ -89,7 +98,7 @@ function rootCommand(options: RunOptions): Pick<RunRequest, "args" | "env"> {
 
 async function preparePreview1Network(
   options: RunOptions,
-  request: RunRequest,
+  request: Omit<RunRequest, "controlGrant">,
 ): Promise<Awaited<ReturnType<typeof createPreview1Network>> | undefined> {
   if (options.adapter !== "preview1") return;
   const sockets = options.preview1?.sockets ?? [];
@@ -157,7 +166,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const memoryTelemetryId = crypto.randomUUID();
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let notifications: NotificationBridge | undefined;
-  let request: RunRequest;
+  let request: Omit<RunRequest, "controlGrant">;
   try {
     request = {
       engine: options.engine,
@@ -194,7 +203,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let rootPid = pid, rootJob = job;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
-  let rootStopped = false;
   let rootConsumerRelease: (() => void) | undefined;
   let worker: Worker | undefined;
   let subprocess: SubprocessBroker | undefined;
@@ -206,17 +214,19 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     return rootQuiescence ??= options.runtime.filesystem.quiesce(request.filesystem);
   };
   let workerStopped = false;
+  let workerStop: Promise<void> | undefined;
   const releaseRootConsumer = () => { rootConsumerRelease?.(); rootConsumerRelease = undefined; };
-  const stopWorker = () => {
+  const stopWorker = (): Promise<void> => {
     sharedRoute?.close();
-    if (workerStopped) return;
+    if (workerStopped) return workerStop ?? Promise.resolve();
     workerStopped = true;
     request.filesystem.port.close();
     request.lookupPort?.close();
     lookupChannel?.port1.close();
     lookupChannel?.port2.close();
     disposeLookup?.();
-    worker?.terminate();
+    workerStop = physicalStop(worker, () => subprocess?.rootStopped());
+    void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
     releaseNotifications(notifications);
     try { helper?.dispose(); }
     finally {
@@ -225,8 +235,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       socketRoot?.release();
       socketRoot = undefined;
     }
+    return workerStop;
   };
-  const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
+  const stopRoot = () => stopWorker();
   const starting = performance.now();
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
@@ -279,7 +290,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     subprocess = new SubprocessBroker(workerUrl, options.runtime, {
       loadTools, network: options.network,
       rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
-      stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
+      stopRoot: () => { finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true); return stopWorker(); },
       output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
     });
   } catch (error) {
@@ -314,6 +325,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (msg.type === "shared-control-allocation") { subprocess?.rootControlAllocated(msg.buffer); return; }
     if (recordMemorySnapshot(msg)) return;
     if (msg.type === "bun-shared-connect") {
       const selected = rootOutcome && readOutcome(rootOutcome);
@@ -385,7 +397,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const state = workerProcessState(transport);
     const { port: _port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
-    if (!subprocess || !await subprocess.adoptRuntimeRoot(transport, () => finished)) return;
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+      request.module = await loadTools();
+      request.linkPlan = programLinkPlan(request.module);
+    }
+    if (preparationStopped()) return;
+    if (!subprocess) return;
+    const controlGrant = await subprocess.adoptRuntimeRoot(transport, programMemory(request.module), () => finished);
+    if (!controlGrant) return;
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
@@ -393,11 +412,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     prepared = true;
     for (const signal of pendingKills) kill(signal);
     pendingKills.length = 0;
-    if (preparationStopped()) return;
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
-      request.module = await loadTools();
-      request.linkPlan = programLinkPlan(request.module);
-    }
     if (preparationStopped()) return;
     networkOwner = await preparePreview1Network(options, request);
     if (networkOwner && (preparationStopped() || workerStopped)) {
@@ -437,7 +451,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         .concat(request.notifications ? [request.notifications.port] : [])
         .concat(request.network ? [request.network.port] : []);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
-      worker.postMessage(request, transfers);
+      worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();
     }
   })().catch(error => finish({ code: 126, error: String(error) }));

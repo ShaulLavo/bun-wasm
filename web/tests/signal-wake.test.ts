@@ -26,7 +26,7 @@ async function proveWake(operation: "kill" | "killJob", suppressNotify: boolean,
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let sampledGeneration = 0, suppressed = 0;
   try {
-    await broker.adoptRuntimeRoot(transport);
+    await broker.adoptRuntimeRoot(transport, []);
     setSignalDisposition(signals.signalState, 2, 2);
     if (suppressNotify) notifyObserver.current = (word, index = 0) => {
       if (word.buffer === selected.buffer && word.byteOffset + index * 4 === selected.byteOffset) { suppressed++; return 0; }

@@ -40,7 +40,7 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   broker.register("/usr/libexec/test-guest", { module, adapter: "preview1", cooperative: true });
   try {
-    await broker.adoptRuntimeRoot(root);
+    await broker.adoptRuntimeRoot(root, []);
     const service = await runtime.processes(), supervisor = await service.ready();
     const pending: WorkerProcessMessage[] = [];
     const post = (message: WorkerProcessMessage) => { pending.push(message); };

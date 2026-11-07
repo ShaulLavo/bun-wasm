@@ -1,3 +1,4 @@
+import { recordProgramMemory } from "../../src/program-memory.ts";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { DescriptorTable } from "waffle/core/descriptors";
@@ -45,5 +46,8 @@ export function rootFixture(
 export function importingModule(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
   const imports = [1].concat(text(namespace), text(name), [0, 0]);
-  return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports)));
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports));
+  const module = new WebAssembly.Module(bytes);
+  recordProgramMemory(module, bytes);
+  return module;
 }

@@ -18,6 +18,13 @@ import { fileIdentity } from "./c1/identity.ts";
 import { bindFiveOwnerOutput, bindFiveOwnerSource, readFiveOwnerHandoff, readFiveOwnerMember, recheckFiveOwnerBrowser, recheckFiveOwnerHandoff, requireFiveOwnerMember, requireFiveOwnerResponse } from "./io-resource-context-intake.ts";
 import { bindLoaded, parseLoaded } from "./c1/loaded.ts";
 import { qualificationFixture } from "./tls-qualification-fixture.ts";
+import type { ReleaseTuple } from "./c1/contract.ts";
+import { selectedReleaseArchives } from "./producer-closure.ts";
+import release from "./waffle-release-inputs.json";
+
+const selectedArchives = selectedReleaseArchives();
+const fixtureTuple = { runtime: selectedArchives.runtime.version, relay: selectedArchives.relay.version,
+  programs: release.programs.tag, programManifestSchema: release.programs.schema, hostInterface: release.hostInterface } satisfies ReleaseTuple;
 
 function run(id: RowId, records: Observation[], extra: Partial<RowRun> & { armed?: boolean; settled?: number } = {}): RowRun {
   const report = { id, records, settled: extra.settled ?? records.length, armed: extra.armed ?? null, error: null, execPath: "/bin/bun" };
@@ -220,14 +227,14 @@ afterEach(() => {
 function syntheticHandoff() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-iorc-schema-"));
   schemaRoots.push(root);
-  const files = writeContractFixture(join(root, "records"));
+  const files = writeContractFixture(join(root, "records"), fixtureTuple);
   const pinned = readFiveOwnerHandoff(files.handoff, fileIdentity(files.handoff).sha256);
   return { ...files, pinned, root };
 }
 
 // The shared consumer fixture supplies consistent config/input copies and a clean synthetic Git tree.
 async function syntheticSource() {
-  const f = await qualificationFixture();
+  const f = await qualificationFixture({}, fixtureTuple);
   schemaRoots.push(f.root);
   return { ...f, pinned: readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256) };
 }
@@ -235,6 +242,8 @@ async function syntheticSource() {
 test("source binding checks actual clean Git source, config, original inputs and donor view", async () => {
   const f = await syntheticSource();
   expect(() => bindFiveOwnerSource(f.pinned, f.host)).not.toThrow();
+  expect(JSON.parse(readFileSync(join(f.host, "web/node_modules/waffle/package.json"), "utf8")).version).toBe(fixtureTuple.runtime);
+  expect(JSON.parse(readFileSync(join(f.host, "web/node_modules/waffle-relay/package.json"), "utf8")).version).toBe(fixtureTuple.relay);
   writeFileSync(join(f.host, "package.json"), "modified source");
   expect(() => bindFiveOwnerSource(f.pinned, f.host)).toThrow("dirty");
 });
@@ -284,7 +293,10 @@ test("original input custody and staged dependency bytes are not satisfied by th
 test("current controller fixture parses without claiming source or guest admission", () => {
   const f = syntheticHandoff();
   expect(f.pinned.handoff.schema).toBe("bun-wasm.c1-handoff/1");
-  expect(f.pinned.handoff.tuple).toMatchObject({ runtime: "0.0.110", relay: "0.0.109" });
+  expect(f.pinned.handoff.tuple).toEqual(fixtureTuple);
+  expect(f.pinned.delivery.inputs.tuple).toEqual(fixtureTuple);
+  expect(f.pinned.delivery.inputs.runtime.archive.path).toEndWith(`waffle-${fixtureTuple.runtime}.tgz`);
+  expect(f.pinned.delivery.inputs.relay.archive.path).toEndWith(`waffle-relay-${fixtureTuple.relay}.tgz`);
   expect(() => bindFiveOwnerOutput(f.pinned, "quickjs", join(f.pinned.handoff.outputs["five-owner"], "quickjs"))).not.toThrow();
   expect(() => bindFiveOwnerOutput(f.pinned, "jsc", join(f.root, "other"))).toThrow("output");
   expect(() => parseInvocation(["--surface", "native", "--engine", "quickjs", "--handoff", f.handoff, "--handoff-sha256", fileIdentity(f.handoff).sha256, "--out", join(f.pinned.handoff.outputs["five-owner"], "quickjs")])).toThrow("source");

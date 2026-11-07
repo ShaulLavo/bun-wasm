@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity } from "waffle/fs";
 import { startRun, type RunOptions, type RunResult } from "../src/runner";
@@ -90,7 +91,7 @@ const contracts = {
 
 for (const [contractName, contract] of Object.entries(contracts)) for (const [endingName, ending] of Object.entries(endings)) {
   test(`a manual Preview1 root posts the ${contractName} argv and environment unchanged with its fd 3 binding, then disposes everything on ${endingName}`, async () => {
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     const args = contract.args.slice(), env = { ...contract.env };
     const connect = async () => { throw new Error("setup must not open a connection"); };
     const { posted, result, closed, helpers } = await observeRoot(
@@ -122,7 +123,7 @@ for (const [contractName, contract] of Object.entries(contracts)) for (const [en
 
 for (const [engine, path] of [["browser", "/bin:/usr/bin"], ["quickjs", "/opt/bun/quickjs/bin:/bin:/usr/bin"], ["jsc", "/opt/bun/jsc/bin:/bin:/usr/bin"]] as const) {
   test(`a ${engine} Bun root keeps its engine executable and Bun environment`, async () => {
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     const executable = `${path.split(":")[0]}/bun`;
     const { posted, result } = await observeRoot({ engine, module, args: ["-e", "0"], env: { A: "1" } }, endings.success.end);
     expect(posted.request.adapter).toBeUndefined();
@@ -155,7 +156,7 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
   });
   const runs: ReturnType<typeof startRun>[] = [];
   try {
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     runs.push(startRun({ runtime, engine: "browser", adapter: "preview1", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} }));
     runs.push(startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} }));
     const program = registrations.get("/bin/bun")!;
