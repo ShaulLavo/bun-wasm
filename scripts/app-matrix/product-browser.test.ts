@@ -4,7 +4,7 @@ import { completeObservations, observeProductTraffic, productObservations, waitF
 import type { ProductCheck } from "./product-types";
 import { fullstackApps } from "./product-fullstack";
 import { serverCommand } from "./browser.mjs";
-import type { Page } from "../../web/node_modules/playwright";
+import type { Page } from "playwright";
 import { HarnessCleanupError } from "./cleanup";
 
 interface FixtureOptions {
