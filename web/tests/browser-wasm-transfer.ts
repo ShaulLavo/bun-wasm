@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildBrowserEntries } from "../../scripts/browser-build.ts";
 import { browserType } from "./browser-type.ts";
+import { fixtureGuestResponse } from "./fixture-guest-response.ts";
 import type { Browser } from "playwright";
 
 const root = resolve(import.meta.dir, "../..");
@@ -37,7 +38,8 @@ try {
   const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
   server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.BUN_WASM_TRANSFER_PORT ?? "0"), reusePort: false, fetch(request) {
     const pathname = new URL(request.url).pathname;
-    if (pathname === "/bun-guest.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
+    const guest = fixtureGuestResponse(pathname, Bun.file(artifact), headers);
+    if (guest) return guest;
     if (pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
     const path = resolve(out, `.${pathname === "/" ? "/index.html" : pathname}`);
     if (!path.startsWith(out + "/") || !existsSync(path)) return new Response(null, { status: 404, headers });
@@ -51,6 +53,7 @@ try {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("response", response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
     await page.goto(`http://127.0.0.1:${port}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "wasmTransferResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "wasmTransferResult"));

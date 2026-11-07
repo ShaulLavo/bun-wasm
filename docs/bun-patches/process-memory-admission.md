@@ -48,7 +48,11 @@ artifact-free runtime-proc browser page registers its original byte-encoded
 modules through the same source-known fixture helper, including foreground-stop
 modules, without changing their bytes or assertions. The filesystem and signal-clock
 fixtures use that helper too. The network and transfer pages use the production
-streaming loader, and the interruption candidate loader records the bytes it
+streaming loader. Their original fixture HTTP servers provide byte-equivalent plain
+and gzip guest routes through `web/tests/fixture-guest-response.ts`, preserving
+isolation and cache headers. Gzip streams the existing source instead of retaining
+another full guest snapshot. Transfer diagnostics keep failed response URLs and
+retain the original zero-error assertion. The interruption candidate loader records the bytes it
 already fetched. Its extracted-loader tests import the same declaration recorder
 and verify the single module retains its actual empty declaration. UI model
 fixtures keep their fake runtime while exposing the real public memory functions
