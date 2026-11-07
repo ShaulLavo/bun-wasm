@@ -98,3 +98,10 @@ its separate diagnostic through the public `writeResult`. It returns write error
 as secondary data. The caller must retain the primary exit code, including when
 the diagnostic sink fails. Neither a captured diagnostic nor a sink failure is a
 new verdict on the original process case.
+
+## Optional connection refusal capture
+
+The consumer-only connection capture work is scoped to the original controller's
+synchronous filesystem connection. It does not change Waffle's public API,
+allocation policy, original cases, or verdict. Focused controls and the final
+callback integration accompany this adapter change.
