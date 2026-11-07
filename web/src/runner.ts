@@ -31,6 +31,14 @@ function loadTools(): Promise<WebAssembly.Module> {
     .catch(error => { toolsModule = undefined; throw error; });
 }
 
+function physicalStop(worker: Worker | undefined, stopped: () => void): Promise<void> {
+  return new Promise<void>(resolve => {
+    const completion: unknown = worker?.terminate();
+    if (completion === undefined) { stopped(); resolve(); return; }
+    resolve(Promise.resolve(completion).then(stopped));
+  });
+}
+
 export interface RunOptions {
   engine: Engine;
   module: WebAssembly.Module;
@@ -217,7 +225,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     lookupChannel?.port1.close();
     lookupChannel?.port2.close();
     disposeLookup?.();
-    workerStop = new Promise<void>(resolve => resolve(worker?.terminate())).then(() => { subprocess?.rootStopped(); });
+    workerStop = physicalStop(worker, () => subprocess?.rootStopped());
     void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
     releaseNotifications(notifications);
     try { helper?.dispose(); }

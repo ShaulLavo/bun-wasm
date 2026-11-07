@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
 import { cliShimFixture } from "./cli-shim-fixture";
 import { startRun, type Run } from "../src/runner";
@@ -237,7 +238,7 @@ async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
   for (const signal of [2, 9] as const) {
     let output = "";
     const foreground = startRun({ engine: "browser", adapter: "preview1", runtime,
-      module: new WebAssembly.Module(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
+      module: fixtureModule(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
     }, { stdout(bytes) { output += new TextDecoder().decode(bytes); }, stderr(bytes) { throw new Error(new TextDecoder().decode(bytes)); } });
     try {
       await until(() => output === "runner-ready\n", "foreground guest reached signal polling");
@@ -282,7 +283,7 @@ try {
   // This original preview1 fixture is not Bun. Give it its own admitted marker and
   // executable registration rather than accidentally loading the real /bin/bun guest.
   const executable = "/fixtures/runtime-proc";
-  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture(executable) : runtimeProcFixture(executable));
+  const module = fixtureModule(jobWait ? runtimeProcJobWaitFixture(executable) : runtimeProcFixture(executable));
   await runtime.filesystem.mkdirp("/fixtures");
   await runtime.filesystem.writeFile(executable, "original byte-encoded preview1 fixture");
   await runtime.filesystem.flush();

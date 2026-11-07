@@ -49,13 +49,13 @@ export function fixtureDependencies(root: string): ConsumerDependencies {
   return { browsers: fixtureTree(root, "browsers"), tls: { status: "unresolved", missing: "pg 8.16.3 tarball, complete installed tree and frozen lock not yet authenticated" } };
 }
 /** A parseable manifest whose native and consumer entries are honestly draft. */
-export function fixtureInputManifest(root: string): InputManifest {
+export function fixtureInputManifest(root: string, tuple: ReleaseTuple = FIXTURE_TUPLE): InputManifest {
   const draft = (missing: string) => ({ status: "draft", missing }) as const;
   const native = (name: string, missing: string) => ({ root: join(root, "native", name), files: [fixtureFile(root, `native-${name}-receipt.json`)], provenance: draft(missing) });
   return {
-    schema: "bun-wasm.c1-inputs/1", source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE,
-    runtime: { archive: fixtureFile(root, "waffle-0.0.110.tgz"), authentication: fixtureFile(root, "RUNTIME-INPUT.json") },
-    relay: { archive: fixtureFile(root, "waffle-relay-0.0.109.tgz"), provenance: draft("selected-source relay checks not yet run") },
+    schema: "bun-wasm.c1-inputs/1", source: FIXTURE_SOURCE, tuple,
+    runtime: { archive: fixtureFile(root, `waffle-${tuple.runtime}.tgz`), authentication: fixtureFile(root, "RUNTIME-INPUT.json") },
+    relay: { archive: fixtureFile(root, `waffle-relay-${tuple.relay}.tgz`), provenance: draft("selected-source relay checks not yet run") },
     programs: { manifest: fixtureFile(root, "program-release.json"), checksums: fixtureFile(root, "SHA256SUMS"), archives: [fixtureFile(root, "waffle-base-0.0.15.tgz")] },
     fd3: { artifact: fixtureFile(root, "preview1-relay.fd3.wasm"), receipt: fixtureFile(root, "RECEIPT.json") },
     native: { jsc: native("jsc", "current jsc/common.sh stamp not admitted"), sdk: native("sdk", "current helper validation not run"),
@@ -182,10 +182,10 @@ export interface SealedFixture { readonly inputsPath: string; readonly configPat
  * config names, under `root` (which must not exist). `beforeSeal` may change
  * payload files before the single seal.
  */
-export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: string) => void = () => {}): SealedFixture {
+export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: string) => void = () => {}, tuple: ReleaseTuple = FIXTURE_TUPLE): SealedFixture {
   mkdirSync(root, { mode: 0o700 });
   const inputsPath = join(root, "inputs.json");
-  const inputsBytes = JSON.stringify(fixtureInputManifest(join(root, "input-files")), null, 2) + "\n";
+  const inputsBytes = JSON.stringify(fixtureInputManifest(join(root, "input-files"), tuple), null, 2) + "\n";
   write(inputsPath, inputsBytes);
   const configPath = join(root, "config.json");
   const config = fixtureConfig(root, fileIdentity(inputsPath));
@@ -195,15 +195,15 @@ export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: stri
   writeFixtureDelivery(deliveryRoot);
   const records = writeFixtureRecords(deliveryRoot, configBytes, inputsBytes);
   beforeSeal(deliveryRoot);
-  const identity = sealDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, ...records });
+  const identity = sealDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple, ...records });
   return { inputsPath, configPath, config, deliveryRoot, identity };
 }
 /** Build every contract file under `root`, which must not exist yet. */
-export function writeContractFixture(root: string): ContractFixture {
-  const { inputsPath, configPath, config, deliveryRoot, identity } = writeSealedFixture(root);
+export function writeContractFixture(root: string, tuple: ReleaseTuple = FIXTURE_TUPLE): ContractFixture {
+  const { inputsPath, configPath, config, deliveryRoot, identity } = writeSealedFixture(root, undefined, tuple);
   const delivery = readSealedDelivery(deliveryRoot);
   const intake: ParentIntake = { schema: "bun-wasm.c1-intake/1", kind: "independent-parent-byte-admission", owner: "fixture parent", at: "2026-11-05T00:00:00.000Z",
-    deliveryRoot, delivery: identity, source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, members: delivery.manifest.files.length, admitted: true };
+    deliveryRoot, delivery: identity, source: FIXTURE_SOURCE, tuple, members: delivery.manifest.files.length, admitted: true };
   const intakePath = join(root, "INTAKE.json");
   write(intakePath, JSON.stringify(intake, null, 2) + "\n");
   const admitted = admitIntake(intakePath, fileIdentity(intakePath).sha256, delivery);

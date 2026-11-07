@@ -106,6 +106,8 @@ test("rootExit before a root is adopted is a no-op, and after adoption confirms 
     await state.broker.rootExit(7);
     expect(root.result).toEqual({ kind: "exited", code: 7, status: 7 });
     expect(root.jobSafe).toBe(true);
+    expect(controlLoad(shared.confirmed, 0)).toBe(1);
+    state.broker.rootStopped();
     expect(() => controlLoad(shared.confirmed, 0)).toThrow("collected");
   } finally { await state.dispose(); }
 });

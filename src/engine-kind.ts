@@ -123,6 +123,10 @@ function importedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): voi
   }
 }
 
+function definedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): void {
+  for (let count = readUnsigned(cursor); count > 0; count--) declarations.push(memoryDeclaration(cursor, "defined"));
+}
+
 /** Read all actual memories, including non-env imports and unexported definitions. */
 export function wasmMemoryLimits(bytes: Uint8Array): readonly MemoryLimits[] {
   const module: Cursor = { bytes, at: 8 };
@@ -133,7 +137,7 @@ export function wasmMemoryLimits(bytes: Uint8Array): readonly MemoryLimits[] {
     const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };
     module.at += size;
     if (id === 2) importedDeclarations(section, declarations);
-    if (id === 5) for (let count = readUnsigned(section); count > 0; count--) declarations.push(memoryDeclaration(section, "defined"));
+    if (id === 5) definedDeclarations(section, declarations);
   }
   return declarations;
 }

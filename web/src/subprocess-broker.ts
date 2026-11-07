@@ -34,6 +34,7 @@ export class SubprocessBroker {
   private disposed = false;
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
+  private releaseRootLease?: () => void;
   constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
     installBunAdapters(runtime, workerUrl, options.loadTools, options.network, options.preview1);
   }
@@ -84,15 +85,23 @@ export class SubprocessBroker {
     await service.adoptRuntimeRoot(transport, {
       memory,
       filesystem: this.options.rootFilesystem, acknowledged: this.options.rootAcknowledged,
-      output: this.options.output, stop: this.options.stopRoot,
+      output: this.options.output, stop: this.options.stopRoot, retired: () => this.releaseRoot(),
     });
+    this.releaseRootLease = service.retainRoot(state.pid);
     return service.rootControlGrant(state.pid);
   }
   rootControlAllocated(buffer: SharedArrayBuffer): void {
     if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
   }
   rootStopped(): void {
-    if (this.root && !this.runtime.disposed) this.service?.rootStopped(this.root.pid);
+    if (!this.root || this.runtime.disposed) return;
+    this.service?.rootStopped(this.root.pid);
+    this.releaseRoot();
+  }
+  private releaseRoot(): void {
+    const release = this.releaseRootLease;
+    this.releaseRootLease = undefined;
+    release?.();
   }
   async runtimeMessage(message: WorkerProcessMessage, senderPid: number): Promise<void> {
     return (await this.processService()).runtimeMessage(message, senderPid);

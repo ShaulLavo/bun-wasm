@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -10,6 +11,21 @@ import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engi
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
 const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+
+test("fixture Git failures preserve the command and subprocess result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-fixture-git-error-"));
+  try {
+    let failure: unknown;
+    try { fixtureGit(root, "not-a-fixture-command"); }
+    catch (error) { failure = error; }
+    if (!(failure instanceof Error)) throw new Error("Expected fixture Git failure", { cause: failure });
+    expect(failure.cause).toMatchObject({ exitCode: 1 });
+    expect(failure.cause).toHaveProperty("stdout");
+    expect(failure.cause).toHaveProperty("stderr");
+    expect(failure.message).toContain("status 1");
+    expect(failure.message).toContain("not-a-fixture-command");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function quickjsNativeProducerFragment(): string {
   const parsed: unknown = Bun.YAML.parse(workflow);

@@ -151,3 +151,12 @@ whole `result.json`, or why none is readable.
   worker's phases, exit and error messages and redacted stdout and stderr
   tails (secrets removed before bounding), the page's sent count and any
   records the host did not receive.
+
+## Synthetic release fixtures
+
+The source-only fixture builders accept a release tuple before they seal their
+synthetic records. Resource-context checks select the checked-in runtime, relay
+and programs together. Their archive names and staged package metadata follow
+that selection. Existing TLS fixture defaults remain explicit and unchanged.
+No existing sealed delivery, intake or historical result is edited or admitted
+by these synthetic fixtures. The production tuple guard remains unchanged.
