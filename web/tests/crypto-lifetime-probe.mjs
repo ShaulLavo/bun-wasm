@@ -13,7 +13,12 @@ function encode(value) {
   const fields = entries.flatMap(([key, item]) => [u32(Buffer.byteLength(key)), Buffer.from(key), encode(item)]);
   return Buffer.concat([Buffer.from([8]), u32(entries.length)].concat(fields));
 }
-const put = value => new Uint8Array(memory.buffer).set(encode(value));
+let resultLength = 0;
+const put = value => {
+  const packet = encode(value);
+  resultLength = packet.length;
+  new Uint8Array(memory.buffer).set(packet);
+};
 const source = `(function(native) {
   return {
     crypto: {makeKey:()=>Object.create({}),encode:()=>"",isKey:()=>false},
@@ -33,7 +38,7 @@ const source = `(function(native) {
   };
 })`;
 await startEngineHost({instance:{exports:{
-  memory, bunwasm_alloc:() => 32768, bunwasm_result_ptr:() => 0,
+  memory, bunwasm_alloc:() => 32768, bunwasm_result_ptr:() => 0, bunwasm_result_len:() => resultLength,
   bunwasm_describe() {put({natives:["polyfillSource", "flushOutput", "writeStderr", "closeAllDirs", "hostUseModuleRecords"], constants:{hostCaps:{}}, entry:{kind:"run", main:"/main.js"}});},
   bunwasm_call(index) {put(index === 0 ? source : undefined); return 0;},
 }}, onExit(code) {
