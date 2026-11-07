@@ -11,8 +11,13 @@ export function productionTemplate(value: string | undefined) {
 function flightText(scripts: readonly string[]): string {
   const chunks: string[] = [];
   for (const script of scripts) {
-    const call = /^self\.__next_f\.push\((\[.*\])\);?$/.exec(script.trim());
-    if (!call) continue;
+    const body = script.trim();
+    if (/^\(self\.__next_f=self\.__next_f\|\|\[\]\)\.push\(\[0\]\);?$/.test(body)) continue;
+    const call = /^self\.__next_f\.push\((\[.*\])\);?$/.exec(body);
+    if (!call) {
+      assert.ok(!body.includes("__next_f"), "Unsupported Flight script body");
+      continue;
+    }
     const chunk: unknown = JSON.parse(call[1] ?? "null");
     assert.ok(Array.isArray(chunk));
     if (chunk[0] !== 1) continue;
@@ -26,7 +31,7 @@ function jsonFlightRoot(text: string): unknown {
   let root: unknown;
   for (const line of text.split("\n")) {
     if (line === "") continue;
-    const record = /^([0-9a-f]+):(.*)$/.exec(line);
+    const record = /^(0|[1-9a-f][0-9a-f]*):(.*)$/.exec(line);
     assert.ok(record, "Unsupported Flight record framing");
     const payload = record[2] ?? "";
     // This source-only fixture emits JSON and import records, never length-prefixed text or binary records.

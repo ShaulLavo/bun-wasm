@@ -97,6 +97,9 @@ for (const [name, scripts] of [
   ["quoted push call", [JSON.stringify(flight('0:{"b":"fresh-build"}\n'))]],
   ["commented fresh root before stale root", [`/* ${flight('0:{"b":"fresh-build"}\n')} */`, flight('0:{"b":"stale"}\n')]],
   ["duplicate root", [flight('0:{"b":"fresh-build"}\n0:{"b":"stale"}\n')]],
+  ["executable commented-prefix stale call", [`/* comment */${flight('0:{"b":"stale"}\n')}`, flight('0:{"b":"fresh-build"}\n')]],
+  ["executable suffixed stale call", [`${flight('0:{"b":"stale"}\n')};void 0;`, flight('0:{"b":"fresh-build"}\n')]],
+  ["leading-zero root before fresh root", [flight('00:{"b":"stale"}\n0:{"b":"fresh-build"}\n')]],
 ] satisfies [string, string[]][]) {
   test(`App production acceptance rejects ${name}`, () => {
     expect(() => assertAppProductionBuildID(scripts, "fresh-build")).toThrow();
