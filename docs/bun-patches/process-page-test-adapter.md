@@ -101,7 +101,46 @@ new verdict on the original process case.
 
 ## Optional connection refusal capture
 
-The consumer-only connection capture work is scoped to the original controller's
-synchronous filesystem connection. It does not change Waffle's public API,
-allocation policy, original cases, or verdict. Focused controls and the final
-callback integration accompany this adapter change.
+`process-case-runner.ts` holds the original command without entry side effects.
+`process-browser-main.ts` remains the same hosted and desktop entry. Importing
+the runner lets focused controls select existing labels without copying a
+controller, rewriting source, or running the full suite. Without that explicit
+selection, all original registrations still run in their original order. The
+frozen body and finalizer hashes remain unchanged.
+
+Only a hosted entry with `__bunProcessPageDiagnostic` creates a command-owned
+connection capture. The existing callback now receives its optional first
+connection-failure record after the original command finally resolves. An old
+zero-argument callback still reads its own diagnostics unchanged. The primary
+transport value, policy, clocks, allocation ACK and omission handling do not
+change. No capture exists and no diagnostic snapshot runs by default.
+
+`process-connection-capture.ts` wraps only the synchronous controller
+`filesystem.connect` operation. It copies the first failure before the enclosing
+scope disposes its runtime. The record includes the case label, scope ordinal,
+root or parent controller PID, the parent PID when applicable, typed public
+refusal fields and page-wide logical snapshots immediately before connection
+and on failure. The previous scope's disposal marker is `pending`, `fulfilled`
+or `rejected`. Fulfillment means that the original awaited scope disposal
+resolved, not that native backing memory was released.
+
+Snapshots retain public scalar totals and at most eight entries per array.
+Strings and object keys are limited to 128 characters, objects to 16 keys,
+traversal to 256 values and six levels, and each copied snapshot to 4 KiB UTF-8.
+Page-wide holder counts grouped by label and state, and omitted-holder counts,
+remain explicit. Shared guest and
+contradiction totals disclose array truncation. Symbols and non-plain objects
+are not retained. An unavailable snapshot or unreadable refusal is secondary
+missing evidence. The first failure still consumes the one-record slot.
+No Runtime, exception, SharedArrayBuffer or WebAssembly.Memory object is saved.
+
+The public ledger is page-wide. It cannot identify every runtime holder or pool
+incarnation. Buffer maxima, weak observations and `awaiting-collection` states
+are not physical residency or backing-release measurements. The record supplies
+no native constructor ordinal. The separately installed, unchanged constructor
+observer owns its own observations.
+
+Capture errors cannot replace the exact thrown connection value, including
+falsy throws. The existing callback serializer and diagnostic writer still own
+their bounds and secondary errors. Focused source controls test these paths;
+a controlled injected refusal is not evidence of an actual platform refusal.

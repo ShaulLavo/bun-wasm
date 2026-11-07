@@ -1,8 +1,9 @@
 import { cleanupStorage, type PageSuite } from "waffle/testing/page-runner/page";
 import { processDiagnosticError } from "./process-diagnostic-error";
 import { processCommandId, processResultForTransport, type ProcessObservation, type ProcessRequest } from "./process-page-adapter";
+import type { ProcessConnectionFailure } from "./process-connection-capture";
 
-export type ProcessPageDiagnostic = () => unknown;
+export type ProcessPageDiagnostic = (connectionFailure?: ProcessConnectionFailure | null) => unknown;
 export type ProcessDiagnostic = { status: "captured"; value: unknown } | { status: "error"; error: string };
 
 declare global {
@@ -34,7 +35,7 @@ function diagnosticResult(original: unknown, collect: ProcessPageDiagnostic): un
   return resultFits(envelope) ? envelope : processResult;
 }
 
-type CommandResult = Pick<ProcessObservation, "result" | "progress">;
+type CommandResult = Pick<ProcessObservation, "result" | "progress"> & { connectionFailure?: ProcessConnectionFailure | null };
 
 export function observeProcessPageErrors(): string[] {
   const errors: string[] = [];
@@ -55,7 +56,7 @@ export function createProcessPageSuite(runCases: (databaseName: string) => Promi
       const result = await runCases(request.databaseName);
       const processResult = processResultForTransport({ ...result, pageErrors: errors });
       if (!diagnostic || processResult === undefined) return processResult;
-      return diagnosticResult(processResult, diagnostic);
+      return diagnosticResult(processResult, () => diagnostic(result.connectionFailure));
     },
     finish: cleanupStorage,
   } satisfies PageSuite<ProcessRequest>;

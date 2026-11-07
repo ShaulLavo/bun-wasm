@@ -14,9 +14,9 @@ import { processAdapter } from "./process-ios-adapter";
 import { ownedDatabase } from "waffle/testing/page-runner";
 import { automaticChecks } from "../../scripts/test-checks";
 
-const pageSource = await Bun.file(new URL("./process-browser-main.ts", import.meta.url)).text();
+const pageSource = await Bun.file(new URL("./process-case-runner.ts", import.meta.url)).text();
 const runnerSource = await Bun.file(new URL("./browser-process.ts", import.meta.url)).text();
-const pageAST = ts.createSourceFile("process-browser-main.ts", pageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+const pageAST = ts.createSourceFile("process-case-runner.ts", pageSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const envelope = pageAST.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "runProcessCases");
 const pageTry = envelope && ts.isFunctionDeclaration(envelope) ? envelope.body?.statements.find(ts.isTryStatement) : undefined;
 if (!pageTry?.finallyBlock) throw new Error("original process command finally missing");
