@@ -259,7 +259,7 @@ function gitWitness(path: string): string[] {
   return readdirSync(path, { recursive: true, withFileTypes: true }).map(entry => {
     const full = join(entry.parentPath, entry.name);
     const stat = lstatSync(full, { bigint: true });
-    return `${full}\0${stat.mtimeNs}\0${stat.size}`;
+    return `${full}\0${stat.mtimeNs}\0${stat.ctimeNs}\0${stat.ino}\0${stat.mode}\0${stat.size}\0${entry.isFile() ? sha256(readFileSync(full)) : ""}`;
   }).sort();
 }
 
@@ -312,6 +312,15 @@ test("WebKit admission compares patched bytes when the original index stat cache
   const before = gitWitness(fixture.webkit);
   admitFixtureWebkit(fixture, fresh("webkit-stat-matched-scratch"));
   expect(readFileSync(join(fixture.webkit, "a.txt"), "utf8")).toBe("two\n");
+  expect(gitWitness(fixture.webkit)).toEqual(before);
+});
+
+test("WebKit admission still refuses different bytes with the same original cached stat", () => {
+  const fixture = statMatchedWebkitFixture(fresh("webkit-stat-matched-changed"));
+  write(join(fixture.webkit, "a.txt"), "one\n");
+  utimesSync(join(fixture.webkit, "a.txt"), 946684800, 946684800);
+  const before = gitWitness(fixture.webkit);
+  expect(() => admitWebkit(fixture.source, fixture.jsc, fresh("webkit-stat-matched-changed-scratch"))).toThrow("working tree differs");
   expect(gitWitness(fixture.webkit)).toEqual(before);
 });
 
@@ -414,6 +423,26 @@ test("the maintained WebKit check compares patched bytes when the original index
   if (result.status !== 0) reportWebkitFailure(fixture, fixture.source, result);
   expect({ status: result.status, stderr: result.stderr, stdout: result.stdout }).toMatchObject({ status: 0 });
   expect(gitWitness(fixture.jsc)).toEqual(before);
+});
+test("the maintained WebKit check still refuses different bytes with the same original cached stat", () => {
+  const fixture = statMatchedWebkitFixture(fresh("maintained-webkit-stat-matched-changed"));
+  write(join(fixture.webkit, "a.txt"), "one\n");
+  utimesSync(join(fixture.webkit, "a.txt"), 946684800, 946684800);
+  const before = gitWitness(fixture.jsc);
+  expect(maintainedWebkitCheck(fixture, fixture.jsc).status).toBe(1);
+  expect(gitWitness(fixture.jsc)).toEqual(before);
+});
+test("the maintained WebKit check preserves sparse admission and refuses changed required source", () => {
+  const fixture = sparseWebkitFixture(fresh("maintained-webkit-sparse"));
+  const before = gitWitness(fixture.jsc);
+  const accepted = maintainedWebkitCheck(fixture, fixture.jsc);
+  if (accepted.status !== 0) reportWebkitFailure(fixture, fixture.source, accepted);
+  expect({ status: accepted.status, stderr: accepted.stderr }).toMatchObject({ status: 0 });
+  expect(gitWitness(fixture.jsc)).toEqual(before);
+  write(join(fixture.webkit, "a.txt"), "changed required source\n");
+  const changed = gitWitness(fixture.jsc);
+  expect(maintainedWebkitCheck(fixture, fixture.jsc).status).toBe(1);
+  expect(gitWitness(fixture.jsc)).toEqual(changed);
 });
 test("the maintained WebKit check refuses a missing object without fetching or adding any", () => {
   const root = fresh("maintained-webkit-missing");

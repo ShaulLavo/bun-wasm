@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pinnedBashWeb, verifiedGuests } from "../bash-web-guests.ts";
 import { selectedReleaseArchives } from "../producer-closure.ts";
@@ -171,10 +171,10 @@ export function admitWebkit(source: string, jsc: string, scratch: string): void 
   if (!pin || git(webkit, ["rev-parse", "HEAD"]) !== pin) fail("WebKit is not the source's pinned commit");
   if (git(webkit, ["ls-files", "--others", "--exclude-standard"])) fail("WebKit has untracked files");
   const expected = patchedTree(webkit, pin, [join(source, "jsc/webkit-wasi.patch")], join(scratch, "webkit"), true);
-  // The original index carries the sparse-checkout bits. A private copy keeps
-  // them while any stat refresh git performs lands in scratch, not the original.
+  // Git uses the index mtime to detect racily clean entries. Preserve that cutoff
+  // and the sparse-checkout bits; any refresh still lands only in scratch.
   const index = join(scratch, "webkit", "original-index");
-  copyFileSync(resolve(webkit, git(webkit, ["rev-parse", "--git-path", "index"])), index);
+  execFileSync("cp", ["--preserve=timestamps", "--", resolve(webkit, git(webkit, ["rev-parse", "--git-path", "index"])), index]);
   const objects = join(scratch, "webkit", "objects");
   const env = { GIT_INDEX_FILE: index, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: resolve(webkit, git(webkit, ["rev-parse", "--git-path", "objects"])) };
   try { git(webkit, ["diff", "--quiet", expected, "--"], env); }
