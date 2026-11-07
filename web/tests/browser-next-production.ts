@@ -4,18 +4,20 @@ import { join } from "node:path";
 import type { Page } from "playwright";
 import type { Runtime } from "waffle";
 import type { Previews } from "../src/preview";
+import { templateFiles } from "../../sandbox/template-files";
 import { playwright, ready, run, session, terminalText } from "./playground.mjs";
 import { stopForeground } from "./foreground";
-import { assertProductionBrowserEvents, finishProduction } from "./next-production-controls";
+import { assertAppProductionBuildID, assertProductionBrowserEvents, finishProduction, productionTemplate } from "./next-production-controls";
 
 declare const playground: {
-  editor: { path: string };
-  fs: Pick<Runtime["filesystem"], "readFile">;
+  editor: { path: string; open(path: string): Promise<void> };
+  fs: Runtime["filesystem"];
   previews: Previews;
   shell: { submit(command: string): Promise<void>; running: boolean; lastExit: number };
 };
 declare const productionServer: { finished: boolean; error: string | null };
 
+const template = productionTemplate(process.env.NEXT_PRODUCTION_TEMPLATE);
 const reports = process.env.NEXT_PRODUCTION_REPORTS;
 if (reports) mkdirSync(reports, { recursive: true });
 const task = session("bun-wasm-next-production-");
@@ -83,11 +85,18 @@ async function compiledPage(target: Page, url: string, expectedBuildID: string):
   assert.match(response?.headers()["content-type"] ?? "", /text\/html/);
   const html = await response?.text();
   assert.ok(html);
+  report("production.html", html);
   assert.doesNotMatch(html, /\/_next\/static\/development\/|\/_next\/webpack-hmr/);
-  const data: unknown = await target.locator("#__NEXT_DATA__").evaluate(element => JSON.parse(element.textContent ?? "null"));
-  assert.ok(data && typeof data === "object" && "buildId" in data);
-  assert.equal(data.buildId, expectedBuildID, "Served HTML must use the guest's production BUILD_ID");
-  await target.getByRole("heading", { name: "Next.js in your browser", exact: true }).waitFor({ timeout: 120_000 });
+  if (template.id === "next") {
+    const data: unknown = await target.locator("#__NEXT_DATA__").evaluate(element => JSON.parse(element.textContent ?? "null"));
+    assert.ok(data && typeof data === "object" && "buildId" in data);
+    assert.equal(data.buildId, expectedBuildID, "Served HTML must use the guest's production BUILD_ID");
+  } else {
+    assert.equal(await target.locator("#__NEXT_DATA__").count(), 0, "App Router must not fall back to Pages HTML");
+    const scripts = await target.locator("script:not([src])").allTextContents();
+    assertAppProductionBuildID(scripts, expectedBuildID);
+  }
+  await target.getByRole("heading", { name: template.heading, exact: true }).waitFor({ timeout: 120_000 });
   operation = "production counter hydration";
   await target.getByRole("button", { name: "Count: 0", exact: true }).click();
   await target.getByRole("button", { name: "Count: 1", exact: true }).click();
@@ -96,12 +105,12 @@ async function compiledPage(target: Page, url: string, expectedBuildID: string):
   assert.deepEqual(staticResponses.filter(response => response.status !== 200), []);
   assertProductionBrowserEvents(events);
   assert.equal(events.some(event => event.includes("[HMR] connected")), false);
-  report("production.html", html);
   if (reports) await target.screenshot({ path: join(reports, "production.png") });
 }
 
 async function execute(): Promise<void> {
   const url = new URL(process.env.NEXT_PLAYGROUND_URL ?? await task.serve());
+  // The terminal playground supplies the shell; the source-only App fixture replaces its Pages seed below.
   url.searchParams.set("template", "next");
   url.searchParams.set("engine", "browser");
   url.searchParams.set("prompt", "off");
@@ -111,10 +120,22 @@ async function execute(): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   page = await context.newPage();
   observe(page, "playground");
-  operation = "Pages template startup";
+  operation = `${template.id} template startup`;
   await page.goto(url.href, { timeout: 120_000 });
   assert.match(await ready(page), /ready · Browser/);
-  assert.equal(await page.evaluate(() => playground.editor.path), "/home/user/pages/index.tsx");
+  if (template.id === "next-app") {
+    operation = "load source-only App Router template into terminal workspace";
+    const files = await templateFiles(new URL("../../sandbox/template-next-app", import.meta.url).pathname);
+    await page.evaluate(async files => {
+      await playground.fs.remove("/home/user");
+      await playground.fs.mkdirp("/home/user");
+      for (const [path, text] of Object.entries(files)) await playground.fs.writeFile(`/home/user/${path}`, text);
+      await playground.editor.open("/home/user/app/page.tsx");
+      await playground.fs.flush();
+    }, files);
+    assert.equal(await readGuest(page, "/home/user/pages/index.tsx"), null, "App fixture must not retain a Pages route");
+  }
+  assert.equal(await page.evaluate(() => playground.editor.path), template.editorPath);
   assert.equal(await readGuest(page, "/home/user/.next/BUILD_ID"), null, "Fresh template must not contain a prebuilt application");
   report("package.json", await readGuest(page, "/home/user/package.json") ?? "missing");
   report("next.config.ts", await readGuest(page, "/home/user/next.config.ts") ?? "missing");
@@ -145,7 +166,7 @@ function closeSession(): Promise<void> {
 
 function reportResult(): void {
   report("browser.log", events.join("\n"));
-  report("result.json", JSON.stringify({ operation, failure, stages, browserVersion, buildID, staticResponses, ms: Date.now() - started, cleanup, scratch: task.scratch }, null, 2));
+  report("result.json", JSON.stringify({ template: template.id, operation, failure, stages, browserVersion, buildID, staticResponses, ms: Date.now() - started, cleanup, scratch: task.scratch }, null, 2));
 }
 
 function expired(scope: string): void {
