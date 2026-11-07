@@ -294,6 +294,27 @@ test("WebKit admission uses a private index and object store and never writes th
   expect(gitWitness(join(fixture.webkit, ".git"))).toEqual(before);
 });
 
+function statMatchedWebkitFixture(root: string) {
+  const fixture = webkitFixture(root);
+  fixture.git("config", "core.checkStat", "minimal");
+  fixture.git("config", "core.trustctime", "false");
+  fixture.git("checkout", "-q", "--", "a.txt");
+  const file = join(fixture.webkit, "a.txt");
+  utimesSync(file, 946684800, 946684800);
+  fixture.git("add", "a.txt");
+  utimesSync(join(fixture.webkit, ".git/index"), 946684800, 946684800);
+  write(file, "two\n");
+  utimesSync(file, 946684800, 946684800);
+  return fixture;
+}
+test("WebKit admission compares patched bytes when the original index stat cache matches a same-size edit", () => {
+  const fixture = statMatchedWebkitFixture(fresh("webkit-stat-matched"));
+  const before = gitWitness(fixture.webkit);
+  admitFixtureWebkit(fixture, fresh("webkit-stat-matched-scratch"));
+  expect(readFileSync(join(fixture.webkit, "a.txt"), "utf8")).toBe("two\n");
+  expect(gitWitness(fixture.webkit)).toEqual(before);
+});
+
 function sparseWebkitFixture(root: string) {
   const fixture = webkitFixture(root);
   fixture.git("checkout", "-q", "--", "a.txt");
@@ -385,6 +406,14 @@ test("the maintained WebKit check writes neither the native root nor the reposit
   expect({ status: result.status, signal: result.signal, stderr: result.stderr, stdout: result.stdout, error: result.error }).toMatchObject({ status: 0 });
   expect(gitWitness(native)).toEqual(before);
   expect(lstatSync(native, { bigint: true }).mtimeNs).toBe(rootBefore);
+});
+test("the maintained WebKit check compares patched bytes when the original index stat cache matches", () => {
+  const fixture = statMatchedWebkitFixture(fresh("maintained-webkit-stat-matched"));
+  const before = gitWitness(fixture.jsc);
+  const result = maintainedWebkitCheck(fixture, fixture.jsc);
+  if (result.status !== 0) reportWebkitFailure(fixture, fixture.source, result);
+  expect({ status: result.status, stderr: result.stderr, stdout: result.stdout }).toMatchObject({ status: 0 });
+  expect(gitWitness(fixture.jsc)).toEqual(before);
 });
 test("the maintained WebKit check refuses a missing object without fetching or adding any", () => {
   const root = fresh("maintained-webkit-missing");
