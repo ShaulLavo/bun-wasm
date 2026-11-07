@@ -35,6 +35,9 @@ test("fills missing aliases without replacing complete native implementations", 
   expect(Object.getOwnPropertyDescriptor(Stream.prototype, "values")).toEqual({
     configurable: true, enumerable: true, writable: true, value: Stream.prototype.values,
   });
+  expect(Object.getOwnPropertyDescriptor(Stream.prototype, Symbol.asyncIterator)).toEqual({
+    configurable: true, enumerable: false, writable: true, value: Stream.prototype.values,
+  });
   const installed = Stream.prototype.values;
   Reflect.apply(installReadableStreamIteration, undefined, [Stream]);
   expect(Stream.prototype.values).toBe(installed);

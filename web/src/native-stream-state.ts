@@ -1,4 +1,5 @@
 import { constructNativeReadable } from "./native-direct-stream.ts";
+import { installReadableStreamIteration } from "./native-readable-iterator.ts";
 
 const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
 const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
@@ -418,10 +419,11 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
     if (active(value)) observeHandle(value, handle);
   });
   if (readable) {
+    installReadableStreamIteration(Native.ReadableStream);
     const values = Reflect.get(prototype, "values");
     const alias = Object.getOwnPropertyDescriptor(prototype, Symbol.asyncIterator);
     const wrapped = method(prototype, "values", stream => request(record(stream, true)));
-    if (alias?.value === values) Object.defineProperty(prototype, Symbol.asyncIterator, Object.assign({}, alias, { value: wrapped }));
+    if (wrapped && alias?.value === values) Object.defineProperty(prototype, Symbol.asyncIterator, Object.assign({}, alias, { value: wrapped }));
     else method(prototype, Symbol.asyncIterator, stream => request(record(stream, true)));
   }
   for (const name of readable ? ["cancel", "pipeThrough"] : ["abort", "close"]) method(prototype, name, stream => request(record(stream, readable)));

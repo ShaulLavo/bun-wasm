@@ -36,6 +36,14 @@ async function checkInstalledIteration(): Promise<void> {
   const completion: Promise<void> = Reflect.get(stream, closedKey).promise;
   const method: unknown = Reflect.get(stream, Symbol.asyncIterator);
   assert.ok(typeof method === "function", "the bridge must install missing native stream iteration");
+  const values = Object.getOwnPropertyDescriptor(ReadableStream.prototype, "values");
+  const alias = Object.getOwnPropertyDescriptor(ReadableStream.prototype, Symbol.asyncIterator);
+  assert.equal(values?.value, alias?.value, "values and the iterator stay aliases after tracking wrappers");
+  for (const descriptor of [values, alias]) {
+    assert.deepEqual([descriptor?.configurable, descriptor?.writable], [true, true]);
+  }
+  assert.equal(values?.enumerable, true);
+  assert.equal(alias?.enumerable, false);
   const iterator: AsyncIterator<unknown> = Reflect.apply(method, stream, []);
   assert.ok(stream.locked, "iterator acquires a reader before next");
   assert.deepEqual(await iterator.next(), { value: "one", done: false });

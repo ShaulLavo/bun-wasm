@@ -62,6 +62,7 @@
     "web/src/buffer-transfer.ts",
     "web/src/shared-objects",
     "web/src/native-stream-state.ts",
+    "web/src/native-readable-iterator.ts",
     "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
     "web/src/module-records.ts",

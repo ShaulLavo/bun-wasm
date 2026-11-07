@@ -90,5 +90,5 @@ export function installReadableStreamIteration(Ctor: typeof ReadableStream): voi
   const method = typeof values === "function" ? values : typeof alias === "function" ? alias : iterationMethod(prototype);
   const descriptor = { configurable: true, enumerable: true, writable: true, value: method };
   if (typeof values !== "function") Object.defineProperty(prototype, "values", descriptor);
-  if (typeof alias !== "function") Object.defineProperty(prototype, Symbol.asyncIterator, descriptor);
+  if (typeof alias !== "function") Object.defineProperty(prototype, Symbol.asyncIterator, { ...descriptor, enumerable: false });
 }

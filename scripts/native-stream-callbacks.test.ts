@@ -2,13 +2,11 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { chromium, webkit } from "playwright";
+import { nativeStreamBridgeSource } from "./fixtures/native-stream-source";
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
-const emit = (file: string) => transpiler.transformSync(readFileSync(new URL(file, import.meta.url), "utf8"));
-const direct = emit("../web/src/native-direct-stream.ts").replace("export function", "function");
-const bridge = emit("../web/src/native-stream-state.ts").replace(/^import .*;$/m, "").replace("export function", "function");
 const controls = transpiler.transformSync(readFileSync(new URL("../web/tests/native-stream-callback-controls.ts", import.meta.url), "utf8")).replace("export async function", "async function");
-const initialize = `${direct}\n${bridge}\nreturn installNativeStreamState();`;
+const initialize = nativeStreamBridgeSource();
 
 for (const syncOnly of [true, false]) {
   test(`native callback ${syncOnly ? "synchronous returns" : "asynchronous ordering and errors"}`, () => {
