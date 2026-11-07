@@ -44,7 +44,10 @@ export function resolveRuntimePackage(consumerEntry: string) {
       return output;
     },
     relativeSource(specifier: string, importer: string): string | undefined {
-      if (inside(path, importer) === undefined && inside(physical, importer) === undefined) return;
+      const target = resolve(dirname(importer), specifier);
+      const owner = inside(path, importer) ?? inside(physical, importer);
+      const requested = inside(path, target) ?? inside(physical, target);
+      if (owner === undefined && requested === undefined) return;
       const resolved = Bun.resolveSync(specifier, dirname(importer));
       const input = inside(path, resolved) ?? inside(physical, resolved);
       if (input === undefined) throw new Error(`Runtime relative import escapes installed package: ${specifier}`);
@@ -103,6 +106,11 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
         build.onResolve({ filter: /^waffle(?:\/|$)/ }, ({ path }) => {
           runtimePackage ??= resolveRuntimePackage(main);
           return { path: runtimePackage.source(path) };
+        });
+        build.onResolve({ filter: /(?:^|[\\/])node_modules[\\/]waffle[\\/]/ }, ({ path, importer }) => {
+          runtimePackage ??= resolveRuntimePackage(main);
+          const resolved = runtimePackage.relativeSource(path, importer);
+          if (resolved) return { path: resolved };
         });
         build.onResolve({ filter: /^\.\.?\// }, ({ path, importer }) => {
           if (!runtimePackage) return;

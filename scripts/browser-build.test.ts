@@ -45,6 +45,32 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
+for (const directFirst of [false, true]) test(`consumer runtime keeps file and package imports in one module identity, direct first: ${directFirst}`, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-runtime-identity-"));
+  try {
+    const consumer = join(scratch, "consumer");
+    const cached = join(scratch, "cache.runtime..git");
+    await mkdir(cached, { recursive: true });
+    await mkdir(join(consumer, "node_modules"), { recursive: true });
+    await writeFile(join(cached, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./core": "./core.ts" } }));
+    await writeFile(join(cached, "token.ts"), 'export const token = Symbol("runtime-owned-token");');
+    await writeFile(join(cached, "core.ts"), 'export { token } from "./token.js";');
+    await symlink(cached, join(consumer, "node_modules/waffle"));
+    const entry = join(consumer, "main.ts");
+    const direct = 'import { token as direct } from "./node_modules/waffle/token.ts";';
+    const exported = 'import { token as exported } from "waffle/core";';
+    const imports = directFirst ? [direct, exported] : [exported, direct];
+    await writeFile(entry, imports.concat(["globalThis.sameToken = direct === exported;"]).join("\n"));
+    const config = browserBuildConfig([entry], join(scratch, "output"), { splitting: false });
+    const result = await Bun.build({ ...config, format: "iife" });
+    expect(result.success).toBe(true);
+    const context = { sameToken: false };
+    runInNewContext(await result.outputs[0]!.text(), context);
+    const identities = Object.keys(result.metafile!.inputs).filter(path => path.endsWith("/token.ts")).length;
+    expect({ sameToken: context.sameToken, identities }).toEqual({ sameToken: true, identities: 1 });
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
 test("browser realms tree-shake shared modules independently", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-realm-build-"));
   try {
