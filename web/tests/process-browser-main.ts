@@ -470,5 +470,5 @@ export async function runProcessCases(databaseName?: string) {
   return { result, progress: { checks, currentTest } };
 }
 
-if (isHostedPage()) startPage(createProcessPageSuite(runProcessCases, observeProcessPageErrors()));
+if (isHostedPage()) startPage(createProcessPageSuite(runProcessCases, observeProcessPageErrors(), window.__bunProcessPageDiagnostic));
 else await runProcessCases();
