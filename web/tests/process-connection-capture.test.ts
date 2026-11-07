@@ -137,3 +137,10 @@ for (const original of [
     expect(capture.read()?.refusal).toEqual({ name: original.name, code: original.code, errno: original.errno, refusal: expected });
   });
 }
+
+test("a failed diagnostic recorder write cannot replace the exact connection exception", () => {
+  const capture = createProcessConnectionCapture(), scope = capture.scope("case"), original = refusal();
+  Object.freeze(capture);
+  expect(thrown(() => connectProcessFilesystem(runtime(original, []), identity, scope, controller))).toBe(original);
+  expect(capture.read()).toBeNull();
+});

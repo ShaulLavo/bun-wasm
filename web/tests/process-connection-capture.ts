@@ -63,7 +63,6 @@ class ConnectionScope {
     const beforeConnect = snapshot(runtime);
     try { return runtime.filesystem.connect(identity); }
     catch (error) {
-      this.owner.failed = true;
       this.capture(runtime, controller, error, beforeConnect);
       throw error;
     }
@@ -71,6 +70,7 @@ class ConnectionScope {
 
   private capture(runtime: ConnectionRuntime, controller: ControllerIdentity, error: unknown, beforeConnect: LogicalSnapshot) {
     try {
+      this.owner.failed = true;
       const onFailure = snapshot(runtime);
       this.owner.failure = { caseLabel: this.label.slice(0, 128), scopeOrdinal: this.disposal.scopeOrdinal,
         controller: { kind: controller.kind, pid: controller.pid, parentPid: controller.parentPid },
