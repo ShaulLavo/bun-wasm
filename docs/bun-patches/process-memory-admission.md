@@ -49,7 +49,13 @@ modules through the same source-known fixture helper, including foreground-stop
 modules, without changing their bytes or assertions. The filesystem and signal-clock
 fixtures use that helper too. The network and transfer pages use the production
 streaming loader, and the interruption candidate loader records the bytes it
-already fetched. No raw compiled fixture is labeled memory-free.
+already fetched. Its extracted-loader tests import the same declaration recorder
+and verify the single module retains its actual empty declaration. UI model
+fixtures keep their fake runtime while exposing the real public memory functions
+needed by the bundled source helper. The isolated service-worker readiness test
+keeps its loader boundary and issued-grant identity while exposing those same
+public functions. It verifies that loading starts only after activation.
+No raw compiled fixture is labeled memory-free.
 `tests/helpers/process-reservations.ts` obtains reservations from the public
 `processHost` hook and disposes its memory-filesystem owner after its borrowers.
 Bun test commands resolve the invoking consumer's public package entries; browser

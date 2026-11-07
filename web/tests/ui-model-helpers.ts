@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { EditorState } from "@codemirror/state";
 import * as stateModule from "@codemirror/state";
 import * as viewModule from "@codemirror/view";
-import type { Runtime } from "waffle";
+import { declareModuleMemory, pages, type Runtime } from "waffle";
 import { getVfsDescriptor } from "../src/shared-fs";
 import * as engineLoader from "../src/engine-loader";
 import type { Playground } from "../src/playground/playground";
@@ -103,7 +103,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
   const boundary = {
     ...stateModule, ...viewModule, EditorView: View, EditorState,
-    ...engineLoader,
+    ...engineLoader, declareModuleMemory, pages,
     FitAddon: class { fit() {} }, Terminal: TerminalFixture,
     createRuntime: () => (runtime = { ...runtime }),
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
@@ -137,7 +137,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const replacements: Record<string, string[]> = {
     "@codemirror/state": Object.keys(stateModule), "@codemirror/view": Object.keys(viewModule),
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
-    waffle: ["createRuntime"], "browser-programs": ["BrowserPrograms"],
+    waffle: ["createRuntime", "declareModuleMemory", "pages"], "browser-programs": ["BrowserPrograms"],
     "engine-loader": ["ENGINES", "WasmMissing", "isEngine", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
