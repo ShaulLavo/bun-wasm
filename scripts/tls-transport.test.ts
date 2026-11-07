@@ -392,3 +392,43 @@ test("adapter ClientHello marker waits for callback unwind and the next raw reco
   expect(plain).toEqual(["S"]);
   expect(Buffer.concat(state.writes)).toEqual(Buffer.from([22, 1]));
 });
+
+test("STARTTLS error ordering reports certificate failure before the old socket closes", () => {
+  const state = fixture();
+  const raw = state.plain();
+  const events: string[] = [];
+  raw.on("close", () => events.push("pg-end"));
+  raw.on("data", () => {
+    const socket = state.tls.connect({ socket: raw });
+    socket.on("error", error => events.push(String(Reflect.get(error, "code"))));
+    socket.write("startup", () => {});
+  });
+  state.respond(() => ({ kind: "failed", error: {
+    code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", message: "TLS certificate verification failed", libraryCodes: [],
+  } }));
+  state.callbacks();
+  state.reads.push(Buffer.from("S"));
+  state.pump();
+  for (let turn = 0; turn < 8; turn++) { state.callbacks(); state.pump(); }
+  expect(events).toEqual(["UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "pg-end"]);
+  expect(state.counters.closes).toBe(1);
+  expect(state.releases.filter(([kind]) => kind === "connection")).toHaveLength(1);
+});
+
+test("STARTTLS error ordering also preserves JavaScript identity rejection", () => {
+  const state = fixture(); state.handshake();
+  const raw = state.plain();
+  const events: string[] = [];
+  const rejected = Object.assign(new Error("hostname does not match"), { code: "ERR_TLS_CERT_ALTNAME_INVALID" });
+  raw.on("close", () => events.push("pg-end"));
+  raw.on("data", () => {
+    const socket = state.tls.connect({ socket: raw, checkServerIdentity: () => rejected });
+    socket.on("error", error => { expect(error).toBe(rejected); events.push("identity-error"); });
+    socket.write("startup", () => {});
+  });
+  state.callbacks(); state.reads.push(Buffer.from("S")); state.pump();
+  for (let turn = 0; turn < 8; turn++) { state.callbacks(); state.pump(); }
+  expect(events).toEqual(["identity-error", "pg-end"]);
+  expect(state.counters.closes).toBe(1);
+  expect(state.releases.filter(([kind]) => kind === "connection")).toHaveLength(1);
+});

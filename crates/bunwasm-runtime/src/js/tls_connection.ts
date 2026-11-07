@@ -323,8 +323,8 @@
       try {
         if (phase.kind !== "waiting" && phase.kind !== "closed") internal.native.tlsRelease("connection", phase.id);
       } finally {
-        try { this.reservation.destroy(value); }
-        finally { this.finishDestroy(value, writeError, writing, final); }
+        try { this.finishDestroy(value, writeError, writing, final); }
+        finally { this.reservation.destroy(value); }
       }
     }
   }

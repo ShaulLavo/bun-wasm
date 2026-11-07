@@ -32,6 +32,13 @@ the native session, and closes the raw handle once. A scheduled old-stream
 `read(0)` becomes an inert readiness poll after transfer. Other old-shell I/O
 fails with `ERR_TLS_SOCKET_OWNERSHIP`.
 
+On STARTTLS failure, the TLS owner's error and close callbacks run before the
+transferred plaintext shell is closed. Both sockets defer stream destruction,
+so this order queues the certificate error before the old shell's close event.
+PostgreSQL clients can otherwise reject `connect()` on the old shell's close
+with a generic connection-ended error and lose the original TLS reason.
+Transport teardown remains in `finally`, including when an owner callback throws.
+
 ## Explicit limits
 
 Only client TLS over a bun-wasm TCP socket is implemented. Server APIs, arbitrary
