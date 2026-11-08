@@ -23,7 +23,7 @@ export async function buildNativeProfile(profile: unknown, directory: string, en
   const root = resolve(directory);
   const core = join(root, 'core');
   const side = join(root, engine);
-  const program = join(root, 'program');
+  const program = join(root, engine === 'quickjs' ? 'program' : `program-${engine}`);
   mkdirSync(program, { recursive: true });
   const engineEnvironment = engine === 'quickjs'
     ? { QUICKJS_BUILD_DIR: side, QUICKJS_PROFILE: 'shared-group' }

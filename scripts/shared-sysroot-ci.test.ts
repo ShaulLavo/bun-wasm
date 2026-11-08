@@ -147,6 +147,7 @@ test("all shared saves require a successful uncancelled main push and an actual 
     "Save completed shared-wasm-tools setup",
     "Save completed shared-wasmtime setup",
     "Save shared profile cache",
+    "Save the shared JSC prebuild",
     "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
@@ -176,7 +177,8 @@ test("shared native checks consume one matching launcher and one produced group 
   expect(shared).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
   expect(shared).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
   expect(shared.indexOf('"$GUEST_CARGO" fetch --locked')).toBeLessThan(shared.indexOf("      - name: Produce the shared native profile once"));
-  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group/g)).toHaveLength(1);
+  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native"$/gm)).toHaveLength(1);
+  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native" jsc$/gm)).toHaveLength(1);
   expect(shared).toContain("bun scripts/test-checks.ts native --profile shared-group");
   expect(shared).toContain('export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"');
   expect(shared).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
