@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 test("build-qualified streaming engines reuse one source snapshot for declarations and verified cache storage", () => {
   const result = spawnSync(process.execPath, [new URL("../web/tests/fixtures/engine-loader-copy-probe.ts", import.meta.url).pathname], { encoding: "utf8", timeout: 3000 });
@@ -15,7 +16,7 @@ function relocateImports(source: string, path: string): string {
 
 for (const expression of ["Uint8Array.from(bytes)", "new Uint8Array(bytes)", "bytes.slice()"]) {
   test(`copy probe rejects a redundant snapshot from ${expression}`, () => {
-    const scratch = mkdtempSync("/work/tmp/bun-wasm-engine-copy-");
+    const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-engine-copy-"));
     try {
       const loader = new URL("../web/src/engine-loader.ts", import.meta.url).pathname;
       const fixture = new URL("../web/tests/fixtures/engine-loader-copy-probe.ts", import.meta.url).pathname;
