@@ -9,6 +9,8 @@ async function checkAvailability(ownerOnly = false): Promise<void> {
 }
 export async function withNativeDriver<T>(operation: (endpoint: string) => Promise<T>, cleanupFile?: string): Promise<T> {
   if (process.platform !== "darwin") throw new Error("Native Safari driver must run on the discovered Mac");
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error("Mac user identity is unavailable");
   await checkAvailability();
   const lock = join(homedir(), "tmp/.agent-mac-lock");
   await mkdir(lock);
@@ -23,7 +25,7 @@ export async function withNativeDriver<T>(operation: (endpoint: string) => Promi
     if (await consoleState.exited !== 0 || /CGSSessionScreenIsLocked[^\n]*Yes/.test(state)) throw new Error("Desktop Safari requires an unlocked Mac console");
     port = await allocateSafariDriverPort();
     const started = Date.now();
-    driver = Bun.spawn(["/usr/bin/safaridriver", "--port", String(port)], { stdout: "ignore", stderr: "inherit" });
+    driver = Bun.spawn(["/bin/launchctl", "asuser", String(uid), "/usr/bin/safaridriver", "--port", String(port)], { stdout: "ignore", stderr: "inherit" });
     owned = ownSafariDriver(driver, started, port);
     const endpoint = `http://127.0.0.1:${port}`;
     await until(async () => fetch(endpoint + "/status", { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false), Boolean, 10_000);

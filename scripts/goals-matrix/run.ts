@@ -10,6 +10,7 @@ import { createPlaywrightTransport, type Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { assetIdentity } from "./assets";
 import { withNativeDriver } from "./native";
+import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 
 export interface Options {
@@ -94,6 +95,7 @@ function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): 
   }
 }
 async function runLocked(config: Options): Promise<Report> {
+  await preflight(config.root, config.engines);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);

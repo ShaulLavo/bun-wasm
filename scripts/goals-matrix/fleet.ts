@@ -1,4 +1,5 @@
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { run, options, type Options } from "./run";
 import { saveReport } from "./report";
@@ -75,7 +76,7 @@ export async function fleet(config: Options): Promise<Report> {
   await mkdir(config.output, { recursive: true });
   const lock = join(config.output, ".goals-fleet-lock");
   await mkdir(lock);
-  const scratch = await mkdtemp("/work/tmp/bun-wasm-goals-fleet-");
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-fleet-"));
   try {
     const local = await run({ ...config, browsers: ["chrome", "firefox"] });
     const native = await mac(config, local.source, scratch);

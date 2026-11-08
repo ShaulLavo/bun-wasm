@@ -1,9 +1,18 @@
 # Run the framework matrix
 
-Build the playground with `source env.sh && bun web/build.ts`. Supply matching
-engine pairs through the build's existing environment variables, or copy a
-recorded delivery's WASM files into the new build. Keep the actual WASM source
-identity separate from the playground source commit.
+Stage the retained delivery before building current playground JavaScript:
+
+```sh
+source env.sh
+TMPDIR=/work/tmp bun /work/heavy-runner/current/run.js --class build goals-matrix-prepare -- \
+  bun scripts/goals-matrix/prepare.ts /absolute/delivery
+```
+
+The preparation command checks the delivery shell pin against the current consumer,
+expands the engine pairs in task-owned scratch, and builds with those inputs. It
+then checks embedded host fingerprints, engine-builds.json, and actual staged
+bytes. Copying WASM into an already built host is rejected before any cells run.
+Keep the WASM delivery source separate from the playground source commit.
 
 Run all 260 boxes:
 
@@ -49,3 +58,7 @@ Set `GOALS_CHROME_EXECUTABLE` when Google Chrome is installed outside its normal
 location. The runner checks the executable reports Google Chrome. Chromium is not
 accepted under the Chrome label. Generated Mac runner dependencies install only
 inside the task directory; shared browser and download caches remain available.
+
+Native SafariDriver starts through `launchctl asuser` in the Mac GUI login session.
+An SSH-launched driver without that GUI context can time out waiting for
+RWIApplication even when remote automation is already enabled.

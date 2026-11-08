@@ -10,6 +10,7 @@
         "scripts/c1-controller.ts",
         "scripts/goals-matrix/run.ts",
         "scripts/goals-matrix/fleet.ts",
+        "scripts/goals-matrix/prepare.ts",
         "scripts/c1/contract-fixture.ts",
         "scripts/c1/tls-page.ts",
         "scripts/c1/native-header.ts",
