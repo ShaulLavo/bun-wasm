@@ -4,6 +4,8 @@ import { command, start } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
+import { createSafariTransport } from "./safari-transport";
+import { withPlayground } from "./test-fixture";
 function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready")): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
@@ -63,3 +65,46 @@ test("a preview activation rejection keeps its original error", async () => {
   const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation);
   await expect(start(transport, "starts with rejected activation", 1000)).rejects.toBe(error);
 });
+
+function safariDriver(fixture: Transport, onPreview: () => void) {
+  let deleted = false;
+  async function evaluated(expression: string): Promise<Response> {
+    if (expression.includes("function previewReady")) onPreview();
+    const value = await fixture.evaluate(expression);
+    return Response.json({ value: { ok: true, json: JSON.stringify(value ?? null) } });
+  }
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/session") return Response.json({ value: { sessionId: "preview-cancellation", capabilities: { browserName: "Safari", platformName: "macOS" } } });
+    if (request.method === "DELETE" && path === "/session/preview-cancellation") { deleted = true; return Response.json({ value: null }); }
+    if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
+    if (!path.endsWith("/execute/async")) return Response.json({ value: null });
+    const body: unknown = await request.json();
+    if (!body || typeof body !== "object" || !("args" in body) || !Array.isArray(body.args) || typeof body.args[0] !== "string") throw new Error("Missing evaluation");
+    return evaluated(body.args[0]);
+  } });
+  return { server, deleted: () => deleted };
+}
+
+test("pending preview activation leaves the serialized Safari transport free for cancellation cleanup", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async fixture => {
+    const controller = new AbortController();
+    await fixture.evaluate("globalThis.activation = Promise.withResolvers(); playground.previews.ready = activation.promise; void 0");
+    const driver = safariDriver(fixture, () => queueMicrotask(() => controller.abort()));
+    const transport = await createSafariTransport({ endpoint: driver.server.url.href, browser: "safari", timeoutMs: 30_000 });
+    try {
+      const result = await execute({ framework, box: { framework: framework.id, browser: "safari", engine: "browser" },
+        url: "http://fixture/?engine=browser", timeoutMs: 30_000, signal: controller.signal,
+        async createTransport() { return transport; }, async saveLog() {},
+      });
+      expect(result).toMatchObject({ status: "fail", phase: "dev" });
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass" });
+      expect(driver.deleted()).toBe(true);
+    } finally {
+      await fixture.evaluate("activation.resolve('ready')");
+      await transport.close();
+      await driver.server.stop(true);
+    }
+  });
+}, 30_000);

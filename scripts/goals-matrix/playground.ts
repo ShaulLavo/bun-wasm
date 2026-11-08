@@ -8,7 +8,8 @@ interface Playground {
   term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
 }
 declare const playground: Playground;
-declare global { var __goalsCommand: { token: string; done: boolean; code: number | null; error: string | null } | undefined; }
+type PreviewState = { status: "pending" | "ready" } | { status: "failed"; error: unknown };
+declare global { var __goalsPreview: PreviewState | undefined; var __goalsCommand: { token: string; done: boolean; code: number | null; error: string | null } | undefined; }
 function expression<A, R>(operation: (input: A) => R, input: A): string { return `(${operation.toString()})(${JSON.stringify(input)})`; }
 export async function until<T>(operation: () => Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
@@ -67,18 +68,26 @@ function listener(): { listening: boolean; running: boolean; url: string | null 
   const listening = playground.previews.serves(5173);
   return { listening, running: playground.shell.running, url: listening ? playground.previews.url(5173) : null };
 }
-async function previewReady(): Promise<void> {
-  const state = await playground.previews.ready;
-  if (state !== "ready") throw new Error(`Preview transport is ${state}`);
+function previewReady(): boolean {
+  if (!globalThis.__goalsPreview) {
+    globalThis.__goalsPreview = { status: "pending" };
+    void playground.previews.ready.then(state => {
+      globalThis.__goalsPreview = state === "ready" ? { status: "ready" } : { status: "failed", error: new Error(`Preview transport is ${state}`) };
+    }, error => { globalThis.__goalsPreview = { status: "failed", error }; });
+  }
+  const state = globalThis.__goalsPreview;
+  if (state.status === "failed") throw state.error;
+  return state.status === "ready";
 }
 export async function start(transport: Transport, text: string, timeoutMs: number): Promise<string> {
   await transport.useHost();
+  await transport.evaluate<boolean>(expression(previewReady, undefined));
   const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined));
   if (before.running || before.listening) throw new Error("Cannot start with an existing foreground or listener");
   const token = await transport.evaluate<string>(expression(launch, text));
   const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
-  await transport.evaluate(expression(previewReady, undefined));
+  await until(() => transport.evaluate<boolean>(expression(previewReady, undefined)), value => value, timeoutMs);
   return result.url;
 }
 function stop(): void {
