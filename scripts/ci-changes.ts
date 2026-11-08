@@ -43,8 +43,16 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts",
   "web/src/native-direct-stream.ts", "src/engine-kind.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake",
   "scripts/with-build-cache.sh", ".github/actions/rust-build-cache/action.yml",
+  // The shared Browser consumer's entry points, group-sensitive host and build/dependency inputs.
+  "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
+  "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
+  "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
+  "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
+  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
+  "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/"];
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/"];
 export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
   return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
@@ -52,7 +60,7 @@ export function needsSharedNative(paths: readonly string[], inputs = sharedNativ
 
 const nativeChecks = discoverChecks();
 const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
-const sharedNativeCheckInputs = nativeChecks.filter(check => check.owner === "native" && check.profile === "shared-group").flatMap(checkInputPaths);
+const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
