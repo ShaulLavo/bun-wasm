@@ -27,6 +27,7 @@ jobs:
       rust: ${{ steps.changes.outputs.rust }}
       jsc: ${{ steps.changes.outputs.jsc }}
       shared: ${{ steps.changes.outputs.shared }}
+      shared-native: ${{ steps.changes.outputs.shared_native }}
     steps:
       - name: Require a ready PR
         if: github.event_name == 'pull_request' && github.event.pull_request.draft
@@ -1141,6 +1142,7 @@ jobs:
       # JSC builds at low priority beside QuickJS and host-engine work; timed checks
       # start only after the background producer finishes.
       - name: Start the JSC Cargo guest build
+        id: jsc-guest-start
         if: needs.quality.outputs.jsc == 'true'
         env:
           JOBS: "2"
@@ -1157,6 +1159,21 @@ jobs:
           trap 'exit 143' TERM
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
+      - name: Package the native profile launcher
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-profile-launcher"
+          cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          git rev-parse HEAD > "$RUNNER_TEMP/native-profile-launcher/source.txt"
+      - uses: actions/upload-artifact@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/native-profile-launcher/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+          compression-level: 0
       - name: Build one host-engine guest for real-browser source cache acceptance
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -1187,7 +1204,7 @@ jobs:
         run: |
           bun scripts/ci-jsc-worker.ts wait "$RUNNER_TEMP/jsc-guest"
       - name: Stop the JSC Cargo guest build
-        if: ${{ always() && needs.quality.outputs.jsc == 'true' }}
+        if: ${{ always() && contains(fromJSON('["success", "failure", "cancelled"]'), steps.jsc-guest-start.outcome) }}
         run: |
           bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"
       - name: Save the JSC Cargo cache once per input revision
@@ -1316,8 +1333,8 @@ jobs:
 
   shared-sysroot:
     name: Shared PIC sysroot proof
-    needs: quality
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}
+    needs: [quality, rust]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1325,14 +1342,36 @@ jobs:
     timeout-minutes: 30
     env:
       WASI_LIBC_JOBS: "2"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
       - uses: actions/checkout@v4
+      - name: Require the shared native launcher producer
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
+        run: |
+          test "$PROFILE_LAUNCHER_RESULT" = success
+      - uses: actions/download-artifact@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/native-profile-launcher
+      - name: Verify the native launcher source
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
+          chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
       - name: Configure private shared sysroot paths
         run: |
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
           echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
           echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -1350,6 +1389,8 @@ jobs:
           if command -v cmake && command -v ninja; then exit 0; fi
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
+      - name: Install pinned shared build tools
+        run: bun scripts/ci-build-tools.ts
       - uses: actions/cache/restore@v4
         id: shared-sdk
         with:
@@ -1451,6 +1492,78 @@ jobs:
         run: |
           source env.sh
           bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
+
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-rustup-cache
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: dtolnay/rust-toolchain@nightly
+        if: needs.quality.outputs.shared-native == 'true'
+        with:
+          toolchain: nightly-2026-09-15
+          components: rust-src, rustfmt, clippy
+          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
+      - uses: ./.github/actions/rust-build-cache
+        if: needs.quality.outputs.shared-native == 'true'
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-binaryen
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Prepare shared-profile Binaryen
+        if: needs.quality.outputs.shared-native == 'true'
+        run: bun scripts/ci-binaryen.ts
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-native-cache
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}/shared-native
+          key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
+          restore-keys: |
+            shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-
+      - name: Prepare the shared native source dependencies
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          bash scripts/sync-bun.sh
+          bash scripts/sync-crypto.sh
+          cargo fetch --locked
+          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+          eval "$guest_environment"
+          sysroot=$("$RUSTC" --print sysroot)
+          "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
+      - name: Produce the shared native profile once
+        if: needs.quality.outputs.shared-native == 'true'
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source env.sh
+          bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native"
+      - name: Consume the shared native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Save the completed shared native profile
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}/shared-native
+          key: ${{ steps.shared-native-cache.outputs.cache-primary-key }}
+      - name: Shared profile cache result
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
 
   web:
     needs: quality

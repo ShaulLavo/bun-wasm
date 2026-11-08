@@ -160,9 +160,9 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
 
 test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
   expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
-    .toBe("rust=false\njsc=false\nshared=true");
+    .toBe("rust=false\njsc=false\nshared=true\nshared_native=false");
   expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
-    .toBe("rust=false\njsc=false\nshared=false");
+    .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -204,16 +204,22 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
   if (!fixture) throw new Error("Fixture not initialized");
   const first = commitInput("package.json");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.1", scripts: { quality: "bun quality.ts" } }));
-  git(["commit", "-qam", "manifest inputs"]);
+  mkdirSync(join(fixture, "checks"), { recursive: true });
+  writeFileSync(join(fixture, "checks/native-shared-release.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/shared-release", profile: "shared-group" }));
+  git(["add", "."]);
+  git(["commit", "-qm", "manifest inputs"]);
   const manifestBase = git(["rev-parse", "HEAD"]);
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.2", scripts: { quality: "bun quality.ts" } }));
   git(["commit", "-qam", "patch bump"]);
   const bumped = git(["rev-parse", "HEAD"]);
   expect(select(manifestBase, bumped)).toBe("rust=false\njsc=false");
   expect(select(manifestBase, bumped, "push")).toBe("rust=false\njsc=false");
+  expect(selectionOutput(manifestBase, bumped)).toEndWith("shared_native=false");
+  expect(selectionOutput(manifestBase, bumped, "push")).toEndWith("shared_native=false");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
   git(["commit", "-qam", "change native driver"]);
   expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=false");
+  expect(selectionOutput(bumped, git(["rev-parse", "HEAD"]))).toEndWith("shared_native=true");
   expect(() => select(first, bumped)).toThrow();
 });
 
@@ -295,9 +301,9 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
 for (const event of ["pull_request", "push"]) {
   test(`dormant Hermes recipes do not select native production through an actual ${event} diff`, () => {
     expect(selectionOutput(base, commitInput("hermes/build.sh"), event))
-      .toBe("rust=false\njsc=false\nshared=false");
+      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
     expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
-      .toBe("rust=false\njsc=false\nshared=false");
+      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
   });
 }
 

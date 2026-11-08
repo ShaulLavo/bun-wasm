@@ -10,6 +10,7 @@ mod guest;
 mod linked;
 #[path = "../../bunwasm-cli/max_memory.rs"]
 mod max_memory;
+mod nested;
 mod net;
 mod process;
 mod shm;
@@ -53,6 +54,7 @@ BUN_WASM_HOST_STACK_KIB sets the host wasm stack limit (default 16384 KiB).
 ";
 
 pub struct Host {
+    pub(crate) nested: nested::State,
     pub wasi: WasiP1Ctx,
     pub net: net::Net,
     pub memory: Option<guest::GuestMemory>,
@@ -369,6 +371,7 @@ fn run_module_instance(
     processes.join_memory_group(member.as_ref().map(shm::MemberLease::group));
     let watches = fs_watch::Watches::new(net.notify());
     let host = Host {
+        nested: nested::State::default(),
         wasi: wasi.build_p1(),
         net,
         functions: Vec::new(),
@@ -398,8 +401,20 @@ fn settle(store: Store<Host>) {
     let Some(member) = host.shm.take() else {
         return;
     };
+    let group = member.group();
+    let trace = host.trace;
+    if trace {
+        eprintln!("bun-wasm nested resources: {}", host.nested.snapshot());
+        eprintln!(
+            "bun-wasm group before physical stop: {:?}",
+            group.snapshot()
+        );
+    }
     drop(host);
     member.physical_stopped();
+    if trace {
+        eprintln!("bun-wasm group after physical stop: {:?}", group.snapshot());
+    }
 }
 
 fn run_store(
@@ -431,6 +446,7 @@ fn run_store(
     slots::add_import(&mut linker, &mut *store)?;
     slots::add_shell_imports(&mut linker)?;
     shm::add_imports(&mut linker)?;
+    nested::add_imports(&mut linker)?;
     // SAFETY: run_module_instance holds the member's group backing lease (`_backing`) from
     // before this Store exists until after it is destroyed.
     let (instance, member) = unsafe {
@@ -479,12 +495,20 @@ fn select_instance_outcome(
                 // observed by epoch, poll, or stdio already selected signal death.
                 let outcome = cancel.select(FinalOutcome::Exit(134));
                 if matches!(outcome, FinalOutcome::Exit(_)) {
-                    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
+                    report_instance_trap(&error);
                 }
                 outcome
             }
         },
     }
+}
+
+fn report_instance_trap(error: &anyhow::Error) {
+    if let Some(diagnostic) = nested::fatal_diagnostic(error) {
+        eprintln!("bun-wasm: bun.wasm trapped: {diagnostic}");
+        return;
+    }
+    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
 }
 
 fn main() -> ExitCode {

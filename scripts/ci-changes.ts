@@ -10,7 +10,7 @@ const nativeFiles = new Set([
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh", "tests/test-stdout-busy-loop.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
-  "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
+  "scripts/native-profile-fixtures.ts", "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "web/src/script-evaluation.ts",
   "tests/memory-telemetry.test.ts",
@@ -32,7 +32,27 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
   return paths.some(path => sharedSysrootFiles.has(path));
 }
 
-const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
+export const sharedNativeFiles: ReadonlySet<string> = new Set([
+  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
+  "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
+  "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/src/program-profile.ts", "scripts/src/engine-explicit-init.ts",
+  "scripts/src/engine-init.c", "scripts/quickjs-core-exports.txt", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts",
+  "scripts/build-wasi-sysroot.ts", "scripts/build-shared-wasi-libc.sh", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
+  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts",
+  "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts",
+  "web/src/native-direct-stream.ts", "src/engine-kind.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake",
+  "scripts/with-build-cache.sh", ".github/actions/rust-build-cache/action.yml",
+]);
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/"];
+export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {
+  if (inputs.length === 0) return false;
+  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+}
+
+const nativeChecks = discoverChecks();
+const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
+const sharedNativeCheckInputs = nativeChecks.filter(check => check.owner === "native" && check.profile === "shared-group").flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
@@ -76,9 +96,13 @@ function sharedWebGuestInput(path: string): boolean {
   return webGuestFiles.has(path) || path.startsWith("web/scripts/node-") || webGuestDirectories.some(root => path.startsWith(root));
 }
 
+function excludedNativeInput(path: string): boolean {
+  return runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
+    || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path);
+}
+
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
-  if (runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
-    || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path)) return false;
+  if (excludedNativeInput(path)) return false;
   return path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
     || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
@@ -89,7 +113,7 @@ export function needsJsc(paths: readonly string[]): boolean {
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
-  return needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
+  return needsJsc(paths) || needsSharedNative(paths) || paths.some(path => nativeInput(path, checkInputs));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
@@ -108,7 +132,7 @@ function manifestInputs(ref: string): string | undefined {
 }
 
 function nativeChanges(paths: readonly string[], base: string, head: string, ancestor: string): string[] {
-  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(nativeCheckInputsAt);
+  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref));
   if (!paths.includes("package.json")) return paths.filter(path => needsRust([path], checkInputs));
   const before = manifestInputs(base);
   const after = manifestInputs(head);
@@ -123,5 +147,6 @@ if (import.meta.main) {
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}`);
+  const profileInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref, "shared-group"));
+  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nshared_native=${needsSharedNative(native, profileInputs)}`);
 }

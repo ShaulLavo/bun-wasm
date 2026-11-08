@@ -236,6 +236,9 @@ impl Programs {
         let Some(program) = self.program(module) else {
             return Ok(());
         };
+        if member.is_some() {
+            crate::nested::bind(core, store)?;
+        }
         core.get_typed_func::<(), ()>(&mut *store, "__wasm_call_ctors")?
             .call(&mut *store, ())?;
         let image = match (member, &program.group) {

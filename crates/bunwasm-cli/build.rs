@@ -73,11 +73,66 @@ fn shared_group_link() {
     for arg in std::fs::read_to_string(list).unwrap().lines() {
         println!("cargo:rustc-link-arg-bin=bun={arg}");
     }
+    shared_cxx_runtime();
     // The producer proves which C++ runtime members the link selected from this map.
     println!("cargo:rerun-if-env-changed=BUN_WASM_CORE_LINK_MAP");
     let map = std::env::var("BUN_WASM_CORE_LINK_MAP")
         .expect("shared-group cores record their link map in BUN_WASM_CORE_LINK_MAP");
     println!("cargo:rustc-link-arg-bin=bun=-Map={map}");
+}
+
+fn shared_cxx_runtime() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cxx-runtime.c");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("cxx-runtime.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-c",
+        ])
+        .args(entry_flags())
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "compile shared-group C++ runtime overrides"
+    );
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    shared_cxx_sort();
+}
+
+fn shared_cxx_sort() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cxx-sort.cpp");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("cxx-sort.o");
+    let compiler = std::env::var("CXX_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-D_LIBCPP_BUILDING_LIBRARY",
+            "-c",
+        ])
+        .args(entry_flags())
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(status.success(), "compile shared-group libc++ sort");
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
 }
 
 fn split_entry() {
@@ -112,9 +167,30 @@ fn split_entry() {
         "cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/libwasi-emulated-process-clocks.a"
     );
     println!("cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/libwasi-emulated-getpid.a");
+    if shared_group() {
+        println!("cargo:rustc-link-arg-bin=bun=--export=errno_location");
+        for name in [
+            "bun_futex_wait32",
+            "bun_futex_wait64",
+            "bun_futex_wake",
+            "bun_core_bind_nested",
+            "bun_nested_dispatch",
+        ] {
+            println!("cargo:rustc-link-arg-bin=bun=--export={name}");
+        }
+    }
     for name in std::fs::read_to_string(exports).unwrap().lines() {
         // A PIE member imports its stack pointer; the side shares that same imported global.
-        if name == "__stack_pointer" && shared_group() {
+        if shared_group()
+            && [
+                "__stack_pointer",
+                "__stack_low",
+                "__stack_high",
+                "__heap_base",
+                "errno",
+            ]
+            .contains(&name)
+        {
             continue;
         }
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");

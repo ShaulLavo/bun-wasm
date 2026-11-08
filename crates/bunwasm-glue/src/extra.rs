@@ -10,10 +10,10 @@ use bun_core::String as BunString;
 #[unsafe(no_mangle)]
 extern "C" fn errno_location() -> *mut c_int {
     unsafe extern "C" {
-        static mut errno: c_int;
+        fn __errno_location() -> *mut c_int;
     }
-    // SAFETY: address of wasi-libc's errno.
-    &raw mut errno
+    // SAFETY: wasi-libc's accessor has no preconditions.
+    unsafe { __errno_location() }
 }
 
 // ── WTF strings: never created without JavaScriptCore ─────────────────────
