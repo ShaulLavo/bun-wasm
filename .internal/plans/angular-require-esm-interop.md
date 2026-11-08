@@ -76,3 +76,44 @@ are in `split-marker/asset-source.json`. Both actual split guests pass the
 focused namespace fixture and nearby CommonJS controls, so the namespace marker
 is no longer the first blocker. The parent owns diagnosis of the later failures.
 No further Angular attempt was made by this worker.
+
+## Remaining conditional-resolution gap
+
+Independent review found a pre-existing gap outside wrapped static imports.
+A required ES module using `import {tag} from 'dual'` or `export {tag} from 'dual'`
+selects the package's `require` condition. A namespace import selects `import`.
+This reproduces in store and records modes, each with hooks and native contexts.
+Expected output for the named import and re-export is `import-tag`; actual output
+is `require-tag`. The unwrapped printer branch already behaves this way at the
+assigned base, so this is not caused by the new scoped wrapper.
+
+The retained reproducer is
+`/work/reports/goals/astro-angular/angular/review-548/condition-forms.ts`.
+Stage a browser guest as `<scratch>/bun-browser.wasm`, then run
+`bun /work/reports/goals/astro-angular/angular/review-548/condition-forms.ts "$PWD" <scratch>`
+from a source-qualified worktree after `source env.sh`. The script materializes
+its conditional package and removes that fixture. Its four outputs distinguish
+named, namespace, named re-export and side-effect import forms. Investigate the
+internal printer's unwrapped static import and re-export paths without changing
+explicit CommonJS require conditions. Keep the current PR claim limited to
+wrapped static imports. This follow-up is not a proven Angular goal blocker.
+
+## Namespace review blockers
+
+Independent review at `f401db6429f25f185ada4b11847cd62d72d01381` reproduces
+two regressions on the actual QuickJS and JSC guests. A require-only getter
+view is not identical to the dynamic-import namespace or a namespace re-export.
+Its non-null prototype also fails the current namespace-recognition predicate.
+The pre-change split namespace and native Bun pass both controls.
+
+PR 552 remains blocked. Preserve the actual canonical namespace and its live
+exports across require, dynamic import, and namespace re-export, rather than
+relaxing the identity or recognition tests. Native Bun exposes its marker on
+a namespace prototype and still recognizes the namespace by its engine brand.
+A correct fix may need native namespace construction support; the original
+require-only wrapper is not a sufficient solution.
+
+Exact reproduction is in
+`/work/reports/goals/astro-angular/split-marker/review-552/namespace-probe.sh`,
+with outputs in `identity-reexport.log`. The actual native fixture now asserts
+identity and namespace recognition, retaining all earlier marker checks.
