@@ -34,7 +34,7 @@ export function options(args: readonly string[]): Options {
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
-  const timeoutMs = parseTimeout(values.get("timeout-ms") ?? "180000");
+  const timeoutMs = parseTimeout(values.get("timeout-ms") ?? "90000");
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
@@ -89,7 +89,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const framework = frameworks.find(framework => framework.id === cell.framework);
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
   const port = framework.rootPreview ? await availablePort() : 5173;
-  return execute({ box: cell, framework, port, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
+  return execute({ box: cell, framework, port, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, buildTimeoutMs: deadlinePolicy(config.timeoutMs).buildTimeouts[cell.framework], installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
