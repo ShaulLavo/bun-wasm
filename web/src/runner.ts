@@ -1,6 +1,6 @@
 import { programMemory } from "../../src/program-memory.ts";
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
-import { pairedEngines } from "../../src/engine-kind.ts";
+import { isSharedGroupCore, pairedEngines } from "../../src/engine-kind.ts";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -403,8 +403,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     if (preparationStopped()) return;
     if (!subprocess) return;
-    const controlGrant = await subprocess.adoptRuntimeRoot(transport, programMemory(request.module), () => finished);
+    // A group core links only into a group admitted by the page, charged by that group's owner.
+    const memberOfGroup = isSharedGroupCore(request.module);
+    const controlGrant = await subprocess.adoptRuntimeRoot(transport, memberOfGroup ? "group" : programMemory(request.module), () => finished);
     if (!controlGrant) return;
+    const groupMember = memberOfGroup ? await subprocess.admitRootGroup() : undefined;
+    if (groupMember) request.memoryGroup = groupMember.request;
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
@@ -449,7 +453,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const transfers = [request.filesystem.port]
         .concat(request.lookupPort ? [request.lookupPort] : [])
         .concat(request.notifications ? [request.notifications.port] : [])
-        .concat(request.network ? [request.network.port] : []);
+        .concat(request.network ? [request.network.port] : [])
+        .concat(groupMember ? Array.from(groupMember.transfer as Iterable<MessagePort>) : []);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();

@@ -30,9 +30,14 @@ export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 /** Initialize a shared-group (PIE) core's data before constructors. */
 export const SHARED_GROUP_CORE_INITIALIZE_MEMORY = ["core_initialize_memory", "__wasm_apply_data_relocs"] as const;
 
+/** A relocatable core runs only as a memory group member. */
+export function isSharedGroupCore(core: WebAssembly.Module): boolean {
+  return WebAssembly.Module.customSections(core, "dylink.0").length === 1;
+}
+
 /** A shared-group pair is a relocatable core and a side that imports a shared memory. Mixed halves are refused. */
 export function sharedGroupPair(core: WebAssembly.Module, side: Uint8Array): boolean {
-  const group = WebAssembly.Module.customSections(core, "dylink.0").length === 1;
+  const group = isSharedGroupCore(core);
   if (group !== (importedMemory(side)?.shared ?? false)) throw new TypeError("Core and engine side were built for different program profiles");
   return group;
 }
