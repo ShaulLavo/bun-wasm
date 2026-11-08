@@ -67,10 +67,10 @@ export async function command(transport: Transport, text: string, timeoutMs: num
   if (result.code !== 0 || result.error) throw new Error(`${text} exited ${result.code}: ${result.error ?? output.slice(-6000)}`);
   return { ...result, output };
 }
-function listener(): { listening: boolean; running: boolean; url: string | null } {
+function listener(port: number): { listening: boolean; running: boolean; url: string | null } {
   if (typeof playground === "undefined") return { listening: false, running: false, url: null };
-  const listening = playground.previews.serves(5173);
-  return { listening, running: playground.shell.running, url: listening ? playground.previews.url(5173) : null };
+  const listening = playground.previews.serves(port);
+  return { listening, running: playground.shell.running, url: listening ? playground.previews.url(port) : null };
 }
 function previewReady(): boolean {
   if (!globalThis.__goalsPreview) {
@@ -83,13 +83,13 @@ function previewReady(): boolean {
   if (state.status === "failed") throw state.error;
   return state.status === "ready";
 }
-export async function start(transport: Transport, text: string, timeoutMs: number): Promise<string> {
+export async function start(transport: Transport, text: string, timeoutMs: number, port = 5173): Promise<string> {
   await transport.useHost();
   await transport.evaluate<boolean>(expression(previewReady, undefined));
-  const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined));
+  const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port));
   if (before.running || before.listening) throw new Error("Cannot start with an existing foreground or listener");
   const token = await transport.evaluate<string>(expression(launch, text));
-  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
+  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
   await until(() => transport.evaluate<boolean>(expression(previewReady, undefined)), value => value, timeoutMs);
   return result.url;
@@ -99,10 +99,10 @@ function stop(): void {
   if (playground.shell.running) playground.shell.input("\x03");
   if (playground.shell.running) playground.shell.input("\x03");
 }
-export async function stopServer(transport: Transport, timeoutMs: number): Promise<void> {
+export async function stopServer(transport: Transport, timeoutMs: number, port = 5173): Promise<void> {
   await transport.useHost();
   await transport.evaluate(expression(stop, undefined));
-  await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), value => !value.running && !value.listening, timeoutMs);
+  await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => !value.running && !value.listening, timeoutMs);
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
