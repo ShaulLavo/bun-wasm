@@ -23,6 +23,7 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
       const url = await task.serve();
       const browser = await task.launch(name === "chromium" ? chromium : webkit);
       for (const stage of ["metadata", "tarball"] as const) await scenario(browser, url, stage);
+      await scenario(browser, url, "metadata", "parents");
       assert.deepEqual(verifySite(out), before);
     } finally {
       if (previousRoot === undefined) delete process.env.ROOT;
@@ -33,8 +34,8 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
   }, 180000);
 }
 
-async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string, stage: "metadata" | "tarball") {
-  const registry = await fixture(stage);
+async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string, stage: "metadata" | "tarball", topology: "siblings" | "parents" = "siblings") {
+  const registry = await fixture(stage, topology);
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
@@ -44,7 +45,8 @@ async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, ur
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
     const result = await run(page, stage === "metadata" ? "bun install --lockfile-only" : "bun install", 30000);
     assert.equal(result.code, 0, result.output);
-    assert.equal(registry.trace.missedBarrier, false, `${stage} did not overlap`);
+    assert.equal(registry.trace.missedBarrier, false, `${stage} ${topology} did not overlap`);
+    if (topology === "parents") assert.equal(registry.trace.requests.length, 40, "cross-parent lookahead duplicated requests");
     assert.ok(registry.trace.peak > 1 && registry.trace.peak <= 8, `${stage} concurrency ${registry.trace.peak}`);
     console.log(`${browser.browserType().name()} Waffle ${stage}: ${result.ms} ms, peak ${registry.trace.peak}, body exceeds per-handle window`);
     const requests = registry.trace.requests.length;
