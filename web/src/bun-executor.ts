@@ -228,7 +228,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
         coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
       group = linked;
       onLinked(linked);
-      reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry, undefined, linked.memory);
+      reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry, undefined, linked.entry.exports.memory ?? linked.memory);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
       context.checkActive();
       return linked.entry;
@@ -241,7 +241,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
       try { group.initialize(); }
       finally { context.wasi.imports = originalImports; }
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics, group.memory);
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics, group.entry.exports.memory ?? group.memory);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
     beforeFinish() {

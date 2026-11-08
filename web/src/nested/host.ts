@@ -197,9 +197,14 @@ function readSlot(view: DataView, at: number, type: ValueName): number | bigint 
   return f64Value(bits);
 }
 
+/** A Wasm trap, or a stack overflow: RangeError in V8 and WebKit, InternalError in Firefox. */
+function isTrap(error: unknown): error is Error {
+  return error instanceof WebAssembly.RuntimeError || error instanceof RangeError || (error instanceof Error && error.name === "InternalError");
+}
+
 function replyError(error: unknown, category: string): Reply {
   if (error instanceof PendingException) return "PendingException";
-  const execution = error instanceof WebAssembly.RuntimeError || error instanceof NestedExecution || error instanceof RangeError;
+  const execution = isTrap(error) || error instanceof NestedExecution;
   return { Error: { category: execution ? "RuntimeError" : category, message: error instanceof Error ? error.message : String(error) } };
 }
 
@@ -258,8 +263,9 @@ export class NestedHost {
     return this.provider;
   }
 
+  /** An owned copy: neither TextDecoder nor WebAssembly.Module accepts a shared view. */
   private copy(pointer: number, length: number): Uint8Array<ArrayBuffer> {
-    return Uint8Array.from(new Uint8Array(this.shared().buffer, pointer, length));
+    return new Uint8Array(this.shared().buffer, pointer, length).slice();
   }
 
   /** A failure out of a core entry unwound core and engine frames: the member cannot continue. */
@@ -277,8 +283,7 @@ export class NestedHost {
    * 134. Only the outermost request converts it: a stack overflow leaves no room for this deep down.
    */
   private memberExit(error: unknown): unknown {
-    if (!this.coreFailed || this.invocations.length > 0) return error;
-    if (!(error instanceof WebAssembly.RuntimeError || error instanceof RangeError)) return error;
+    if (!this.coreFailed || this.invocations.length > 0 || !isTrap(error)) return error;
     this.diagnostic(`reentered core failed: ${error.message}\n`);
     return new WasiExit(134);
   }
