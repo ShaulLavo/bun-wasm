@@ -28,7 +28,8 @@
       "src/api/build.ts": "2e3f68d226cbb02a664d5badd57cc8283734e5e504f1db704b2485a994308505",
       "src/api/artifacts.ts": "0e92f51ff8352363eabd6774a99ed7b763fd9d9cfb40cd5d3eead32d36301bce",
       "src/api/templates/load-wasi-template.ts": "0f8e387c54e935928a9d043eeb72718ed873a3dfd7d6c2ca478081548a9a9aa3",
-      "src/api/templates/wasi-worker-template.ts": "1740f582c97bc963460e4b0fe27e1254112d0a75f48839ec820ebd349a8e4eee"
+      "src/api/templates/wasi-worker-template.ts": "1740f582c97bc963460e4b0fe27e1254112d0a75f48839ec820ebd349a8e4eee",
+      "dist/index.js": "9c129e8ee02ecebf3154dc5e8b7c84c045347d9843fb17e6a6db336e5ac4a883"
     }
   },
   "addons": [
