@@ -131,3 +131,26 @@ for (const stage of ["metadata", "tarball"] as const) {
     }
   }, 60000);
 }
+
+
+test("metadata lookahead spans already resolved parents with narrow child lists", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-parents-"));
+  const registry = await fixture("metadata", "parents");
+  try {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: registry.dependencies }));
+    await install(directory, registry.base);
+    assert.equal(registry.trace.missedBarrier, false, "next resolved parent's metadata did not start before the current child response was released");
+    assert.equal(registry.trace.requests.length, 40, "lookahead duplicated or speculated beyond known edges");
+    assert.ok(registry.trace.peak <= 8, `metadata concurrency ${registry.trace.peak}`);
+    const lock = JSON.parse(readFileSync(join(directory, "bun.lock"), "utf8"));
+    for (const name of Object.keys(registry.dependencies)) {
+      const child = name.replace("parent-", "item-");
+      assert.equal(lock.packages[child][0], `${child}@1.0.0`);
+      assert.equal(lock.packages[name][0], `${name}@1.0.0`);
+    }
+    await assertClosed(registry.trace);
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 60000);
