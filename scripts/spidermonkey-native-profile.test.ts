@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { discoverChecks } from "./test-checks.ts";
@@ -73,7 +74,7 @@ test("compile database parser rejects untyped or incomplete compiler inputs", ()
 });
 
 test("fresh-profile overlay installs once, checks exact bytes and rejects stale generations", () => {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-native-profile-test-");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-profile-test-"));
   try {
     installOverlay(scratch);
     installOverlay(scratch);
@@ -93,7 +94,7 @@ test("fresh-profile overlay installs once, checks exact bytes and rejects stale 
 });
 
 test("an old configured tree cannot acquire a new profile", () => {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-native-profile-test-");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-profile-test-"));
   try {
     mkdirSync(join(scratch, "obj"));
     writeFileSync(join(scratch, "obj/config.status"), "old");
@@ -130,7 +131,7 @@ test("all G2 embed hook requirements must remain in the new native archive", () 
 
 
 test("normal and unified sources must own actual members of the archive object closure", () => {
-  const root = mkdtempSync("/work/tmp/bun-wasm-irregexp-closure-");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-irregexp-closure-"));
   try {
     const sourceRoot = join(root, "firefox/js/src/irregexp");
     const objectRoot = join(root, "obj/js/src/irregexp");
@@ -176,7 +177,7 @@ test("every out-of-line subset definition is required, regardless of filler symb
 });
 
 function withQualificationFixture(run: (root: string) => void): void {
-  const root = mkdtempSync("/work/tmp/bun-wasm-native-qualification-test-");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-qualification-test-"));
   try { run(root); }
   finally { rmSync(root, { recursive: true, force: true }); }
 }
