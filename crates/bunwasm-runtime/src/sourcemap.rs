@@ -1,6 +1,8 @@
 //! Decoding of source map v3 `mappings` (one source) for mapping stack-trace
 //! positions in transpiled code back to the original file.
 
+use std::cell::RefCell;
+
 /// One mapping segment: generated column -> original (line, column), 0-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Segment {
@@ -9,10 +11,19 @@ struct Segment {
     orig_col: u32,
 }
 
-/// Decoded mappings, indexed by generated line (0-based).
-#[derive(Debug, Default)]
+/// The text is about a third the size of its decoded form, and most modules
+/// never appear in a stack trace.
+#[derive(Debug)]
+enum Mappings {
+    Encoded(Box<str>),
+    /// Indexed by generated line (0-based).
+    Decoded(Vec<Vec<Segment>>),
+}
+
+/// A module's mappings, decoded the first time a position is looked up.
+#[derive(Debug)]
 pub struct SourceMap {
-    lines: Vec<Vec<Segment>>,
+    mappings: RefCell<Mappings>,
 }
 
 fn base64_value(c: u8) -> Option<i64> {
@@ -52,40 +63,54 @@ fn decode_segment(text: &str) -> Vec<i64> {
     values
 }
 
-impl SourceMap {
-    pub fn parse(mappings: &str) -> SourceMap {
-        let mut lines = Vec::new();
-        // Source index, original line and column are relative across the
-        // whole string; the generated column resets on every line.
-        let (mut orig_line, mut orig_col, mut source) = (0i64, 0i64, 0i64);
-        for line_text in mappings.split(';') {
-            let mut gen_col = 0i64;
-            let mut segments = Vec::new();
-            for segment_text in line_text.split(',').filter(|s| !s.is_empty()) {
-                let fields = decode_segment(segment_text);
-                gen_col += fields[0];
-                if fields.len() < 4 {
-                    continue;
-                }
-                source += fields[1];
-                orig_line += fields[2];
-                orig_col += fields[3];
-                let _ = source;
-                segments.push(Segment {
-                    gen_col: gen_col.max(0) as u32,
-                    orig_line: orig_line.max(0) as u32,
-                    orig_col: orig_col.max(0) as u32,
-                });
+fn decode_mappings(mappings: &str) -> Vec<Vec<Segment>> {
+    let mut lines = Vec::new();
+    // Source index, original line and column are relative across the
+    // whole string; the generated column resets on every line.
+    let (mut orig_line, mut orig_col, mut source) = (0i64, 0i64, 0i64);
+    for line_text in mappings.split(';') {
+        let mut gen_col = 0i64;
+        let mut segments = Vec::new();
+        for segment_text in line_text.split(',').filter(|s| !s.is_empty()) {
+            let fields = decode_segment(segment_text);
+            gen_col += fields[0];
+            if fields.len() < 4 {
+                continue;
             }
-            segments.sort_by_key(|s| s.gen_col);
-            lines.push(segments);
+            source += fields[1];
+            orig_line += fields[2];
+            orig_col += fields[3];
+            let _ = source;
+            segments.push(Segment {
+                gen_col: gen_col.max(0) as u32,
+                orig_line: orig_line.max(0) as u32,
+                orig_col: orig_col.max(0) as u32,
+            });
         }
-        SourceMap { lines }
+        segments.sort_by_key(|s| s.gen_col);
+        lines.push(segments);
+    }
+    lines
+}
+
+impl SourceMap {
+    pub fn new(mappings: impl Into<Box<str>>) -> SourceMap {
+        SourceMap {
+            mappings: RefCell::new(Mappings::Encoded(mappings.into())),
+        }
     }
 
     /// Original (line, column), both 1-based, for a 1-based generated position.
     pub fn lookup(&self, line: u32, col: u32) -> Option<(u32, u32)> {
-        let segments = self.lines.get(line.checked_sub(1)? as usize)?;
+        let mut mappings = self.mappings.borrow_mut();
+        if let Mappings::Encoded(text) = &*mappings {
+            let lines = decode_mappings(text);
+            *mappings = Mappings::Decoded(lines);
+        }
+        let Mappings::Decoded(lines) = &*mappings else {
+            unreachable!("decoded above");
+        };
+        let segments = lines.get(line.checked_sub(1)? as usize)?;
         let col0 = col.saturating_sub(1);
         // Last segment starting at or before the column; else the first one.
         let index = segments.partition_point(|s| s.gen_col <= col0);
@@ -116,11 +141,28 @@ mod tests {
     #[test]
     fn lookup() {
         // line 1: col 0 -> (0,0); col 4 -> (0,10). line 2: col 2 -> (2,6).
-        let map = SourceMap::parse("AAAA,IAAU;EAEJ");
+        let map = SourceMap::new("AAAA,IAAU;EAEJ");
         assert_eq!(map.lookup(1, 1), Some((1, 1)));
         assert_eq!(map.lookup(1, 5), Some((1, 11)));
         assert_eq!(map.lookup(1, 7), Some((1, 13)));
         assert_eq!(map.lookup(2, 3), Some((3, 7)));
         assert_eq!(map.lookup(5, 1), None);
+    }
+
+    #[test]
+    fn mappings_stay_encoded_until_the_first_lookup() {
+        let map = SourceMap::new("AAAA,IAAU;EAEJ");
+        assert!(matches!(&*map.mappings.borrow(), Mappings::Encoded(_)));
+        assert_eq!(map.lookup(2, 3), Some((3, 7)));
+        assert!(matches!(&*map.mappings.borrow(), Mappings::Decoded(_)));
+        assert_eq!(map.lookup(1, 5), Some((1, 11)));
+    }
+
+    #[test]
+    fn segments_on_a_line_are_searched_in_column_order() {
+        // The second segment starts before the first on the generated line.
+        let map = SourceMap::new("IAAA,DACA");
+        assert_eq!(map.lookup(1, 4), Some((2, 1)));
+        assert_eq!(map.lookup(1, 5), Some((1, 1)));
     }
 }

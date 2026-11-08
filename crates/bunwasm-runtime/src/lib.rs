@@ -105,6 +105,8 @@ pub(crate) struct State {
     /// Stack-position fixups for files whose evaluated code differs from the
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
+    /// The original file most recently read for an error excerpt.
+    last_original: RefCell<Option<(String, Rc<str>)>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
     /// Handled signals dequeued by a synchronous sleep, delivered at the next checkpoint.
@@ -142,6 +144,7 @@ impl State {
             #[cfg(feature = "engine-host")]
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
+            last_original: RefCell::new(None),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),
