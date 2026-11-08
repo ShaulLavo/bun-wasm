@@ -47,10 +47,19 @@ fn is_cjs_wrapper(code: &str) -> bool {
 
 #[derive(Clone)]
 pub enum Original {
-    /// Read back when an excerpt is needed. A file edited since it was loaded has no excerpt.
+    /// Read back on a cache miss. Changed files have no new excerpt.
     File,
     /// Standard input, which cannot be read twice.
     Text(Rc<str>),
+}
+
+impl Original {
+    fn loaded(source: &str, stdin: bool) -> Self {
+        if stdin {
+            return Self::Text(Rc::from(source));
+        }
+        Self::File
+    }
 }
 
 /// How positions in the code the engine evaluated map to the file on disk.
@@ -470,11 +479,7 @@ impl State {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
                     entry.map = Some(crate::sourcemap::SourceMap::new(mappings));
-                    entry.original = Some(if stdin {
-                        Original::Text(Rc::from(raw.as_str()))
-                    } else {
-                        Original::File
-                    });
+                    entry.original = Some(Original::loaded(&raw, stdin));
                 }
                 (out.code, format)
             }
@@ -531,7 +536,8 @@ impl State {
     }
 
     /// The file `path` as it was loaded. Stack formatting asks for several lines of one
-    /// file in a row, so the last file read is kept.
+    /// file in a row, so the last file read is kept. That snapshot remains valid
+    /// for the loaded code even if the file later changes or disappears.
     fn original_file_text(&self, path: &str) -> Option<Rc<str>> {
         if let Some((cached, text)) = &*self.last_original.borrow()
             && cached == path

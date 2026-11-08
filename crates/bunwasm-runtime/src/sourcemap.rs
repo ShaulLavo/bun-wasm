@@ -63,32 +63,42 @@ fn decode_segment(text: &str) -> Vec<i64> {
     values
 }
 
+#[derive(Default)]
+struct DecoderPosition {
+    source: i64,
+    line: i64,
+    column: i64,
+}
+
+fn decode_line(text: &str, position: &mut DecoderPosition) -> Vec<Segment> {
+    let mut gen_col = 0i64;
+    let mut segments = Vec::new();
+    for segment_text in text.split(',').filter(|s| !s.is_empty()) {
+        let fields = decode_segment(segment_text);
+        gen_col += fields[0];
+        if fields.len() < 4 {
+            continue;
+        }
+        position.source += fields[1];
+        position.line += fields[2];
+        position.column += fields[3];
+        segments.push(Segment {
+            gen_col: gen_col.max(0) as u32,
+            orig_line: position.line.max(0) as u32,
+            orig_col: position.column.max(0) as u32,
+        });
+    }
+    segments.sort_by_key(|s| s.gen_col);
+    segments
+}
+
 fn decode_mappings(mappings: &str) -> Vec<Vec<Segment>> {
     let mut lines = Vec::new();
     // Source index, original line and column are relative across the
     // whole string; the generated column resets on every line.
-    let (mut orig_line, mut orig_col, mut source) = (0i64, 0i64, 0i64);
+    let mut position = DecoderPosition::default();
     for line_text in mappings.split(';') {
-        let mut gen_col = 0i64;
-        let mut segments = Vec::new();
-        for segment_text in line_text.split(',').filter(|s| !s.is_empty()) {
-            let fields = decode_segment(segment_text);
-            gen_col += fields[0];
-            if fields.len() < 4 {
-                continue;
-            }
-            source += fields[1];
-            orig_line += fields[2];
-            orig_col += fields[3];
-            let _ = source;
-            segments.push(Segment {
-                gen_col: gen_col.max(0) as u32,
-                orig_line: orig_line.max(0) as u32,
-                orig_col: orig_col.max(0) as u32,
-            });
-        }
-        segments.sort_by_key(|s| s.gen_col);
-        lines.push(segments);
+        lines.push(decode_line(line_text, &mut position));
     }
     lines
 }
