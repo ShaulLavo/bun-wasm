@@ -1206,3 +1206,118 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/So
 +        request.fail();
 +#endif
          throwOutOfMemoryError(globalObject, scope);
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -45,6 +45,13 @@
+ #include "WASIMemoryTelemetry.h"
+ #endif
+
++#if defined(BUN_WASM_SHARED_GROUP)
++#include "Heap.h"
++#include "VM.h"
++extern "C" uint32_t bun_shared_buffer_alloc(uint32_t bytes);
++extern "C" void bun_shared_buffer_release(uint32_t address);
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+ namespace JSC {
+@@ -673,6 +680,27 @@ RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, uns
+     return createShared(SharedArrayBufferContents::create({ memory, sizeInBytes.value() }, maxByteLength, WTF::move(handle), nullptr, SharedArrayBufferContents::Mode::Default));
+ }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++RefPtr<ArrayBuffer> ArrayBuffer::tryCreateGroupShared(VM& vm, size_t byteLength)
++{
++    if (byteLength > MAX_ARRAY_BUFFER_SIZE)
++        return nullptr;
++    uint32_t address = bun_shared_buffer_alloc(byteLength);
++    if (!address) {
++        // Finalization lags allocation. Collect and finish sweeping so released regions return.
++        vm.heap.collectNow(Sync, CollectionScope::Full);
++        address = bun_shared_buffer_alloc(byteLength);
++    }
++    if (!address)
++        return nullptr;
++    auto* data = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(address));
++    auto release = createSharedTask<void(void*)>([](void* storage) {
++        bun_shared_buffer_release(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(storage)));
++    });
++    return createShared(SharedArrayBufferContents::create({ data, byteLength }, std::nullopt, nullptr, WTF::move(release), SharedArrayBufferContents::Mode::Default));
++}
++#endif
++
+ ArrayBuffer::~ArrayBuffer() { }
+
+ std::expected<int64_t, GrowFailReason> SharedArrayBufferContents::grow(VM& vm, size_t newByteLength, bool requirePageMultiple)
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.h
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+@@ -259,6 +259,10 @@ public:
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(ArrayBuffer&);
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(std::span<const uint8_t> = { });
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreateShared(VM&, size_t numElements, unsigned elementByteSize, size_t maxByteLength);
++#if defined(BUN_WASM_SHARED_GROUP)
++    // A fixed-length shared buffer over its own group memory region. Null when none is available.
++    JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreateGroupShared(VM&, size_t byteLength);
++#endif
+
+     // Only for use by Uint8ClampedArray::tryCreateUninitialized and FragmentedSharedBuffer::tryCreateArrayBuffer.
+     JS_EXPORT_PRIVATE static Ref<ArrayBuffer> createUninitialized(size_t numElements, unsigned elementByteSize);
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
+@@ -119,6 +119,16 @@ EncodedJSValue JSGenericArrayBufferConstructor<sharingMode>::constructImpl(JSGlo
+         }
+     }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    if constexpr (sharingMode == ArrayBufferSharingMode::Shared) {
++        if (!buffer) {
++            buffer = ArrayBuffer::tryCreateGroupShared(vm, byteLength);
++            if (!buffer)
++                return JSValue::encode(throwOutOfMemoryError(globalObject, scope));
++        }
++    }
++#endif
++
+     if (!buffer) {
+         buffer = ArrayBuffer::tryCreate(byteLength, 1, maxBytes);
+         if (!buffer) [[unlikely]]
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+@@ -152,6 +152,14 @@ static ALWAYS_INLINE std::pair<SpeciesConstructResult, JSArrayBuffer*> speciesCo
+         return errorResult;
+     }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    // Distinct wrappers can view one region, so compare the shared block, not the object.
++    if (mode == ArrayBufferSharingMode::Shared && result->impl()->data() == thisObject->impl()->data()) {
++        throwVMTypeError(globalObject, scope, "Species construction returns the same shared storage to a receiver"_s);
++        return errorResult;
++    }
++#endif
++
+     // 21. If new.[[ArrayBufferByteLength]] < newLen, throw a TypeError exception.
+     if (result->impl()->byteLength() < length) {
+         throwVMTypeError(globalObject, scope, "Species construction returns ArrayBuffer which byteLength is less than requested"_s);
+@@ -233,6 +241,17 @@ static EncodedJSValue arrayBufferSlice(JSGlobalObject* globalObject, JSValue arr
+             }
+         }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++        // The default path allocates without the constructor, so it needs a region too.
++        if (mode == ArrayBufferSharingMode::Shared) {
++            newBuffer = ArrayBuffer::tryCreateGroupShared(vm, newLength);
++            if (!newBuffer)
++                return JSValue::encode(throwOutOfMemoryError(globalObject, scope));
++            if (newLength)
++                memcpy(newBuffer->data(), static_cast<const char*>(thisObject->impl()->data()) + firstIndex, newLength);
++        }
++#endif
++
+         if (!newBuffer) {
+             newBuffer = thisObject->impl()->sliceWithClampedIndex(firstIndex, finalIndex);
+             if (!newBuffer)

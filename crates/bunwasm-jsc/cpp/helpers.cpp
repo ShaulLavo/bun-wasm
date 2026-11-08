@@ -539,6 +539,15 @@ JSValueRef bunjsc_shared_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, siz
     auto contents = SharedArrayBufferContents::create({ data, length }, std::nullopt, nullptr, createSharedTask<void(void*)>([](void*) { }), SharedArrayBufferContents::Mode::Default);
     return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Shared), ArrayBuffer::createShared(WTF::move(contents))));
 }
+
+// The storage of a real SharedArrayBuffer, or null for any other value.
+uint8_t* bunjsc_shared_array_buffer_data(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    return buffer && buffer->impl()->isShared() ? static_cast<uint8_t*>(buffer->impl()->data()) : nullptr;
+}
 #endif
 
 // ArrayBuffer::detach accepts pinned wasm memories; it empties every view of the buffer.

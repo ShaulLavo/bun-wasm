@@ -764,6 +764,13 @@ impl Engine for Jsc {
         }))
     }
 
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_array_buffer_data(&self, v: &JsVal) -> Option<*mut u8> {
+        // SAFETY: the helper checks the buffer class under the VM lock.
+        let data = unsafe { bunjsc_shared_array_buffer_data(ctx(), v.raw()) };
+        (!data.is_null()).then_some(data)
+    }
+
     fn detach_wasm_memory_buffer(&self, v: &JsVal) -> bool {
         // SAFETY: the helper checks the value is a wasm memory buffer under the VM lock.
         unsafe { bunjsc_detach_wasm_memory_buffer(ctx(), v.raw()) }

@@ -177,6 +177,11 @@ pub trait Engine: Sized + 'static {
         )))
     }
 
+    /// The storage address of a real SharedArrayBuffer, or None for any other value.
+    fn shared_array_buffer_data(&self, _value: &Self::Value) -> Option<*mut u8> {
+        None
+    }
+
     /// Detach a buffer from [`Engine::wasm_memory_buffer`], and every view of it.
     /// Already detached ones are accepted; false for any other value.
     fn detach_wasm_memory_buffer(&self, v: &Self::Value) -> bool;

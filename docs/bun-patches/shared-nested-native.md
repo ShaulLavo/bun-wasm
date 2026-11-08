@@ -10,6 +10,21 @@ The QuickJS-ng 0.16.2 source bundled by rquickjs-sys 0.13.0 is adapted in
 build macro, wrap external SAB prefix views, and use the existing cancellable
 host wait provider. Default split builds retain the prior atomics selection.
 
+In the same group build, QuickJS allocates each SharedArrayBuffer from its own
+region through `JS_SetSharedArrayBufferFunctions` and the core's
+`bun_shared_buffer_alloc`. A refused allocation runs `JS_RunGC` once and retries,
+because cycles never refcount to zero and regions are outside malloc accounting.
+Growable construction is refused, because each wrapper keeps its own length.
+The finalizer skips `sab_free` for a `wasm_memory` wrapper, which never owns its
+region. Slice refuses a species result over the source's own storage before
+copying, comparing storage pointers rather than wrapper objects.
+
+`wasm/shared_buffer.rs` is an original adapter. Each member keeps a ledger from
+buffer address to its region's memory handle. A finalizer only queues the region,
+so no host request runs during collection. The next allocation returns queued
+regions, and member stop releases the rest. Every buffer commits at least one
+64 KiB page and takes one region slot. There is no heap fallback.
+
 The shared-group-only ABI is `runtime_nested.request(pointer, length, out) -> i32`.
 Requests and replies are the closed serde enums in `wasm/nested_wire.rs`.
 Compilation supplies the core-validated regionizer output in an owned input span.

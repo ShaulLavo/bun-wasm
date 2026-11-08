@@ -9,6 +9,9 @@ mod nested_invocation;
 
 #[cfg(bun_wasm_shared_group)]
 mod group;
+#[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/shared_buffer.rs"]
+mod shared_buffer;
 
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 

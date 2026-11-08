@@ -25,6 +25,7 @@ pub(crate) struct State {
     entries: Option<Entries>,
     instantiation_attempts: u64,
     failed_instantiations: u64,
+    refused_reservations: u64,
 }
 
 // Memory slots are reused, but identities never are. Retire a slot rather than wrap.
@@ -113,7 +114,7 @@ impl State {
             "functions": self.functions.len(), "memories": memories.count(),
             "reserved_committed_bytes": committed, "visible_bytes": visible,
             "memory_slots": self.memories.slots.len(), "core_failed": self.core_failed,
-            "admission_closed": self.admission_error.is_some(), "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations })
+            "admission_closed": self.admission_error.is_some(), "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations, "refused_reservations": self.refused_reservations })
     }
 }
 
@@ -302,8 +303,13 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 .shm
                 .as_ref()
                 .context("shared memory needs a group member")?;
-            let region = NestedMemory::new(member, initial, maximum)
-                .map_err(|error| anyhow!("region admission: {error:?}"))?;
+            let region = match NestedMemory::new(member, initial, maximum) {
+                Ok(region) => region,
+                Err(error) => {
+                    caller.data_mut().nested.refused_reservations += 1;
+                    bail!("region admission: {error:?}");
+                }
+            };
             Ok(Reply::Handle(
                 caller.data_mut().nested.memories.insert(region)?,
             ))
