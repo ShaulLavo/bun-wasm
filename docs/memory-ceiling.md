@@ -4,6 +4,8 @@ Bun core and its QuickJS or JavaScriptCore engine share one wasm32 linear memory
 Its maximum is 1 GiB, or 1073741824 bytes (16384 pages). It was 512 MiB until
 stage 1 of the plan below.
 
+Safari allocates requested WebAssembly memory ahead of time, while Chrome and Firefox allocate lazily, so size memory for Safari.
+
 ## One authority
 
 `crates/bunwasm-cli/max-memory.txt` holds the maximum as one line of decimal bytes.

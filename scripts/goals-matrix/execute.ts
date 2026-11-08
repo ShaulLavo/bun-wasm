@@ -1,3 +1,4 @@
+import { cleanupTimeoutMs } from "./deadlines";
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import type { Transport } from "./transport";
@@ -7,6 +8,7 @@ export interface Execution {
   framework: Framework;
   url: string;
   timeoutMs: number;
+  installTimeoutMs?: number;
   createTransport(): Promise<Transport>;
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
@@ -28,9 +30,9 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
   const started = performance.now();
   try {
     const evidence = await bounded(operation, timeoutMs, signal);
-    results.push({ phase: name, status: "pass", startedAt, durationMs: Math.round(performance.now() - started), evidence });
+    results.push({ phase: name, status: "pass", startedAt, timeoutMs, durationMs: Math.round(performance.now() - started), evidence });
   } catch (error) {
-    results.push({ phase: name, status: "fail", startedAt, durationMs: Math.round(performance.now() - started), error: String(error) });
+    results.push({ phase: name, status: "fail", startedAt, timeoutMs, durationMs: Math.round(performance.now() - started), error: String(error) });
     throw error;
   }
 }
@@ -60,7 +62,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
   }
   finally {
     closing = true;
-    await phase(results, "cleanup", 20_000, async () => {
+    await phase(results, "cleanup", cleanupTimeoutMs, async () => {
       const pending = creation;
       if (!transport && pending) await bounded(() => pending.catch(() => undefined), 10_000);
       return cleanup(transport, options);
@@ -71,7 +73,8 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
 async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
   const { framework, timeoutMs } = options;
   const check = (name: Phase, operation: () => Promise<unknown>) => phase(results, name, timeoutMs, operation, options.signal);
-  await check("install", () => command(transport, "bun install", timeoutMs));
+  const installTimeoutMs = options.installTimeoutMs ?? timeoutMs;
+  await phase(results, "install", installTimeoutMs, () => command(transport, "bun install", installTimeoutMs), options.signal);
   let previewUrl = "";
   await check("dev", async () => { previewUrl = await start(transport, "bun run dev", timeoutMs); return { url: previewUrl }; });
   await check("render", async () => { await transport.openPreview(previewUrl); return render(transport, framework, framework.text, timeoutMs); });

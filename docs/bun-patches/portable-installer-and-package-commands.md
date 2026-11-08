@@ -196,3 +196,28 @@ host backpressure. No parsed packument cache or archive preload is added.
 `install-metadata.test.ts` uses real delayed registry I/O, including responses
 larger than the host body window, to check overlap, bounds, cancellation and
 request-free locked, local and no-op installs. No upstream code is copied.
+
+Metadata lookahead also fills unused handles from required edges of already
+selected queued parents. It examines at most seven queued parents and retains
+only the next seven distinct request URLs. It never resolves a speculative
+package or fetches deferred peer edges. Current siblings keep priority, and
+version selection, placement and peer traversal still run in their original
+order. Handles survive parent boundaries when their URLs remain in the window;
+obsolete handles close before replacement requests start. The existing delayed
+registry also checks overlap between narrow child lists of successive parents.
+This is an original adapter change with no additional upstream source.
+A nested-alias fixture forces an unpredicted demand while seven requests for the
+next selected parent's children remain open. Those children wait about two
+seconds before consumption under a one-second idle timeout. The check preserves
+the nested alias placement, reaches exactly eight handles, and confirms that
+queue residence does not consume the response reader's idle budget.
+
+Lookahead eligibility advances once through each current dependency list instead
+of rescanning every remaining suffix. Candidate names from the same bounded
+queued-parent window are also prepared once per current parent. Only the next
+seven transport handles are retained. Local file, link and workspace specifiers
+never open manifests during transport eligibility checks; demand-time resolution
+still validates them. Linux resolver regressions observe actual manifest opens
+with an armed inotify control, covering root lists and selected local parents.
+This avoids quadratic filesystem work without changing package selection or the
+reserved demand slot. No upstream code is copied.
