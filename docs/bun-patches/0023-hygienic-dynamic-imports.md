@@ -13,7 +13,11 @@ unchanged. Existing printer source-map accounting includes the replacement.
 The original adapter in `crates/bunwasm-runtime/src/js/function.ts` installs that
 non-writable, non-configurable helper on JSC as well as the other engines.
 JSC still keeps its native function constructors. No VM interface changes.
-Compiler controls verify the emitted call, and the normal text-import fixture
+The Browser store and CommonJS adapters in `web/src/engine-host.js` and
+`crates/bunwasm-runtime/src/engine_host.rs` use the same helper for their dynamic
+import substitutions. The Browser metadata prologue uses a separate
+non-writable function-prototype helper and no lexical global lookup. Its old
+global helper is removed. Compiler controls verify the emitted call, and the normal text-import fixture
 executes ordinary and text imports with shadowed names in `.mjs` and `.cjs` files.
 
 [Ledger scope and pinned revisions](scope.md).

@@ -7,6 +7,9 @@
     value: (from: string) => (spec: unknown, options?: unknown) => global.__bunwasm_dynamicImport(from)(spec, options),
   });
 
+  if (native.engine === "host") Object.defineProperty(Function.prototype, "__bunwasmModuleMeta", {
+    value: (meta: Parameters<BunWasm.Internal["initImportMeta"]>[0], path: string) => internal.initImportMeta(meta, path, path === internal.mainPath),
+  });
   if (native.engine === "jsc") return {};
   const callerSourceOrigin = internal.require("builtins")["bun:jsc"]().callerSourceOrigin;
 

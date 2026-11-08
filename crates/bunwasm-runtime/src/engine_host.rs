@@ -349,7 +349,10 @@ fn host_dynamic_imports(
     if spans.is_empty() {
         return code.to_owned();
     }
-    let hook = format!("globalThis.__bunwasm_dynamicImport({})", json_string(from));
+    let hook = format!(
+        "(function(){{}})[\"__bunwasmFunctionImport\"]({})",
+        json_string(from)
+    );
     let mut out = String::with_capacity(code.len() + spans.len() * hook.len());
     let mut at = 0;
     for span in spans {
@@ -390,7 +393,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     if format != modules::Format::Esm {
         return Ok(Record::new().set("format", format.name()).into());
     }
-    let meta = format!("globalThis.__bunwasm_meta(import.meta, {path:?}); ");
+    let meta = format!("(function(){{}})[\"__bunwasmModuleMeta\"](import.meta, {path:?}); ");
     let source = modules::esm_source_with(state, path, &code, &meta);
     let mut imports = Vec::new();
     use crate::transpiler::ModuleImportKind;
