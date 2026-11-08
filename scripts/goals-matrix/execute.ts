@@ -7,6 +7,7 @@ export interface Execution {
   box: Box;
   framework: Framework;
   url: string;
+  port?: number;
   timeoutMs: number;
   installTimeoutMs?: number;
   buildTimeoutMs?: number;
@@ -72,23 +73,23 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
   return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
 }
 async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
-  const { framework, timeoutMs } = options;
+  const { framework, timeoutMs, port = 5173 } = options;
   const check = (name: Phase, operation: () => Promise<unknown>) => phase(results, name, timeoutMs, operation, options.signal);
   const installTimeoutMs = options.installTimeoutMs ?? timeoutMs;
   await phase(results, "install", installTimeoutMs, () => command(transport, "bun install", installTimeoutMs), options.signal);
   let previewUrl = "";
-  await check("dev", async () => { previewUrl = await start(transport, "bun run dev", timeoutMs); return { url: previewUrl }; });
+  await check("dev", async () => { previewUrl = await start(transport, framework.rootPreview?.dev.replaceAll("{port}", String(port)) ?? "bun run dev", timeoutMs, port); return { url: previewUrl, port }; });
   await check("render", async () => { await transport.openPreview(previewUrl); return render(transport, framework, framework.text, timeoutMs); });
   await check("click", () => checkClick(transport, framework, timeoutMs));
   await check("hot-reload", () => edit(transport, framework, timeoutMs));
   const buildTimeoutMs = options.buildTimeoutMs ?? timeoutMs;
   await phase(results, "build", buildTimeoutMs, async () => {
     await transport.closePreview();
-    await stopServer(transport, Math.min(timeoutMs, 15_000));
+    await stopServer(transport, Math.min(timeoutMs, 15_000), port);
     return command(transport, "bun run build", buildTimeoutMs);
   }, options.signal);
   await check("preview", async () => {
-    const url = await start(transport, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : "bun run start", timeoutMs);
+    const url = await start(transport, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : framework.rootPreview?.start.replaceAll("{port}", String(port)) ?? "bun run start", timeoutMs, port);
     await transport.openPreview(url);
     const rendered = await render(transport, framework, `${framework.text} hot updated`, timeoutMs);
     const clicked = await checkClick(transport, framework, timeoutMs);
@@ -109,7 +110,7 @@ async function captureFailure(transport: Transport, options: Execution, results:
 async function cleanup(transport: Transport | undefined, options: Execution): Promise<unknown> {
   if (!transport) return { transportCreated: false };
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000); await options.saveLog(await terminal(transport)); }, 8_000); }
+  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport)); }, 8_000); }
   catch (error) { errors.push(error); }
   try { await bounded(() => transport.close(), 10_000); }
   catch (error) { errors.push(error); }
