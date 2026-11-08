@@ -51,3 +51,7 @@ Differences from the native host:
 Chromium, owned by `checks/browser-guest-shared-wasm-memory.json`. The Shared PIC job consumes
 its one group build. That gate selects on the nested host, the executor and launcher and this
 consumer. Other web files keep to their ordinary web gates, so they do not compile native code.
+
+The published package includes `web/src/nested/` alongside its worker sources,
+so packed consumers can resolve the same host and wire types. The existing
+packed-consumer gate checks all three files and the real TypeScript/Vite closure.
