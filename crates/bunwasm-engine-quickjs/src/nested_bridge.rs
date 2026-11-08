@@ -42,12 +42,7 @@ pub(crate) fn execute(
         )));
     }
     let token = NEXT.with(|next| {
-        let token = ACTIVE.with(|stack| {
-            let stack = stack.borrow();
-            next_token(next.get(), |token| {
-                stack.iter().any(|entry| entry.token == token)
-            })
-        });
+        let token = next_token(next.get(), token_in_use);
         next.set(token);
         token
     });
@@ -69,6 +64,10 @@ pub(crate) fn execute(
         Some(value) => Err(value),
         None => result,
     }
+}
+
+fn token_in_use(token: u32) -> bool {
+    ACTIVE.with(|stack| stack.borrow().iter().any(|entry| entry.token == token))
 }
 
 pub(crate) extern "C" fn dispatch(token: u32, callback: u32, pointer: u32) -> u32 {

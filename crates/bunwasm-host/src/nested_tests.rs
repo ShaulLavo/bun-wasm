@@ -1,3 +1,6 @@
+#[path = "../../bunwasm-engine-quickjs/src/nested_token.rs"]
+mod invocation_tokens;
+
 use super::*;
 use crate::process::{Cancellation, Runtime, Stdio};
 use std::sync::Arc;
