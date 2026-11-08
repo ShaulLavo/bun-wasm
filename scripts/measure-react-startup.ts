@@ -89,12 +89,15 @@ async function main(): Promise<void> {
     launching = chromium.launch({ headless: !values.headed });
     browser = await launching;
     for (let iteration = 0; iteration < samples; iteration++) {
-      for (const variant of iteration % 2 ? variants.toReversed() : variants) await measurePair(browser, variant, iteration);
+      await measureIteration(browser, iteration);
     }
     if (values["limit-ms"]) checkStartupLimit(rows, Number(values["limit-ms"]));
   } catch (error) { errors.push(String(error)); throw error; }
   finally { clearTimeout(timer); await cleanup(); await save(); }
 
+  async function measureIteration(browser: Browser, iteration: number): Promise<void> {
+    for (const variant of iteration % 2 ? variants.toReversed() : variants) await measurePair(browser, variant, iteration);
+  }
   async function measurePair(browser: Browser, variant: typeof variants[number], iteration: number): Promise<void> {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "allow" });
     try {
@@ -102,6 +105,7 @@ async function main(): Promise<void> {
       page.setDefaultTimeout(deadline);
       page.setDefaultNavigationTimeout(deadline);
       page.on("console", message => console.error(`[${variant.revision}] ${message.text()}`));
+      page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()} ${response.url()}`); });
       page.on("pageerror", error => errors.push(`${variant.revision}: ${error.message}`));
       for (const cache of ["cold", "warm"] as const) await record(page, { ...variant, iteration, cache });
     } finally { await context.close(); }
@@ -114,7 +118,12 @@ async function main(): Promise<void> {
       await save();
       console.error(`React rendered ${sample.renderMs.toFixed(1)} ms; interactive ${sample.interactiveMs.toFixed(1)} ms`);
     } catch (error) {
-      errors.push(await page.locator("#status").textContent().catch(() => "status unavailable") ?? "no status");
+      errors.push(JSON.stringify(await page.evaluate(() => ({
+        status: document.querySelector("#status")?.textContent,
+        terminal: document.querySelector(".xterm-screen")?.textContent,
+        frames: Array.from(document.querySelectorAll("iframe"), frame => ({ url: frame.src, text: frame.contentDocument?.body?.textContent })),
+        phases: performance.getEntriesByType("measure").map(entry => ({ name: entry.name, duration: entry.duration })),
+      })).catch(() => "diagnostics unavailable")));
       throw error;
     }
   }
