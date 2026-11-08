@@ -47,3 +47,13 @@ stay alive during synchronous waits. Negative/zero timeout and cancellation reta
 the provider's semantics. Ordinary split/native QuickJS uses its ordinary code.
 Single-agent tests are not cross-worker acceptance. Waffle, another embedded
 engine, another host, stock Vite and large-memory admission are not delivered here.
+
+Wasmtime retains instantiation allocations until its Store ends, including an
+instance whose start traps. The existing native Store limit remains 40 instances.
+The adapter does not increase that ceiling. Repeated failed starts can therefore
+exhaust the remaining session metadata slots and produce a LinkError. Existing
+instances and memories remain usable. Unpublished defined regions and provisional
+JS roots are released despite that native metadata retention. The fixture checks
+both normal recovery after a failure and explicit bounded Store exhaustion.
+Trace counters report attempts and failures, region reservations and visible bytes
+separately. These counters are not RSS measurements.

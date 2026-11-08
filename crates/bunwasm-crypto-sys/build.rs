@@ -217,7 +217,8 @@ impl Profile {
         std::fs::write(build.join(STAMP), self.name()).expect("BoringSSL profile stamp");
     }
 
-    /// A PIE link prefers a shared library for `-l`; a group member must not depend on one.
+    /// The group core supplies its required C++ functions compiled with atomics.
+    /// Do not pull non-atomic SDK archive members into that profile.
     fn link_cxx_runtime(self) {
         let names: &[&str] = match self {
             Self::Split => &["static=c++", "static=c++abi"],

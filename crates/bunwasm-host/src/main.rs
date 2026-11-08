@@ -405,6 +405,10 @@ fn settle(store: Store<Host>) {
     let trace = host.trace;
     if trace {
         eprintln!("bun-wasm nested resources: {}", host.nested.snapshot());
+        eprintln!(
+            "bun-wasm group before physical stop: {:?}",
+            group.snapshot()
+        );
     }
     drop(host);
     member.physical_stopped();

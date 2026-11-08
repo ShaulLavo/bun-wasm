@@ -1,11 +1,11 @@
 //! Shared-memory backend. The core owns only validated handles and numeric data.
+use super::nested_frame as frame;
+use super::nested_invocation::Invocation;
 use super::{error, resource_id};
 use crate::data::{NativeError, NativeResult, Record, Val};
 use bunwasm_nested::MemoryPlan;
 use std::{cell::RefCell, collections::BTreeMap};
 use wasmparser::{ExternalKind, Parser, Payload, TypeRef, ValType};
-#[path = "nested_frame.rs"]
-mod frame;
 #[path = "nested_wire.rs"]
 mod wire;
 use wire::{BACKEND, Binding, Number, Reply, Request};
@@ -23,7 +23,6 @@ type Dispatch = extern "C" fn(u32, u32, u32) -> u32;
 thread_local! {
     #[cfg(bun_wasm_shared_group)]
     static DISPATCH: std::cell::Cell<Option<Dispatch>> = const { std::cell::Cell::new(None) };
-    static INVOCATIONS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static MODULES: RefCell<BTreeMap<u32, Description>> = const { RefCell::new(BTreeMap::new()) };
     static INSTANCES: RefCell<BTreeMap<u32, u32>> = const { RefCell::new(BTreeMap::new()) };
     static FUNCTIONS: RefCell<BTreeMap<u32, Vec<String>>> = const { RefCell::new(BTreeMap::new()) };
@@ -43,7 +42,7 @@ pub extern "C" fn bun_core_bind_nested(dispatch: Dispatch) {
 #[cfg(bun_wasm_shared_group)]
 #[unsafe(no_mangle)]
 pub extern "C" fn bun_nested_dispatch(invocation: u32, callback: u32, pointer: u32) -> u32 {
-    let active = INVOCATIONS.with(|stack| stack.borrow().last().copied());
+    let active = super::nested_invocation::active();
     if active != Some(invocation)
         || crate::split::nested_transport_read(pointer, frame::FRAME_BYTES).is_err()
     {
@@ -53,27 +52,6 @@ pub extern "C" fn bun_nested_dispatch(invocation: u32, callback: u32, pointer: u
         return frame::BAD_FRAME;
     };
     dispatch(invocation, callback, pointer)
-}
-
-struct Invocation(u32);
-impl Invocation {
-    fn enter(token: u32) -> Result<Self, NativeError> {
-        INVOCATIONS.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            if token == 0 || stack.len() >= frame::MAX_DEPTH || stack.contains(&token) {
-                return Err(NativeError::range_error(
-                    "Invalid or excessive nested invocation",
-                ));
-            }
-            stack.push(token);
-            Ok(Self(token))
-        })
-    }
-}
-impl Drop for Invocation {
-    fn drop(&mut self) {
-        INVOCATIONS.with(|stack| assert_eq!(stack.borrow_mut().pop(), Some(self.0)));
-    }
 }
 
 #[cfg(bun_wasm_shared_group)]
@@ -92,12 +70,7 @@ fn exchange(input: &Request) -> Result<Reply, NativeError> {
     crate::split::bun_core_free(out[0], out[1], 8);
     serde_json::from_slice(&bytes?).map_err(error)
 }
-#[cfg(not(bun_wasm_shared_group))]
-fn exchange(_: &Request) -> Result<Reply, NativeError> {
-    Err(error(
-        "Shared WebAssembly memories require the shared-group profile",
-    ))
-}
+
 fn request(input: Request) -> Result<Reply, NativeError> {
     match exchange(&input)? {
         Reply::Error { category, message } => Err(NativeError::error(message).named(&category)),
@@ -153,7 +126,12 @@ pub(super) fn shared(bytes: &[u8]) -> bool {
     })
 }
 pub(super) fn validate(bytes: &[u8]) -> bool {
-    cfg!(bun_wasm_shared_group) && bunwasm_nested::regionize(bytes).is_ok()
+    let Ok(output) = bunwasm_nested::regionize(bytes) else {
+        return false;
+    };
+    output
+        .memory
+        .is_some_and(|memory| memory.shared && describe(bytes, memory).is_ok())
 }
 fn type_name(ty: ValType) -> Result<String, NativeError> {
     Ok(match ty {
@@ -505,34 +483,4 @@ pub(super) fn call(function: u32, values: &[Val], token: u32) -> NativeResult {
     Ok(Record::new()
         .set("values", values.into_iter().map(number).collect::<Vec<_>>())
         .into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn invocation_guards_reject_duplicates_and_restore_outer_tokens() {
-        INVOCATIONS.with(|stack| assert!(stack.borrow().is_empty()));
-        let outer = Invocation::enter(1).unwrap();
-        assert!(Invocation::enter(1).is_err());
-        assert!(Invocation::enter(0).is_err());
-        let inner = Invocation::enter(2).unwrap();
-        drop(inner);
-        INVOCATIONS.with(|stack| assert_eq!(*stack.borrow(), [1]));
-        drop(outer);
-        INVOCATIONS.with(|stack| assert!(stack.borrow().is_empty()));
-    }
-
-    #[test]
-    fn invocation_depth_limit_leaves_the_session_usable() {
-        let guards = (1..=frame::MAX_DEPTH as u32)
-            .map(|token| Invocation::enter(token).unwrap())
-            .collect::<Vec<_>>();
-        assert!(Invocation::enter(frame::MAX_DEPTH as u32 + 1).is_err());
-        for guard in guards.into_iter().rev() {
-            drop(guard);
-        }
-        assert!(Invocation::enter(1000).is_ok());
-    }
 }

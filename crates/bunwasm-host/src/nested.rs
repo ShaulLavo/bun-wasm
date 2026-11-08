@@ -21,6 +21,8 @@ pub(crate) struct State {
     memories: Vec<Option<NestedMemory>>,
     invocations: Vec<u32>,
     entries: Option<Entries>,
+    instantiation_attempts: u64,
+    failed_instantiations: u64,
 }
 
 struct Guest {
@@ -39,7 +41,7 @@ impl State {
         serde_json::json!({ "modules": self.modules.len(), "instances": self.instances.len(),
             "functions": self.functions.len(), "memories": memories.count(),
             "reserved_committed_bytes": committed, "visible_bytes": visible,
-            "active_invocations": self.invocations.len() })
+            "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations })
     }
 }
 
@@ -320,7 +322,19 @@ fn instantiate(
     ensure!(bindings.next().is_none(), "extra nested binding");
     // No State, core Runtime, or region-owner mutex borrow survives this call.
     // Generated initialization and original start may synchronously enter guest JS.
-    let instance = Instance::new(&mut *caller, &module, &imports)?;
+    caller.data_mut().nested.instantiation_attempts = caller
+        .data()
+        .nested
+        .instantiation_attempts
+        .saturating_add(1);
+    let instance = match Instance::new(&mut *caller, &module, &imports) {
+        Ok(instance) => instance,
+        Err(error) => {
+            caller.data_mut().nested.failed_instantiations =
+                caller.data().nested.failed_instantiations.saturating_add(1);
+            return Err(error);
+        }
+    };
     Ok(Reply::Handle(insert(
         &mut caller.data_mut().nested.instances,
         Guest {

@@ -38,14 +38,17 @@ pub(crate) fn execute(
             "Nested WebAssembly call depth exceeded",
         )));
     }
-    let token = NEXT.with(|next| {
-        let token = next
-            .get()
-            .checked_add(1)
-            .expect("nested invocation token exhausted");
-        next.set(token);
-        token
-    });
+    let token = NEXT
+        .with(|next| {
+            let token = next.get().checked_add(1)?;
+            next.set(token);
+            Some(token)
+        })
+        .ok_or_else(|| {
+            engine.error_value(&NativeError::range_error(
+                "Nested invocation tokens exhausted",
+            ))
+        })?;
     let invocation = Rc::new(Invocation {
         token,
         engine: engine.clone(),

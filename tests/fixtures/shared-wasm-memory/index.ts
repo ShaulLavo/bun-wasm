@@ -125,4 +125,16 @@ callback = () => {
 };
 fn(a, 'callback')();
 assert.equal(fn(a, 'read')(), 53);
+callback = () => { throw thrown; };
+for (let attempt = 0; attempt < 4; attempt++) {
+  assert.throws(() => new WebAssembly.Instance(start, { env: { memory, observe: () => callback() } }), error => error === thrown);
+  assert.throws(() => new WebAssembly.Instance(trap), WebAssembly.RuntimeError);
+}
+callback = () => { fn(a, 'callback')(); };
+assert.throws(() => fn(a, 'callback')(), RangeError);
+callback = () => { fn(b, 'write')(59); };
+fn(a, 'callback')();
+assert.equal(fn(a, 'read')(), 59);
+new WebAssembly.Instance(start, { env: { memory, observe: () => callback() } });
+assert.equal(fn(a, 'read')(), 59);
 console.log('shared-wasm-memory: pass');

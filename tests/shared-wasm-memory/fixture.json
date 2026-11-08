@@ -1,1 +1,0 @@
-{"status":"local-guest-pass-ci-profile-pending","scope":"QuickJS shared-group guest on bunwasm-host","reference":"bun tests/shared-wasm-memory/index.ts","note":"The ordinary split fixture runner cannot consume this shared-group fixture. It is not a passing skip and must not be counted as browser, worker or framework acceptance."}

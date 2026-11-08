@@ -10,15 +10,16 @@ import { discoverChecks } from "./test-checks";
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 
-test("the dedicated shared profile gate is blocking and never invokes an engine build", () => {
-  expect(shared).toContain("needs: quality");
-  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}");
+test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
+  expect(shared).toContain("needs: [quality, rust]");
+  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
   expect(shared).toContain("node-version: '26'");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic\n");
   expect(shared).toContain('bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"');
-  expect(shared).not.toMatch(/continue-on-error|cargo |build-engine|build-bun|sync-bun/);
+  expect(shared).not.toContain("continue-on-error");
+  expect(shared.split("      - name: Require the shared native launcher producer")[0]).not.toMatch(/cargo |build-engine|build-bun|sync-bun/);
   expect(shared).toContain("v1.262.0/wasm-tools");
   expect(shared).toContain("v49.0.3/wasmtime");
   expect(shared).toContain("key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}");
@@ -60,7 +61,7 @@ test("shared setup publishes the same private paths before the first cache resto
   try {
     const output = join(scratch, "github-env");
     const result = spawnSync("bash", ["-euo", "pipefail", "-c", setup], {
-      env: { ...process.env, RUNNER_TEMP: scratch, GITHUB_ENV: output }, encoding: "utf8", timeout: 3000,
+      env: { ...process.env, RUNNER_TEMP: scratch, GITHUB_ENV: output, GITHUB_WORKSPACE: join(scratch, "workspace") }, encoding: "utf8", timeout: 3000,
     });
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
@@ -69,6 +70,9 @@ test("shared setup publishes the same private paths before the first cache resto
       `BUN_WASM_SHARED_SYSROOT=${scratch}/bun-wasm-shared-sysroot`,
       `BUN_WASM_SYSROOT=${scratch}/bun-wasm-shared-sysroot`,
       `TMPDIR=${scratch}`,
+      `CARGO_HOME=${scratch}/cargo`,
+      `RUSTUP_HOME=${scratch}/rustup`,
+      `CARGO_TARGET_DIR=${scratch}/workspace/target`,
     ]);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -125,6 +129,7 @@ function sharedCacheSaves(): { name: string; condition: string }[] {
 
 function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean {
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replace(/needs\.quality\.outputs\.shared-native/g, JSON.stringify("true"))
     .replace(/success\(\)/g, String(state.success))
     .replace(/cancelled\(\)/g, String(state.cancelled))
     .replace(/github\.event_name/g, JSON.stringify(state.event))
@@ -135,13 +140,14 @@ function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean
   return result;
 }
 
-test("all four shared saves require a successful uncancelled main push and an actual miss", () => {
+test("all shared saves require a successful uncancelled main push and an actual miss", () => {
   const saves = sharedCacheSaves();
   expect(saves.map(step => step.name)).toEqual([
     "Save completed shared-sdk setup",
     "Save completed shared-wasm-tools setup",
     "Save completed shared-wasmtime setup",
     "Save shared profile cache",
+    "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
   const cases = [
@@ -159,4 +165,18 @@ test("all four shared saves require a successful uncancelled main push and an ac
       expect(sharedSaveAllowed(save.condition, item.state), `${save.name}: ${item.name}`).toBe(item.allowed);
     }
   }
+});
+
+test("shared native checks consume one matching launcher and one produced group pair", () => {
+  const rust = workflow.split("\n  rust:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
+  expect(rust).toContain('cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
+  expect(rust).toContain("name: native-profile-launcher");
+  expect(shared).toContain("name: native-profile-launcher");
+  expect(shared).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
+  expect(shared).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
+  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group/g)).toHaveLength(1);
+  expect(shared).toContain("bun scripts/test-checks.ts native --profile shared-group");
+  expect(shared).toContain('export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"');
+  expect(shared).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
+  expect(shared).not.toContain("shared-wasm-memory");
 });

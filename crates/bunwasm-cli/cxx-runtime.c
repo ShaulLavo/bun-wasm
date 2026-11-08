@@ -1,5 +1,5 @@
-// The shared-group core's whole C++ runtime need: BoringSSL references only these two
-// functions. Both are documented C++ override points (the replaceable sized `operator delete`,
+// The shared-group core's two replaceable C++ runtime functions. BoringSSL also
+// needs the real libc++ sort specialization in cxx-sort.cpp. Both are documented C++ override points (the replaceable sized `operator delete`,
 // and libc++'s `_LIBCPP_OVERRIDABLE_FUNC_VIS` `std::__libcpp_verbose_abort`), with the same
 // bodies as libc++abi/libc++ at LLVM 895aa2c896ad (wasi-sdk 34). Defining them here keeps
 // every SDK libc++/libc++abi member out of the link: the stock noeh members they would pull

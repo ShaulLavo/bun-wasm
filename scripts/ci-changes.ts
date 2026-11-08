@@ -10,7 +10,7 @@ const nativeFiles = new Set([
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh", "tests/test-stdout-busy-loop.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
-  "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
+  "scripts/native-profile-fixtures.ts", "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "web/src/script-evaluation.ts",
   "tests/memory-telemetry.test.ts",
@@ -30,6 +30,20 @@ const sharedSysrootFiles = new Set([
 
 export function needsSharedSysroot(paths: readonly string[]): boolean {
   return paths.some(path => sharedSysrootFiles.has(path));
+}
+
+const sharedNativeFiles = new Set([
+  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
+  "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
+  "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/src/program-profile.ts", "scripts/src/engine-explicit-init.ts",
+  "scripts/src/engine-init.c", "scripts/quickjs-core-exports.txt", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts",
+  "scripts/build-wasi-sysroot.ts", "scripts/build-shared-wasi-libc.sh", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
+]);
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/"];
+export function needsSharedNative(paths: readonly string[], inputs = discoverChecks().filter(check => check.owner === "native" && check.profile === "shared-group").flatMap(checkInputPaths)): boolean {
+  if (inputs.length === 0) return false;
+  return paths.some(path => nativeInput(path, inputs) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
 
 const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
@@ -108,7 +122,7 @@ function manifestInputs(ref: string): string | undefined {
 }
 
 function nativeChanges(paths: readonly string[], base: string, head: string, ancestor: string): string[] {
-  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(nativeCheckInputsAt);
+  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref));
   if (!paths.includes("package.json")) return paths.filter(path => needsRust([path], checkInputs));
   const before = manifestInputs(base);
   const after = manifestInputs(head);
@@ -123,5 +137,6 @@ if (import.meta.main) {
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}`);
+  const profileInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref, "shared-group"));
+  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nshared_native=${needsSharedNative(paths, profileInputs)}`);
 }
