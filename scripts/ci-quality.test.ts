@@ -453,7 +453,7 @@ test("CMake preflight has one always-on lightweight owner, independent of native
 
 for (const { job, install } of [
   { job: "web", install: "bunx playwright install chromium webkit" },
-  { job: "browser-process", install: "bunx playwright install ${{ matrix.browser }}" },
+  { job: "browser-process", install: "bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}" },
 ]) {
   test(`${job} selects HTTPS apt sources with optional mirrors before installing browsers`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
@@ -498,7 +498,7 @@ for (const { job, install } of [
 
 for (const { job, browsers } of [
   { job: "web", browsers: "chromium webkit" },
-  { job: "browser-process", browsers: "${{ matrix.browser }}" },
+  { job: "browser-process", browsers: "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}" },
 ]) {
   test(`${job} prefetches verified apt archives instead of serial browser dependency downloads`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";

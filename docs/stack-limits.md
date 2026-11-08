@@ -269,3 +269,11 @@ QUICKJS_STACK_KIB=190 bun web/tests/browser-quickjs-stack.ts firefox
 
 Run browser commands through the machine's heavy-job wrapper. Each check closes
 its browser contexts and asset server, including on failure or interruption.
+
+## Blocking browser check
+
+`checks/browser-guest-quickjs-stack.json` registers the Firefox and Chromium
+capacity and cold-recursion checks. The Chromium Processes leg runs both hosts
+once against the existing Rust producer's verified site, then runs Firefox at
+190 KiB to check the default budget's safety margin. No guest is rebuilt by the
+consumer. Changes to the executor policy, probe, or fixture select that producer.

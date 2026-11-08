@@ -1717,19 +1717,19 @@ jobs:
         id: browser-cache
         with:
           path: ${{ runner.temp }}/browser-apt/*.deb
-          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
+          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-quickjs-stack-v1-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
           # ci-browser-deps.ts verifies every archive's SHA256 and fetches only what is missing.
           restore-keys: |
-            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-
+            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-quickjs-stack-v1-
       - name: Prefetch and install verified browser system packages
-        run: bun scripts/ci-browser-deps.ts ${{ matrix.browser }}
+        run: bun scripts/ci-browser-deps.ts ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
       - uses: actions/cache/save@v4
         if: steps.browser-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}/browser-apt/*.deb
           key: ${{ steps.browser-cache.outputs.cache-primary-key }}
       - name: Install browser
-        run: bunx playwright install ${{ matrix.browser }}
+        run: bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
           BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles

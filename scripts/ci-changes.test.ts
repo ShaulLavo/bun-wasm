@@ -22,6 +22,10 @@ test.each([
   expect(needsRust([path])).toBe(true);
 });
 
+test.each(["web/src/bun-executor.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
+  expect(needsRust([path])).toBe(true);
+});
+
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
 test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("browser bundling alone skips native gates: $paths", ({ paths }) => {
