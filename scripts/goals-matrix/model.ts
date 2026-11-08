@@ -49,7 +49,7 @@ function phaseResult(value: unknown, engine: string, framework: string, deadline
   const data = object(value);
   const phase = phases.find(phase => phase === data.phase);
   if (!phase || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid phase or duration");
-  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
+  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : phase === "build" ? (deadlines.buildTimeouts[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
   if (data.timeoutMs !== timeoutMs) throw new Error("Phase timeout differs from report deadline policy");
   const base = { phase, timeoutMs: data.timeoutMs, startedAt: text(data.startedAt), durationMs: data.durationMs };
   if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };

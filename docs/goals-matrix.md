@@ -75,7 +75,8 @@ in `fleet-cleanup.json` instead of deleting files under a live process.
 
 ## Choose an install deadline
 
-The default remains 180,000 ms for campaign phases. An explicit
+The default is 90,000 ms for campaign phases, with the measured Next build bound
+described below. An explicit
 `--timeout-ms=90000` still gives every framework install 90,000 ms unless you
 also set an install override. Cleanup keeps its existing 20,000 ms outer bound
 and shorter inner bounds. No install override changes startup, dev, render,
@@ -137,3 +138,18 @@ The exact measurement evidence is `/work/reports/goals/installs/nuxt-tail/RESULT
 `/work/reports/goals/installs/nuxt-tail/collected/safari.json`.
 Those runs used source `c55a206ed38e8cc0737bfea5f8eec1a357015cf6` and guest SHA-256
 `05952225469a7647ff726149236561cc9f54a90f6f96f0a65b2b86002eb853db`.
+
+## Measured Next build bound
+
+The default campaign bound is 90 seconds. Next's production build alone has
+a 110 second bound, based on successful uninstrumented Chrome builds of
+96,483 ms on QuickJS and 93,268 ms on JSC. Install, development, rendering,
+interaction, hot reload, preview, and other frameworks retain 90 seconds.
+Cleanup retains its separate 20 second limit and shorter inner bounds.
+Reports include effective install and build bounds for every framework. Historical
+90 second failures are not rewritten or resumed with a different policy.
+
+The Pages starter excludes only the pinned unused Turbopack and experimental
+React production runtime files from Next server tracing. A restricted-dependency
+SSR control validates the selected trace, including a missing-runtime negative
+control. See [the adapter record](bun-patches/next-build-scheduling.md).

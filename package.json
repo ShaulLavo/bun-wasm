@@ -61,6 +61,7 @@
     "web/src/promise-reactions.ts",
     "web/src/buffer-transfer.ts",
     "web/src/shared-objects",
+    "web/src/nested",
     "web/src/native-stream-state.ts",
     "web/src/native-wasm-lifetime.ts",
     "web/src/native-readable-iterator.ts",
@@ -72,6 +73,7 @@
     "web/src/bun-launcher.ts",
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
+    "web/src/engine-stack-budget.ts",
     "web/src/memory-telemetry.ts",
     "web/src/jsc-allocation-boundary.ts",
     "web/src/memory-channel.ts"

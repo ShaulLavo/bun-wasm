@@ -1,5 +1,6 @@
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
+import { isSharedGroupCore } from "../../src/engine-kind.ts";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
 // descriptors, signals and filesystem fences; these only describe the worker to start.
@@ -114,6 +115,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,
+      // A group core starts its own group, as on the native host; it has no other way to link.
+      memoryGroup: isSharedGroupCore(module) ? "new" : undefined,
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },

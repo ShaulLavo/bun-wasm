@@ -45,6 +45,23 @@ fn is_cjs_wrapper(code: &str) -> bool {
     code.starts_with(CJS_WRAPPER_PREFIX) || code.starts_with(CJS_META_WRAPPER_PREFIX)
 }
 
+#[derive(Clone)]
+pub enum Original {
+    /// Read back on a cache miss. Changed files have no new excerpt.
+    File,
+    /// Standard input, which cannot be read twice.
+    Text(Rc<str>),
+}
+
+impl Original {
+    fn loaded(source: &str, stdin: bool) -> Self {
+        if stdin {
+            return Self::Text(Rc::from(source));
+        }
+        Self::File
+    }
+}
+
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
 pub struct PositionMap {
@@ -52,8 +69,8 @@ pub struct PositionMap {
     pub record: Option<crate::sourcemap::SourceMap>,
     /// Source map from transpiled to original code.
     pub map: Option<crate::sourcemap::SourceMap>,
-    /// Original source, for error excerpts (only kept when mapped).
-    pub original: Option<Rc<str>>,
+    /// Where the original source comes from, for error excerpts (only when mapped).
+    pub original: Option<Original>,
     /// Characters injected at the start of line 1 (the ESM prologue).
     pub line1_shift: u32,
     /// Lines injected above the file's line 1 (the host engine's CommonJS
@@ -362,7 +379,7 @@ impl State {
             .record = out
             .mappings
             .filter(|m| !m.is_empty())
-            .map(|m| crate::sourcemap::SourceMap::parse(&m));
+            .map(crate::sourcemap::SourceMap::new);
         Ok(out.code)
     }
 
@@ -463,8 +480,8 @@ impl State {
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
-                    entry.map = Some(crate::sourcemap::SourceMap::parse(&mappings));
-                    entry.original = Some(Rc::from(raw.as_str()));
+                    entry.map = Some(crate::sourcemap::SourceMap::new(mappings));
+                    entry.original = Some(Original::loaded(&raw, stdin));
                 }
                 (out.code, format)
             }
@@ -506,20 +523,36 @@ impl State {
     }
 
     pub fn source_line(&self, file: &str, line: usize) -> Option<String> {
-        if let Some(original) = self
+        let index = line.checked_sub(1)?;
+        let original = self
             .positions
             .borrow()
             .get(file)
-            .and_then(|p| p.original.clone())
+            .and_then(|p| p.original.clone());
+        let text = match original {
+            Some(Original::File) => self.original_file_text(file)?,
+            Some(Original::Text(text)) => text,
+            None => self.sources.borrow().get(file)?.0.clone(),
+        };
+        text.lines().nth(index).map(str::to_owned)
+    }
+
+    /// The file `path` as it was loaded. Stack formatting asks for several lines of one
+    /// file in a row, so the last file read is kept. That snapshot remains valid
+    /// for the loaded code even if the file later changes or disappears.
+    fn original_file_text(&self, path: &str) -> Option<Rc<str>> {
+        if let Some((cached, text)) = &*self.last_original.borrow()
+            && cached == path
         {
-            return original
-                .lines()
-                .nth(line.checked_sub(1)?)
-                .map(str::to_owned);
+            return Some(text.clone());
         }
-        let sources = self.sources.borrow();
-        let (code, _) = sources.get(file)?;
-        code.lines().nth(line.checked_sub(1)?).map(str::to_owned)
+        let raw = std::fs::read(path).ok()?;
+        if self.source_digests.borrow().get(path) != Some(&self.source_digest(&raw)) {
+            return None;
+        }
+        let text: Rc<str> = Rc::from(String::from_utf8_lossy(&raw).as_ref());
+        *self.last_original.borrow_mut() = Some((path.to_owned(), text.clone()));
+        Some(text)
     }
 
     /// Original position for a stack frame, if the file needs any fixup.
@@ -556,14 +589,11 @@ impl State {
         if let Some(mappings) = out.mappings.as_ref().filter(|m| !m.is_empty()) {
             let mut positions = self.positions.borrow_mut();
             if !positions.contains_key(path) {
-                let original = std::fs::read_to_string(path)
-                    .ok()
-                    .map(|s| Rc::from(s.as_str()));
                 positions.insert(
                     path.to_owned(),
                     PositionMap {
-                        map: Some(crate::sourcemap::SourceMap::parse(mappings)),
-                        original,
+                        map: Some(crate::sourcemap::SourceMap::new(mappings.as_str())),
+                        original: Some(Original::File),
                         ..Default::default()
                     },
                 );
@@ -596,12 +626,16 @@ impl State {
         Ok(imports)
     }
 
+    fn source_digest(&self, raw: &[u8]) -> u64 {
+        bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw)
+    }
+
     /// Forget what was cached for `path` when its content changed since.
     /// Dev servers rewrite their output in place (webpack's server chunks),
     /// and `delete require.cache[path]` then expects the new code. The key
     /// includes the printed hooks' version, like every cache of hooked text.
     fn revalidate(&self, path: &str, raw: &[u8]) {
-        let digest = bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw);
+        let digest = self.source_digest(raw);
         let previous = self
             .source_digests
             .borrow_mut()
@@ -611,6 +645,7 @@ impl State {
         }
         self.sources.borrow_mut().remove(path);
         self.positions.borrow_mut().remove(path);
+        self.last_original.borrow_mut().take();
         #[cfg(feature = "engine-host")]
         {
             self.source_imports.borrow_mut().remove(path);
@@ -759,9 +794,9 @@ mod tests {
     #[test]
     fn record_positions_compose_before_prologue_and_transpile_maps() {
         let positions = PositionMap {
-            record: Some(crate::sourcemap::SourceMap::parse("oGAAG;AACH")),
+            record: Some(crate::sourcemap::SourceMap::new("oGAAG;AACH")),
             line1_shift: 3,
-            map: Some(crate::sourcemap::SourceMap::parse("AAEK;AACA")),
+            map: Some(crate::sourcemap::SourceMap::new("AAEK;AACA")),
             ..Default::default()
         };
         assert_eq!(positions.original_position(1, 101), (3, 6));
@@ -826,6 +861,59 @@ mod tests {
             state.lower_script("console.log(1);", "/m.cjs").unwrap(),
             "console.log(1);"
         );
+    }
+
+    struct MappedTranspiler;
+
+    impl crate::Transpiler for MappedTranspiler {
+        fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
+            Ok(source.to_uppercase())
+        }
+
+        fn transpile_with_map(
+            &self,
+            source: &str,
+            _: &str,
+            _: SourceLoader,
+        ) -> Result<crate::Transpiled, String> {
+            Ok(crate::Transpiled {
+                code: source.to_uppercase(),
+                mappings: Some("AAAA".into()),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn original_lines_come_from_the_file_as_loaded() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mapped.js");
+        let other = dir.join("other.js");
+        let path = file.to_str().unwrap();
+        let other_path = other.to_str().unwrap();
+        let state = State::new(Vec::new(), Box::new(MappedTranspiler));
+        std::fs::write(&file, "first\nsecond\n").unwrap();
+        std::fs::write(&other, "other\n").unwrap();
+        assert_eq!(&*state.load_source(path).unwrap().0, "FIRST\nSECOND\n");
+        state.load_source(other_path).unwrap();
+        assert!(matches!(
+            state.positions.borrow()[path].original,
+            Some(Original::File)
+        ));
+
+        assert_eq!(state.source_line(path, 2).as_deref(), Some("second"));
+        assert_eq!(state.source_line(path, 3), None);
+        assert_eq!(state.source_line(path, 0), None);
+
+        // An edit that has not been loaded yet never shows lines the running code lacks.
+        assert_eq!(state.source_line(other_path, 1).as_deref(), Some("other"));
+        std::fs::write(&file, "edited\nlater\n").unwrap();
+        assert_eq!(state.source_line(path, 1), None);
+
+        state.load_source(path).unwrap();
+        assert_eq!(state.source_line(path, 2).as_deref(), Some("later"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

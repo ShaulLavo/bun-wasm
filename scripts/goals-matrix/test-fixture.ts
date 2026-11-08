@@ -19,13 +19,14 @@ export function completeAttempt(): Attempt {
   return { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass", evidence: evidence(phase), startedAt: "now", durationMs: 1, timeoutMs: phase === "cleanup" ? 20_000 : 180_000 })) };
 }
 
-export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>): Promise<T> {
+export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0): Promise<T> {
   const pending: Promise<void>[] = [];
   let listening = false, count = 0, message = framework.text;
   const shell = { running: false, lastExit: 0,
     async submit(text: string): Promise<void> {
-      if (text === "bun install") { const install = Bun.sleep(installDelayMs); pending.push(install); return install; }
-      if (text === "bun run build") return;
+      if (text === "bun install" && installDelayMs > 0) { const install = Bun.sleep(installDelayMs); pending.push(install); return install; }
+      if (text === "bun run build" && buildDelayMs > 0) { const build = Bun.sleep(buildDelayMs); pending.push(build); return build; }
+      if (text === "bun install" || text === "bun run build") return;
       shell.running = true; listening = true; count = 0;
       return new Promise(() => {});
     },
@@ -42,7 +43,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
       if (selector === framework.button || selector === framework.clicked) return counter;
       return { textContent: message };
     } },
-    playground: { shell, previews: { serves: () => listening, url: () => "http://fixture/preview" },
+    playground: { shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
       editor: { async open() {}, async save() {}, view },
       term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
     },
