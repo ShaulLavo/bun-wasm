@@ -8,6 +8,7 @@
         "scripts/app-matrix/engine-memory-hook.ts",
         "scripts/engine-producer.ts",
         "scripts/c1-controller.ts",
+        "scripts/goals-matrix/run.ts",
         "scripts/c1/contract-fixture.ts",
         "scripts/c1/tls-page.ts",
         "scripts/c1/native-header.ts",

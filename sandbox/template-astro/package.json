@@ -1,0 +1,15 @@
+{
+  "name": "astro-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run node_modules/astro/astro.js dev --host 127.0.0.1 --port 5173",
+    "build": "bun run node_modules/astro/astro.js build",
+    "start": "bun run start.ts 5173"
+  },
+  "dependencies": {
+    "astro": "5.14.1",
+    "@astrojs/node": "9.4.4",
+    "typescript": "5.9.3"
+  }
+}
