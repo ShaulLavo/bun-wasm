@@ -1339,7 +1339,7 @@ jobs:
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
       WASI_LIBC_JOBS: "2"
       CARGO_BUILD_JOBS: "2"
