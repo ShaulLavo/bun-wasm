@@ -1,22 +1,26 @@
-# Next playground build scheduling
+# Next playground production traces
 
-Classification: Host feature, original application configuration and regression test.
+Classification: Host feature, original application configuration and test adapters.
 No upstream implementation is copied or patched.
 
-`sandbox/template-next/next.config.ts` configures Next.js 15.5.6 with its supported
-`experimental.parallelServerBuildTraces` option. Next starts dependency tracing
-after the server compiler finishes, while client compilation and page generation
-continue. It still awaits tracing before completing the production build. The
-single-CPU worker setting remains unchanged. Type checking, page generation,
-trace output, and production startup stay enabled.
+The Pages Router starter pins Next 15.5.6 and stable React 19.1.1 and builds with
+webpack. Its `outputFileTracingExcludes` entry for `next-server` names only eight
+compiled production runtime files for Turbopack or experimental React. The five
+stable production runtimes remain eligible for tracing. No package, image
+processor, application route, build phase, or production assertion is excluded.
 
-The upstream scheduling code is `next/dist/build/index.js` in the npm release
-`next@15.5.6`. Without this option, that release starts server dependency tracing
-after page generation. Interpreted engines spend most of this starter's build in
-that analysis, so serial scheduling delays the browser playground unnecessarily.
+The upstream selectors are
+`next/dist/server/route-modules/{app-page,app-route,pages,pages-api}/module.compiled.js`.
+Their webpack, production, stable-React branches select the retained runtime
+files. `next/dist/lib/needs-experimental-react.js` checks the experimental React
+configuration. `next/dist/build/collect-build-traces.js` applies the named
+`next-server` exclusions before dependency analysis.
 
-`scripts/next-build-scheduling.test.ts` checks the complete starter configuration,
-including the worker count and absence of settings that skip build work. Its
-feature-owned quality manifest preserves blocking check discovery. The existing
-goals runner exercises development, interaction, hot reload, production build,
-and production startup with unchanged deadlines.
+`scripts/next-trace-fixture.ts` checks those installed pinned selectors, reads the
+generated trace manifests, rejects missing stable runtimes and alternate runtime
+leaks, and copies only trace-selected dependencies into an isolated project. It
+moves the original dependency directory out of package resolution. The server
+fixture exercises production SSR from that restricted project. Omitting a
+required stable runtime is the negative control. Configuration and inventory
+regressions have a feature-owned blocking quality manifest. Timing and live
+correctness results are recorded by the lane, not inferred from these unit tests.
