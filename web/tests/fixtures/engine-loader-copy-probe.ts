@@ -7,11 +7,12 @@ const source = appendCustomSection(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0,
 const build = new Bun.CryptoHasher("sha256").update(source).digest("hex");
 const events: { kind: string; bytes: number }[] = [];
 const NativeBlob = globalThis.Blob;
+const NativeResponse = globalThis.Response;
 const previous = new Map(["location", "caches", "__bunwasmBuilds"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 const stored = Promise.withResolvers<void>();
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   if (new URL(request.url).pathname.endsWith(".gz")) return new Response(null, { status: 404 });
-  return new Response(source, { headers: { "Content-Type": "application/wasm" } });
+  return new NativeResponse(source, { headers: { "Content-Type": "application/wasm" } });
 } });
 let timer: ReturnType<typeof setTimeout> | undefined;
 try {
@@ -24,6 +25,12 @@ try {
       stored.resolve();
     } }; },
   } });
+  globalThis.Response = class extends NativeResponse {
+    constructor(body?: BodyInit | null, init?: ResponseInit) {
+      super(body, init);
+      if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) events.push({ kind: "response-buffer-copy", bytes: body.byteLength });
+    }
+  };
   globalThis.Blob = class extends NativeBlob {
     constructor(...args: ConstructorParameters<typeof NativeBlob>) { super(...args); events.push({ kind: "blob", bytes: this.size }); }
     override async arrayBuffer() { events.push({ kind: "arrayBuffer", bytes: this.size }); return super.arrayBuffer(); }
@@ -32,12 +39,13 @@ try {
   assert.equal(engine.size, source.length);
   assert.deepEqual(programMemory(engine.module), [{ kind: "private", origin: "defined", maximumPages: 3 }]);
   await Promise.race([stored.promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("cache did not finish")), 1000); })]);
-  assert.deepEqual(events, [{ kind: "blob", bytes: source.length }, { kind: "arrayBuffer", bytes: source.length }]);
+  assert.deepEqual(events, [], "streamed bytes must not be copied through a retained Blob");
   console.log("PASS one owned engine source snapshot");
 } finally {
   if (timer) clearTimeout(timer);
   await server.stop(true);
   globalThis.Blob = NativeBlob;
+  globalThis.Response = NativeResponse;
   for (const [key, descriptor] of previous) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else Reflect.deleteProperty(globalThis, key);
