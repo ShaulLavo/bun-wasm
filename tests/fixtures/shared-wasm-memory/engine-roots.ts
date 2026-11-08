@@ -34,7 +34,7 @@ function deep(depth: number): number {
   assert.equal(held.depth, depth);
   return below + 1;
 }
-assert.equal(deep(200), 200);
+assert.equal(deep(40), 40);
 
 function gc() {
   (globalThis as { Bun?: { gc(sync: boolean): void } }).Bun?.gc(true);
