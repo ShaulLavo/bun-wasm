@@ -510,7 +510,7 @@ for (const secondaryFirst of [false, true]) test(`owned root hostname routes sec
   await client.register(49153);
   expect((await fetch(endpoint, { headers: { origin: root } })).status).toBe(200);
   client.unregister(3137);
-  await expect(fetch(endpoint, { headers: { origin: sibling } })).rejects.toThrow();
+  expect((await fetch(endpoint, { headers: { origin: sibling } })).status).toBe(403);
   const siblingEndpoint = new URL(endpoint); siblingEndpoint.hostname = new URL(sibling).hostname;
   expect((await fetch(siblingEndpoint, { headers: { origin: sibling } })).status).toBe(200);
   expect((await fetch(sibling)).status).toBe(201);

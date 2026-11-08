@@ -13,7 +13,7 @@ PREVIEW_ORIGINS=1 bun web/serve.ts
 ```
 
 Open the printed URL with `?root-previews`. Each virtual server gets a separate
-loopback address and origin with its application at `/`. The maintained app harness selects
+loopback hostname and origin with its application at `/`. The maintained app harness selects
 this setup with `scripts/app-matrix.sh --preview-origins` alongside its ordinary
 options. Root mode requires the matching Waffle root-preview API.
 
@@ -58,7 +58,7 @@ state, keeping their callbacks outside the owner session's request handlers.
 The defaults bound the host to 128 lifetime origin allocations, 128 outstanding tickets or
 connected owners, 16 ports per owner, 64 active exchanges across owners, 256 root
 sockets across the host, 64 sockets per origin, 4 MiB request bodies/chunks and
-8 MiB control frames/send queues. A root address is not shared with another owner or port, so cookies cannot cross
+8 MiB control frames/send queues. A root hostname is not shared with another owner or port, so cookies cannot cross
 preview hosts. An old origin is never reassigned during a host lifetime. A late close cannot unregister a replacement binding.
 
 Root mode skips the mounted preview service worker. The playground's independent
@@ -80,12 +80,15 @@ selects its runtime through its registered browser Origin, then that runtime's
 fixed port grant. The same rule covers HTTP requests with an Origin header.
 Other owners and unregistered ports fail before dispatch. Shared native listeners
 retain separate owner/socket leases and close after the final owner releases them.
-Native port conflicts fail without touching a pre-existing listener. The same
-fixed-port listeners are also bound on each currently allocated owner loopback
-hostname, so a native client using its page hostname and another registered port
-reaches that owner. Registration in either order adds the missing host/port pairs.
-Closing a root releases its hostname aliases; closing a port releases all aliases
-for that port. Foreign owner Origins remain rejected before dispatch. No package
+Native port conflicts fail without touching a pre-existing listener. Each shared
+fixed-port listener also accepts exact hostname leases for currently allocated
+roots, so a native client using its page hostname and another registered port
+reaches that owner. A hostname lease requires the matching owner Origin. The
+physical listener binds only to `127.0.0.1`, never to a randomized `127.x` address. Registration in either order adds the missing host/port pairs.
+Closing a root releases its hostname leases and associated sockets; closing a
+port releases that owner's leases for that port. A retired hostname gets HTTP 403
+if a sibling keeps the shared listener alive. It cannot dispatch through that
+sibling or another owner. Foreign owner Origins remain rejected before dispatch. No package
 configuration, application URL rewriting, history patch or service-worker opener
 is needed. This specifically covers generic extra server ports as well as the
 primary port.
@@ -95,12 +98,13 @@ request line sent into each virtual server connection. Original bytes, headers
 and bodies are forwarded unchanged. Root-mode app results retain caller pathname
 and those server request targets as independent path-agreement evidence.
 
-The virtual-port pool is bounded to 512 native listeners, 256 sockets in total and
-64 sockets per listener. Pending first-grant
+The virtual-port pool retains its 512 host/port allocation bound, 256 sockets in
+total and 64 sockets per physical listener. Each virtual port shares one literal
+loopback listener. Repeated reservation of the same lease uses no extra slot. Pending first-grant
 requests count toward the shared exchange budget. They wait for that authenticated
 grant or revocation rather than racing startup. A reused native connection cannot
 switch runtime owners. Loopback aliases retain the browser's ordinary cookie
-rules; the dedicated root addresses provide the separate cookie hosts.
+rules; the dedicated root hostnames provide the separate cookie hosts.
 
 Root-mode HMR evidence comes from actual native browser WebSocket frames. The
 mounted-mode observer continues to handle the runtime polyfill's dispatched
@@ -113,3 +117,32 @@ error diagnostics redact token query values.
 The app matrix stops its server through the maintained terminal focus and real
 browser keyboard Ctrl-C helper. It waits for shell idle and command completion,
 accepts normal handled exit or status 130, and retains the listener-removal checks.
+
+
+## Portable loopback hostnames
+
+Each root uses a fresh single-label `bw-<counter>-<UUID>.localhost` hostname and an
+ephemeral TCP port. Its socket binds only to literal `127.0.0.1`. The host lifetime
+counter prevents retired hostname reuse even if the OS reuses a TCP port. Exact
+Host and URL-origin checks still reject alternate hostnames on a root listener.
+No DNS server, interface alias, hosts-file edit or wildcard listener is provisioned.
+
+[RFC 6761 section 6.3](https://www.rfc-editor.org/rfc/rfc6761.html#section-6.3)
+reserves `localhost` and its children for loopback resolution. This adapter requires
+the browser and local resolver to honor that rule. The single-label names also
+keep distinct roots cross-site and reject a shared `Domain=localhost` cookie.
+The executable browser control checks actual resolution, both cookie properties,
+Fetch metadata and foreign-owner rejection without resolver overrides.
+
+[WebKit bug 160504](https://bugs.webkit.org/show_bug.cgi?id=160504#c19) records
+macOS 26 support, with implementation confirmed in OS frameworks below WebKit.
+Older macOS support is not claimed. Linux Chromium, Firefox and WebKit controls
+are not macOS Safari, iOS Simulator or physical iPhone acceptance evidence.
+Native delivery checks must exercise their actual browser and resolver.
+
+`scripts/preview-origins-browser.test.ts` belongs to the existing Web browser gate
+through `checks/web-browser-preview-origins.json`. It defaults to the gate's
+installed Chromium and WebKit. `BUN_WASM_PREVIEW_BROWSERS=chromium,firefox,webkit`
+also runs Firefox when installed. The canonical-loopback-only regression runs in
+`web/tests/preview-origin-host.test.ts`; exact hostname leases, connection identity,
+the allocation bound and repeated cleanup run in `preview-port-sockets.test.ts`.
