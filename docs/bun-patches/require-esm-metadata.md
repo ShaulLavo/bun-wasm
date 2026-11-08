@@ -22,7 +22,7 @@ containing `import.meta` remain unchanged. The bundler API and wrapper format co
 from Bun `src/bundler` and `src/js_printer` at
 `9510e74152073d850a18758ca41114d8f214ffa6` with this repository's WASI patches.
 
-`tests/fixtures/require-esm-meta/` is an original TypeScript regression. The
+`web/tests/fixtures/require-esm-meta/` is an original TypeScript regression. The
 browser guest runs it with both module-store and registration-record loaders.
 It checks resolution from a dependency directory, metadata identity, metadata
 fields, require, require-cache identity, escaped-name collisions, and literals.

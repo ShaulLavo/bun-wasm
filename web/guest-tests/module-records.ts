@@ -152,7 +152,7 @@ function runCase(directory: string, wasm: string, modules: "store" | "records", 
 
 export function testModuleRecordControls(wasm: string): void {
   test("required ES modules retain their own metadata without capturing source names", () => {
-    const fixture = join(root, "tests/fixtures/require-esm-meta");
+    const fixture = join(root, "web/tests/fixtures/require-esm-meta");
     const expected = readFileSync(join(fixture, "expected.txt"), "utf8");
     for (const modules of ["store", "records"] as const) {
       const child = runCase(fixture, wasm, modules, ["run", "/index.cts"]);
