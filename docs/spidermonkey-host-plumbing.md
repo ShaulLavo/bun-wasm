@@ -28,7 +28,9 @@ The Node fixture host accepts `--engine spidermonkey=PATH`, loads that core and 
 sibling side, and registers only configured engine-qualified executables. An
 unconfigured path never falls back to the base module.
 
-The browser accepts `?engine=spidermonkey` without adding a menu option. Named
+The browser accepts `?engine=spidermonkey`. An explicitly selected SpiderMonkey
+engine appears as the current menu option rather than misleadingly showing Browser.
+The normal menu remains Browser, QuickJS and JSC. Named
 standard URLs use the fingerprinted pair loader. Custom SpiderMonkey core URLs
 also require both standard manifest fingerprints. The runner reuses the selected
 prepared module for engine-qualified child commands.

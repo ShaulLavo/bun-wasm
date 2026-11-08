@@ -11,6 +11,7 @@ bun-wasm code. They do not copy or modify Mozilla, Bun, Node, or WebKit code.
 | `src/executable-paths.ts`, `src/bun-adapter.ts` | Opt-in package registration and immutable engine-qualified paths. |
 | `web/build.ts`, `web/src/engine-loader.ts` | Optional paired staging and fingerprinted browser loading. |
 | `web/src/runner.ts`, `web/src/subprocess-broker.ts` | Selected module reuse and child launchers. |
+| `web/src/playground/app.tsx` | Display the explicitly selected experimental engine without changing the normal menu. |
 | `web/scripts/node-host.ts`, `web/scripts/node-spawn.ts` | Explicit Node CLI loading and configured executable registration. |
 | `web/src/memory-telemetry.ts` | No refresh calls for engines without a known telemetry record. |
 | `scripts/spidermonkey-host-plumbing.test.ts`, `web/tests/fixtures/spidermonkey-tier-worker.ts`, `web/tests/fixtures/spidermonkey-node-host.ts` | Tiny paired initialization, loader rejection, staging, and concurrent child transport checks. |

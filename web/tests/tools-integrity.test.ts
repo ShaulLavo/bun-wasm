@@ -14,6 +14,7 @@ test("the loader admits explicit SpiderMonkey while the ready menu stays Browser
   const options = source.match(/^const ENGINE_OPTIONS = (.+)$/m)?.[1];
   if (!options) throw new Error("Missing ready engine menu options");
   expect(Array.from(options.matchAll(/\["([^"]+)"/g), match => match[1])).toEqual(["browser", "quickjs", "jsc"]);
+  expect(source).toContain('playground.engine === "spidermonkey" ? <option value="spidermonkey" selected>');
 });
 
 for (const source of ["download", "cache"] as const) {
