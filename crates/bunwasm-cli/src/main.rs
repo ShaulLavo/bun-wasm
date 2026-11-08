@@ -88,17 +88,18 @@ mod bun_transpiler {
     }
 
     fn compiler_loader(loader: Loader) -> BunLoader {
+        use BunLoader::{Js, Json, Json5, Jsonc, Jsx, Text, Toml, Ts, Tsx, Yaml};
         match loader {
-            Loader::Js => BunLoader::Js,
-            Loader::Jsx => BunLoader::Jsx,
-            Loader::Ts => BunLoader::Ts,
-            Loader::Tsx => BunLoader::Tsx,
-            Loader::Json => BunLoader::Json,
-            Loader::Toml => BunLoader::Toml,
-            Loader::Yaml => BunLoader::Yaml,
-            Loader::Json5 => BunLoader::Json5,
-            Loader::Jsonc => BunLoader::Jsonc,
-            Loader::Text => BunLoader::Text,
+            Loader::Js => Js,
+            Loader::Jsx => Jsx,
+            Loader::Ts => Ts,
+            Loader::Tsx => Tsx,
+            Loader::Json => Json,
+            Loader::Toml => Toml,
+            Loader::Yaml => Yaml,
+            Loader::Json5 => Json5,
+            Loader::Jsonc => Jsonc,
+            Loader::Text => Text,
         }
     }
 
