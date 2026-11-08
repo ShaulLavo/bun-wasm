@@ -1,7 +1,7 @@
 import { readFile, mkdir, writeFile, rmdir } from "node:fs/promises";
 import { hostname } from "node:os";
 import { resolve, join } from "node:path";
-import { browsers, engines, boxId, frameworks, type Browser, type Engine } from "./catalog";
+import { browsers, engines, boxId, frameworks, type Browser, type Engine, type Framework } from "./catalog";
 import { initialCells, validateReport, type Report, type Cell } from "./model";
 import { saveReport } from "./report";
 import { deadlinePolicy, parseInstallTimeouts, parseTimeout, sameDeadlines } from "./deadlines";
@@ -76,15 +76,18 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
+export function playgroundURL(base: string, framework: Framework, engine: Engine): string {
+  const url = new URL(base);
+  url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
+  url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
+  return url.href;
+}
 async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal): Promise<Cell> {
   const missing = prerequisites(cell, config);
   if (missing) return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: cell.attempts, status: "not runnable yet", ...missing };
   const framework = frameworks.find(framework => framework.id === cell.framework);
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
-  const url = new URL(base);
-  url.searchParams.set("template", framework.template); url.searchParams.set("engine", cell.engine);
-  url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
-  return execute({ box: cell, framework, url: url.href, timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
+  return execute({ box: cell, framework, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
