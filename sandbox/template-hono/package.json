@@ -1,0 +1,5 @@
+{
+  "name": "hono-app", "private": true, "type": "module",
+  "scripts": { "dev": "bun --hot run server.ts", "build": "bun build server.ts --target=bun --outdir=dist", "start": "bun run dist/server.js" },
+  "dependencies": { "hono": "4.10.2" }
+}

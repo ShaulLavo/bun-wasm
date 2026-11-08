@@ -1,0 +1,16 @@
+---
+const value = Astro.url.searchParams.get('value') ?? 'initial';
+---
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Product matrix</title></head><body>
+  <h1 id="message">Hello from astro</h1>
+  <p id="server-value">{value}</p>
+  <button id="increment">Increment</button><output id="count">0</output>
+  <script>
+    const button = document.querySelector<HTMLButtonElement>('#increment');
+    const output = document.querySelector<HTMLOutputElement>('#count');
+    if (!button || !output) throw new Error('Counter elements missing');
+    let count = 0;
+    button.addEventListener('click', () => { output.textContent = String(++count); });
+  </script>
+</body></html>

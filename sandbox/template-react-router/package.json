@@ -1,0 +1,20 @@
+{
+  "name": "react-router-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run node_modules/@react-router/dev/bin.js dev --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "bun run node_modules/@react-router/dev/bin.js build",
+    "start": "bun run start.ts 5173"
+  },
+  "dependencies": {
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-router": "7.9.4",
+    "@react-router/dev": "7.9.4",
+    "@react-router/node": "7.9.4",
+    "@react-router/serve": "7.9.4",
+    "vite": "7.1.12",
+    "typescript": "5.9.3"
+  }
+}

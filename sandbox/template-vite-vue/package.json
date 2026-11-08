@@ -1,0 +1,15 @@
+{
+  "name": "vite-vue-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "bun run node_modules/vite/bin/vite.js build",
+    "start": "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort"
+  },
+  "dependencies": {
+    "vite": "7.1.12",
+    "vue": "3.5.22",
+    "@vitejs/plugin-vue": "6.0.1"
+  }
+}
