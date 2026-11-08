@@ -20,6 +20,7 @@
     call_indirect (type $binary))
   (func (export "setCounter") (param i32) local.get 0 global.set $counter)
   (func (export "getCounter") (result i32) global.get $counter)
+  (func (export "readBase") (result i32) global.get $base)
   (func (export "clearEntry") (param i32) local.get 0 ref.null func table.set $table)
   (func (export "restoreAdd") (param i32) local.get 0 ref.func $add table.set $table)
   (export "add" (func $add))

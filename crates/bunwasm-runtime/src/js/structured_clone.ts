@@ -93,7 +93,6 @@ type StructuredCloneInternal = BunWasm.Internal & {
 
   function isUncloneable(value: object): boolean {
     if (typeof internal.isProxy === "function" && internal.isProxy(value)) return true;
-    if (internal.isWasmCapability?.(value)) return true;
     if (value instanceof Promise || brand(WeakMap.prototype.has, value, [{}]) || brand(WeakSet.prototype.has, value, [{}])) {
       return true;
     }
@@ -183,6 +182,7 @@ type StructuredCloneInternal = BunWasm.Internal & {
     }
 
     cloneObject(value: object): unknown {
+      if (internal.isWasmCapability?.(value)) throw dataCloneError();
       const special = this.cloneSpecial(value);
       if (special !== undefined) return this.remember(value, special);
       if (brand(mapSize, value)) return this.cloneMap(value as Map<unknown, unknown>);

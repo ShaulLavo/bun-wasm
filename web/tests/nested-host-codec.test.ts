@@ -23,6 +23,7 @@ describe("runtime_nested wire", () => {
     const values: WasmNumber[] = [{ I32: 7 }, { I64: "-9007199254740993" }, { F32: 1 }, { F64: "2" }];
     expect(decoder.decode(encodeReply({ Values: values }))).toBe('{"Values":[{"I32":7},{"I64":-9007199254740993},{"F32":1},{"F64":2}]}');
     expect(decoder.decode(encodeReply("PendingException"))).toBe('"PendingException"');
+    expect(decoder.decode(encodeReply("Null"))).toBe('"Null"');
     expect(decoder.decode(encodeReply({ Handle: 2147483649 }))).toBe('{"Handle":2147483649}');
     expect(JSON.parse(decoder.decode(encodeReply({ Error: { category: "LinkError", message: 'bad "name"' } })))).toEqual({ Error: { category: "LinkError", message: 'bad "name"' } });
   });

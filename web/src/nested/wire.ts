@@ -50,7 +50,8 @@ export type Reply =
   | { Function: { id: number; params: readonly string[]; results: readonly string[] } }
   | { Values: readonly WasmNumber[] }
   | { Error: { category: string; message: string } }
-  | "PendingException";
+  | "PendingException"
+  | "Null";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();

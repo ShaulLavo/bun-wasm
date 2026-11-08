@@ -29,6 +29,36 @@ assert.equal(imported(reexport, 'importedBase2'), global);
 assert.equal(imported(create(global, 6), 'importedBase'), global);
 assert.notEqual(imported(create(global, 6), 'importedBase2'), global);
 
+function readBase(instance: WebAssembly.Instance) {
+  const read = instance.exports.readBase;
+  if (typeof read !== 'function') throw new Error('Missing real Wasm global read');
+  return read();
+}
+const intrinsicValue = Object.getOwnPropertyDescriptor(WebAssembly.Global.prototype, 'value')!.get!;
+function checkImport() {
+  const instance = create(global, global);
+  assert.equal(readBase(instance), 42);
+  assert.equal(intrinsicValue.call(global), 42);
+  assert.equal(WebAssembly.Global.prototype.valueOf.call(global), 42);
+  assert.equal(imported(instance, 'importedBase'), global);
+  assert.equal(imported(instance, 'importedBaseAlias'), global);
+  assert.equal(imported(instance, 'importedBase2'), global);
+}
+Object.defineProperty(global, 'value', { value: 17, configurable: true });
+checkImport();
+let valueReads = 0;
+Object.defineProperty(global, 'value', { get() { valueReads++; throw new Error('Must not read a Global property'); }, configurable: true });
+Object.defineProperty(global, 'valueOf', { value() { throw new Error('Must not call a Global conversion'); }, configurable: true });
+checkImport();
+assert.equal(valueReads, 0);
+Object.setPrototypeOf(global, Error.prototype);
+checkImport();
+Object.setPrototypeOf(global, WebAssembly.Global.prototype);
+Reflect.deleteProperty(global, 'value');
+Reflect.deleteProperty(global, 'valueOf');
+assert.throws(() => new WebAssembly.Instance(module, { env: { memory, base: Object.create(WebAssembly.Global.prototype), base2: 6 } }), WebAssembly.LinkError);
+checkImport();
+
 for (const name of ['table-externref', 'global-reference']) {
   const source = await bytes(name);
   assert.throws(() => new WebAssembly.Module(source), WebAssembly.CompileError);
@@ -47,6 +77,15 @@ const child = `${import.meta.dir}/plain-sab-child.ts`;
 for (const value of [table, global]) {
   refused(() => structuredClone(value));
   refused(() => structuredClone({ fresh: new SharedArrayBuffer(8), value }));
+  Object.defineProperty(value, Symbol.toStringTag, { value: 'Error', configurable: true });
+  refused(() => structuredClone(value));
+  refused(() => structuredClone({ value }));
+  Reflect.deleteProperty(value, Symbol.toStringTag);
+  const prototype = Object.getPrototypeOf(value);
+  Object.setPrototypeOf(value, Error.prototype);
+  refused(() => structuredClone(value));
+  refused(() => structuredClone({ value }));
+  Object.setPrototypeOf(value, prototype);
   refused(() => new Worker(child, { workerData: { mode: 'creator', value } }));
   const { port1, port2 } = new MessageChannel();
   refused(() => port1.postMessage({ value }));

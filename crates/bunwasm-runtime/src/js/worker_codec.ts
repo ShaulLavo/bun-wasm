@@ -220,11 +220,20 @@
       hydrate(graph, memory);
       function hydrate(graph: Graph, values?: Map<number, unknown>) {
         for (const [index, node] of graph.nodes.entries()) {
-          if (node[0] === "shared") sharedObjects!.read({ id: node[1], byteLength: node[2] });
+          if (node[0] === "shared") cacheShared(node, index, values);
           if (node[0] === "wasm-module" || node[0] === "wasm-memory") cacheWasm(node, graph, index, values);
           if (node[0] !== "port") continue;
           for (const [, pending] of node[1].pending) hydrate(pending);
         }
+      }
+      function sharedBuffer(node: Extract<Node, ["shared", string, number]>) {
+        const buffer = sharedObjects!.read({ id: node[1], byteLength: node[2] });
+        if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
+        return buffer;
+      }
+      function cacheShared(node: Extract<Node, ["shared", string, number]>, index: number, values?: Map<number, unknown>) {
+        const buffer = sharedBuffer(node);
+        if (!values?.has(index)) values?.set(index, buffer);
       }
       function cacheWasm(node: WasmNode, graph: Graph, index: number, values?: Map<number, unknown>) {
         const value = readWasm(node);
@@ -275,12 +284,7 @@
             const buffer = node[2] ? new ArrayBuffer(bytes.length, { maxByteLength: node[2] }) : new ArrayBuffer(bytes.length);
             new Uint8Array(buffer).set(bytes); result = buffer; break;
           }
-          case "shared": {
-            const reference = { id: node[1], byteLength: node[2] };
-            const buffer = sharedObjects!.read(reference);
-            if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
-            result = buffer; break;
-          }
+          case "shared": result = sharedBuffer(node); break;
           case "wasm-module": case "wasm-memory": result = readWasm(node); break;
           case "node-buffer": result = readNodeBuffer(node); break;
           case "view": result = readView(node); break;

@@ -168,3 +168,15 @@ host before crossing the import boundary, including checked conversion to its
 32-bit wire length. A valid module with an oversized publication description is
 refused with DataCloneError, rather than trapping at the host import. The discovered
 group fixture includes that case and a real reentrant Memory-and-Module delivery.
+
+Immutable Global imports read their private state through the native value helper,
+not an own value property or valueOf method. Re-export caches retain that same
+privately validated Global even if its public prototype changes. Local clone
+refusal likewise precedes user-controlled Error tags and prototypes.
+
+Instance.exports is a branded prototype accessor, as on a native Instance, rather
+than an own nonconfigurable data property. The canonical exports object remains
+frozen and private to the instance. This permits an unchanged emnapi child
+instance proxy to substitute its exports without violating Proxy invariants.
+The discovered guest regression uses the pinned upstream proxy and real node:wasi
+reactor initialization; it is not real binding registration or thread-pool proof.

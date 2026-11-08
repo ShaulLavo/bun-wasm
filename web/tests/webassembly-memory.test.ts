@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext, runInThisContext } from "node:vm";
 
+import { createInstanceProxy } from "../../tests/fixtures/shared-wasm-memory/instance-proxy.js";
+
 const host = globalThis.WebAssembly;
 const factory = runInThisContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.__wasmFactory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/webassembly.ts", import.meta.url), "utf8")));
 const encodeName = (name: string) => [name.length].concat(Array.from(new TextEncoder().encode(name)));
@@ -54,9 +56,13 @@ function sourceApi() {
     compile(bytes: Uint8Array<ArrayBuffer>) {
       const module = new host.Module(bytes);
       modules.push(module);
-      return { id: modules.length - 1, imports: host.Module.imports(module), exports: host.Module.exports(module).map(entry => ({
-        ...entry, params: entry.name === "read" ? [] : ["i32"], results: entry.name === "write" ? [] : ["i32"],
-      })) };
+      const exports = host.Module.exports(module);
+      const imports = host.Module.imports(module).map(entry => entry.kind === "global" ? { ...entry, type: "i32", mutable: false } : entry);
+      return { id: modules.length - 1, backend: exports.some(entry => entry.kind === "global") ? "nested" : undefined, imports,
+        exports: exports.map(entry => ({ ...entry, type: "i32", mutable: false, index: 0,
+          params: entry.name === "read" || entry.name === "readBase" ? [] : ["i32"], results: entry.name === "write" ? [] : ["i32"],
+        })) };
+
     },
     validate(bytes: Uint8Array<ArrayBuffer>) { return host.validate(bytes); },
     createMemory(initial: number, maximum?: number) {
@@ -79,10 +85,15 @@ function sourceApi() {
       assert.ok(module);
       const imports: Record<string, Record<string, WebAssembly.ImportValue>> = {};
       host.Module.imports(module).forEach((entry, index) => {
-        (imports[entry.module] ??= {})[entry.name] = resource(bindings[index]!).memory;
+        (imports[entry.module] ??= {})[entry.name] = entry.kind === "global" ? bindings[index]! : resource(bindings[index]!).memory;
       });
       instances.push(new host.Instance(module, imports));
       return instances.length - 1;
+    },
+    global(id: number, name: string) {
+      const value = instances[id]?.exports[name];
+      assert.ok(value instanceof host.Global);
+      return Reflect.getOwnPropertyDescriptor(host.Global.prototype, "value")!.get!.call(value);
     },
     memoryIdentity(id: number, name: string) { return intern(exported(id, name)); },
     functionIdentity(id: number, name: string) {
@@ -91,7 +102,7 @@ function sourceApi() {
       if (typeof fn !== "function") throw new Error("Expected exported function");
       const prior = callables.indexOf(fn);
       if (prior !== -1) return descriptions[prior];
-      const info = { id: callables.length, params: name === "read" ? [] : ["i32"], results: name === "write" ? [] : ["i32"] };
+      const info = { id: callables.length, params: name === "read" || name === "readBase" ? [] : ["i32"], results: name === "write" ? [] : ["i32"] };
       callables.push(fn);
       descriptions.push(info);
       return info;
@@ -121,7 +132,7 @@ function sourceApi() {
     handed.add(value.buffer);
     return value.buffer;
   }
-  const api: typeof WebAssembly = factory({ native: { wasm: native, wasmMemoryBuffer } });
+  const api: typeof WebAssembly = factory({ native: { wasm: native, wasmMemoryBuffer, wasmNestedExecute: (action: (token: number) => unknown) => action(0) } });
   return { api, allocations: () => allocations };
 }
 
@@ -312,5 +323,70 @@ for (const backend of ["host", "source"]) {
     assert.throws(() => new api.Memory(descriptor), error => error === sentinel);
     assert.deepEqual(reads, ["initial", "maximum"]);
     assert.equal(source.allocations(), 0);
+  });
+}
+
+const globalDefinition = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(
+  section(6, [1, 0x7f, 0, 0x41, 42, 0x0b]),
+  section(7, [2].concat(exportEntry("answer", 3, 0), exportEntry("alias", 3, 0))),
+));
+const globalImport = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(
+  section(1, [1, 0x60, 0, 1, 0x7f]),
+  section(2, [1].concat(encodeName("env"), encodeName("base"), [3, 0x7f, 0])),
+  section(3, [1, 0]),
+  section(7, [3].concat(exportEntry("importedBase", 3, 0), exportEntry("alias", 3, 0), exportEntry("readBase", 0, 0))),
+  section(10, [1, 4, 0, 0x23, 0, 0x0b]),
+));
+
+test("source: immutable Global imports use private state rather than own value or conversion hooks", () => {
+  const { api } = sourceApi();
+  const initial = new api.Instance(new api.Module(globalDefinition));
+  const value = initial.exports.answer;
+  assert.ok(value instanceof api.Global);
+  const intrinsic = Object.getOwnPropertyDescriptor(api.Global.prototype, "value")!.get!;
+  const module = new api.Module(globalImport);
+  const check = () => {
+    const instance = new api.Instance(module, { env: { base: value } });
+    const read = instance.exports.readBase;
+    assert.equal(typeof read, "function");
+    if (typeof read !== "function") throw new Error("Missing real Wasm read");
+    assert.equal(read(), 42);
+    assert.equal(intrinsic.call(value), 42);
+    assert.equal(instance.exports.importedBase, value);
+    assert.equal(instance.exports.alias, value);
+  };
+  Object.defineProperty(value, "value", { value: 17, configurable: true });
+  check();
+  let reads = 0;
+  Object.defineProperty(value, "value", { get() { reads++; throw new Error("Must not read own Global value"); }, configurable: true });
+  Object.defineProperty(value, "valueOf", { value() { throw new Error("Must not call own Global conversion"); }, configurable: true });
+  check();
+  assert.equal(reads, 0);
+  Object.setPrototypeOf(value, Error.prototype);
+  check();
+  Reflect.deleteProperty(value, "value");
+  Reflect.deleteProperty(value, "valueOf");
+  Object.setPrototypeOf(value, api.Global.prototype);
+  assert.throws(() => Reflect.construct(api.Instance, [module, { env: { base: {} } }]), api.LinkError);
+  check();
+});
+
+for (const backend of ["host", "source"]) {
+  test(`${backend}: Instance exports has native accessor semantics and permits the exact wasi-threads proxy`, () => {
+    const api = backend === "host" ? host : sourceApi().api;
+    const memory = new api.Memory({ initial: 1, maximum: 3 });
+    const instance = new api.Instance(new api.Module(fixture), { env: { memory } });
+    assert.equal(Object.hasOwn(instance, "exports"), false);
+    const descriptor = Object.getOwnPropertyDescriptor(api.Instance.prototype, "exports");
+    assert.equal(typeof descriptor?.get, "function");
+    assert.equal(descriptor?.set, undefined);
+    assert.equal(descriptor?.configurable, true);
+    assert.equal(descriptor?.enumerable, true);
+    assert.equal(Object.isFrozen(instance.exports), true);
+    const proxy = createInstanceProxy(instance, memory);
+    assert.equal(proxy.exports.memory, memory);
+    assert.notEqual(proxy.exports, instance.exports);
+    assert.equal(proxy.exports.read, instance.exports.read);
+    assert.equal(createInstanceProxy(proxy, memory), proxy);
   });
 }

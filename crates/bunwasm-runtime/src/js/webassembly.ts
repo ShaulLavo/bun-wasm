@@ -8,8 +8,10 @@
   const native = internal.native.wasm;
   const modules = new WeakMap<Module, BunWasm.WasmModule>();
   const memoryStates = new WeakMap<Memory, MemoryState>();
-  const tableStates = new WeakMap<Table, BunWasm.WasmTable>();
-  const globalStates = new WeakMap<Global, { id: number; name: string; type: BunWasm.WasmType; mutable: boolean }>();
+  type GlobalState = { id: number; name: string; type: BunWasm.WasmType; mutable: boolean };
+  const tableStates = new WeakMap<object, BunWasm.WasmTable>();
+  const globalStates = new WeakMap<object, GlobalState>();
+  const instanceExports = new WeakMap<Instance, Exports>();
   const memories = new Map<number, WeakRef<Memory>>();
   const memoryResources = new Map<number, WeakRef<MemoryState>>();
   const memoryBufferStates = new WeakMap<ArrayBuffer | SharedArrayBuffer, MemoryState>();
@@ -28,7 +30,7 @@
   const memoryBuffers = new WeakSet<ArrayBuffer | SharedArrayBuffer>();
   internal.isWasmMemoryBuffer = value => (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) && memoryBuffers.has(value);
   // Tables and Globals are capabilities of one member. They have no clone representation.
-  internal.isWasmCapability = value => tableStates.has(value as Table) || globalStates.has(value as Global);
+  internal.isWasmCapability = value => isObject(value) && (tableStates.has(value) || globalStates.has(value));
   class CompileError extends Error { constructor(message: string) { super(message); this.name = 'CompileError'; } }
   class LinkError extends Error { constructor(message: string) { super(message); this.name = 'LinkError'; } }
   class RuntimeError extends Error { constructor(message: string) { super(message); this.name = 'RuntimeError'; } }
@@ -152,19 +154,22 @@
     if (!state) throw new TypeError('Expected a WebAssembly.Global');
     return state;
   }
+  function isGlobal(value: unknown): value is Global {
+    return isObject(value) && globalStates.has(value);
+  }
+  function globalValue(state: GlobalState) {
+    if (state.type === 'v128') throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
+    return decode(native.global(state.id, state.name));
+  }
   class Global {
     constructor() { throw new LinkError('Standalone WebAssembly globals are not supported'); }
-    get value() {
-      const state = globalState(this);
-      if (state.type === 'v128') throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
-      return decode(native.global(state.id, state.name));
-    }
+    get value() { return globalValue(globalState(this)); }
     set value(value: unknown) {
       const state = globalState(this);
       if (!state.mutable) throw new TypeError('Immutable WebAssembly global');
       native.global(state.id, state.name, coerce(value, state.type));
     }
-    valueOf() { return this.value; }
+    valueOf() { return globalValue(globalState(this)); }
   }
   function memoryState(memory: Memory) {
     const state = memoryStates.get(memory);
@@ -303,7 +308,6 @@
   type Exports = Record<string, Callable | Memory | Table | Global>;
   type Imports = Record<string, Record<string, unknown>>;
   class Instance {
-    declare readonly exports: Exports;
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
       const provisional: number[] = [];
@@ -322,9 +326,15 @@
       importedGlobals.forEach((global, index) => { if (global) globals.set(index, global); });
       for (const item of info.exports) installExport(id, exports, item, globals);
       if (info.backend !== 'nested') sync(refreshMemory);
-      Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
+      instanceExports.set(this, Object.freeze(exports));
+    }
+    get exports() {
+      const exports = instanceExports.get(this);
+      if (!exports) throw new TypeError('Expected a WebAssembly.Instance');
+      return exports;
     }
   }
+  Object.defineProperty(Instance.prototype, 'exports', { enumerable: true });
   function retainNestedCallback(entry: Callback) {
     const limit = native.nestedCallbackLimit();
     if (nestedCallbacks.size >= limit) throw new RangeError('Nested callback resource limit');
@@ -353,23 +363,25 @@
     }
     if (item.kind === 'memory' && value instanceof Memory) return memoryState(value).resource;
     if (item.kind === 'table' && value instanceof Table) return tableState(value).id;
-    if (item.kind === 'global' && backend === 'nested') {
-      const imported = globalImport(item, value);
-      // Global indices number imports first, so a re-export finds its supplied object here.
-      importedGlobals.push(value instanceof Global ? value : undefined);
-      return imported;
-    }
+    if (item.kind === 'global' && backend === 'nested') return globalImport(item, value, importedGlobals);
     throw new LinkError(`Missing or unsupported WebAssembly import ${item.module}.${item.name}`);
   }
-  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown) {
-    if (value instanceof Global) {
-      const state = globalStates.get(value);
-      if (!state || state.type !== item.type || state.mutable !== item.mutable) throw new LinkError('Incompatible WebAssembly global import');
-      return coerce(value.value, item.type);
+  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown, importedGlobals: (Global | undefined)[]) {
+    let input = value;
+    let global: Global | undefined;
+    if (isGlobal(value)) {
+      const state = globalState(value);
+      if (state.type !== item.type || state.mutable !== item.mutable) throw new LinkError('Incompatible WebAssembly global import');
+      input = globalValue(state);
+      global = value;
+    } else {
+      const expected = item.type === 'i64' ? 'bigint' : 'number';
+      if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
     }
-    const expected = item.type === 'i64' ? 'bigint' : 'number';
-    if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
-    return coerce(value, item.type);
+    const imported = coerce(input, item.type);
+    // Global indices number imports first; retain the same privately validated object.
+    importedGlobals.push(global);
+    return imported;
   }
   function installExport(id: number, exports: Exports, item: BunWasm.WasmExport, globals: Map<number, Global>) {
     const name = item.name;
