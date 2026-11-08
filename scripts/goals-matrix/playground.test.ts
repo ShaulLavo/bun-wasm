@@ -4,10 +4,10 @@ import { command, start } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
-function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>): Transport {
+function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, listeningPort = 5173): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
-  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/" }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
+  const context = createContext({ crypto, playground: { shell, previews: { serves: (port: number) => port === listeningPort && listening, url: () => "http://preview/" }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
   return { capabilities: { browserName: "unit-test" }, async navigate() {}, async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {}, async close() {},
     async evaluate<T>(expression: string): Promise<T> { return runInContext(expression, context); },
   };
@@ -37,4 +37,10 @@ test("startup timeout closes a transport whose factory resolves after the deadli
     async createTransport() { await Bun.sleep(50); return transport; }, async saveLog() {},
   });
   expect(result.status).toBe("fail"); expect(closed).toBe(1); expect(navigated).toBe(false);
+});
+
+
+test("server readiness observes the task's configured free guest port", async () => {
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, 41373);
+  expect(await start(transport, "bun run dev --port 41373", 100, 41373)).toBe("http://preview/");
 });
