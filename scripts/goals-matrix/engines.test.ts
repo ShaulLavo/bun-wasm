@@ -6,6 +6,7 @@ import { pairedEngines, programProfile } from "../../src/engine-kind";
 import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import { prerequisites } from "./discovery";
 import { preflight, withStagedAssets } from "./preparation";
+import { engineFiles } from "./engines";
 import { ready } from "./playground";
 import type { Transport } from "./transport";
 
@@ -71,3 +72,45 @@ test("ready uses the registered SpiderMonkey status and refuses another engine's
   expect(await ready(transport(status), box.engine, 100)).toHaveProperty("status", status);
   await expect(ready(transport(`${ENGINES.jsc.name} ready`), box.engine, 100)).rejects.toThrow("Wrong running engine status");
 });
+
+const preparationInputs = [
+  { label: "absent", files: [] },
+  { label: "core-only", files: pair.slice(0, 1) },
+  { label: "side-only", files: pair.slice(1) },
+  { label: "complete", files: pair },
+];
+async function prepareInput(root: string, files: readonly string[]): Promise<void> {
+  const supported = ["browser", "quickjs", "jsc"].flatMap(engineFiles);
+  for (const name of supported.concat(files)) await Bun.write(join(root, name + ".gz"), Bun.gzipSync(data));
+  let buildCalled = false;
+  const build = async (directory: string) => {
+    buildCalled = true;
+    for (const name of supported.concat(files)) expect(await Bun.file(join(directory, name)).bytes()).toEqual(data);
+    for (const name of pair.filter(name => !files.includes(name))) expect(await Bun.file(join(directory, name)).exists()).toBe(false);
+  };
+  if (files.length === 1) {
+    const missing = pair.filter(name => !files.includes(name));
+    await expect(withStagedAssets(root, build)).rejects.toThrow(`Missing engine assets: ${missing.join(", ")}`);
+    expect(buildCalled).toBe(false);
+    return;
+  }
+  await withStagedAssets(root, build);
+  expect(buildCalled).toBe(true);
+}
+test.each(preparationInputs)("preparation validates $label SpiderMonkey input before building", ({ files }) =>
+  site(root => prepareInput(root, files)));
+
+async function rejectPartialPreparation(root: string, name: string): Promise<void> {
+  const source = Bun.spawnSync(["git", "rev-parse", "HEAD"]);
+  expect(source.exitCode).toBe(0);
+  await Bun.write(join(root, "delivery-manifest.json"), JSON.stringify({ guestSource: { head: source.stdout.toString().trim() } }));
+  await Bun.write(join(root, "delivery/web", name + ".gz"), Bun.gzipSync(data));
+  const process = Bun.spawn(["bun", join(import.meta.dir, "prepare.ts"), join(root, "delivery")], { stdout: "pipe", stderr: "pipe" });
+  const [exit, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+  expect(exit).toBe(1);
+  expect(stdout).toBe("");
+  expect(stderr).toContain(`Missing engine assets: ${pair.filter(file => file !== name).join(", ")}`);
+  expect(stderr).not.toContain("Playground build failed");
+}
+test.each(pair)("prepare.ts rejects orphan input %s before starting web/build.ts", name =>
+  site(root => rejectPartialPreparation(root, name)));

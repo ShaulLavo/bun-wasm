@@ -80,3 +80,9 @@ is instantiated. This file is not registered as a passing runtime fixture.
 The Engines parent owns the separate main CI compiler-control repair, review,
 final rebase, CI and merge. Its deferred-native-destruction test hunk is unchanged
 here; the SpiderMonkey semantics test addition covers only realm configuration.
+
+## Preparation-input review correction
+
+The independent review reproduced an orphan SpiderMonkey side being silently omitted by `prepare.ts`. Staging now preserves registered engine groups and validates each complete group before invoking the build callback. This rejects either partial pair while retaining fully absent optional engines and unchanged supported assets. It reads each compressed input once.
+
+Four input-state controls cover absent, core-only, side-only and complete pairs. Both partial-state controls fail against the previous staging code and pass after correction. Two additional subprocess controls execute the real `prepare.ts` entry and verify it rejects each orphan before invoking `web/build.ts`. No guest, fixture, framework clock or runtime behavior changed in this correction.

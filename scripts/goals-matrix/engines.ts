@@ -6,6 +6,6 @@ export function engineFiles(engine: string): string[] {
   return [ENGINES[engine].wasm].concat(isPairedEngine(engine) ? [programProfile(engine).side] : []);
 }
 
-export function registeredEngineFiles(): string[] {
-  return Object.keys(ENGINES).flatMap(engineFiles);
+export function registeredEngineGroups(): string[][] {
+  return Object.keys(ENGINES).map(engineFiles);
 }
