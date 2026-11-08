@@ -4,10 +4,10 @@ import { command, start } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
-function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>): Transport {
+function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready")): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
-  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/" }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
+  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/", ready: previewReady }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
   return { capabilities: { browserName: "unit-test" }, async navigate() {}, async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {}, async close() {},
     async evaluate<T>(expression: string): Promise<T> { return runInContext(expression, context); },
   };
@@ -37,4 +37,21 @@ test("startup timeout closes a transport whose factory resolves after the deadli
     async createTransport() { await Bun.sleep(50); return transport; }, async saveLog() {},
   });
   expect(result.status).toBe("fail"); expect(closed).toBe(1); expect(navigated).toBe(false);
+});
+
+test("a server start waits for its preview worker to activate before returning its URL", async () => {
+  const activation = Promise.withResolvers<string>();
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation.promise);
+  let returned = false;
+  const started = start(transport, "starts before preview activation", 1000).then(url => { returned = true; return url; });
+  try {
+    await Bun.sleep(25);
+    expect(returned).toBe(false);
+  } finally { activation.resolve("ready"); }
+  expect(await started).toBe("http://preview/");
+});
+
+test.each(["failed", "unsupported"])("a server start rejects a %s preview transport", async state => {
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, Promise.resolve(state));
+  await expect(start(transport, "starts without preview transport", 1000)).rejects.toThrow(`Preview transport is ${state}`);
 });
