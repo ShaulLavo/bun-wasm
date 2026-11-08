@@ -68,9 +68,6 @@ fi
   --export=jsc_register --export=jsc_run \
   --export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh --export=jsc_allocation_boundary -Map="$out/engine-link.map" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "${group_objects[@]}" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_jsc.a"
-if [[ "$profile" == shared-group ]]; then
-  bun "$root/scripts/src/program-profile.ts" link-proof "$out/engine-link.map" "$out/selected-cxx-members.json"
-fi
 "$root/jsc/finalize.sh" "$out/engine.implicit.wasm" "$out/engine.spilled.wasm"
 node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side" "${explicit_profile[@]}"
 wasm-tools validate "$side"
