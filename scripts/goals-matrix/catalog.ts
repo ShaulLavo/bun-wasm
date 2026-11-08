@@ -1,4 +1,4 @@
-export const engines = ["browser", "quickjs", "jsc", "hermes", "spidermonkey"] as const;
+export const engines = ["browser", "quickjs", "jsc", "spidermonkey"] as const;
 export const browsers = ["chrome", "firefox", "safari", "iphone-safari"] as const;
 export type Engine = typeof engines[number];
 export type Browser = typeof browsers[number];

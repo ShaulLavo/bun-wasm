@@ -66,7 +66,7 @@ test("SIGTERM during native lock setup reaps the setup child and releases the ow
     await mkdir(join(root, ".agents/skills/machine-fleet/scripts"), { recursive: true });
     await mkdir(join(root, "tmp"));
     await writeFile(join(root, ".agents/skills/machine-fleet/scripts/availability.py"), "import os,time\np=os.environ['HOME']+'/called'\nif os.path.exists(p):\n open(os.environ['HOME']+'/second','w').write(str(os.getpid()))\n time.sleep(30)\nelse: open(p,'w').write('called')\n");
-    await writeFile(join(root, "child.ts"), `Object.defineProperty(process,'platform',{value:'darwin'}); const {withNativeDriver}=await import(${JSON.stringify(join(import.meta.dir, "native.ts"))}); await withNativeDriver(async()=>{});`);
+    await writeFile(join(root, "child.ts"), `Object.defineProperty(process,'platform',{value:'darwin'}); const {withNativeDriver}=await import(${JSON.stringify(join(import.meta.dir, "native.ts"))}); await withNativeDriver(async()=>{}, {desktopSafari:true});`);
     child = Bun.spawn([process.execPath, join(root, "child.ts")], { env: { ...process.env, HOME: root }, stdout: "ignore", stderr: "ignore" });
     await waitForFile(join(root, "second"));
     setupPid = Number(await Bun.file(join(root, "second")).text());

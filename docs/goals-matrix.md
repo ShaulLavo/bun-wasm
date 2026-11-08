@@ -16,7 +16,7 @@ Keep the WASM delivery source separate from the playground source commit.
 Preparation records the built host source in `goals-host-source.json`. Continuation
 compares every staged host, worker, template and guest file, not just WASM bytes.
 
-Run all 260 boxes:
+Run all 208 boxes. Hermes is parked and excluded from this matrix:
 
 ```sh
 source env.sh

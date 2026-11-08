@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { captureProgramInputs, engineEnvironment, inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
 import { artifactIdentity } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -120,7 +120,7 @@ test("object target features keep their allow and disallow prefixes", () => {
 });
 
 /** Run `action` with the shared-group compiler environment the capture requires, then restore. */
-async function withSharedEnvironment<T>(sysroot: string, kind: "core" | "quickjs", action: () => Promise<T>): Promise<T> {
+async function withSharedEnvironment<T>(sysroot: string, kind: "core" | "quickjs" | "jsc", action: () => Promise<T>): Promise<T> {
   const environment = sharedGroupEnvironment(sysroot, kind);
   const saved = Object.fromEntries(Object.keys(environment).map(name => [name, process.env[name]]));
   Object.assign(process.env, environment);
@@ -134,22 +134,28 @@ async function withSharedEnvironment<T>(sysroot: string, kind: "core" | "quickjs
   }
 }
 
-for (const [kind, path] of [["core", "scripts/src/engine-explicit-init.ts"], ["core", "scripts/src/program-profile.ts"], ["quickjs", "scripts/src/program-profile.ts"]] as const) {
+const sharedInputChanges = [
+  ["core", "scripts/src/engine-explicit-init.ts"], ["core", "scripts/src/program-profile.ts"], ["quickjs", "scripts/src/program-profile.ts"],
+  ["quickjs", "scripts/src/group-errno-wraps.sh"], ["jsc", "scripts/src/group-errno-wraps.sh"],
+  ["jsc", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs"], ["jsc", "crates/bunwasm-engine-quickjs/src/nested_token.rs"],
+  ["jsc", "crates/bunwasm-engine-quickjs/group-errno.c"],
+] as const;
+for (const [kind, path] of sharedInputChanges) {
   test(`a retained shared-group ${kind} output is refused after ${path} changes`, async () => {
     await withReceiptFixture(async options => {
       const fixture = hash("fixture\n");
       writeFileSync(join(options.sysroot, "bun-wasm-sysroot.json"), JSON.stringify({ builderSha256: fixture, patchSha256: fixture, libcSha256: fixture,
         sdkVersion: "fixture\n", profile: "shared-pic", growthImport: "runtime_shm.group_grow", flags: J2_FLAGS, sharedBuilderSha256: digest, groupGrowPatchSha256: digest }));
-      mkdirSync(join(options.repository, "scripts/src"), { recursive: true });
+      mkdirSync(dirname(join(options.repository, path)), { recursive: true });
       writeFileSync(join(options.repository, path), "export {};\n");
       fixtureGit(options.repository, "add", path);
       fixtureGit(options.repository, "commit", "-m", "shared-group helper");
       const capture = () => withSharedEnvironment(options.sysroot, kind, () => kind === "core"
         ? captureProgramInputs(options, "core", { features: ["engine-split"], profile: "shared-group" })
-        : captureProgramInputs({ ...options, build: "quickjs" }, "quickjs", undefined, "shared-group"));
+        : captureProgramInputs({ ...options, build: kind }, kind, undefined, "shared-group"));
       const origin = await capture();
       expect(inputProfile(origin)).toBe("shared-group");
-      const { core, side } = quickjsPair();
+      const { core, side } = quickjsPair(kind === "jsc" ? "jsc" : "quickjs");
       // A retained core receipt names the untagged generic core: drop the appended engine tag
       // section (id, size, name length, "bun-wasm-engine", "quickjs").
       const bytes = kind === "core" ? core.slice(0, core.length - (3 + "bun-wasm-engine".length + "quickjs".length)) : side;
