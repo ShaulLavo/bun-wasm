@@ -7,6 +7,7 @@ shared-wasm-memory link recovery: pass
 shared-wasm-memory duplicate imports: pass
 shared-wasm-memory engine roots: pass
 shared-wasm-memory cross-worker: pass
+shared-wasm-memory worker refusals: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Store budget: pass

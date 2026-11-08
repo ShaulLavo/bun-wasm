@@ -6,31 +6,41 @@ import { Worker } from 'node:worker_threads';
 const module = new WebAssembly.Module(await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer());
 const child = `${import.meta.dir}/cross-worker-child.ts`;
 type Exports = {
-  read(index: number): number;
-  write(index: number, value: number): void;
+  read(address: number): number;
+  write(address: number, value: number): void;
   pages(): number;
   grow(delta: number): number;
-  wait(index: number, expected: number, timeout: bigint): number;
-  notify(index: number, count: number): number;
+  wait(address: number, expected: number, timeout: bigint): number;
+  notify(address: number, count: number): number;
 };
-function exported(memory: WebAssembly.Memory) {
-  return new WebAssembly.Instance(module, { env: { memory } }).exports as unknown as Exports;
+function exported(memory: WebAssembly.Memory, compiled = module) {
+  return new WebAssembly.Instance(compiled, { env: { memory, observe() {} } }).exports as unknown as Exports;
 }
 function spawn(mode: string, data: object = {}) {
   const worker = new Worker(child, { workerData: { mode, ...data } });
   const exited = new Promise<number>((resolve, reject) => { worker.once('exit', resolve); worker.once('error', reject); });
   return { worker, exited };
 }
+function reply<T>(worker: Worker) {
+  return new Promise<T>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
+}
 function waitFor(view: Int32Array, index: number) {
-  const status = Atomics.wait(view, index, 0, 30_000);
-  if (status === 'timed-out') throw new Error(`Timed out waiting on word ${index}`);
+  if (Atomics.wait(view, index, 0, 30_000) === 'timed-out') throw new Error(`Timed out waiting on word ${index}`);
   assert.equal(Atomics.load(view, index), 1);
+}
+// Retry until the peer has registered: a wake only counts a waiter that exists.
+function wake(view: Int32Array, notify: () => number) {
+  for (let attempt = 0; attempt < 3000; attempt++) {
+    const woken = notify();
+    if (woken !== 0) return woken;
+    Atomics.wait(view, 30, 0, 10);
+  }
+  return 0;
 }
 async function identity(memory: WebAssembly.Memory, view: Int32Array, exports: Exports) {
   Atomics.store(view, 0, 11);
   const { worker, exited } = spawn('identity', { memory, module });
-  const reply = await new Promise<{ seen: number; alias: number }>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
-  assert.deepEqual(reply, { seen: 11, alias: 131072 });
+  assert.deepEqual(await reply(worker), { seen: 11, alias: 131072 });
   waitFor(view, 6);
   assert.equal(Atomics.load(view, 1), 12, 'nested write in the worker reaches a JS view here');
   assert.equal(exports.read(8), 13, 'JS write in the worker reaches nested code here');
@@ -48,10 +58,7 @@ async function identity(memory: WebAssembly.Memory, view: Int32Array, exports: E
 async function nestedWaitJsNotify(memory: WebAssembly.Memory, view: Int32Array) {
   const { exited } = spawn('nestedWait', { memory, module });
   waitFor(view, 8);
-  // The nested waiter must actually register before this JS notify counts it.
-  let woken = 0;
-  for (let i = 0; woken === 0 && i < 3000; i++) { woken = Atomics.notify(view, 10, 1); if (!woken) Atomics.wait(view, 30, 0, 10); }
-  assert.equal(woken, 1, 'JS Atomics.notify woke the nested waiter');
+  assert.equal(wake(view, () => Atomics.notify(view, 10, 1)), 1, 'JS Atomics.notify woke the nested waiter');
   waitFor(view, 14);
   assert.equal(Atomics.load(view, 12), 100);
   assert.equal(await exited, 0);
@@ -59,9 +66,7 @@ async function nestedWaitJsNotify(memory: WebAssembly.Memory, view: Int32Array) 
 async function jsWaitNestedNotify(memory: WebAssembly.Memory, view: Int32Array, exports: Exports) {
   const { exited } = spawn('jsWait', { memory, module });
   waitFor(view, 16);
-  let woken = 0;
-  for (let i = 0; woken === 0 && i < 3000; i++) { woken = exports.notify(18 * 4, 1); if (!woken) Atomics.wait(view, 30, 0, 10); }
-  assert.equal(woken, 1, 'nested notify woke the JS waiter');
+  assert.equal(wake(view, () => exports.notify(18 * 4, 1)), 1, 'nested notify woke the JS waiter');
   waitFor(view, 22);
   assert.equal(Atomics.load(view, 20), 100);
   assert.equal(await exited, 0);
@@ -84,14 +89,14 @@ async function terminated(memory: WebAssembly.Memory, view: Int32Array, how: 'ne
 }
 async function senderExit() {
   const { worker, exited } = spawn('sender', { module });
-  const received = await new Promise<{ memory: WebAssembly.Memory; module: WebAssembly.Module }>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
+  const received = await reply<{ memory: WebAssembly.Memory; module: WebAssembly.Module }>(worker);
   assert.equal(await exited, 0);
   // The sender has physically stopped. Its region and the module it posted stay live here.
   assert(received.memory instanceof WebAssembly.Memory);
   assert(received.memory.buffer instanceof SharedArrayBuffer);
   const view = new Int32Array(received.memory.buffer);
   assert.equal(Atomics.load(view, 0), 91);
-  const exports = new WebAssembly.Instance(received.module, { env: { memory: received.memory } }).exports as unknown as Exports;
+  const exports = exported(received.memory, received.module);
   assert.equal(exports.read(0), 91);
   assert.equal(exports.grow(1), 1);
   assert.equal(received.memory.buffer.byteLength, 131072);
@@ -102,10 +107,10 @@ async function senderExit() {
 async function postedLoad(memory: WebAssembly.Memory, view: Int32Array) {
   // The emnapi pool shape: the worker gets Module and Memory by message, not workerData.
   const { worker, exited } = spawn('loaded');
-  worker.postMessage({ memory, module });
-  const value = await new Promise<number>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
-  assert.equal(value, 7);
+  worker.postMessage({ memory, module, old: view.buffer });
+  assert.deepEqual(await reply(worker), { value: 7, prefix: 65536, current: 131072 });
   assert.equal(Atomics.load(view, 28), 7);
+  assert.equal(Atomics.load(view, 29), 8, 'a posted old prefix writes the same bytes');
   assert.equal(await exited, 0);
 }
 

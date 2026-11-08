@@ -3,41 +3,67 @@
 import { parentPort, workerData } from 'node:worker_threads';
 
 type Exports = {
-  read(index: number): number;
-  write(index: number, value: number): void;
+  read(address: number): number;
+  write(address: number, value: number): void;
   pages(): number;
   grow(delta: number): number;
-  wait(index: number, expected: number, timeout: bigint): number;
-  notify(index: number, count: number): number;
+  wait(address: number, expected: number, timeout: bigint): number;
+  notify(address: number, count: number): number;
+  callback(value: number): void;
 };
-function instantiate(module: WebAssembly.Module, memory: WebAssembly.Memory) {
-  return new WebAssembly.Instance(module, { env: { memory } }).exports as unknown as Exports;
+function instantiate(module: WebAssembly.Module, memory: WebAssembly.Memory, observe: (value: number) => void = () => {}) {
+  return new WebAssembly.Instance(module, { env: { memory, observe } }).exports as unknown as Exports;
 }
-const { mode, memory, module }: { mode: string; memory?: WebAssembly.Memory; module?: WebAssembly.Module } = workerData;
+const { mode, memory, module, how }: { mode: string; memory?: WebAssembly.Memory; module?: WebAssembly.Module; how?: string } = workerData;
 function words() { return new Int32Array(memory!.buffer); }
 function ready(index: number) {
   const view = words();
   Atomics.store(view, index, 1);
   Atomics.notify(view, index);
 }
+function check(condition: boolean, label: string) {
+  if (!condition) throw new Error(label);
+}
+
+function callbacks(compiled: WebAssembly.Module, shared: WebAssembly.Memory) {
+  const thrown = { from: 'worker' };
+  let observed = 0;
+  const exports = instantiate(compiled, shared, value => {
+    observed = value;
+    if (value === 2) throw thrown;
+    // Reenter this member's own nested instance from its JS callback.
+    if (value === 3) exports.write(0, 3);
+  });
+  exports.callback(1);
+  check(observed === 1, 'worker callback');
+  let caught: unknown;
+  try { exports.callback(2); }
+  catch (error) { caught = error; }
+  check(caught === thrown, 'worker callback must rethrow the exact value');
+  const saved = exports.read(0);
+  exports.callback(3);
+  check(exports.read(0) === 3, 'worker callback reentry');
+  exports.write(0, saved);
+}
 
 function identity() {
-  if (!(memory instanceof WebAssembly.Memory)) throw new Error('Expected a WebAssembly.Memory');
-  if (!(module instanceof WebAssembly.Module)) throw new Error('Expected a WebAssembly.Module');
-  const before = memory.buffer;
-  if (!(before instanceof SharedArrayBuffer)) throw new Error('Expected a shared buffer');
-  const exports = instantiate(module, memory);
+  check(memory instanceof WebAssembly.Memory, 'Expected a WebAssembly.Memory');
+  check(module instanceof WebAssembly.Module, 'Expected a WebAssembly.Module');
+  const before = memory!.buffer;
+  check(before instanceof SharedArrayBuffer, 'Expected a shared buffer');
+  callbacks(module!, memory!);
+  const exports = instantiate(module!, memory!);
   const view = new Int32Array(before);
   const seen = exports.read(0);
   exports.write(4, seen + 1);
   Atomics.store(view, 2, seen + 2);
-  if (exports.grow(1) !== 1) throw new Error('child grow');
-  if (before.byteLength !== 65536) throw new Error('old prefix length changed');
-  if (Atomics.load(view, 0) !== seen) throw new Error('old prefix view stopped aliasing');
-  if (memory.buffer === before || memory.buffer.byteLength !== 131072) throw new Error('child buffer did not grow');
-  if (exports.pages() !== 2) throw new Error('child pages');
+  check(exports.grow(1) === 1, 'child grow');
+  check(before.byteLength === 65536, 'old prefix length changed');
+  check(Atomics.load(view, 0) === seen, 'old prefix view stopped aliasing');
+  check(memory!.buffer !== before && memory!.buffer.byteLength === 131072, 'child buffer did not grow');
+  check(exports.pages() === 2, 'child pages');
   ready(6);
-  parentPort!.postMessage({ seen, alias: memory.buffer.byteLength });
+  parentPort!.postMessage({ seen, alias: memory!.buffer.byteLength });
 }
 
 function nestedWait() {
@@ -59,24 +85,27 @@ function jsWait() {
 function sender() {
   const own = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
   new Int32Array(own.buffer)[0] = 91;
-  const compiled = module!;
-  parentPort!.postMessage({ memory: own, module: compiled });
+  parentPort!.postMessage({ memory: own, module });
 }
 
 function blocked() {
   const exports = instantiate(module!, memory!);
   ready(24);
-  if (workerData.how === 'nested') exports.wait(26 * 4, 0, -1n);
+  if (how === 'nested') exports.wait(26 * 4, 0, -1n);
   else Atomics.wait(words(), 26, 0);
   throw new Error('blocked worker must be terminated, not woken');
 }
 
 function loaded() {
-  parentPort!.once('message', ({ memory: received, module: compiled }: { memory: WebAssembly.Memory; module: WebAssembly.Module }) => {
+  parentPort!.once('message', ({ memory: received, module: compiled, old }: { memory: WebAssembly.Memory; module: WebAssembly.Module; old: SharedArrayBuffer }) => {
     const exports = instantiate(compiled, received);
     exports.write(28 * 4, 7);
-    parentPort!.postMessage(exports.read(28 * 4));
+    // A posted old buffer stays that old prefix over the same bytes.
+    const prefix = new Int32Array(old);
+    Atomics.store(prefix, 29, 8);
+    parentPort!.postMessage({ value: exports.read(28 * 4), prefix: old.byteLength, current: received.buffer.byteLength });
   });
 }
 
-({ identity, nestedWait, jsWait, sender, blocked, loaded }[mode] as () => void)();
+const modes: Record<string, () => void> = { identity, nestedWait, jsWait, sender, blocked, loaded };
+modes[mode]!();
