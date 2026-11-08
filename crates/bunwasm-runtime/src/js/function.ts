@@ -1,13 +1,14 @@
 (function (internal: BunWasm.Internal) {
   "use strict";
   const { native } = internal;
-  if (native.engine === "jsc") return {};
   const global = globalThis;
-  const callerSourceOrigin = internal.require("builtins")["bun:jsc"]().callerSourceOrigin;
   const helper = "__bunwasmFunctionImport";
   Object.defineProperty(Function.prototype, helper, {
     value: (from: string) => (spec: unknown, options?: unknown) => global.__bunwasm_dynamicImport(from)(spec, options),
   });
+
+  if (native.engine === "jsc") return {};
+  const callerSourceOrigin = internal.require("builtins")["bun:jsc"]().callerSourceOrigin;
 
   function prepareArguments(args: readonly unknown[], kind: BunWasm.FunctionKind): string[] {
     const strings = Array.from(args, value => `${value}`);

@@ -66,6 +66,7 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
     correctPreparedColumn: mapping.correctPreparedColumn,
     mapPosition: () => null,
     mainPath: () => filename,
+    modulePath: (name: string) => name,
     moduleFormat: (file: string) => file.endsWith(".json") ? "json" : "cjs",
     readFileUtf8: (file: string) => readFileSync(file, "utf8"),
     cwd: () => path.dirname(filename),

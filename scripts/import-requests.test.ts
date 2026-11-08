@@ -99,3 +99,23 @@ test("a record factory created before bootstrap initializes without a new Hermes
   expect((await first).default).toBe("text");
   expect(resolved).toEqual([["./page.html", "/entry.mjs", "text"], ["./page.html", "/entry.mjs", "text"]]);
 });
+
+test("native import hooks ignore lexical globalThis bindings, including JSC", async () => {
+  const context = vm.createContext({});
+  const functionSource = readFileSync(new URL("../crates/bunwasm-runtime/src/js/function.ts", import.meta.url), "utf8");
+  const factory = vm.runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.functionFactory = ${functionSource}`), context);
+  const calls: unknown[][] = [];
+  context.__bunwasm_dynamicImport = (from: string) => (specifier: unknown, options: unknown) => {
+    calls.push([from, specifier, options]);
+    return Promise.resolve(specifier);
+  };
+  factory({ native: { engine: "jsc" } });
+  const result = vm.runInContext(`
+    const globalThis = {};
+    (function(globalThis) {
+      return (function(){})["__bunwasmFunctionImport"]("/entry.mjs")("./page.html", { with: { type: "text" } });
+    })({});
+  `, context);
+  expect(await result).toBe("./page.html");
+  expect(calls).toEqual([["/entry.mjs", "./page.html", { with: { type: "text" } }]]);
+});

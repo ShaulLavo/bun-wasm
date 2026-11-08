@@ -33,6 +33,9 @@ assert.equal(await import("./namespace.mjs").then(module => module.namespace), n
 assert.notEqual(await import("./page.html"), namespace);
 const commonjs = require("./dynamic.cjs");
 assert.equal(await commonjs.load("./page.html", { with: { type: "text" } }), namespace);
+assert.equal(await commonjs.shadowed({}, "./page.html", { with: { type: "text" } }), namespace);
+assert.equal((await commonjs.load("./ordinary.cjs")).default.value, 42);
+assert.equal((await commonjs.shadowed({}, "./ordinary.cjs")).default.value, 42);
 const a = await import("./a/importer.mjs");
 const b = await import("./b/importer.mjs");
 assert.equal(a.default, "alpha\n");

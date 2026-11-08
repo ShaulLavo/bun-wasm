@@ -9,7 +9,7 @@ and the host engine, native parsing validates the original function before Bun's
 parser identifies replacements. Methods named `import` remain intact and invalid
 original syntax still throws. Temporary
 validation functions are never executed. JSC keeps its native constructors because
-its generated imports already preserve the caller origin. The host adapter also
+its generated imports already preserve the caller origin. The non-writable function-prototype import helper is installed on JSC too, for hygienic runtime file imports emitted by the shared printer. The host adapter also
 attaches the creating module's source URL to generated bodies. Otherwise the
 constructor proxy itself would replace available eval-origin metadata with an
 internal runtime location, even in a body without an import. This directive is

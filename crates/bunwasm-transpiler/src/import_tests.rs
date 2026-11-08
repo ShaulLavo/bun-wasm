@@ -47,7 +47,8 @@ fn runtime_dynamic_options_roundtrip_in_preserved_extensions() {
                 "{}",
                 out.code
             );
-            assert!(out.code.contains("__bunwasm_dynamicImport"), "{}", out.code);
+            assert!(out.code.contains("__bunwasmFunctionImport"), "{}", out.code);
+            assert!(!out.code.contains("globalThis."), "{}", out.code);
             assert!(!out.mappings.is_empty());
         }
     }
