@@ -1560,6 +1560,66 @@ jobs:
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Install the shared JSC producer tools
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y ruby gperf bison
+      - name: Identify the shared JSC prebuild inputs
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-jsc-inputs
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
+          export JSC_BUILD_DIR="$RUNNER_TEMP/jsc/shared"
+          source jsc/common.sh
+          copy_jsc_config_inputs
+          inputs=$(jsc_inputs_hash)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-jsc-cache
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}
+      - name: Build the shared JSC prebuild
+        if: needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true'
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          source env.sh
+          JSC_PROFILE=shared-group bash scripts/build-jsc.sh
+      - name: Produce the shared JSC profile once
+        if: needs.quality.outputs.shared-native == 'true'
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          source env.sh
+          bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" jsc
+      - name: Consume the shared JSC feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Save the shared JSC prebuild
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: ${{ steps.shared-jsc-cache.outputs.cache-primary-key }}
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4

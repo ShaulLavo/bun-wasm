@@ -81,9 +81,7 @@ test("a shared-group side keeps its imported group memory and never exports it",
   expect(WebAssembly.Module.exports(module).map(entry => entry.name)).toContain("quickjs_initialize_memory");
   expect(() => convertEngineInitializers(fixture({ limits: GROUP }), "quickjs")).toThrow(/profile/);
   expect(() => convertEngineInitializers(fixture(), "quickjs", "shared-group")).toThrow(/profile/);
-  for (const engine of ["jsc"] as const) {
-    expect(() => convertEngineInitializers(fixture({ limits: GROUP }), engine, "shared-group")).toThrow(/not qualified/);
-  }
+  expect(WebAssembly.Module.exports(new WebAssembly.Module(convertEngineInitializers(fixture({ limits: GROUP }), "jsc", "shared-group"))).map(entry => entry.name)).toContain("jsc_initialize_memory");
 });
 
 function coreFixture(options: { limits?: Limits; dylink?: boolean; exportMemory?: boolean; start?: boolean; missing?: string } = {}): Uint8Array<ArrayBuffer> {

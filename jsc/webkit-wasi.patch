@@ -24,6 +24,104 @@ index 50920859..a9ebd94f 100644
  
  # The build system will execute asm.rb every time LLIntOffsetsExtractor's mtime is newer than
  # LLIntAssembly.h's mtime. The problem we have here is: asm.rb has some built-in optimization
+diff --git a/Source/JavaScriptCore/runtime/AtomicsObject.cpp b/Source/JavaScriptCore/runtime/AtomicsObject.cpp
+--- a/Source/JavaScriptCore/runtime/AtomicsObject.cpp
++++ b/Source/JavaScriptCore/runtime/AtomicsObject.cpp
+@@ -32,6 +32,14 @@
+ #include "ReleaseHeapAccessScope.h"
+ #include "TypedArrayController.h"
+ #include "WaiterListManager.h"
++
++#if defined(BUN_WASM_SHARED_GROUP)
++extern "C" {
++int32_t bun_futex_wait32(uint32_t address, int32_t expected, int64_t timeoutNs);
++int32_t bun_futex_wait64(uint32_t address, int64_t expected, int64_t timeoutNs);
++int32_t bun_futex_wake(uint32_t address, uint32_t count);
++}
++#endif
+
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+@@ -435,4 +443,38 @@
+
+
++#if defined(BUN_WASM_SHARED_GROUP)
++// A memory-group member parks in the group futex the core exports, so a notify from any
++// member or from nested Wasm wakes it. WaiterListManager is the single-agent queue.
++template<typename ValueType>
++static JSValue groupAtomicsWait(JSGlobalObject* globalObject, ThrowScope& scope, ValueType* ptr, ValueType expected, double timeoutInMilliseconds)
++{
++    // Milliseconds to nanoseconds; beyond i64 nanoseconds waits forever.
++    int64_t timeoutNs = -1;
++    if (!std::isnan(timeoutInMilliseconds) && timeoutInMilliseconds < static_cast<double>(INT64_MAX) / 1e6)
++        timeoutNs = static_cast<int64_t>(std::max(timeoutInMilliseconds, 0.0) * 1e6);
++    auto address = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(ptr));
++    int32_t status;
++    if constexpr (sizeof(ValueType) == 8)
++        status = bun_futex_wait64(address, expected, timeoutNs);
++    else
++        status = bun_futex_wait32(address, expected, timeoutNs);
++    VM& vm = globalObject->vm();
++    switch (status) {
++    case 0:
++        return vm.smallStrings.okString();
++    case 1:
++        return vm.smallStrings.notEqualString();
++    case 2:
++        return vm.smallStrings.timedOutString();
++    case -27:
++        // EINTR: the host cancelled this member, which is terminating.
++        __builtin_trap();
++    default:
++        throwTypeError(globalObject, scope, "Atomics.wait failed in the memory group"_s);
++        return { };
++    }
++}
++#endif
++
+ template<typename ValueType, typename JSArrayType>
+ JSValue atomicsWaitImpl(JSGlobalObject* globalObject, JSArrayType* typedArray, uint64_t accessIndex, ValueType expectedValue, JSValue timeoutValue, AtomicsWaitType type)
+@@ -451,2 +493,14 @@
++#if defined(BUN_WASM_SHARED_GROUP)
++    if (type == AtomicsWaitType::Async) {
++        throwTypeError(globalObject, scope, "Atomics.waitAsync is not available in a memory group"_s);
++        return { };
++    }
++    UNUSED_VARIABLE(timeout);
++    if (!vm.m_typedArrayController->isAtomicsWaitAllowedOnCurrentThread()) {
++        throwTypeError(globalObject, scope, "Atomics.wait cannot be called from the current thread."_s);
++        return { };
++    }
++    RELEASE_AND_RETURN(scope, groupAtomicsWait(globalObject, scope, ptr, expectedValue, timeoutInMilliseconds));
++#else
+     if (type == AtomicsWaitType::Async)
+         return WaiterListManager::singleton().waitAsync(globalObject, vm, ptr, expectedValue, timeout);
+@@ -471,3 +525,4 @@
+     RELEASE_ASSERT_NOT_REACHED();
+     return { };
++#endif
+ }
+@@ -610,4 +665,15 @@
+     if (!typedArrayView->isShared())
+         return JSValue::encode(jsNumber(0));
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    if (!count)
++        return JSValue::encode(jsNumber(0));
++    uintptr_t address = typedArrayView->type() == Int32ArrayType
++        ? reinterpret_cast<uintptr_t>(uncheckedDowncast<JSInt32Array>(typedArrayView)->typedVector() + accessIndex)
++        : reinterpret_cast<uintptr_t>(uncheckedDowncast<JSBigInt64Array>(typedArrayView)->typedVector() + accessIndex);
++    int32_t woken = bun_futex_wake(static_cast<uint32_t>(address), count);
++    if (woken < 0)
++        return throwVMTypeError(globalObject, scope, "Atomics.notify failed in the memory group"_s);
++    return JSValue::encode(jsNumber(woken));
++#else
+     switch (typedArrayView->type()) {
+@@ -624,3 +690,4 @@
+         break;
+     }
++#endif
+     return { };
 diff --git i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h w/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
 index 7626bb93..6061652b 100644
 --- i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
@@ -291,19 +389,25 @@ diff --git i/Source/WTF/wtf/StackBounds.cpp w/Source/WTF/wtf/StackBounds.cpp
 index 8cea1e87..2c53b5b9 100644
 --- i/Source/WTF/wtf/StackBounds.cpp
 +++ w/Source/WTF/wtf/StackBounds.cpp
-@@ -102,6 +102,39 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+@@ -102,6 +102,51 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
      return StackBounds { origin, bound };
  }
- 
+
 +#elif OS(WASI)
 +
 +#include <cstdlib>
 +
++#if defined(BUN_WASM_SHARED_GROUP)
++// A group side has no linker stack symbols. The side entry records the address of a local in
++// its outermost frame; the host carves the member's real stack above it.
++extern "C" char* bunjsc_stack_origin;
++#else
 +// wasm-ld places the C (shadow) stack in linear memory between these symbols; it grows down.
 +extern "C" {
 +extern char __stack_low;
 +extern char __stack_high;
 +}
++#endif
 +
 +StackBounds StackBounds::newThreadStackBounds(PlatformThreadHandle)
 +{
@@ -322,10 +426,16 @@ index 8cea1e87..2c53b5b9 100644
 +        if (unsigned long long value = strtoull(kib, nullptr, 10))
 +            budget = std::min<unsigned long long>(value, 7 * 1024) * 1024;
 +    }
++#if defined(BUN_WASM_SHARED_GROUP)
++    auto* origin = bunjsc_stack_origin;
++    RELEASE_ASSERT(origin);
++    return StackBounds { static_cast<void*>(origin), static_cast<void*>(origin - budget - 128 * 1024) };
++#else
 +    auto low = reinterpret_cast<uintptr_t>(&__stack_low);
 +    auto high = reinterpret_cast<uintptr_t>(&__stack_high);
 +    auto bound = high - std::min<size_t>(budget + 128 * 1024, high - low);
 +    return StackBounds { static_cast<void*>(&__stack_high), reinterpret_cast<void*>(bound) };
++#endif
 +}
 +
  #elif OS(UNIX) || OS(HAIKU)

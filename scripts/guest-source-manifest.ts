@@ -199,13 +199,13 @@ function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
   if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts",
     "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts", "web/src/native-direct-stream.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]);
   const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs", "wasm/nested_frame.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
-  const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs", "side_modules.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
+  const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs", "side_modules.rs", "nested_bridge.rs", "nested_token.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
   const owned = {
     quickjs: ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"],
     jsc: ["crates/bunwasm-engine-jsc", "crates/bunwasm-jsc", "jsc"],
   };
   const own = owned[scope];
-  return common.concat(shared, program, own, [`scripts/build-engine-${scope}.sh`, "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c"]);
+  return common.concat(shared, program, own, [`scripts/build-engine-${scope}.sh`, "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/group-errno.c"]);
 }
 
 type HeaderRoot = "prebuild" | "sdk" | "sysroot";

@@ -1220,7 +1220,11 @@ test("ordered producers keep every blocking native command and save JSC before i
     expect(before).toContain(prerequisite);
   }
   expect(rust).not.toContain(`name: ${prebuildStepName}`);
-  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(2);
+  const groupPrebuild = nativeWorkflowStep("name", "Build the shared JSC prebuild", "shared-sysroot");
+  const groupScript = workflowString(workflowField(groupPrebuild, "run"));
+  expect(groupScript.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(workflowField(groupPrebuild, "env")).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
   const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
     .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
   const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
