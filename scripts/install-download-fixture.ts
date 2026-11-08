@@ -9,7 +9,7 @@ function metadata(name: string, base: string, dependencies: Record<string, strin
   return JSON.stringify({ name, "dist-tags": { latest: "1.0.0" }, versions: { "1.0.0": manifest }, padding: padding ? "x".repeat(2 * 1024 * 1024) : "" });
 }
 
-export async function fixture(stage: "metadata" | "tarball" = "metadata") {
+export async function fixture(stage: "metadata" | "tarball" = "metadata", topology: "siblings" | "parents" = "siblings") {
   const trace: Trace = { requests: [], active: new Set(), peak: 0, missedBarrier: false };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const held = new Map<string, () => void>();
@@ -20,13 +20,14 @@ export async function fixture(stage: "metadata" | "tarball" = "metadata") {
   }
   let base = "";
   const state = { base, trace, timers, held, dependencies, archives, stage };
+  const roots = topology === "parents" ? Object.fromEntries(Object.keys(dependencies).map(name => [name.replace("item-", "parent-"), "1.0.0"])) : dependencies;
   const server = createServer((request, response) => serveDownload(state, request, response));
   await new Promise<void>(accept => server.listen(0, "127.0.0.1", accept));
   const address = server.address();
   assert.ok(address && typeof address === "object");
   base = `http://127.0.0.1:${address.port}`;
   state.base = base;
-  return { base, trace, dependencies, async close() {
+  return { base, trace, dependencies: roots, async close() {
     for (const timer of timers) clearTimeout(timer);
     server.closeAllConnections();
     await new Promise<void>(accept => server.close(() => accept()));
@@ -62,7 +63,8 @@ function serveDownload(state: State, request: IncomingMessage, response: ServerR
   const finish = () => {
     response.writeHead(gated && name === "a-fail" ? 503 : 200, { "content-type": archive ? "application/octet-stream" : "application/json", "access-control-allow-origin": "*", "access-control-allow-headers": "*", "cross-origin-resource-policy": "cross-origin" });
     if (archive) { response.end(archives.get(name)?.archive); return; }
-    response.end(metadata(name, state.base, name === "parent" ? dependencies : {}, archives.get(name)?.integrity, gated && name === "item-01"));
+    const children = name.startsWith("parent-") ? { [name.replace("parent-", "item-")]: "1.0.0" } : {};
+    response.end(metadata(name, state.base, name === "parent" ? dependencies : children, archives.get(name)?.integrity, gated && name === "item-01"));
   };
   if (gated && name === "b-stall") return;
   if (gated && name === "item-01") timers.add(setTimeout(() => held.get("item-00")?.(), 80));

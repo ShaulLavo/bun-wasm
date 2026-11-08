@@ -290,7 +290,7 @@ pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Re
 }
 
 // Reserve one handle for a demand lookup that conservative lookahead did not predict.
-const MAX_PREFETCHES: usize = 7;
+pub(super) const MAX_PREFETCHES: usize = 7;
 
 /// Owns only handles. Unconsumed bodies stay under the host's per-handle backpressure.
 #[derive(Default)]
@@ -305,6 +305,10 @@ impl Downloads {
 
     pub fn clear(&mut self) {
         self.pending.clear();
+    }
+
+    pub fn retain(&mut self, urls: &[String]) {
+        self.pending.retain(|url, _| urls.contains(url));
     }
 
     pub fn prefetch(&mut self, url: &str, tarball: bool, refresh: bool, registry: &Registry) {
