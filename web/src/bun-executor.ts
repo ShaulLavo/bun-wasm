@@ -8,6 +8,7 @@ import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
+import { engineStackBudgets } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -46,14 +47,6 @@ export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapsho
 
 export type SleepMode = "atomics" | "busy-wait";
 
-// The engines' default stack budgets are measured on V8, whose first wasm tier uses frames close to
-// its optimized ones. JavaScriptCore starts in an interpreter with frames up to three times larger,
-// in 512 KiB worker stacks on Apple platforms, so other engines get the budgets measured there
-// (docs/stack-limits.md). V8 is the engine whose stack traces have "    at " frames.
-const smallStackKib = (): Partial<Record<Engine, string>> | null => /\n\s+at /.test(new Error().stack ?? "")
-  ? null
-  : { quickjs: "32", jsc: "192" };
-
 export interface BunExecutorHost extends BunSharedNativeHost {
   /** The worker's global scope: its location and fetch, and where network requests are posted. */
   readonly location: { href: string };
@@ -84,7 +77,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
-  const stackKib = smallStackKib()?.[req.engine];
+  const stackKib = engineStackBudgets(new Error().stack ?? "", globalThis.navigator?.userAgent ?? "")?.[req.engine];
   const baseEnv = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
   const generation = allocationBoundaryGeneration(req);
   const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };
