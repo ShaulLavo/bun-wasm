@@ -1,6 +1,6 @@
 mod nested;
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 mod group;
 
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
@@ -476,6 +476,9 @@ pub fn install(table: &mut Table) {
             target_arch = "wasm32",
             target_feature = "atomics"
         ))))
+    });
+    table.add("wasm.nestedCallbackLimit", |_| {
+        Ok(Val::Num(nested::callback_limit() as f64))
     });
     table.add("wasm.createSharedMemory", move |a| {
         nested::create_memory(a.u32(0)?, a.u32(1)?)

@@ -42,7 +42,7 @@ pub extern "C" fn bun_core_dispatch(frame: u32) -> u32 {
     TRANSPORT.with(|transport| transport.dispatch(&dispatcher, frame) as u32)
 }
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 pub(crate) fn nested_transport_read(pointer: u32, bytes: u32) -> Result<Vec<u8>, NativeError> {
     TRANSPORT
         .with(|transport| transport.read(pointer, bytes))

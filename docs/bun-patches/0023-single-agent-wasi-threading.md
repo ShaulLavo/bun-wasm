@@ -3,7 +3,7 @@
 Classification: Port. Upstream `oven-sh/bun` at `9510e74152073d850a18758ca41114d8f214ffa6`,
 paths `src/threading/Futex.rs` and `src/threading/ThreadPool.rs` after patch 0004.
 The adaptation is reused from bun-wasm commit
-`cc4f66eed1a0fb107e5c6aa4175248ab90cefa4f`, now exported as patch 0022.
+`cc4f66eed1a0fb107e5c6aa4175248ab90cefa4f`, now exported as patch 0023.
 
 A WASI memory-group member has one executing agent. Compiling it with atomics
 does not create native threads inside that member. Select Bun's existing

@@ -10,8 +10,8 @@ mod guest;
 mod linked;
 #[path = "../../bunwasm-cli/max_memory.rs"]
 mod max_memory;
-mod net;
 mod nested;
+mod net;
 mod process;
 mod shm;
 mod slots;
@@ -401,8 +401,16 @@ fn settle(store: Store<Host>) {
     let Some(member) = host.shm.take() else {
         return;
     };
+    let group = member.group();
+    let trace = host.trace;
+    if trace {
+        eprintln!("bun-wasm nested resources: {}", host.nested.snapshot());
+    }
     drop(host);
     member.physical_stopped();
+    if trace {
+        eprintln!("bun-wasm group after physical stop: {:?}", group.snapshot());
+    }
 }
 
 fn run_store(

@@ -15,6 +15,7 @@ declare namespace BunWasm {
   type WasmCall = { values: WasmValue[] } | { call: number; import: number; args: WasmValue[] };
   interface WasmNative {
     sharedMemorySupported(): boolean;
+    nestedCallbackLimit(): number;
     createSharedMemory(initial: number, maximum: number): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;

@@ -640,7 +640,7 @@ fn admitted_import_cancellation_interrupts_only_its_member_before_stop_release()
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
     let watches = crate::fs_watch::Watches::new(net.notify());
     let host = Host {
-                nested: crate::nested::State::default(),
+        nested: crate::nested::State::default(),
         wasi: wasi.build_p1(),
         watches,
         net,

@@ -257,7 +257,7 @@ impl Engine for QuickJs {
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
         // SAFETY: the context and its runtime are live and retained by Inner.
         let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
-        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        #[cfg(bun_wasm_shared_group)]
         unsafe {
             qjs::JS_SetCanBlock(runtime_raw, true)
         };
@@ -506,7 +506,7 @@ impl Engine for QuickJs {
         }
     }
 
-    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    #[cfg(bun_wasm_shared_group)]
     fn nested_execute(&self, operation: &V, callback: &V) -> Result<V, V> {
         crate::nested_bridge::execute(self, operation, callback)
     }

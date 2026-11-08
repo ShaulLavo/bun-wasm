@@ -1,7 +1,7 @@
 From cb3de4910fddb7b899325122f31b1b304e5c8d8c Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 23:59:35 +0200
-Subject: [PATCH 22/22] wasm: WASI guests are single agents even with atomics
+Subject: [PATCH 23/23] wasm: WASI guests are single agents even with atomics
 
 bun-wasm's memory-group members are built with wasm atomics so they can
 share one memory, but each is still one agent with no threads. Select

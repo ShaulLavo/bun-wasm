@@ -2,10 +2,7 @@
 use super::{error, resource_id};
 use crate::data::{NativeError, NativeResult, Record, Val};
 use bunwasm_nested::MemoryPlan;
-use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
-};
+use std::{cell::RefCell, collections::BTreeMap};
 use wasmparser::{ExternalKind, Parser, Payload, TypeRef, ValType};
 #[path = "nested_frame.rs"]
 mod frame;
@@ -13,22 +10,26 @@ mod frame;
 mod wire;
 use wire::{BACKEND, Binding, Number, Reply, Request};
 
+pub(super) fn callback_limit() -> usize {
+    wire::MAX_RESOURCES
+}
+
 pub(super) fn owns(id: u32) -> bool {
     id & BACKEND != 0
 }
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 type Dispatch = extern "C" fn(u32, u32, u32) -> u32;
 thread_local! {
-    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
-    static DISPATCH: Cell<Option<Dispatch>> = const { Cell::new(None) };
+    #[cfg(bun_wasm_shared_group)]
+    static DISPATCH: std::cell::Cell<Option<Dispatch>> = const { std::cell::Cell::new(None) };
     static INVOCATIONS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static MODULES: RefCell<BTreeMap<u32, Description>> = const { RefCell::new(BTreeMap::new()) };
     static INSTANCES: RefCell<BTreeMap<u32, u32>> = const { RefCell::new(BTreeMap::new()) };
     static FUNCTIONS: RefCell<BTreeMap<u32, Vec<String>>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 #[unsafe(no_mangle)]
 pub extern "C" fn bun_core_bind_nested(dispatch: Dispatch) {
     DISPATCH.with(|entry| {
@@ -39,7 +40,7 @@ pub extern "C" fn bun_core_bind_nested(dispatch: Dispatch) {
     });
 }
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 #[unsafe(no_mangle)]
 pub extern "C" fn bun_nested_dispatch(invocation: u32, callback: u32, pointer: u32) -> u32 {
     let active = INVOCATIONS.with(|stack| stack.borrow().last().copied());
@@ -48,7 +49,7 @@ pub extern "C" fn bun_nested_dispatch(invocation: u32, callback: u32, pointer: u
     {
         return frame::BAD_FRAME;
     }
-    let Some(dispatch) = DISPATCH.with(Cell::get) else {
+    let Some(dispatch) = DISPATCH.with(std::cell::Cell::get) else {
         return frame::BAD_FRAME;
     };
     dispatch(invocation, callback, pointer)
@@ -75,7 +76,7 @@ impl Drop for Invocation {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[cfg(bun_wasm_shared_group)]
 fn exchange(input: &Request) -> Result<Reply, NativeError> {
     #[link(wasm_import_module = "runtime_nested")]
     unsafe extern "C" {
@@ -91,7 +92,7 @@ fn exchange(input: &Request) -> Result<Reply, NativeError> {
     crate::split::bun_core_free(out[0], out[1], 8);
     serde_json::from_slice(&bytes?).map_err(error)
 }
-#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+#[cfg(not(bun_wasm_shared_group))]
 fn exchange(_: &Request) -> Result<Reply, NativeError> {
     Err(error(
         "Shared WebAssembly memories require the shared-group profile",
@@ -152,8 +153,7 @@ pub(super) fn shared(bytes: &[u8]) -> bool {
     })
 }
 pub(super) fn validate(bytes: &[u8]) -> bool {
-    cfg!(all(target_arch = "wasm32", target_feature = "atomics"))
-        && bunwasm_nested::regionize(bytes).is_ok()
+    cfg!(bun_wasm_shared_group) && bunwasm_nested::regionize(bytes).is_ok()
 }
 fn type_name(ty: ValType) -> Result<String, NativeError> {
     Ok(match ty {
@@ -364,34 +364,35 @@ fn binding(import: &Import, value: &Val) -> Result<Option<Binding>, NativeError>
             name,
             value: numeric(value, ty)?,
         })),
-        ImportKind::Function { .. } => {
-            let Val::Object(fields) = value else {
-                return Err(error("Missing nested function binding"));
-            };
-            let kind = fields
-                .iter()
-                .find(|(key, _)| key == "kind")
-                .map(|(_, value)| value);
-            let id = fields
-                .iter()
-                .find(|(key, _)| key == "id")
-                .map(|(_, value)| value)
-                .ok_or_else(|| error("missing callback ID"))?;
-            let id = resource_id(id)?;
-            match kind {
-                Some(Val::Str(kind)) if kind == "callback" => {
-                    Ok(Some(Binding::Callback { module, name, id }))
-                }
-                Some(Val::Str(kind)) if kind == "function" && owns(id) => {
-                    Ok(Some(Binding::Function { module, name, id }))
-                }
-                _ => Err(NativeError::type_error(
-                    "Unsupported mixed-backend function reference",
-                )),
-            }
-        }
+        ImportKind::Function { .. } => function_binding(module, name, value).map(Some),
     }
 }
+fn function_binding(module: String, name: String, value: &Val) -> Result<Binding, NativeError> {
+    let Val::Object(fields) = value else {
+        return Err(error("Missing nested function binding"));
+    };
+    let kind = fields
+        .iter()
+        .find(|(key, _)| key == "kind")
+        .map(|(_, value)| value);
+    let id = fields
+        .iter()
+        .find(|(key, _)| key == "id")
+        .map(|(_, value)| value)
+        .ok_or_else(|| error("missing callback ID"))?;
+    let id = resource_id(id)?;
+    match kind {
+        Some(Val::Str(kind)) if kind == "callback" => Ok(Binding::Callback { module, name, id }),
+        Some(Val::Str(kind)) if kind == "function" && owns(id) => {
+            Ok(Binding::Function { module, name, id })
+        }
+        _ => Err(
+            NativeError::type_error("Unsupported mixed-backend function reference")
+                .named("LinkError"),
+        ),
+    }
+}
+
 pub(super) fn instantiate(module: u32, values: &[Val], token: u32) -> NativeResult {
     let description = MODULES
         .with(|modules| modules.borrow().get(&module).cloned())
@@ -504,4 +505,34 @@ pub(super) fn call(function: u32, values: &[Val], token: u32) -> NativeResult {
     Ok(Record::new()
         .set("values", values.into_iter().map(number).collect::<Vec<_>>())
         .into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invocation_guards_reject_duplicates_and_restore_outer_tokens() {
+        INVOCATIONS.with(|stack| assert!(stack.borrow().is_empty()));
+        let outer = Invocation::enter(1).unwrap();
+        assert!(Invocation::enter(1).is_err());
+        assert!(Invocation::enter(0).is_err());
+        let inner = Invocation::enter(2).unwrap();
+        drop(inner);
+        INVOCATIONS.with(|stack| assert_eq!(*stack.borrow(), [1]));
+        drop(outer);
+        INVOCATIONS.with(|stack| assert!(stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn invocation_depth_limit_leaves_the_session_usable() {
+        let guards = (1..=frame::MAX_DEPTH as u32)
+            .map(|token| Invocation::enter(token).unwrap())
+            .collect::<Vec<_>>();
+        assert!(Invocation::enter(frame::MAX_DEPTH as u32 + 1).is_err());
+        for guard in guards.into_iter().rev() {
+            drop(guard);
+        }
+        assert!(Invocation::enter(1000).is_ok());
+    }
 }

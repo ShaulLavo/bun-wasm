@@ -80,7 +80,7 @@ pub(crate) extern "C" fn dispatch(token: u32, callback: u32, pointer: u32) -> u3
     let result = run_callback(&invocation, callback, &mut frame);
     match result {
         Ok(()) => {
-            unsafe { (pointer as *mut frame::CallbackFrame).write_unaligned(frame) };
+            write_frame(pointer, frame);
             frame::OK
         }
         Err(thrown) => {
@@ -135,31 +135,25 @@ fn decode(slot: frame::Slot) -> Option<Val> {
     })
 }
 fn encode(value: Val) -> Option<frame::Slot> {
-    let (kind, bits) = match value {
-        // The JS dispatcher returns typed numeric records so f32 and f64 are
-        // never guessed from a JavaScript Number's integral value.
-        Val::Object(fields) => {
-            let kind = fields
-                .iter()
-                .find(|(key, _)| key == "type")
-                .map(|(_, value)| value);
-            let value = fields
-                .iter()
-                .find(|(key, _)| key == "value")
-                .map(|(_, value)| value)?;
-            match (kind, value) {
-                (Some(Val::Str(ty)), Val::Num(value)) if ty == "i32" => {
-                    (0, *value as i32 as u32 as u64)
-                }
-                (Some(Val::Str(ty)), Val::Num(value)) if ty == "f32" => {
-                    (2, u64::from((*value as f32).to_bits()))
-                }
-                (Some(Val::Str(ty)), Val::Num(value)) if ty == "f64" => (3, value.to_bits()),
-                (Some(Val::Str(ty)), Val::BigInt(value)) if ty == "i64" => (1, *value as u64),
-                (Some(Val::Str(ty)), Val::BigUint(value)) if ty == "i64" => (1, *value),
-                _ => return None,
-            }
+    let Val::Object(fields) = value else {
+        return None;
+    };
+    let kind = fields
+        .iter()
+        .find(|(key, _)| key == "type")
+        .map(|(_, value)| value);
+    let value = fields
+        .iter()
+        .find(|(key, _)| key == "value")
+        .map(|(_, value)| value)?;
+    let (kind, bits) = match (kind, value) {
+        (Some(Val::Str(ty)), Val::Num(value)) if ty == "i32" => (0, *value as i32 as u32 as u64),
+        (Some(Val::Str(ty)), Val::Num(value)) if ty == "f32" => {
+            (2, u64::from((*value as f32).to_bits()))
         }
+        (Some(Val::Str(ty)), Val::Num(value)) if ty == "f64" => (3, value.to_bits()),
+        (Some(Val::Str(ty)), Val::BigInt(value)) if ty == "i64" => (1, *value as u64),
+        (Some(Val::Str(ty)), Val::BigUint(value)) if ty == "i64" => (1, *value),
         _ => return None,
     };
     Some(frame::Slot {
@@ -167,4 +161,9 @@ fn encode(value: Val) -> Option<frame::Slot> {
         reserved: 0,
         bits,
     })
+}
+
+fn write_frame(pointer: u32, frame: frame::CallbackFrame) {
+    // SAFETY: dispatch validated this exact frame allocation through the core.
+    unsafe { (pointer as *mut frame::CallbackFrame).write_unaligned(frame) };
 }

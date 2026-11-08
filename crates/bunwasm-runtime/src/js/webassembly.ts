@@ -17,6 +17,9 @@
   const functions = new Map<number, Callable>();
   const functionStates = new WeakMap<object, BunWasm.WasmFunction>();
   const callbacks: Callback[] = [];
+  const nestedCallbacks = new Map<number, Callback>();
+  const freeNestedCallbacks: number[] = [];
+  let nextNestedCallback = 0;
   // Wasmi retains externrefs until Store teardown. These roots have the same runtime lifetime.
   const references = new Map<number, unknown>();
   const memoryCleanup = new FinalizationRegistry<{ resource: number; reference: WeakRef<Memory> }>(({ resource, reference }) => {
@@ -256,7 +259,7 @@
     return values.length === 0 ? undefined : values;
   }
   function nestedCallback(id: number, args: BunWasm.WasmValue[]) {
-    const entry = callbacks[id];
+    const entry = nestedCallbacks.get(id);
     if (!entry) throw new RuntimeError('Invalid nested callback');
     sync(refreshMemory);
     return callbackResults(entry, args).map((value, index) => ({ type: entry.results[index], value }));
@@ -296,11 +299,11 @@
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
       const provisional: number[] = [];
-      const bindings = info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional));
+      const bindings = instanceBindings(info, imports, provisional);
       let id: number;
       try { id = info.backend === 'nested' ? nestedExecute(token => native.instantiate(info.id, bindings, token)) : native.instantiate(info.id, bindings); }
       catch (error) {
-        for (const id of provisional) delete callbacks[id];
+        releaseCallbacks(info, provisional);
         if (info.backend === 'nested') throw error;
         throw new LinkError(message(error));
       }
@@ -311,12 +314,29 @@
       Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
     }
   }
-  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[]): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
+  function retainNestedCallback(entry: Callback) {
+    const limit = native.nestedCallbackLimit();
+    if (nestedCallbacks.size >= limit) throw new RangeError('Nested callback resource limit');
+    const id = freeNestedCallbacks.pop() ?? nextNestedCallback++;
+    nestedCallbacks.set(id, entry);
+    return id;
+  }
+  function releaseCallbacks(info: BunWasm.WasmModule, provisional: number[]) {
+    for (const id of provisional) {
+      if (info.backend !== 'nested') { delete callbacks[id]; continue; }
+      if (nestedCallbacks.delete(id)) freeNestedCallbacks.push(id);
+    }
+  }
+  function instanceBindings(info: BunWasm.WasmModule, imports: Imports, provisional: number[]) {
+    try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend)); }
+    catch (error) { releaseCallbacks(info, provisional); throw error; }
+  }
+  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
     if (item.kind === 'function' && typeof value === 'function') {
       const existing = functionStates.get(value);
       if (existing) return { kind: 'function', id: existing.id };
-      const id = callbacks.length;
-      callbacks.push({ callback: (...args) => value(...args), results: item.results });
+      const entry: Callback = { callback: (...args) => value(...args), results: item.results };
+      const id = backend === 'nested' ? retainNestedCallback(entry) : callbacks.push(entry) - 1;
       provisional.push(id);
       return { kind: 'callback', id };
     }

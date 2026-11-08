@@ -4,6 +4,15 @@ use super::*;
 #[derive(Clone)]
 pub(crate) struct NestedMemory(Arc<LogicalMemory>);
 
+#[derive(Clone)]
+pub(crate) struct WeakNestedMemory(Weak<LogicalMemory>);
+
+impl WeakNestedMemory {
+    pub(crate) fn upgrade(&self) -> Result<NestedMemory, Errno> {
+        self.0.upgrade().map(NestedMemory).ok_or(Errno::BadF)
+    }
+}
+
 struct LogicalMemory {
     group: MemoryGroup,
     member: MemberId,
@@ -36,6 +45,10 @@ impl NestedMemory {
             pages: AtomicU32::new(initial),
             growth: Mutex::new(()),
         })))
+    }
+
+    pub(crate) fn downgrade(&self) -> WeakNestedMemory {
+        WeakNestedMemory(Arc::downgrade(&self.0))
     }
 
     pub(crate) fn base(&self) -> u32 {
@@ -116,5 +129,29 @@ mod tests {
         assert_eq!(group.snapshot().regions, 0);
         member.physical_stopped();
         assert_eq!(group.snapshot().holds, 0);
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    #[test]
+    fn unpublishing_a_region_releases_it_while_weak_imports_survive() {
+        let budget = GroupBackingBudget::default();
+        let group =
+            MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).unwrap();
+        let member = group.reserve(701).unwrap().launch();
+        let region = NestedMemory::new(&member, 1, 2).unwrap();
+        let weak = region.downgrade();
+        assert_eq!(group.snapshot().regions, 1);
+        assert_eq!(group.snapshot().committed_bytes, 3 * u64::from(PAGE_BYTES));
+        drop(region);
+        assert_eq!(weak.upgrade().err(), Some(Errno::BadF));
+        assert_eq!(group.snapshot().regions, 0);
+        assert_eq!(group.snapshot().holds, 0);
+        member.physical_stopped();
+        drop(group);
+        assert_eq!(budget.committed_bytes(), 0);
     }
 }
