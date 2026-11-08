@@ -106,13 +106,17 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
   const kind = programKind(module);
-  const source = new Blob(chunks);
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   chunks.length = 0;
-  const bytes = new Uint8Array(await source.arrayBuffer());
   if (kind !== "single") return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
   recordProgramMemory(module, bytes);
   const engine = { module, size };
-  if (build) setTimeout(() => void cacheIfExpected(key, build, source, bytes), 0);
+  if (build) setTimeout(() => void cacheIfExpected(key, build, bytes), 0);
   return { ...engine, build };
 }
 
@@ -190,12 +194,17 @@ async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expe
 }
 
 /** Caches the downloaded engine only if its bytes are the build the page expects. */
-async function cacheIfExpected(key: string, build: string, source: Blob, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+async function cacheIfExpected(key: string, build: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   if (hex !== build) return;
-  const headers = { "content-type": "application/wasm", "content-length": String(source.size) };
-  await cacheEngine(key, build, new Response(source, { headers }));
+  const headers = { "content-type": "application/wasm", "content-length": String(bytes.byteLength) };
+  // The snapshot is immutable after verification. A stream avoids Response(BufferSource)
+  // making another full copy while cache storage consumes these already-owned bytes.
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) { controller.enqueue(bytes); controller.close(); },
+  });
+  await cacheEngine(key, build, new Response(body, { headers }));
 }
 
 // The service worker at ./__bunwasm/ (sw.ts) serves the Bun worker's script with the headers a
