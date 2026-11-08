@@ -365,7 +365,57 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
         } => enter(caller, invocation, |caller| {
             call(caller, function, arguments)
         }),
+        Request::PublishMemory { memory: id } => {
+            let token = memory(caller, id)?
+                .publish()
+                .map_err(|error| anyhow!("shared memory publication: {error:?}"))?;
+            Ok(Reply::Count(token))
+        }
+        Request::AttachMemory { token } => {
+            let region = NestedMemory::attach(member(caller)?, token)
+                .map_err(|error| anyhow!("shared memory attachment: {error:?}"))?;
+            Ok(Reply::Handle(
+                caller.data_mut().nested.memories.insert(region)?,
+            ))
+        }
+        Request::PublishModule {
+            module,
+            description,
+        } => {
+            let compiled = caller
+                .data()
+                .nested
+                .modules
+                .get(index(module)?)
+                .context("invalid nested module")?
+                .clone();
+            let token = shm::nested::publish_module(member(caller)?, compiled, description.into())
+                .map_err(|error| anyhow!("shared module publication: {error:?}"))?;
+            Ok(Reply::Count(token))
+        }
+        Request::AttachModule { token } => {
+            let (module, description) = shm::nested::attach_module(member(caller)?, token)
+                .map_err(|error| anyhow!("shared module attachment: {error:?}"))?;
+            let id = insert(&mut caller.data_mut().nested.modules, module)?;
+            Ok(Reply::AttachedModule {
+                id,
+                description: description.to_string(),
+            })
+        }
+        Request::Withdraw { token } => {
+            shm::nested::withdraw(member(caller)?, token)
+                .map_err(|error| anyhow!("shared publication withdrawal: {error:?}"))?;
+            Ok(Reply::Count(0))
+        }
     }
+}
+
+fn member<'a>(caller: &'a Caller<'_, Host>) -> Result<&'a shm::MemberLease> {
+    caller
+        .data()
+        .shm
+        .as_ref()
+        .context("shared object transport needs a group member")
 }
 
 fn enter(

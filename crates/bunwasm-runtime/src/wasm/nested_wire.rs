@@ -66,6 +66,22 @@ pub enum Request {
         arguments: Vec<Number>,
         invocation: u32,
     },
+    PublishMemory {
+        memory: u32,
+    },
+    AttachMemory {
+        token: u32,
+    },
+    PublishModule {
+        module: u32,
+        description: String,
+    },
+    AttachModule {
+        token: u32,
+    },
+    Withdraw {
+        token: u32,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,6 +100,10 @@ pub enum Reply {
         results: Vec<String>,
     },
     Values(Vec<Number>),
+    AttachedModule {
+        id: u32,
+        description: String,
+    },
     Error {
         category: String,
         message: String,
