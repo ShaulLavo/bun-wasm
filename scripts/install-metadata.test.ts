@@ -144,14 +144,16 @@ test("metadata lookahead spans already resolved parents with narrow child lists"
     assert.ok(registry.trace.peak <= 8, `metadata concurrency ${registry.trace.peak}`);
     const lock = Bun.JSONC.parse(readFileSync(join(directory, "bun.lock"), "utf8"));
     assert.ok(lock && typeof lock === "object" && "packages" in lock);
-    const packages = lock.packages;
-    assert.ok(packages && typeof packages === "object");
+    assert.ok(lock.packages && typeof lock.packages === "object");
+    const packages = new Map<string, unknown>(Object.entries(lock.packages));
     for (const name of Object.keys(registry.dependencies)) {
       const child = name.replace("parent-", "item-");
-      assert.ok(child in packages && Array.isArray(packages[child]));
-      assert.ok(name in packages && Array.isArray(packages[name]));
-      assert.equal(packages[child][0], `${child}@1.0.0`);
-      assert.equal(packages[name][0], `${name}@1.0.0`);
+      const childRow = packages.get(child);
+      const parentRow = packages.get(name);
+      assert.ok(Array.isArray(childRow));
+      assert.ok(Array.isArray(parentRow));
+      assert.equal(childRow[0], `${child}@1.0.0`);
+      assert.equal(parentRow[0], `${name}@1.0.0`);
     }
     await assertClosed(registry.trace);
   } finally {
