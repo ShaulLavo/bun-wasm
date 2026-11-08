@@ -105,3 +105,10 @@ test("connection failures stay bounded and redirect loops cannot run indefinitel
   } })).rejects.toThrow("redirect");
   expect(calls).toBe(4);
 });
+
+test("the supported Bun cache uses a workspace-relative archive path on both runner layouts", async () => {
+  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  expect(workflow).toContain("BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache");
+  expect(workflow).not.toContain("path: ~/.bun/install/cache");
+  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(10);
+});

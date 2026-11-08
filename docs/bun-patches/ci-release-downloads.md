@@ -28,6 +28,8 @@ This does not authenticate Bun's own remote-tarball requests. Non-release Git
 inputs retain their original transport.
 
 The existing Ubuntu quality job publishes its completed normal Bun cache before
-consumer jobs start. Its key hashes every frozen lockfile, including exact URLs
-and integrities. Boat consumers restore this supported cache rather than relying
+consumer jobs start. Bun uses its supported `BUN_INSTALL_CACHE_DIR` setting
+inside the checkout, so the cached archive path is portable between Ubuntu and
+boat home-directory layouts. Its key hashes every frozen lockfile, including
+exact URLs and integrities. Boat consumers restore this supported cache rather than relying
 on a first unauthenticated release download from their address.

@@ -12,6 +12,7 @@ permissions:
 
 env:
   GITHUB_TOKEN: ${{ github.token }}
+  BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -63,8 +64,8 @@ jobs:
       - uses: actions/cache/restore@v4
         id: bun-dependencies
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Install locked JavaScript tools and application dependencies
         run: |
           bun install --frozen-lockfile --ignore-scripts
@@ -75,7 +76,7 @@ jobs:
         if: steps.bun-dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ~/.bun/install/cache
+          path: .ci-bun-cache
           key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
       - name: Blocking quality gates
         env:
@@ -204,8 +205,8 @@ jobs:
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Identify sysroot build inputs
         id: sysroot-inputs
@@ -549,8 +550,8 @@ jobs:
         run: bash scripts/test-transpiler-example.sh --check-tools
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - uses: actions/cache/restore@v4
         id: sources-cache
@@ -985,8 +986,8 @@ jobs:
         run: bash scripts/test-transpiler-example.sh --check-tools
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Configure private JSC build paths
         run: |
@@ -1302,8 +1303,8 @@ jobs:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run test
@@ -1340,8 +1341,8 @@ jobs:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Install sysroot build tools
         run: |
@@ -1471,8 +1472,8 @@ jobs:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Web host unit, CLI shim, type and bundle gates
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
@@ -1539,8 +1540,8 @@ jobs:
       - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --cwd web --frozen-lockfile --linker=isolated
       - name: Build each process fixture once for all browsers
         run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
@@ -1573,8 +1574,8 @@ jobs:
       - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - uses: actions/download-artifact@v4
         with:
           name: process-bundles
