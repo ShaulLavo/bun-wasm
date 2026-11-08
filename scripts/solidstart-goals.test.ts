@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 import { frameworks } from "./goals-matrix/catalog";
 import { playgroundURL } from "./goals-matrix/run";
@@ -35,7 +35,7 @@ for (const command of ["dev", "start"]) {
 for (const command of ["dev", "build"]) {
   test(`SolidStart ${command} initializes real esbuild in its non-worker mode`, async () => {
     const require = createRequire(import.meta.url);
-    const esbuild = require.resolve("esbuild", { paths: [dirname(require.resolve("wrangler/package.json"))] });
+    const esbuild = require.resolve("esbuild");
     const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-solid-esbuild-"));
     try {
       await writeFile(join(scratch, "package.json"), await Bun.file(new URL("../sandbox/template-solidstart/package.json", import.meta.url)).text());
@@ -52,6 +52,7 @@ for (const command of ["dev", "build"]) {
         const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
         expect({ code, stderr }).toEqual({ code: 0, stderr: expect.any(String) });
         expect(stdout).toContain('"mode":"0"');
+        expect(stdout).toContain('"version":"0.28.2"');
         expect(stdout).toContain('"code":"const value = 42;\\n"');
       } finally { child.kill(); await child.exited; }
     } finally { await rm(scratch, { recursive: true, force: true }); }

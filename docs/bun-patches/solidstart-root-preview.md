@@ -24,9 +24,11 @@ cannot be cloned. The development and build commands set the upstream-supported
 `ESBUILD_WORKER_THREADS=0` before Vinxi imports esbuild. They still use its real
 synchronous service and transform API. Production start is unchanged.
 
-The guest resolves Vinxi's esbuild dependency to esbuild-wasm. Its exact installed
-version and worker guard are captured by the real browser diagnostic. The focused
-command regressions use the installed host esbuild from the locked Wrangler graph
-and call `transformSync` without mocking the API. They check that each template
+The real browser diagnostic resolves Vinxi's esbuild dependency at
+`node_modules/vinxi/node_modules/esbuild/lib/main.js` to esbuild-wasm 0.25.12. Its
+worker guard reads `process.env.ESBUILD_WORKER_THREADS !== "0"`. The focused command
+regressions use an explicit, test-only esbuild 0.28.2 dependency and call
+`transformSync` without mocking the API. This is not a same-version reproduction.
+They check that each template
 command overrides an inherited worker setting before loading esbuild. No shared
 runtime, global environment, or generic esbuild default-mode test changes.
