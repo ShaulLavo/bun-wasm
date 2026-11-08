@@ -68,10 +68,13 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(index).not.toContain("waffle.runtime.owner");
     await writeFile(join(scratch, "core.wasm"), quickjsPair().core);
     await writeFile(join(scratch, "wrong-side.wasm"), quickjsPair("jsc").side);
+    const sm = quickjsPair("spidermonkey");
+    await writeFile(join(scratch, "sm-core.wasm"), sm.core);
+    await writeFile(join(scratch, "sm-side.wasm"), sm.side);
     await copyFile(join(import.meta.dir, "fixtures/paired-asset-brand.ts"), join(scratch, "paired-asset-brand.ts"));
     for (const runtime of ["node", process.execPath]) {
-      const { stdout } = await execute(runtime, ["paired-asset-brand.ts", "core.wasm", "wrong-side.wasm"], { cwd: scratch, timeout: 10_000 });
-      expect(stdout.trim()).toBe("paired asset errors ok");
+      const { stdout } = await execute(runtime, ["paired-asset-brand.ts", "core.wasm", "wrong-side.wasm", "sm-core.wasm", "sm-side.wasm"], { cwd: scratch, timeout: 10_000 });
+      expect(stdout.trim()).toBe("paired asset errors ok\nspidermonkey package initialized 42");
     }
     const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset')); const asset = await import('bun-wasm/asset'); if (typeof asset.prepareQuickjsProgram !== 'function') throw Error('missing paired program loader')"], { cwd: scratch, timeout: 10_000 });
     expect(bunPaths).toContain("/src/index.ts");

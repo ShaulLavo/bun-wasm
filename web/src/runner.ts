@@ -122,7 +122,7 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
 
 function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
   const engines: readonly Engine[] = pairedEngines;
-  for (const engine of engines.concat(["browser"])) {
+  for (const engine of engines.concat(["browser"], selected === "spidermonkey" ? [selected] : [])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;

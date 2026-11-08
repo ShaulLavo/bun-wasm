@@ -5,6 +5,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
   echo "spidermonkey: install cbindgen 0.29.4 with cargo install --locked --version 0.29.4 cbindgen" >&2
   exit 1
 }
+[[ "$JOBS" =~ ^[1-4]$ ]] || { echo "spidermonkey: N1 requires 1 to 4 jobs" >&2; exit 1; }
+export CARGO_BUILD_JOBS="$JOBS"
 "$SPIDERMONKEY_SRC/fetch-spidermonkey.sh"
 
 mozconfig="$SPIDERMONKEY_BUILD_DIR/mozconfig"

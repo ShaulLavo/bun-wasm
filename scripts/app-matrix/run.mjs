@@ -16,6 +16,8 @@ import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts
 import { memorySampler } from "./memory.ts";
 import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
 import { guestCommand as buildGuestCommand, prepareGuestProject, withGuestProject } from "./guest-command.ts";
+import { childEnvironment } from "../engine-arm-registry.ts";
+import { censusProvenance, loadCensusSelection, verifyCensusCatalog } from "./census-request.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -24,35 +26,39 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const flags = new Map();
 for (const arg of process.argv.slice(2)) {
   const [key, value = "true"] = arg.split(/=(.*)/s);
-  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|guest-receipt|preview-origins|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
+  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|guest-receipt|preview-origins|census-plan|arm|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
-  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--preview-origins] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
+  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--census-plan=PLAN --arm=LABEL] [--preview-origins] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --census-plan consumes one typed admitted arm request and requires --arm; it never aliases a measurement label to an engine kind. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
   process.exit(0);
 }
+if (flags.has("census-plan") && (!flags.has("product") || flags.has("reference") || flags.has("record") || flags.has("engines") || flags.has("hosts"))) throw new Error("--census-plan requires --product, offline replay, and registry-owned hosts/engines");
 const apps = flags.has("product") ? (await import("./product.ts")).productApps : legacyApps;
+const censusSelection = flags.has("census-plan") ? await loadCensusSelection(resolve(flags.get("census-plan")), flags.get("arm") ?? "") : null;
+if (flags.has("arm") && !flags.has("census-plan")) throw new Error("--arm requires --census-plan");
 const options = {
   cache: resolve(flags.get("cache") ?? "/work/cache/bun-wasm-app-matrix"),
   output: resolve(flags.get("output") ?? "/work/reports/bun-wasm-app-matrix/run"),
-  launcher: resolve(flags.get("launcher") ?? join(process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target", "release/bun-wasm")),
-  engines: (flags.get("engines") ?? (flags.has("product") ? "browser" : "quickjs,jsc,browser")).split(","),
-  hosts: (flags.get("hosts") ?? (flags.has("product") ? "playground" : "native,playground")).split(","),
+  launcher: censusSelection?.registry.launcher.path ?? resolve(flags.get("launcher") ?? join(process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target", "release/bun-wasm")),
+  engines: censusSelection ? [censusSelection.child.label] : (flags.get("engines") ?? (flags.has("product") ? "browser" : "quickjs,jsc,browser")).split(","),
+  hosts: censusSelection ? [censusSelection.plan.host] : (flags.get("hosts") ?? (flags.has("product") ? "playground" : "native,playground")).split(","),
   timeout: Number(flags.get("timeout") ?? 90) * 1000,
   guestReceipt: flags.get("guest-receipt"),
   previewOrigins: flags.has("preview-origins"),
   strict: flags.has("strict"), product: flags.has("product"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
-for (const engine of options.engines) if (!["quickjs", "jsc", "browser"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
+if (!censusSelection) for (const engine of options.engines) if (!["quickjs", "jsc", "browser"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
 for (const host of options.hosts) if (!["native", "playground"].includes(host)) throw new Error(`Unknown host ${host}`);
-const requested = flags.has("apps") ? flags.get("apps").split(",") : apps.map(app => app.id);
+const requested = flags.has("apps") ? flags.get("apps").split(",") : (censusSelection ? censusSelection.plan.sourceCatalog : apps).map(app => app.id);
 for (const id of requested) if (!apps.some(app => app.id === id)) throw new Error(`Unknown app ${id}`);
 const selected = apps.filter(app => requested.includes(app.id));
+if (censusSelection) verifyCensusCatalog(censusSelection, selected);
 const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
-for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
+if (!censusSelection) for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
 for (const [engine, side] of Object.entries({ quickjs: "quickjs.wasm", jsc: "jsc-engine.wasm" })) {
-  if (options.engines.includes(engine) && !existsSync(join(root, "dist", side))) throw new Error(`Build the matching dist/${side} first`);
+  if (!censusSelection && options.engines.includes(engine) && !existsSync(join(root, "dist", side))) throw new Error(`Build the matching dist/${side} first`);
 }
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
@@ -104,7 +110,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const text = path => existsSync(path) ? readFileSync(path, "utf8") : "";
 function launch(argv, cwd, logfile, env = {}) {
   const fd = openSync(logfile, "w");
-  const child = spawn(argv[0], argv.slice(1), { cwd, env: { ...process.env, ...env }, detached: true, stdio: ["ignore", fd, fd] });
+  const child = spawn(argv[0], argv.slice(1), { cwd, env: { ...(censusSelection ? childEnvironment(censusSelection.arm, process.env) : process.env), ...env }, detached: true, stdio: ["ignore", fd, fd] });
   closeSync(fd);
   children.add(child);
   const done = new Promise(resolve => {
@@ -134,8 +140,13 @@ async function freePort() {
 
 function guestCommand(engine, project, args, port) {
   const wasm = artifacts[engine].path;
-  const host = engine === "browser" ? ["node", "--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net", "--wasm", wasm] : [launcher, "--wasm", wasm];
-  return buildGuestCommand({ host, project, args, port, registry: mirror.base });
+  const kind = censusSelection?.child.engine ?? engine;
+  const host = kind === "browser" ? ["node", "--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net", "--wasm", wasm] : [launcher, "--wasm", wasm];
+  const command = buildGuestCommand({ host, project, args, port, registry: mirror.base });
+  if (!censusSelection) return command;
+  const separator = command.indexOf("--");
+  if (separator < 0) throw new Error("typed census guest command is missing its argument separator");
+  return command.toSpliced(separator, 0, ...Object.entries(censusSelection.child.environment).flatMap(([key, value]) => ["--env", `${key}=${value}`]));
 }
 
 function record(app, engine, host, stage, command, result) {
@@ -252,10 +263,16 @@ function report(provenance) {
 }
 
 const measurementErrors = [];
+const pageIdentities = [];
 
 async function browserApp(app, engine) {
   memory.take();
-  const run = () => browserSession.runApp({ app, engine, registry: mirror.base, record });
+  const selectedEngine = censusSelection?.child.engine ?? engine;
+  const rowRecord = censusSelection
+    ? (app, _engine, host, stage, command, result) => record(app, censusSelection.child.label, host, stage, command, result)
+    : record;
+  const run = () => browserSession.runApp({ app, engine: selectedEngine, registry: mirror.base, record: rowRecord,
+    measurement: censusSelection?.child, observePage: censusSelection ? identity => pageIdentities.push(identity) : undefined });
   if (!options.product) return run();
   const result = await runProductBrowserCase(run);
   if (result.kind === "complete") return;
@@ -271,10 +288,12 @@ try {
   revision = git.output.trim();
   const { programKind, programProfile, verifyProgramSide } = await import("../../src/engine-kind.ts");
   artifacts = Object.fromEntries(options.engines.map(engine => {
-    const name = wasmName[engine];
-    const core = readFileSync(join(root, "dist", name));
+    const request = censusSelection?.child;
+    const name = request ? (request.program.kind === "single" ? "bun-browser.wasm" : programProfile(request.program.kind).core) : wasmName[engine];
+    const core = readFileSync(request?.program.core.path ?? join(root, "dist", name));
+    if (request && (core.length !== request.program.core.bytes || sha256(core) !== request.program.core.sha256)) throw new Error("Census core changed after admission");
     const kind = programKind(new WebAssembly.Module(core));
-    const expected = engine === "browser" ? "single" : engine;
+    const expected = request?.program.kind ?? (engine === "browser" ? "single" : engine);
     if (kind !== expected) throw new Error(`Selected ${engine} core declares ${kind}`);
     const stage = (name, bytes) => {
       const path = join(scratch, name);
@@ -286,7 +305,8 @@ try {
     };
     if (kind === "single") return [engine, stage(name, core)];
     const sideName = programProfile(kind).side;
-    const side = readFileSync(join(root, "dist", sideName));
+    const side = readFileSync(request?.program.side.path ?? join(root, "dist", sideName));
+    if (request && (side.length !== request.program.side.bytes || sha256(side) !== request.program.side.sha256)) throw new Error("Census side changed after admission");
     verifyProgramSide(kind, new WebAssembly.Module(side));
     return [engine, { ...stage(name, core), side: { name: sideName, ...stage(sideName, side) } }];
   }));
@@ -299,9 +319,10 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "guest-command.ts", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "native-product.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  if (censusSelection && launcherDigest !== censusSelection.registry.launcher.sha256) throw new Error("Census launcher changed after admission");
+  runnerSources = Object.fromEntries(["run.mjs", "../engine-playground-driver.ts", "../../web/src/compile-observer.ts", "census-request.ts", "engine-arms.ts", "guest-command.ts", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "native-product.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
-  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.flatMap(engine => [[wasmName[engine], artifacts[engine].sha256]].concat(artifacts[engine].side ? [[artifacts[engine].side.name, artifacts[engine].side.sha256]] : []))));
+  if ((options.product || censusSelection) && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.flatMap(engine => [[censusSelection ? (censusSelection.child.program.kind === "single" ? "bun-browser.wasm" : programProfile(censusSelection.child.program.kind).core) : wasmName[engine], artifacts[engine].sha256]].concat(artifacts[engine].side ? [[artifacts[engine].side.name, artifacts[engine].side.sha256]] : []))));
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
@@ -330,6 +351,7 @@ try {
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,
       launcher_sha256: launcherDigest,
+      ...(censusSelection ? { ...censusProvenance(censusSelection), pages: pageIdentities } : {}),
       registry: mirror?.snapshot(), infrastructureError, blocked_external_network: measurementErrors });
   } finally { await cleanup(); }
 }

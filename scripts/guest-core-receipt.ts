@@ -1,14 +1,14 @@
 import { join, resolve } from "node:path";
 import { lstatSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { isPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type PairedEngine } from "../src/engine-kind.ts";
-import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type ProgramInputScope, type SourceOptions } from "./guest-source-manifest.ts";
+import { isSupportedPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type SupportedPairedEngine } from "../src/engine-kind.ts";
+import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type SourceOptions } from "./guest-source-manifest.ts";
 import { parseProgramProfile, SHARED_GROUP_OPTIMIZER, SHARED_GROUP_SIDE_LINK, sharedGroupCoreLink, sharedGroupEnvironment, verifySharedSysroot,
   verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
 
 export interface ProgramInputSnapshot {
   readonly schema: 1;
-  readonly scope: ProgramInputScope;
+  readonly scope: "core" | SupportedPairedEngine;
   readonly source: { readonly head: string; readonly tree: string };
   readonly content: unknown;
   readonly contentSha256: string;
@@ -25,7 +25,7 @@ export function record(value: unknown): value is Record<string, unknown> {
 const digest = (value: unknown, length: number): value is string => typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value);
 
 export function parseProgramInputs(value: unknown): ProgramInputSnapshot {
-  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && !isPairedEngine(value.scope))
+  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && !isSupportedPairedEngine(value.scope))
     || !record(value.source) || !digest(value.source.head, 40) || !digest(value.source.tree, 40)
     || !digest(value.contentSha256, 64) || !record(value.content) || hash(JSON.stringify(value.content)) !== value.contentSha256) throw new Error("Invalid program input snapshot");
   return { schema: 1, scope: value.scope, source: { head: value.source.head, tree: value.source.tree }, content: value.content, contentSha256: value.contentSha256 };
@@ -105,7 +105,7 @@ function selectionKey(selection: CoreSelection | { kind: string; profile?: "shar
 
 type ProgramOutputRequest = { readonly artifact: string; readonly options: SourceOptions } & (
   | { readonly scope: "core"; readonly selection: CoreSelection }
-  | { readonly scope: PairedEngine; readonly profile?: ProgramProfile }
+  | { readonly scope: SupportedPairedEngine; readonly profile?: ProgramProfile }
 );
 
 function outputReceiptPath(request: ProgramOutputRequest): string {
@@ -165,14 +165,14 @@ const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", 
 
 async function prepareComposedOutputs(repository: string, sysroot: string, build: ComposedBuild, core: string, side: string): Promise<void> {
   const kind = programKindForBuild(build);
-  if (kind === "single") throw new Error(`Not a paired build: ${build}`);
+  if (!isSupportedPairedEngine(kind)) throw new Error(`Not a supported paired build: ${build}`);
   await prepareProgramOutputs([
     { artifact: core, scope: "core", selection: { features: guestBuilds[build].features }, options: sourceOptions(repository, sysroot, "browser") },
     { artifact: side, scope: kind, options: sourceOptions(repository, sysroot, kind) },
   ]);
 }
 
-export function engineEnvironment(kind: PairedEngine, sysroot: string, profile: ProgramProfile = "split"): Record<string, string> {
+export function engineEnvironment(kind: SupportedPairedEngine, sysroot: string, profile: ProgramProfile = "split"): Record<string, string> {
   if (profile === "shared-group") {
     if (kind !== "quickjs") throw new Error(`shared-group ${kind} is not qualified: its native inputs are not built with atomics`);
     return sharedGroupEnvironment(sysroot, kind);
@@ -186,7 +186,7 @@ export function engineEnvironment(kind: PairedEngine, sysroot: string, profile: 
   return flags;
 }
 
-export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputScope, selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
+export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputSnapshot["scope"], selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
   if (process.env.RUSTFLAGS !== undefined || process.env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
   if (scope === "quickjs" && (process.env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
   run(["bash", join(options.repository, "scripts/sync-bun.sh"), "--check"], options.repository);
@@ -218,7 +218,7 @@ function buildStdSource(options: SourceOptions): string {
 }
 
 /** Shared-group inputs: the exact flags, link, sysroot identity and profile, never a split field set. */
-function sharedGroupContent(options: SourceOptions, scope: ProgramInputScope, manifest: Awaited<ReturnType<typeof captureSourceManifest>>,
+function sharedGroupContent(options: SourceOptions, scope: ProgramInputSnapshot["scope"], manifest: Awaited<ReturnType<typeof captureSourceManifest>>,
   sharedSysroot: ReturnType<typeof verifySharedSysroot>, core: CoreSelection | undefined) {
   if (scope !== "core" && scope !== "quickjs") throw new Error(`shared-group ${scope} is not qualified: its native inputs are not built with atomics`);
   const environment = sharedGroupEnvironment(options.sysroot, scope);
@@ -264,7 +264,7 @@ if (import.meta.main) {
     const expected = parseProgramInputs(await Bun.file(argument).json());
     if (expected.scope !== "core") throw new Error("Expected common core inputs");
     verifyProgramReceipt(await Bun.file(path).bytes(), await Bun.file(`${path}.core.json`).json(), expected);
-  } else if (command === "tag" && path && isPairedEngine(argument) && output) {
+  } else if (command === "tag" && path && isSupportedPairedEngine(argument) && output) {
     const receipt = parseProgramReceipt(await Bun.file(`${path}.core.json`).json());
     const expected = await recaptureProgramInputs(root, sysroot, receipt.inputs);
     const bytes = await Bun.file(path).bytes();

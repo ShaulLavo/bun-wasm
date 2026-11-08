@@ -1,20 +1,25 @@
 // Stdout written during a busy event loop must reach the pipe before the loop goes idle.
 // The guest spins until /ack exists; this host creates it only after reading "ready".
-// source env.sh && node tests/test-stdout-busy-loop.ts [--engine quickjs|jsc|browser] [--wasm PATH]
+// source env.sh && node tests/test-stdout-busy-loop.ts [--engine quickjs|jsc|browser|spidermonkey] [--wasm PATH] [--tier interp|pbl]
 import { spawn, type ChildProcess } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-const { values } = parseArgs({ options: { engine: { type: "string", default: "quickjs" }, wasm: { type: "string" }, timeout: { type: "string", default: "30000" } } });
+const { values } = parseArgs({ options: { engine: { type: "string", default: "quickjs" }, wasm: { type: "string" }, tier: { type: "string" }, timeout: { type: "string", default: "30000" } } });
 const binaries: Record<string, string> = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
 const engine = values.engine ?? "quickjs";
-if (!binaries[engine]) throw new Error(`unknown engine ${engine}`);
+const spiderMonkey = engine === "spidermonkey";
+if (!spiderMonkey && !binaries[engine]) throw new Error(`unknown engine ${engine}`);
+if (spiderMonkey && (!values.wasm || (values.tier !== "interp" && values.tier !== "pbl"))) throw new Error("SpiderMonkey requires explicit --wasm CORE and --tier interp|pbl");
 const root = resolve(import.meta.dirname, "..");
-const wasm = resolve(values.wasm ?? join(root, "dist", binaries[engine]));
+const wasm = resolve(values.wasm ?? join(root, "dist", binaries[engine]!));
 const fixture = join(root, "tests/fixtures/stdout-busy-loop");
 const launcher = process.env.BUN_WASM_LAUNCHER ?? join(process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target", "release/bun-wasm");
+const shell = process.env.BUN_WASM_SHELL;
+const envUtility = process.env.BUN_WASM_ENV_UTILITY;
+if (spiderMonkey && (!process.env.BUN_WASM_LAUNCHER || !shell || !envUtility)) throw new Error("SpiderMonkey requires explicit launcher, shell, and env utility inputs");
 
 // The cleanup owner exists before the scratch directory and the child do.
 let work: string | undefined;
@@ -28,7 +33,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => 
 
 function command(directory: string): string[] {
   if (engine === "browser") return [process.execPath, join(root, "web/scripts/node-host.mjs"), "--wasm", wasm, "--dir", `${directory}::/`, "--", "run", "/index.ts"];
-  return [launcher, "--wasm", wasm, "--engine", `${engine}=${wasm}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, "--dir", `${directory}::/`, "--env", "PWD=/", "--", "run", "/index.ts"];
+  const native = spiderMonkey ? ["--shell", shell!, "--env-utility", envUtility!, "--env", `BUN_WASM_SPIDERMONKEY_TIER=${values.tier}`] : [];
+  return [launcher, "--wasm", wasm, "--engine", `${engine}=${wasm}`, "--env", `PATH=/opt/bun/${engine}/bin:/bin:/usr/bin`, ...native, "--dir", `${directory}::/`, "--env", "PWD=/", "--", "run", "/index.ts"];
 }
 
 async function run(): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -38,7 +44,11 @@ async function run(): Promise<{ code: number | null; stdout: string; stderr: str
   const [executable, ...args] = command(directory);
   let stdout = "";
   let stderr = "";
-  const spawned = spawn(executable!, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+  const spawned = spawn(executable!, args, {
+    cwd: directory,
+    env: spiderMonkey ? { ...process.env, BUN_WASM_SPIDERMONKEY_TIER: values.tier } : undefined,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   child = spawned;
   spawned.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
     stdout += chunk;

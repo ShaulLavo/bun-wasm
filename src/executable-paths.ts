@@ -5,6 +5,7 @@ export const ENGINE_BIN: Readonly<Record<Engine, string>> = {
   browser: "/bin",
   quickjs: "/opt/bun/quickjs/bin",
   jsc: "/opt/bun/jsc/bin",
+  spidermonkey: "/opt/bun/spidermonkey/bin",
 };
 
 export function bunEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {

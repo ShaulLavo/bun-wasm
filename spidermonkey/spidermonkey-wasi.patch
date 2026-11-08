@@ -1,19 +1,20 @@
-diff --git i/js/public/friend/ErrorNumbers.msg w/js/public/friend/ErrorNumbers.msg
-index aadf9370b..bf4e17206 100644
---- i/js/public/friend/ErrorNumbers.msg
-+++ w/js/public/friend/ErrorNumbers.msg
-@@ -204,7 +204,11 @@ MSG_DEF(JSMSG_BUFFER_TOO_SMALL,        0, JSEXN_INTERNALERR, "buffer too small")
- MSG_DEF(JSMSG_BYTECODE_TOO_BIG,        2, JSEXN_INTERNALERR, "bytecode {0} too large (limit {1})")
- MSG_DEF(JSMSG_NEED_DIET,               1, JSEXN_INTERNALERR, "{0} too large")
- MSG_DEF(JSMSG_OUT_OF_MEMORY,           0, JSEXN_INTERNALERR, "out of memory")
+diff --git i/js/src/vm/ErrorMessages.cpp w/js/src/vm/ErrorMessages.cpp
+--- i/js/src/vm/ErrorMessages.cpp
++++ w/js/src/vm/ErrorMessages.cpp
+@@ -10,8 +10,13 @@
+ #include "vm/ErrorObject.h"  // js_ErrorFormatString
+
+ const JSErrorFormatString js_ErrorFormatString[JSErr_Limit] = {
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+MSG_DEF(JSMSG_OVER_RECURSED,           0, JSEXN_RANGEERR, "too much recursion")
++#define MSG_DEF(name, count, exception, format) \
++  {#name, format, count, (name == JSMSG_OVER_RECURSED ? JSEXN_RANGEERR : exception)},
 +#else
- MSG_DEF(JSMSG_OVER_RECURSED,           0, JSEXN_INTERNALERR, "too much recursion")
+ #define MSG_DEF(name, count, exception, format) \
+   {#name, format, count, exception},
 +#endif
- MSG_DEF(JSMSG_TOO_DEEP,                1, JSEXN_INTERNALERR, "{0} nested too deeply")
- MSG_DEF(JSMSG_UNCAUGHT_EXCEPTION,      1, JSEXN_INTERNALERR, "uncaught exception: {0}")
- MSG_DEF(JSMSG_UNKNOWN_FORMAT,          1, JSEXN_INTERNALERR, "unknown bytecode format {0}")
+ #include "js/friend/ErrorNumbers.msg"
+ #undef MSG_DEF
+ };
 diff --git i/js/src/util/NativeStack.cpp w/js/src/util/NativeStack.cpp
 index ab0f9a1b9..c7501b8c4 100644
 --- i/js/src/util/NativeStack.cpp
@@ -160,3 +161,139 @@ index b26a32f2e..691424f65 100644
    aFilename = MOZ_StripRelativeComponents(aFilename);
    MOZ_FUZZING_HANDLE_CRASH_EVENT4("MOZ_CRASH", aFilename, aLine, aReason);
  #if defined(DEBUG) || defined(MOZ_ASAN) || defined(FUZZING)
+--- a/js/src/irregexp/moz.build
++++ b/js/src/irregexp/moz.build
+@@ -59,6 +59,15 @@
+         "imported/special-case.cc",
+         "util/ZoneShimFFI.cpp",
+     ]
++elif CONFIG["OS_TARGET"] == "WASI":
++    CXXFLAGS += ["-DV8_INTL_SUPPORT", "-DBUNWASM_IRREGEXP_ICU4X"]
++    LOCAL_INCLUDES += ["bunwasm-icu/include"]
++    UNIFIED_SOURCES += [
++        "bunwasm-icu/allocator.cpp",
++        "bunwasm-icu/generated/special-case.cc",
++        "bunwasm-icu/icu_subset.cpp",
++        "util/ZoneShimFFI.cpp",
++    ]
+
+ if CONFIG["JS_JITSPEW"]:
+     CXXFLAGS += ["-DV8_ENABLE_REGEXP_DIAGNOSTICS"]
+--- a/js/src/moz.build
++++ b/js/src/moz.build
+@@ -342,6 +342,8 @@
+         "builtin/intl/locale_glue",
+         "irregexp/properties_glue",
+     ]
++elif CONFIG["OS_TARGET"] == "WASI":
++    DIRS += ["irregexp/properties_glue"]
+
+ CXXFLAGS += CONFIG["MOZ_ZLIB_CFLAGS"]
+
+--- a/js/src/irregexp/imported/regexp-parser.cc
++++ b/js/src/irregexp/imported/regexp-parser.cc
+@@ -2148,6 +2148,9 @@
+ namespace {
+
+ bool IsExactPropertyAlias(const char* property_name, UProperty property) {
++#ifdef BUNWASM_IRREGEXP_ICU4X
++  return bunsm_icu_is_exact_property_alias(property_name, property);
++#else
+   const char* short_name = u_getPropertyName(property, U_SHORT_PROPERTY_NAME);
+   if (short_name != nullptr && strcmp(property_name, short_name) == 0) {
+     return true;
+@@ -2159,10 +2162,14 @@
+     if (strcmp(property_name, long_name) == 0) return true;
+   }
+   return false;
++#endif
+ }
+
+ bool IsExactPropertyValueAlias(const char* property_value_name,
+                                UProperty property, int32_t property_value) {
++#ifdef BUNWASM_IRREGEXP_ICU4X
++  return bunsm_icu_is_exact_property_value_alias(property_value_name, property, property_value);
++#else
+   const char* short_name =
+       u_getPropertyValueName(property, property_value, U_SHORT_PROPERTY_NAME);
+   if (short_name != nullptr && strcmp(property_value_name, short_name) == 0) {
+@@ -2176,6 +2183,7 @@
+     if (strcmp(property_value_name, long_name) == 0) return true;
+   }
+   return false;
++#endif
+ }
+
+ void ExtractStringsFromUnicodeSet(const icu::UnicodeSet& set,
+@@ -2254,6 +2262,10 @@
+   UErrorCode ec = U_ZERO_ERROR;
+   icu::UnicodeSet set;
+   set.applyIntPropertyValue(property, property_value, ec);
++#ifdef BUNWASM_IRREGEXP_ICU4X
++  if (U_FAILURE(ec)) {
++#else
+   if (U_FAILURE(ec) || set.isEmpty()) {
++#endif
+     return ClassSetResult<mode>::Failure();
+   }
+--- a/js/src/builtin/String.cpp
++++ b/js/src/builtin/String.cpp
+@@ -673,6 +673,21 @@
+  *
+  * Unicode 9.0, §3.13 Default Case Algorithms
+  */
++#if JS_HAS_INTL_API
++using FinalSigmaCaseProperties = mozilla::intl::String;
++#elif defined(__wasi__) && defined(BUNWASM_EMBED)
++// bun-wasm: ICU4X Cased and Case_Ignorable from the side's Unicode glue.
++extern "C" bool bunsm_ucd_is_cased(uint32_t codePoint);
++extern "C" bool bunsm_ucd_is_case_ignorable(uint32_t codePoint);
++struct FinalSigmaCaseProperties {
++  static bool IsCased(char32_t c) { return bunsm_ucd_is_cased(c); }
++  static bool IsCaseIgnorable(char32_t c) {
++    return bunsm_ucd_is_case_ignorable(c);
++  }
++};
++#  define BUNWASM_FINAL_SIGMA_ICU4X
++#endif
++
+ static char16_t Final_Sigma(const char16_t* chars, size_t length,
+                             size_t index) {
+   MOZ_ASSERT(index < length);
+@@ -680,7 +695,7 @@
+   MOZ_ASSERT(unicode::ToLowerCase(unicode::GREEK_CAPITAL_LETTER_SIGMA) ==
+              unicode::GREEK_SMALL_LETTER_SIGMA);
+
+-#if JS_HAS_INTL_API
++#if JS_HAS_INTL_API || defined(BUNWASM_FINAL_SIGMA_ICU4X)
+   // Tell the analysis the BinaryProperty.contains function pointer called by
+   // mozilla::intl::String::Is{CaseIgnorable, Cased} cannot GC.
+   JS::AutoSuppressGCAnalysis nogc;
+@@ -700,11 +715,11 @@
+     // Ignore any characters with the property Case_Ignorable.
+     // NB: We need to skip over all Case_Ignorable characters, even when
+     // they also have the Cased binary property.
+-    if (mozilla::intl::String::IsCaseIgnorable(codePoint)) {
++    if (FinalSigmaCaseProperties::IsCaseIgnorable(codePoint)) {
+       continue;
+     }
+
+-    precededByCased = mozilla::intl::String::IsCased(codePoint);
++    precededByCased = FinalSigmaCaseProperties::IsCased(codePoint);
+     break;
+   }
+   if (!precededByCased) {
+@@ -726,11 +741,11 @@
+     // Ignore any characters with the property Case_Ignorable.
+     // NB: We need to skip over all Case_Ignorable characters, even when
+     // they also have the Cased binary property.
+-    if (mozilla::intl::String::IsCaseIgnorable(codePoint)) {
++    if (FinalSigmaCaseProperties::IsCaseIgnorable(codePoint)) {
+       continue;
+     }
+
+-    followedByCased = mozilla::intl::String::IsCased(codePoint);
++    followedByCased = FinalSigmaCaseProperties::IsCased(codePoint);
+     break;
+   }
+   if (!followedByCased) {

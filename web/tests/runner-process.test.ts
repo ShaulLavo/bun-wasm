@@ -1,4 +1,6 @@
 import { fixtureModule } from "./process-module-fixture.ts";
+import { prepareProgram } from "../../src/assets.ts";
+import { quickjsPair } from "../../tests/package/quickjs-plan-fixture.ts";
 import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
@@ -1026,4 +1028,28 @@ test("a source-unknown compiled root fails before admission or worker dispatch",
     expect(admission).not.toHaveBeenCalled();
     expect(state.worker.terminated).toBe(1);
   } finally { admission.mockRestore(); await state.dispose(); }
+});
+
+test("explicit SpiderMonkey browser roots reuse the selected pair for engine-qualified children", async () => {
+  const selected = await prepareProgram({ kind: "spidermonkey", ...quickjsPair("spidermonkey") });
+  const programs = new Map<string, Parameters<ReturnType<typeof processRuntimeFixture>["registerProgram"]>[1]>();
+  const state = isolatedRoot(true, "spidermonkey", {}, ["-e", "0"], runtime => {
+    const register = runtime.registerProgram.bind(runtime);
+    runtime.registerProgram = (path, program) => { programs.set(path, program); return register(path, program); };
+  }, selected);
+  try {
+    await state.ready;
+    expect(state.request.engine).toBe("spidermonkey");
+    expect(state.request.module).toBe(selected);
+    expect(state.request.env.PATH?.split(":")[0]).toBe("/opt/bun/spidermonkey/bin");
+    for (const command of ["bun", "node", "nodejs"]) {
+      const path = `/opt/bun/spidermonkey/bin/${command}`;
+      expect(programs.get(path)?.module).toBe(selected);
+      expect(programs.get(path)?.adapter).toBe("bun:spidermonkey");
+      expect(await state.runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
+    }
+    expect(programs.get("/bin/bun")?.module).not.toBe(selected);
+    state.worker.exit(0);
+    expect(await state.run.done).toEqual({ code: 0 });
+  } finally { await state.dispose(); }
 });

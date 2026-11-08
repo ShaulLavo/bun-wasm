@@ -10,7 +10,7 @@ const runner = readFileSync(new URL("../../scripts/app-matrix/run.mjs", import.m
 const start = runner.indexOf("  artifacts = Object.fromEntries(options.engines.map(engine => {");
 const end = runner.indexOf("  if (options.guestReceipt) {", start);
 if (start < 0 || end < 0) throw new Error("Missing matrix staging source boundary");
-const stage = new Function("root", "scratch", "options", "wasmName", "readFileSync", "writeFileSync", "join", "sha256", "programKind", "programProfile", "verifyProgramSide", `let artifacts;\n${runner.slice(start, end)}\nreturn artifacts;`);
+const stage = new Function("root", "scratch", "options", "wasmName", "readFileSync", "writeFileSync", "join", "sha256", "programKind", "programProfile", "verifyProgramSide", "censusSelection", `let artifacts;\n${runner.slice(start, end)}\nreturn artifacts;`);
 const names = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
@@ -79,7 +79,7 @@ test("matrix source playground union and provenance include every selected fixed
     const companions = runner.split("\n").find(line => line.trimStart().startsWith("companions: "));
     if (!line || !companions) throw new Error("Missing matrix fingerprint/provenance source");
     const observed: unknown[] = [];
-    new Function("options", "artifacts", "wasmName", "playgroundBuilds", "verifyPlaygroundBuilds", line)(
+    new Function("options", "artifacts", "wasmName", "playgroundBuilds", "verifyPlaygroundBuilds", "censusSelection", "programProfile", line)(
       { product: true, hosts: ["playground"], engines: ["quickjs", "jsc"] }, artifacts, names, {}, (_build: unknown, expected: unknown) => observed.push(expected));
     const expected: Record<string, string> = {};
     const provenance: Record<string, unknown> = {};

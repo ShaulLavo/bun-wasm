@@ -1,5 +1,5 @@
 import { captureProgramInputs, inputProfile, parseProgramReceipt, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
-import { importedMemory, parseProgramFiles, programKind, programKindForBuild, programProfile, sharedGroupPair, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { importedMemory, isSupportedPairedEngine, parseProgramFiles, programKind, programKindForBuild, programProfile, sharedGroupPair, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
 import { parseProgramProfile, verifySharedSysroot, verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
@@ -101,6 +101,7 @@ async function receiptProgram(options: SourceOptions, bytes: Uint8Array, directo
   checkProfile(options.build, profile);
   const program = await programIdentity(options.build, bytes, directory, profile);
   if (program.kind === "single") return { program };
+  if (!isSupportedPairedEngine(program.kind)) throw new Error(`Unsupported normal guest receipt engine: ${program.kind}`);
   const sidePath = join(directory, programProfile(program.kind).side);
   const current = await captureProgramInputs(options, program.kind, undefined, profile);
   const engineOrigin = verifyProgramReceipt(await Bun.file(sidePath).bytes(), await Bun.file(`${sidePath}.engine.json`).json(), current);

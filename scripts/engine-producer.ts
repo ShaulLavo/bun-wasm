@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt } from "./guest-build-receipt.ts";
 import { hash, sourceOptions } from "./guest-source-manifest.ts";
-import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind.ts";
+import { programProfile, tagProgramCore, type SupportedPairedEngine } from "../src/engine-kind.ts";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests.ts";
 import { parseProgramProfile, sharedGroupEnvironment } from "./src/program-profile.ts";
 import { launcherReceipt, producerArtifactPaths, producerEngines, producerLauncherPath, producerLauncherReceiptPath, producerScopes, producerSelection, producerWebRoot, requireClosureFiles, rejectWithdrawnPublicationPath, verifyManifestLauncher, verifyPublicationBuilds, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
@@ -76,7 +76,7 @@ async function verifyPrograms(current: readonly ProgramInputSnapshot[]): Promise
     await verifyGuestCompanions(receipt, join(output, "dist"));
   }
 }
-async function compose(engine: PairedEngine): Promise<void> {
+async function compose(engine: SupportedPairedEngine): Promise<void> {
   const names = programProfile(engine);
   const options = sourceOptions(repository, sysroot!, engine);
   const captured = await prepareGuestBuildInputs(options, profile);
@@ -121,7 +121,7 @@ function programSmoke(): void {
     if (profile === "split") smoke(engine, "node", ["--no-warnings", join(repository, "web/scripts/node-host.ts"), "--wasm", core, "--", "-e", text], "node");
   }
 }
-function smoke(engine: PairedEngine, executable: string, args: string[], host: string): void {
+function smoke(engine: SupportedPairedEngine, executable: string, args: string[], host: string): void {
   const result = spawnSync(executable, args, { cwd: repository, env: { ...environment, BUN_WASM_SCRATCH_ROOT: join(output, "smoke-tmp") }, encoding: "utf8", timeout: 120000 });
   writeFileSync(join(output, host === "launcher" ? `${engine}-smoke.log` : `${engine}-${host}-smoke.log`), result.stdout + result.stderr);
   if (result.error) throw result.error;

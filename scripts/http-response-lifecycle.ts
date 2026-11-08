@@ -5,9 +5,28 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { stopProcessGroup } from "../web/tests/next-framework-process.ts";
 
+type SpiderMonkeyTier = "interp" | "pbl";
+
+function optionValue(args: readonly string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  assert.ok(value && !value.startsWith("--"), `${name} needs a value`);
+  return value;
+}
+
+function spiderMonkeyTier(value: string | undefined): SpiderMonkeyTier {
+  assert.ok(value === "interp" || value === "pbl", "SpiderMonkey requires --tier interp or pbl");
+  return value;
+}
+
 const engine = process.argv[2];
-assert.ok(engine === "quickjs" || engine === "jsc" || engine === "browser");
+assert.ok(engine === "quickjs" || engine === "jsc" || engine === "browser" || engine === "spidermonkey");
 const output = resolve(process.argv[3] ?? `/work/tmp/bun-wasm-http-lifecycle-${engine}`);
+const extra = process.argv.slice(4);
+const requestedWasm = optionValue(extra, "--wasm");
+const tier = engine === "spidermonkey" ? spiderMonkeyTier(optionValue(extra, "--tier")) : undefined;
+if (engine === "spidermonkey") assert.ok(requestedWasm, "SpiderMonkey requires explicit --wasm CORE");
 await mkdir(output, { recursive: true });
 const listener = createServer();
 await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
@@ -16,12 +35,27 @@ assert.ok(address && typeof address === "object");
 const port = address.port;
 await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
 const root = resolve(import.meta.dir, "..");
-const wasm = resolve(root, "dist", engine === "browser" ? "bun-browser.wasm" : engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm");
+const wasm = resolve(requestedWasm ?? resolve(root, "dist", engine === "browser" ? "bun-browser.wasm" : engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm"));
 const launcher = engine === "browser" ? "node" : process.env.BUN_WASM_LAUNCHER;
-assert.ok(launcher, "Set BUN_WASM_LAUNCHER to the native launcher for QuickJS and JSC networking");
+assert.ok(launcher, "Set BUN_WASM_LAUNCHER to the native launcher for QuickJS, JSC, or SpiderMonkey networking");
 const prefix = engine === "browser" ? [resolve(root, "web/scripts/node-host.mjs"), "--net"] : [];
-const args = prefix.concat(["--wasm", wasm, "--dir", root, "--env", `PORT=${port}`, "--", "run", resolve(root, "tests/fixtures/http-response-lifecycle/index.ts")]);
-const child = spawn(launcher, args, { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+const native = engine === "spidermonkey" ? [
+  "--engine", `spidermonkey=${wasm}`,
+  "--shell", process.env.BUN_WASM_SHELL ?? "",
+  "--env-utility", process.env.BUN_WASM_ENV_UTILITY ?? "",
+  "--env", `BUN_WASM_SPIDERMONKEY_TIER=${tier}`,
+] : [];
+if (engine === "spidermonkey") {
+  assert.ok(process.env.BUN_WASM_SHELL, "SpiderMonkey requires explicit BUN_WASM_SHELL");
+  assert.ok(process.env.BUN_WASM_ENV_UTILITY, "SpiderMonkey requires explicit BUN_WASM_ENV_UTILITY");
+}
+const args = prefix.concat(["--wasm", wasm], native, ["--dir", root, "--env", `PORT=${port}`, "--", "run", resolve(root, "tests/fixtures/http-response-lifecycle/index.ts")]);
+const child = spawn(launcher, args, {
+  cwd: root,
+  detached: true,
+  env: engine === "spidermonkey" ? { ...process.env, BUN_WASM_SPIDERMONKEY_TIER: tier } : undefined,
+  stdio: ["ignore", "pipe", "pipe"],
+});
 let log = "";
 child.stdout.on("data", chunk => { log += String(chunk); });
 child.stderr.on("data", chunk => { log += String(chunk); });

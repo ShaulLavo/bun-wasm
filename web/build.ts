@@ -88,6 +88,12 @@ const jscEngineSource = join(dirname(jscSource), "jsc-engine.wasm");
 if (existsSync(jscSource) && !(await copyWasm(jscEngineSource, "jsc-engine.wasm"))) {
   throw new Error(`JSC core requires its matching side module: ${jscEngineSource}`);
 }
+if (process.env.SPIDERMONKEY_WASM) {
+  const source = resolve(here, process.env.SPIDERMONKEY_WASM);
+  if (!(await copyWasm(source, "bun-spidermonkey.wasm"))) throw new Error(`SpiderMonkey core is missing: ${source}`);
+  const side = join(dirname(source), "spidermonkey-engine.wasm");
+  if (!(await copyWasm(side, "spidermonkey-engine.wasm"))) throw new Error(`SpiderMonkey core requires its matching side module: ${side}`);
+}
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);

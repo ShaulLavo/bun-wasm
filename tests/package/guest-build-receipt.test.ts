@@ -1,4 +1,4 @@
-import { programKindForBuild, programProfile } from "../../src/engine-kind";
+import { isSupportedPairedEngine, programKindForBuild, programProfile } from "../../src/engine-kind";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -166,7 +166,8 @@ for (const build of ["quickjs", "quickjs-minimal", "tools", "jsc"] as const) tes
     const artifact = join(options.repository, "dist", guestBuilds[build].artifact);
     const kind = programKindForBuild(build);
     if (kind === "single") await writeFile(artifact, wasm);
-    else await stageProgramFixture(selected, artifact, kind);
+    else if (isSupportedPairedEngine(kind)) await stageProgramFixture(selected, artifact, kind);
+    else throw new Error(`Unsupported normal receipt fixture engine: ${kind}`);
     const inputs = await prepareGuestBuildInputs(selected);
     const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
     expect(receipt.sourceManifest.build).toBe(build);

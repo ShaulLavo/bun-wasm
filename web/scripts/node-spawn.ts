@@ -1,4 +1,4 @@
-import { pairedEngines } from "../../src/engine-kind.ts";
+import { pairedEngineKinds } from "../../src/engine-kind.ts";
 import { isToolCommand } from "../src/tool-command.ts";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
@@ -61,7 +61,7 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
 export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}): ExecutableRegistry {
   const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path));
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
-  for (const engine of pairedEngines) {
+  for (const engine of pairedEngineKinds) {
     const module = engines[engine];
     if (module) for (const name of ["bun", "node", "nodejs"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
   }
@@ -77,7 +77,7 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
-    for (const engine of pairedEngines) {
+    for (const engine of pairedEngineKinds) {
       if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
       for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(bin, name), new Uint8Array());

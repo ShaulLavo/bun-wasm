@@ -13,6 +13,7 @@ import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
 import { observePreviewPaths, readPreviewPaths, readPreviewPorts } from "./preview-paths.ts";
 import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-environment.ts";
+import { playgroundURL as measurementURL, servedProgram } from "../engine-playground-driver.ts";
 import { stopMatrixServer } from "./keyboard-stop.ts";
 
 export function earlyServerExit(command, stage) {
@@ -204,7 +205,7 @@ export async function browserHost({ root, options, launch, stop }) {
     return { ...await checkCommand(command, runResult, path => readGuest(page, path)), timings };
   }
 
-  async function runApp({ app, engine, registry, record }) {
+  async function runApp({ app, engine, registry, record, measurement = undefined, observePage = undefined }) {
     const context = await (await getBrowser()).newContext({ serviceWorkers: "allow" });
     let page;
     const external = [];
@@ -221,12 +222,17 @@ export async function browserHost({ root, options, launch, stop }) {
       const base = await serve();
       const loading = performance.now();
       const diagnostics = browserDiagnostics(page);
-      const playgroundURL = new URL(base);
+      const verifyServed = measurement ? servedProgram(context, measurement, base) : null;
+      const playgroundURL = new URL(measurement ? measurementURL(base, measurement) : base);
       playgroundURL.searchParams.set("engine", engine);
       playgroundURL.searchParams.set("prompt", "off");
       await page.goto(playgroundURL.href);
       const status = await ready(page);
       if (!status.includes("ready")) throw await engineLoadFailure(page, engine, status, diagnostics, run);
+      if (verifyServed) await verifyServed(page);
+      if (observePage) observePage({ app: app.id, url: page.url(), ...await page.evaluate(() => ({
+        timeOrigin: performance.timeOrigin, builds: globalThis.__bunwasmBuilds,
+      })) });
       const engineReadyMs = since(loading);
       if (options.previewOrigins) await page.evaluate(observePreviewPaths);
       await page.evaluate(resetBrowserProject);

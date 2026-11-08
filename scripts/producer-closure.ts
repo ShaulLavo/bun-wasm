@@ -1,6 +1,6 @@
 import { accessSync, constants, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { pairedEngines, programProfile, type Engine, type PairedEngine } from "../src/engine-kind.ts";
+import { pairedEngines, programProfile, type SupportedPairedEngine } from "../src/engine-kind.ts";
 import type { ProgramProfile } from "./src/program-profile.ts";
 import { DELIVERY_RECORDS, EXECUTABLE_ROLES, type HandoffRole } from "./c1/contract.ts";
 import waffleRelease from "./waffle-release-inputs.json";
@@ -14,12 +14,12 @@ interface LauncherReceipt {
   readonly artifact: { readonly sha256: string; readonly bytes: number };
 }
 const producerFeatures = ["engine-split", "bun-transpiler", "bun-build"];
-const groupEngines: readonly PairedEngine[] = ["quickjs"];
-export function producerEngines(profile: ProgramProfile): readonly PairedEngine[] {
+const groupEngines: readonly SupportedPairedEngine[] = ["quickjs"];
+export function producerEngines(profile: ProgramProfile): readonly SupportedPairedEngine[] {
   return profile === "split" ? pairedEngines : groupEngines;
 }
-export function producerScopes(profile: ProgramProfile): readonly ("core" | PairedEngine)[] {
-  const scopes: ("core" | PairedEngine)[] = ["core"];
+export function producerScopes(profile: ProgramProfile): readonly ("core" | SupportedPairedEngine)[] {
+  const scopes: ("core" | SupportedPairedEngine)[] = ["core"];
   return scopes.concat(producerEngines(profile));
 }
 export function producerSelection(profile: ProgramProfile) {
@@ -61,8 +61,8 @@ export const publicationGuestPaths = {
   "source-cache-browser": "browser/source-cache/bun-browser.wasm",
   tools: "tools/bun-tools.wasm",
 } as const;
-const publicationPaired: readonly Engine[] = pairedEngines;
-export const publicationEngines: readonly Engine[] = publicationPaired.concat(["browser"]);
+const publicationPaired: readonly (SupportedPairedEngine | "browser")[] = pairedEngines;
+export const publicationEngines: readonly (SupportedPairedEngine | "browser")[] = publicationPaired.concat(["browser"]);
 export const publicationAssets: readonly string[] = pairedEngines.flatMap<string>(engine => {
   const profile = programProfile(engine);
   return [profile.core, profile.side];

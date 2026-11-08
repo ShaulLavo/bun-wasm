@@ -169,7 +169,9 @@ impl Runtime {
         let (_, paths) = executables::ENGINE_PATHS
             .iter()
             .find(|(engine, _)| *engine == name)
-            .ok_or_else(|| anyhow::anyhow!("unknown engine {name:?}; expected quickjs or jsc"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown engine {name:?}; expected quickjs, jsc or spidermonkey")
+            })?;
         self.executables.register(paths, module)?;
         Ok(())
     }

@@ -1,0 +1,290 @@
+{
+  "observed": "2026-11-01",
+  "scope": "Read-only source evidence. No execution or acceptance.",
+  "wrapper_default_head": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+  "wrapper_engine_pin": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+  "fork_default_head": "f08e4aa189eb02015568aea1085dab77a187c330",
+  "mozilla_pin": "a5df22d986d4b626f771b4f8885241941601c35c",
+  "mozilla_observed_main": "e924f94175311819d7b549a732d0d8ee1263b31d",
+  "files": [
+    {
+      "id": "wrapper-pin",
+      "repository": "HeyPuter/firefox-wasm",
+      "commit": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+      "path": "Makefile",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox-wasm/bc69aaa5e2c5388bcf93a43b975b490bb940f4c0/Makefile",
+      "sha256": "571bfe9c7c70e4c7e70fe13d55e43ffe9e5e03b84673dc89417ff25f7db9f91d",
+      "bytes": 13940,
+      "lines": 265
+    },
+    {
+      "id": "fork-front-end",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/wasm/WasmJitWarp.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/wasm/WasmJitWarp.cpp",
+      "sha256": "75c363a91c40410feb917db1acfbb3f8d720f2a75c40bc73bef4151827f28457",
+      "bytes": 24353,
+      "lines": 526
+    },
+    {
+      "id": "fork-backend",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/wasm/WasmJitBackend.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/wasm/WasmJitBackend.cpp",
+      "sha256": "60ff7b3f247ea312ec7de8f0579fb38e1915d61b92f5a31b96b29b05d6ff1562",
+      "bytes": 817252,
+      "lines": 14425
+    },
+    {
+      "id": "fork-runtime",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/wasm/WasmJitRuntime.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/wasm/WasmJitRuntime.cpp",
+      "sha256": "370a9e8e0483951242465899e395018d04315751c49eed1a1fede10d137bb697",
+      "bytes": 270685,
+      "lines": 5301
+    },
+    {
+      "id": "browser-bridge",
+      "repository": "HeyPuter/firefox-wasm",
+      "commit": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+      "path": "gecko.js/lib/wasm-host-bridge.js",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox-wasm/bc69aaa5e2c5388bcf93a43b975b490bb940f4c0/gecko.js/lib/wasm-host-bridge.js",
+      "sha256": "e2a4efaf733f1df506b59af6a5994fec10062ecb2d43830d1c55a7ee821f13fa",
+      "bytes": 21291,
+      "lines": 453
+    },
+    {
+      "id": "browser-link",
+      "repository": "HeyPuter/firefox-wasm",
+      "commit": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+      "path": "gecko.js/build-lib.sh",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox-wasm/bc69aaa5e2c5388bcf93a43b975b490bb940f4c0/gecko.js/build-lib.sh",
+      "sha256": "7375a0df5e12d06230e58a08e687fe423b75e2465b5e471e55636b16adebbad7",
+      "bytes": 11885,
+      "lines": 196
+    },
+    {
+      "id": "node-link",
+      "repository": "HeyPuter/firefox-wasm",
+      "commit": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+      "path": "bench/spidermonkey.js/build.sh",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox-wasm/bc69aaa5e2c5388bcf93a43b975b490bb940f4c0/bench/spidermonkey.js/build.sh",
+      "sha256": "bd2efbd04d936786fb577dc3888a546e2b80364c03dc26417aac68be6b004dc6",
+      "bytes": 3560,
+      "lines": 80
+    },
+    {
+      "id": "fork-limits",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/wasm/WasmJitBackend.h",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/wasm/WasmJitBackend.h",
+      "sha256": "2f270992d4aeb63ae2120ac10d4a51987e9635bc84b1a0aa0b5659f8c16b277c",
+      "bytes": 39265,
+      "lines": 477
+    },
+    {
+      "id": "fork-pbl",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/vm/PortableBaselineInterpret.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/vm/PortableBaselineInterpret.cpp",
+      "sha256": "29ed896697a70b47e676752b90a974cf2ccc700967758f9bfeaaaa4f504a2f8d",
+      "bytes": 362525,
+      "lines": 9907
+    },
+    {
+      "id": "fork-roots",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/gc/RootMarking.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/gc/RootMarking.cpp",
+      "sha256": "c173786c7bb40411e25856da78cbd8ca28bb1b647e4fce8c7a04b370be0f4b37",
+      "bytes": 17030,
+      "lines": 498
+    },
+    {
+      "id": "current-fork-backend",
+      "repository": "HeyPuter/firefox",
+      "commit": "f08e4aa189eb02015568aea1085dab77a187c330",
+      "path": "js/src/wasm/WasmJitBackend.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/f08e4aa189eb02015568aea1085dab77a187c330/js/src/wasm/WasmJitBackend.cpp",
+      "sha256": "ccf25b12743f0d636ef56fab2af6f8ab713b6ee0d49d2cdaa9edee30fb6c7d0e",
+      "bytes": 820032,
+      "lines": 14462
+    },
+    {
+      "id": "current-fork-runtime",
+      "repository": "HeyPuter/firefox",
+      "commit": "f08e4aa189eb02015568aea1085dab77a187c330",
+      "path": "js/src/wasm/WasmJitRuntime.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/f08e4aa189eb02015568aea1085dab77a187c330/js/src/wasm/WasmJitRuntime.cpp",
+      "sha256": "77d87ea41f2c1a16a940be22a98791d8b40619fd705b8f3e6f4850ca66ada2d6",
+      "bytes": 279817,
+      "lines": 5458
+    },
+    {
+      "id": "pin-trampoline",
+      "repository": "mozilla-firefox/firefox",
+      "commit": "a5df22d986d4b626f771b4f8885241941601c35c",
+      "path": "js/src/jit/wasm32/Trampoline-wasm32.cpp",
+      "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/a5df22d986d4b626f771b4f8885241941601c35c/js/src/jit/wasm32/Trampoline-wasm32.cpp",
+      "sha256": "6c397cd746909e5b8805c86d1894f0c2270b10011166e4504b496a26ffac7fbb",
+      "bytes": 1146,
+      "lines": 41
+    },
+    {
+      "id": "pin-codegen",
+      "repository": "mozilla-firefox/firefox",
+      "commit": "a5df22d986d4b626f771b4f8885241941601c35c",
+      "path": "js/src/jit/wasm32/CodeGenerator-wasm32.cpp",
+      "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/a5df22d986d4b626f771b4f8885241941601c35c/js/src/jit/wasm32/CodeGenerator-wasm32.cpp",
+      "sha256": "c0166e929e2f4ba31acdd4d9e040c4d9d88be6fd4f10f4951567ef1186027b7c",
+      "bytes": 8239,
+      "lines": 213
+    },
+    {
+      "id": "pin-pbl",
+      "repository": "mozilla-firefox/firefox",
+      "commit": "a5df22d986d4b626f771b4f8885241941601c35c",
+      "path": "js/src/vm/PortableBaselineInterpret.cpp",
+      "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/a5df22d986d4b626f771b4f8885241941601c35c/js/src/vm/PortableBaselineInterpret.cpp",
+      "sha256": "d08159ae44b5464213b10dcfec655eb25eb830aeb9f8fbd73c3eadaa8d8d4865",
+      "bytes": 328953,
+      "lines": 9361
+    },
+    {
+      "id": "pin-ion",
+      "repository": "mozilla-firefox/firefox",
+      "commit": "a5df22d986d4b626f771b4f8885241941601c35c",
+      "path": "js/src/jit/Ion.cpp",
+      "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/a5df22d986d4b626f771b4f8885241941601c35c/js/src/jit/Ion.cpp",
+      "sha256": "f1447075a11fe7d46236928d5b868330fa8a957e5cfa95e5ddd07027a316d6b8",
+      "bytes": 89218,
+      "lines": 2817
+    },
+    {
+      "id": "upstream-trampoline",
+      "repository": "mozilla-firefox/firefox",
+      "commit": "e924f94175311819d7b549a732d0d8ee1263b31d",
+      "path": "js/src/jit/wasm32/Trampoline-wasm32.cpp",
+      "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/e924f94175311819d7b549a732d0d8ee1263b31d/js/src/jit/wasm32/Trampoline-wasm32.cpp",
+      "sha256": "6c397cd746909e5b8805c86d1894f0c2270b10011166e4504b496a26ffac7fbb",
+      "bytes": 1146,
+      "lines": 41
+    },
+    {
+      "id": "current-fork-front-end",
+      "repository": "HeyPuter/firefox",
+      "commit": "f08e4aa189eb02015568aea1085dab77a187c330",
+      "path": "js/src/wasm/WasmJitWarp.cpp",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/f08e4aa189eb02015568aea1085dab77a187c330/js/src/wasm/WasmJitWarp.cpp",
+      "sha256": "e9028d3dc113d429d480555056915a84db14f74596d4dc152aa1863247476a3b",
+      "bytes": 26054,
+      "lines": 547,
+      "observed_functions": [
+        "WJWarpCompile",
+        "AssembleAndInstall"
+      ]
+    },
+    {
+      "id": "fork-backend-header",
+      "repository": "HeyPuter/firefox",
+      "commit": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+      "path": "js/src/wasm/WasmJitBackend.h",
+      "url": "https://raw.githubusercontent.com/HeyPuter/firefox/2e1e835a5da5907e5ceef19aade58a7493f1e34d/js/src/wasm/WasmJitBackend.h",
+      "sha256": "2f270992d4aeb63ae2120ac10d4a51987e9635bc84b1a0aa0b5659f8c16b277c",
+      "bytes": 39265,
+      "lines": 477,
+      "observed_constants": [
+        "kWJMaxArgs",
+        "kWJEHABI",
+        "kWJCallRootsSize"
+      ]
+    }
+  ],
+  "local_experimental_profile": [
+    {
+      "commit": "1a53e2123e4876be671a9a03eb025ae569795001",
+      "path": "spidermonkey/mozconfig.in",
+      "sha256": "aa89466248cba5f319c628fb498b8da641cdd0449161e2cf55ed6d137cd52402"
+    },
+    {
+      "commit": "1a53e2123e4876be671a9a03eb025ae569795001",
+      "path": "spidermonkey/native-profile.ts",
+      "sha256": "c98c7043975fb40f780d516afd1cf623f9623ede00b8ca908c411c62a9f89fe3"
+    }
+  ],
+  "followup_evidence": {
+    "source_revision_checked": "f08e4aa189eb02015568aea1085dab77a187c330",
+    "primary_source_map": [
+      {
+        "path": "js/src/wasm/WasmJitWarp.cpp",
+        "revision": "f08e4aa189eb02015568aea1085dab77a187c330",
+        "functions": [
+          "WJWarpCompile",
+          "AssembleAndInstall"
+        ],
+        "lines": "98-301",
+        "fact": "Warp snapshot/build/OptimizeMIR, MIR-to-Wasm emission, host compile/instantiate, and shared-table install form one concrete call path; failures return -1."
+      },
+      {
+        "path": "gecko.js/lib/wasm-host-bridge.js",
+        "revision": "bc69aaa5e2c5388bcf93a43b975b490bb940f4c0",
+        "functions": [
+          "wasmhost_instantiate",
+          "wasmhost_table_call",
+          "wasmhost_call",
+          "wasmhost_guest_mem_objid",
+          "wasmhost_jit_table_set"
+        ],
+        "lines": "92-180,239-318,390-450",
+        "fact": "Host WebAssembly objects are registry-backed; call marshalling converts through Number and no release operation appears in the bridge."
+      },
+      {
+        "path": "js/src/wasm/WasmJitRuntime.cpp",
+        "revision": "f08e4aa189eb02015568aea1085dab77a187c330",
+        "functions": [
+          "WasmJitInvalidateAll",
+          "WasmJitPreCall",
+          "WasmJitObserveCall",
+          "WasmJitDrainDeferred",
+          "WJTraceRoots"
+        ],
+        "lines": "648-749,1015-1052,5232-5314",
+        "fact": "Warmup, deferred compilation, invalidation, root tracing, and deopt state are explicit runtime contracts; invalidation leaves in-flight frames and has no host module/table release."
+      },
+      {
+        "path": "js/src/wasm/WasmJitBackend.cpp",
+        "revision": "f08e4aa189eb02015568aea1085dab77a187c330",
+        "functions": [
+          "EmitEffect"
+        ],
+        "lines": "10822-10825",
+        "fact": "InterruptCheck and CheckOverRecursed are skipped; throw/bail nodes use deopt paths."
+      },
+      {
+        "path": "js/src/wasm/WasmJitBackend.h",
+        "revision": "2e1e835a5da5907e5ceef19aade58a7493f1e34d",
+        "functions": [
+          "WJEmitBody"
+        ],
+        "lines": "28-35,429-455",
+        "fact": "Emitter returns false for unsupported MIR; the register ABI caps actual arguments at eight and kWJEHABI remains false."
+      }
+    ],
+    "proof_gates": [
+      "Bridge-only f64 module proves host compile/instantiate, guest-memory identity, shared-table call, and no signature trap.",
+      "Exact-pinned real Warp numeric leaf proves installed module and PBL-equivalent repeated calls.",
+      "One type guard proves one side-effect-preserving WasmJitResumeViaPBL fallback.",
+      "Moving-GC/deopt stress proves traced and relocated roots remain correct.",
+      "Interrupt loop must terminate under an injected interrupt; the current skip is a known stop condition.",
+      "Lifecycle check must bound module handles and table slots across invalidation and teardown."
+    ],
+    "status": "Source evidence strengthens the original substantial-backend-port verdict. No implementation, execution, performance, or acceptance claim."
+  }
+}

@@ -1,17 +1,18 @@
 import { recordProgramMemory } from "../../src/program-memory.ts";
-import { pairedEngines, programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
+import { pairedEngineKinds, programKind, programProfile, type Engine, type PairedEngine } from "../../src/engine-kind.ts";
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
-import type { Engine } from "./bun-executor";
+import { observeCompile, withoutCompileSpans } from "./compile-observer";
 
-export type { Engine } from "./bun-executor";
+export type { Engine } from "../../src/engine-kind.ts";
 
 /** What each `?engine=` loads. The browser engine runs the program in the page's own JS engine. */
 export const ENGINES: Record<Engine, { name: string; wasm: string; script: string }> = {
   quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
+  spidermonkey: { name: "SpiderMonkey (experimental)", wasm: "bun-spidermonkey.wasm", script: "an external SpiderMonkey guest build described in docs/spidermonkey-host-plumbing.md" },
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
 };
@@ -34,7 +35,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const requested = new URL(url, location.href);
   const name = requested.pathname;
   if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  for (const kind of pairedEngines) {
+  for (const kind of pairedEngineKinds) {
     const standard = new URL(ENGINES[kind].wasm, location.href);
     if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
   }
@@ -103,6 +104,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   // Compilation consumes the decompressed stream while the remaining bytes are still arriving.
   const compiling = performance.now();
   const response = new Response(body, { headers: { "content-type": "application/wasm" } });
+  // Streaming completion includes download and decompression waits. No direct compile span is available.
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
   const kind = programKind(module);
@@ -119,7 +121,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
 async function compileCached(response: Response, key: string) {
   try {
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const module = await WebAssembly.compile(bytes);
+    const module = await observeCompile("core", () => WebAssembly.compile(bytes));
     recordProgramMemory(module, bytes);
     return { bytes, module };
   } catch {
@@ -136,9 +138,16 @@ async function loadPaired(url: string, expected: PairedEngine, progress: (text: 
 
 async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
   const profile = programProfile(kind);
+  if (kind === "spidermonkey" && !verifyBuild) {
+    const build = assetBuild(profile.core);
+    if (build === null) throw new Error(`${profile.core}: build manifest fingerprint is missing`);
+    await verifyArtifact(profile.core, core.bytes, build);
+    core = { bytes: core.bytes, build };
+    verifyBuild = true;
+  }
   const sideUrl = new URL(profile.side, new URL(url, location.href));
   const side = await loadVerifiedFile(sideUrl.href, profile.side, progress, verifyBuild);
-  const module = await prepareProgram({ kind, core: core.bytes, side: side.bytes });
+  const module = await withoutCompileSpans(() => prepareProgram({ kind, core: core.bytes, side: side.bytes }));
   return { module, size: core.bytes.length + side.bytes.length, build: core.build };
 }
 
