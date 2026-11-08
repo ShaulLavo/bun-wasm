@@ -14,7 +14,7 @@ test("template selection uses the same catalog as the dropdown and build", () =>
   expect(selectTemplate(null)).toBe(defaultTemplate);
   expect(selectTemplate("unknown")).toBe(defaultTemplate);
   for (const template of templates) expect(selectTemplate(template.id)).toBe(template);
-  expect(templates.map(template => template.id)).toEqual(["react", "next", "next-app", "vanilla"]);
+  expect(templates.map(template => template.id)).toEqual(["react", "next", "next-app", "vanilla", "nuxt", "sveltekit", "astro", "react-router", "solidstart", "tanstack-start", "angular", "qwik", "vite-vue", "vite-svelte", "hono"]);
   expect(templates.map(template => template.label)).not.toContain("Vite");
 });
 
