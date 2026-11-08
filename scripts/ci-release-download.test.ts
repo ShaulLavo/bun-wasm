@@ -85,6 +85,8 @@ test("CI callers use the downloader and consume a completed cache rather than ra
   expect(workflow).toContain("Publish the completed dependency cache before consumer jobs");
   expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
   expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
+  const cache = await Bun.file(new URL("../.github/actions/release-downloads/action.yml", import.meta.url)).text();
+  expect(cache.match(/release-assets-v1-.*?\$\{\{ github.job \}\}-/g)).toHaveLength(2);
   const native = await Bun.file(new URL("./waffle-release-inputs.ts", import.meta.url)).text();
   expect(native.match(/download: Download = releaseDownload/g)).toHaveLength(2);
   const sccache = await Bun.file(new URL("../.github/actions/rust-build-cache/action.yml", import.meta.url)).text();

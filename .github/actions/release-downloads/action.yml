@@ -8,6 +8,6 @@ runs:
     - uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/github-release-assets
-        key: release-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/bun.lock', 'scripts/waffle-release-inputs.json', 'scripts/ci-*.ts', '.github/workflows/ci.yml', '.github/actions/rust-build-cache/action.yml') }}
+        key: release-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/bun.lock', 'scripts/waffle-release-inputs.json', 'scripts/ci-*.ts', '.github/workflows/ci.yml', '.github/actions/rust-build-cache/action.yml') }}
         restore-keys: |
-          release-assets-v1-${{ runner.os }}-${{ runner.arch }}-
+          release-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
