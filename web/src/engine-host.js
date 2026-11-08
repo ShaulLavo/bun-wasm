@@ -1,3 +1,4 @@
+import { installNativeWasmLifetime } from "./native-wasm-lifetime.ts";
 import { createScriptEvaluation } from "./script-evaluation.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
@@ -774,6 +775,7 @@ class EngineHost {
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
     this.installContextHooks(hidden);
+    installNativeWasmLifetime(WebAssembly, promise => host.track(promise));
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }

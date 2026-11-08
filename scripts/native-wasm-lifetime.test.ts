@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { installNativeWasmLifetime } from "../web/src/native-wasm-lifetime";
 import { SLOT_NAMES } from "../web/src/net/trampoline";
 import { createContext, runInContext } from "node:vm";
 
@@ -11,7 +12,7 @@ for (const name of ["compile", "compileStreaming", "instantiate", "instantiateSt
   test(`native WebAssembly.${name} keeps the browser host alive until settlement`, async () => {
     const gate = Promise.withResolvers<object>();
     const wasm = { [name]: () => gate.promise };
-    const context = createContext({ WebAssembly: wasm, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
+    const context = createContext({ WebAssembly: wasm, installNativeWasmLifetime, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
     const Host = runInContext(source + "\nEngineHost;", context);
     const host = new Host({ instance: { exports: {} } }, () => {});
     host.internal = {};
