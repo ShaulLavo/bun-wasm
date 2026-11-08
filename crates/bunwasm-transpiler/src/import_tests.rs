@@ -12,6 +12,7 @@ fn prepare(source: &str, path: &str) -> (Transpiled, Vec<String>) {
 
 #[test]
 fn runtime_static_text_requests_include_direct_reexports() {
+    let _guard = PARSER_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for statement in [
         "import page from './page.html' with { type: 'text' }; console.log(page);",
         "export { default as page } from './page.html' with { type: 'text' };",
@@ -34,6 +35,7 @@ fn runtime_static_text_requests_include_direct_reexports() {
 
 #[test]
 fn runtime_dynamic_options_roundtrip_in_preserved_extensions() {
+    let _guard = PARSER_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for path in ["importer.js", "importer.mjs", "importer.cjs"] {
         for args in [
             "'./page.html', { with: { type: 'text' } }",
@@ -58,6 +60,7 @@ fn runtime_dynamic_options_roundtrip_in_preserved_extensions() {
 
 #[test]
 fn runtime_lowering_keeps_default_requests_and_static_grammar_errors() {
+    let _guard = PARSER_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let source = "import ordinary from './page.html'; import page from './page.html' with { type: 'text' }; console.log(ordinary, page);";
     let (out, requests) = prepare(source, "mixed.mjs");
     assert_eq!(requests, ["./page.html"]);

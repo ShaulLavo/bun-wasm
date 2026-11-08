@@ -1019,5 +1019,9 @@ fn format_log(log: &bun_ast::Log, path: &str) -> String {
     out
 }
 
+/// Bun's parser tests share process-wide state, including across test modules.
+#[cfg(test)]
+static PARSER_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod import_tests;
