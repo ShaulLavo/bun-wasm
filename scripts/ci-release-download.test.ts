@@ -114,3 +114,19 @@ test("the supported Bun cache uses a workspace-relative archive path on both run
   expect(workflow).not.toContain("path: ~/.bun/install/cache");
   expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(10);
 });
+
+
+test("release diagnostics preserve machine-readable caller stdout", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bun-wasm-release-stdout-"));
+  try {
+    await Bun.write(join(directory, releaseCacheKey(url)), "archive");
+    const module = new URL("./ci-release-download.ts", import.meta.url).href;
+    const script = `const { releaseDownload } = await import(${JSON.stringify(module)});
+      await (await releaseDownload(${JSON.stringify(url)}, { cache: ${JSON.stringify(directory)}, token: "" })).text();
+      console.log("fixture-input-key");`;
+    const result = Bun.spawnSync([process.execPath, "--eval", script]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("fixture-input-key\n");
+    expect(result.stderr.toString()).toContain("GitHub release cache hit:");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
