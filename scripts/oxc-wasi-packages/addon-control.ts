@@ -123,13 +123,17 @@ function exchange(worker: Worker, prefix: Int32Array) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error("Atomics worker timeout")), 10_000);
     worker.once("error", error => { clearTimeout(deadline); reject(error); });
-    worker.on("message", message => {
-      const result = object(message);
-      if (result.stage === "ready") { Atomics.store(prefix, 0, 7); Atomics.notify(prefix, 0); return; }
-      clearTimeout(deadline);
-      resolve(result);
-    });
+    worker.on("message", memoryWorkerMessage(prefix, deadline, resolve));
   });
+}
+
+function memoryWorkerMessage(prefix: Int32Array, deadline: ReturnType<typeof setTimeout>, resolve: (value: Record<string, unknown>) => void) {
+  return (message: unknown) => {
+    const result = object(message);
+    if (result.stage === "ready") { Atomics.store(prefix, 0, 7); Atomics.notify(prefix, 0); return; }
+    clearTimeout(deadline);
+    resolve(result);
+  };
 }
 
 function growthControl(instance: WebAssembly.Instance, maintained: boolean) {
