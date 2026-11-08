@@ -2,6 +2,7 @@ import { cp, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pinnedBashWeb } from "../bash-web-guests";
 import { preflight, withStagedAssets } from "./preparation";
+import { engines } from "./catalog";
 const delivery = resolve(process.argv[2] ?? "");
 if (!process.argv[2]) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery");
 const manifest: unknown = JSON.parse(await readFile(resolve(delivery, "../delivery-manifest.json"), "utf8"));
@@ -12,11 +13,12 @@ if (await sourcePackage.exited !== 0 || !original || typeof original !== "object
 await withStagedAssets(join(delivery, "web"), async assets => {
   const build = Bun.spawn(["bun", "web/build.ts"], { stdout: "inherit", stderr: "inherit", env: { ...process.env,
     BUN_WASM: join(assets, "bun.wasm"), JSC_WASM: join(assets, "bun-jsc.wasm"), BUN_BROWSER_WASM: join(assets, "bun-browser.wasm"), BUN_TOOLS_WASM: join(assets, "bun-tools.wasm"),
+    SPIDERMONKEY_WASM: await Bun.file(join(assets, "bun-spidermonkey.wasm")).exists() ? join(assets, "bun-spidermonkey.wasm") : undefined,
   } });
   if (await build.exited !== 0) throw new Error("Playground build failed");
 });
 await cp(join(delivery, "web/programs"), resolve("web/dist/programs"), { recursive: true });
-await preflight(resolve("web/dist"), ["browser", "quickjs", "jsc"]);
+await preflight(resolve("web/dist"), engines);
 
 const source = Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" });
 const commit = (await new Response(source.stdout).text()).trim();
