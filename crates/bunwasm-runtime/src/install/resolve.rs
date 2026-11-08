@@ -316,18 +316,18 @@ impl Resolver {
         .filter(|(_, (_, _, peer))| *peer == peers)
         .collect();
         let mut lookahead = dependencies.iter();
-        for (name, (range, optional, peer)) in dependencies.iter().cloned() {
+        for (name, (range, optional, peer)) in &dependencies {
             self.prefetch_dependencies(&mut lookahead, Some(parent));
-            let range = self.edge_range(Some(parent), &name, &range);
-            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
+            let range = self.edge_range(Some(parent), name, range);
+            let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
             else {
                 continue;
             };
-            let chain = self.placement(parent, &name, &target, peer, optional || parent.optional);
+            let chain = self.placement(parent, name, &target, *peer, *optional || parent.optional);
             let Some(chain) = chain else {
                 continue;
             };
-            self.add(&name, &target, chain, optional || parent.optional)?;
+            self.add(name, &target, chain, *optional || parent.optional)?;
         }
         self.downloads.clear();
         Ok(())

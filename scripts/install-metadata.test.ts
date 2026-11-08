@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 
-import { fixture } from "./install-download-fixture";
+import { assertClosed, fixture } from "./install-download-fixture";
 
 async function install(directory: string, base: string, args: string[] = [], expected = 0, archives = false) {
   const engine = process.env.INSTALL_ENGINE ?? "quickjs";
@@ -57,6 +57,12 @@ for (const transitive of [false, true]) {
       assert.equal(registry.trace.requests.length, before, "locked install fetched metadata");
       assert.equal(readFileSync(join(directory, "bun.lock"), "utf8"), lock);
       assert.equal(registry.trace.active.size, 0);
+      rmSync(join(directory, "bun.lock"));
+      await install(directory, registry.base);
+      const cached = registry.trace.requests.length;
+      rmSync(join(directory, "bun.lock"));
+      await install(directory, registry.base);
+      assert.equal(registry.trace.requests.length, cached, "fresh metadata cache was bypassed");
     } finally {
       await registry.close();
       rmSync(directory, { recursive: true, force: true });
@@ -71,9 +77,7 @@ test("metadata errors close other outstanding requests and local edges do not fe
     const directory = join(scratch, "failure");
     project(directory, { "a-fail": "1.0.0", "b-stall": "1.0.0" });
     assert.match(await install(directory, registry.base, [], 1), /503/);
-    const deadline = performance.now() + 2000;
-    while (registry.trace.active.size && performance.now() < deadline) await new Promise(accept => setTimeout(accept, 10));
-    assert.equal(registry.trace.active.size, 0, "failed resolution left HTTP requests open");
+    await assertClosed(registry.trace);
     const local = join(scratch, "local");
     project(local, { child: "file:child" });
     project(join(local, "child"), {});
@@ -108,3 +112,22 @@ test("tarball downloads overlap and warm installs request nothing", async () => 
     rmSync(directory, { recursive: true, force: true });
   }
 }, 60000);
+
+
+for (const stage of ["metadata", "tarball"] as const) {
+  test(`${stage} errors cancel siblings and optional failures stay optional`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-download-errors-"));
+    const registry = await fixture(stage);
+    try {
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: { "a-fail": "1.0.0", "b-stall": "1.0.0" } }));
+      assert.match(await install(directory, registry.base, [], 1, stage === "tarball"), /503/);
+      await assertClosed(registry.trace);
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: { "item-02": "1.0.0" }, optionalDependencies: { "a-fail": "1.0.0" } }));
+      assert.match(await install(directory, registry.base, [], 0, stage === "tarball"), /optional dependency a-fail/);
+      await assertClosed(registry.trace);
+    } finally {
+      await registry.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 60000);
+}

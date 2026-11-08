@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
-import { fixture } from "./install-download-fixture";
+import { assertClosed, fixture } from "./install-download-fixture";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
 
 for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
@@ -15,10 +15,10 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
     const scratch = provided ? undefined : mkdtempSync(join(tmpdir(), "bun-wasm-download-site-"));
     const out = provided ? resolve(provided) : scratch!;
     const task = session("bun-wasm-download-browser-");
-    const before = provided ? verifySite(out) : buildSite(out);
     const previousRoot = process.env.ROOT;
     process.env.ROOT = join(out, "site");
     try {
+      const before = provided ? verifySite(out) : buildSite(out);
       assert.ok(name === "chromium" || name === "webkit", `unsupported browser ${name}`);
       const url = await task.serve();
       const browser = await task.launch(name === "chromium" ? chromium : webkit);
@@ -51,6 +51,12 @@ async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, ur
     const warm = await run(page, stage === "metadata" ? "bun install --lockfile-only --frozen-lockfile" : "bun install --frozen-lockfile", 30000);
     assert.equal(warm.code, 0, warm.output);
     assert.equal(registry.trace.requests.length, requests, "warm install performed network work");
+    await writeFile(page, "/home/user/package.json", JSON.stringify({ dependencies: { "a-fail": "1.0.0", "b-stall": "1.0.0" } }));
+    const failed = await run(page, stage === "metadata" ? "bun install --lockfile-only" : "bun install", 30000);
+    assert.equal(failed.code, 1, failed.output);
+    assert.match(failed.output, /503/);
+    await assertClosed(registry.trace);
+
   } finally {
     await context.close();
     await registry.close();
