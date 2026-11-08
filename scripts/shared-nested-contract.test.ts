@@ -29,7 +29,7 @@ test('shared fixtures cannot silently become an ordinary split passing skip', ()
   const status: unknown = JSON.parse(source('tests/fixtures/shared-wasm-memory/fixture.json'));
   expect(status).toMatchObject({ status: 'shared-profile-blocking' });
   const runner = source('scripts/shared-nested-native.ts');
-  expect(runner).toContain('real-quickjs-shared-group-native');
+  expect(source('scripts/native-profile-fixtures.ts')).toContain('-shared-group-native');
   expect(source('scripts/native-profile-fixtures.ts')).toContain('output differs from expected.txt');
   expect(runner).not.toMatch(/\bskip\(/);
 });

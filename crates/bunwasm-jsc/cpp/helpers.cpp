@@ -41,11 +41,17 @@
 #include "SourceProvider.h"
 #include "VM.h"
 #include "Options.h"
+#include "SimpleTypedArrayController.h"
 #include "WASIMemoryTelemetry.h"
 #include <wtf/URL.h>
 #include <string>
 
 using namespace JSC;
+
+#if defined(BUN_WASM_SHARED_GROUP)
+// WTF's stack origin in a group side, set by the side entry before the VM exists (StackBounds.cpp).
+extern "C" char* bunjsc_stack_origin = nullptr;
+#endif
 
 extern "C" {
 // Implemented in Rust (engine_jsc.rs). Each returns a malloc'd UTF-8 string
@@ -243,6 +249,10 @@ JSGlobalContextRef bunjsc_create_context()
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
+#if defined(BUN_WASM_SHARED_GROUP)
+    // The group futex parks a member safely, so its JS may block in Atomics.wait.
+    vm->m_typedArrayController = adoptRef(new SimpleTypedArrayController(true));
+#endif
     // The default method table (private to JSGlobalObject), read off a plain global object,
     // with the module loader hooks filled in.
     static GlobalObjectMethodTable table = [&] {
@@ -517,6 +527,19 @@ JSValueRef bunjsc_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t len
     buffer->makeWasmMemory();
     return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Default), WTF::move(buffer)));
 }
+
+#if defined(BUN_WASM_SHARED_GROUP)
+// A real SharedArrayBuffer prefix view over a stable group region. The core retains the region
+// for the session, so the destructor is empty and old prefix views stay live after growth.
+JSValueRef bunjsc_shared_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+    auto contents = SharedArrayBufferContents::create({ data, length }, std::nullopt, nullptr, createSharedTask<void(void*)>([](void*) { }), SharedArrayBufferContents::Mode::Default);
+    return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Shared), ArrayBuffer::createShared(WTF::move(contents))));
+}
+#endif
 
 // ArrayBuffer::detach accepts pinned wasm memories; it empties every view of the buffer.
 bool bunjsc_detach_wasm_memory_buffer(JSContextRef ctx, JSValueRef value)

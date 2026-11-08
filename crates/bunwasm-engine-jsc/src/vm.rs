@@ -124,6 +124,20 @@ impl Drop for JsVal {
 #[derive(Clone, Copy)]
 pub struct Jsc;
 
+/// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) type NestedEngine = Jsc;
+
+/// Publish the address of a local in the outermost frame as WTF's stack origin.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn record_stack_origin(frame: &[u8; 16]) {
+    // SAFETY: called once before the VM exists; JSC only reads this pointer afterwards.
+    unsafe {
+        bunjsc_stack_origin =
+            (std::hint::black_box(frame.as_ptr()) as usize + frame.len()) as *mut c_char
+    };
+}
+
 fn checked(exc: JSValueRef, v: JSValueRef) -> Result<JsVal, JsVal> {
     if exc.is_null() {
         Ok(JsVal::new(v))
@@ -730,6 +744,24 @@ impl Engine for Jsc {
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> JsVal {
         // SAFETY: the caller keeps the bytes valid until the buffer is detached.
         JsVal::new(unsafe { bunjsc_wasm_memory_buffer(ctx(), data, length) })
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn nested_execute(&self, operation: &JsVal, callback: &JsVal) -> Result<JsVal, JsVal> {
+        crate::nested_bridge::execute(self, operation, callback)
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    unsafe fn shared_wasm_memory_buffer(
+        &self,
+        data: *mut u8,
+        length: usize,
+    ) -> Result<JsVal, JsVal> {
+        // SAFETY: the core validated this session's stable region and retains it
+        // until the member, engine roots and host instances have all stopped.
+        Ok(JsVal::new(unsafe {
+            bunjsc_shared_wasm_memory_buffer(ctx(), data, length)
+        }))
     }
 
     fn detach_wasm_memory_buffer(&self, v: &JsVal) -> bool {

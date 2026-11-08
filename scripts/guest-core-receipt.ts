@@ -174,7 +174,7 @@ async function prepareComposedOutputs(repository: string, sysroot: string, build
 
 export function engineEnvironment(kind: SupportedPairedEngine, sysroot: string, profile: ProgramProfile = "split"): Record<string, string> {
   if (profile === "shared-group") {
-    if (kind !== "quickjs") throw new Error(`shared-group ${kind} is not qualified: its native inputs are not built with atomics`);
+    if (kind !== "quickjs" && kind !== "jsc") throw new Error(`shared-group ${kind} is not qualified: its native inputs are not built with atomics`);
     return sharedGroupEnvironment(sysroot, kind);
   }
   const flags: Record<string, string> = {
@@ -220,14 +220,14 @@ function buildStdSource(options: SourceOptions): string {
 /** Shared-group inputs: the exact flags, link, sysroot identity and profile, never a split field set. */
 function sharedGroupContent(options: SourceOptions, scope: ProgramInputSnapshot["scope"], manifest: Awaited<ReturnType<typeof captureSourceManifest>>,
   sharedSysroot: ReturnType<typeof verifySharedSysroot>, core: CoreSelection | undefined) {
-  if (scope !== "core" && scope !== "quickjs") throw new Error(`shared-group ${scope} is not qualified: its native inputs are not built with atomics`);
+  if (scope !== "core" && scope !== "quickjs" && scope !== "jsc") throw new Error(`shared-group ${scope} is not qualified: its native inputs are not built with atomics`);
   const environment = sharedGroupEnvironment(options.sysroot, scope);
   const recorded = Object.fromEntries(Object.keys(environment).map(name => [name, process.env[name] ?? ""]));
   if (JSON.stringify(recorded) !== JSON.stringify(environment)) throw new Error("shared-group build environment differs from its profile");
   const base = { target: "wasm32-wasip1", release: true, locked: true, offline: true, buildStd: ["std", "panic_abort"], environment };
   const command = scope === "core"
     ? { ...base, optimizer: SHARED_GROUP_OPTIMIZER, link: sharedGroupCoreLink(), finalize: "core_initialize_memory" }
-    : { ...base, link: SHARED_GROUP_SIDE_LINK, spillPointers: false, smokeExports: false };
+    : { ...base, link: SHARED_GROUP_SIDE_LINK, spillPointers: scope === "jsc", smokeExports: false };
   const selection = core ?? { kind: scope, profile: "shared-group" };
   return { selection, sharedSysroot, command, groups: manifest.groups, tools: manifest.tools, omissions: manifest.omissions };
 }
