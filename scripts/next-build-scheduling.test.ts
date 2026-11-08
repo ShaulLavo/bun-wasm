@@ -12,6 +12,8 @@ test("the pinned webpack starter traces stable runtimes, not alternate bundlers 
   const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
   const { default: config } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
   expect(config).toEqual({ experimental: { cpus: 1 }, outputFileTracingExcludes: { "next-server": alternate.map(file => `**/${file}`) } });
+  const starter: unknown = JSON.parse(readFileSync(join(import.meta.dir, "../sandbox/template-next/package.json"), "utf8"));
+  expect(starter).toMatchObject({ scripts: { build: "next build" }, dependencies: { next: "15.5.6", react: "19.1.1", "react-dom": "19.1.1" } });
   const omitted = config.outputFileTracingExcludes?.["next-server"] ?? [];
   const traced = stable.concat(alternate).filter(file => !omitted.some((pattern: string) => new Bun.Glob(pattern).match(`/home/user/node_modules/${file}`)));
   expect(traced).toEqual(stable);
