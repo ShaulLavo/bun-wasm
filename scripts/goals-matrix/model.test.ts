@@ -1,16 +1,13 @@
+import { completeAttempt } from "./test-fixture";
 import { describe, expect, test } from "bun:test";
 import { inventory, browsers, engines } from "./catalog";
-import { finish, initialCells, phases, validateReport, type Attempt, type Report } from "./model";
+import { finish, initialCells, phases, validateReport, type Report } from "./model";
 import { markdown } from "./report";
 import { execute } from "./execute";
 import { options } from "./run";
 import { prerequisites } from "./discovery";
 const box = { framework: "vite-react", browser: "chrome", engine: "browser" } as const;
-function complete(): Attempt {
-  return { startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), browser: { browserName: "chrome" },
-    phases: phases.map(phase => ({ phase, status: "pass", evidence: { observed: true }, startedAt: new Date().toISOString(), durationMs: 1 })),
-  };
-}
+const complete = completeAttempt;
 function report(): Report {
   return { schema: 1, run: "test-only", createdAt: new Date().toISOString(), command: "test", source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() };
 }

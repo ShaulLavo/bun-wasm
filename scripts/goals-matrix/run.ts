@@ -10,10 +10,12 @@ import { createPlaywrightTransport, type Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { assetIdentity } from "./assets";
 import { withNativeDriver } from "./native";
+import { withSignals } from "./lifetime";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 
 export interface Options {
+  signal?: AbortSignal;
   root: string; output: string; timeoutMs: number; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
 }
@@ -49,12 +51,16 @@ async function nativeTransport(box: Cell, config: Options): Promise<Transport> {
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
   return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs });
 }
-async function initialReport(config: Options): Promise<Report> {
+export async function initialReport(config: Options): Promise<Report> {
   const staged: Report["source"] | undefined = config.sourceFile ? JSON.parse(await readFile(config.sourceFile, "utf8")) : undefined;
   const commit = staged?.commit ?? (await new Response(Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
   const dirty = staged?.dirty ?? Boolean((await new Response(Bun.spawn(["git", "status", "--porcelain"], { stdout: "pipe" }).stdout).text()).trim());
+  const hostSource = await readFile(join(config.root, "goals-host-source.json"), "utf8").then(text => JSON.parse(text)).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+  if (hostSource !== null && (!hostSource || typeof hostSource !== "object" || typeof hostSource.commit !== "string" || !/^[a-f0-9]{40}$/.test(hostSource.commit) || typeof hostSource.dirty !== "boolean")) throw new Error("Invalid built host source identity");
+  const files = await assetIdentity(config.root);
+  if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 1, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, files: await assetIdentity(config.root) } }, cells: initialCells() };
+  const report: Report = { schema: 1, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: Report = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
@@ -82,30 +88,31 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   }, cell.attempts);
 }
 export async function run(config: Options): Promise<Report> {
-  await mkdir(config.output, { recursive: true });
-  const lock = join(config.output, ".goals-matrix-lock");
-  await mkdir(lock);
-  try { return await runLocked(config); }
-  finally { await rmdir(lock); }
+  return withSignals(async signal => {
+    await mkdir(config.output, { recursive: true });
+    const lock = join(config.output, ".goals-matrix-lock");
+    await mkdir(lock);
+    try { signal.throwIfAborted(); return await runLocked(config, signal); }
+    finally { await rmdir(lock); }
+  }, config.signal);
 }
+
 function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): void {
   for (const cell of report.cells) {
     const blocker = nativePlatformBlocker(cell);
     if (blocker) blockers.set(cell.browser, blocker);
   }
 }
-async function runLocked(config: Options): Promise<Report> {
+async function runLocked(config: Options, signal: AbortSignal): Promise<Report> {
   await preflight(config.root, config.engines);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);
+  signal.throwIfAborted();
   const server = Bun.spawn(["bun", "web/serve.ts"], { env: { ...process.env, ROOT: config.root, HOST: "127.0.0.1", PORT: "0" }, stdout: "pipe", stderr: "inherit" });
   const resource = { kind: "asset-server" as const, host: hostname(), pid: server.pid, stopped: false };
   report.resources = (report.resources ?? []).concat([resource]);
   let base = "";
-  const controller = new AbortController();
-  const interrupt = () => controller.abort();
-  process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
   try {
     const reader = server.stdout.getReader();
     const first = await bounded(() => reader.read(), 10_000); reader.releaseLock();
@@ -115,8 +122,8 @@ async function runLocked(config: Options): Promise<Report> {
     if (!config.retryFailures) seedBlockers(report, blockers);
     for (const [index, cell] of report.cells.entries()) {
       if (!selectedCell(cell, config)) continue;
-      if (controller.signal.aborted) break;
-      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, controller.signal);
+      if (signal.aborted) break;
+      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, signal);
       report.cells[index] = result;
       const blocker = nativePlatformBlocker(result);
       if (blocker) blockers.set(cell.browser, blocker);
@@ -124,16 +131,29 @@ async function runLocked(config: Options): Promise<Report> {
       console.log(boxId(cell), report.cells[index]?.status);
     }
   } finally {
-    process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
     server.kill("SIGTERM"); await server.exited;
     resource.stopped = true;
     await saveReport(config.output, report);
   }
   return report;
 }
+export async function unavailableReport(config: Options, error: unknown, current?: Report): Promise<Report> {
+  const report = current ?? await initialReport(config);
+  report.cells = report.cells.map(cell => {
+    if (!selectedCell(cell, config) || cell.attempts.length) return cell;
+    return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: [], status: "not runnable yet", reason: `Native fleet prerequisite failed: ${String(error)}`, discovery: { error: String(error) } };
+  });
+  await saveReport(config.output, report);
+  return report;
+}
 if (import.meta.main) {
   const config = options(process.argv.slice(2));
   const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint;
-  const report = automaticNative ? await withNativeDriver(endpoint => run({ ...config, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), join(config.output, "native-cleanup.json")) : await run(config);
+  const report = automaticNative
+    ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), join(config.output, "native-cleanup.json")).catch(async error => {
+      if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
+      return unavailableReport(config, error);
+    })
+    : await run(config);
   process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
 }

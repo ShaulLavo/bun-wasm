@@ -1,17 +1,20 @@
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { run, options, type Options } from "./run";
+import { run, options, unavailableReport, type Options } from "./run";
 import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
 import { bounded } from "./execute";
+import { ownedCommand, withSignals } from "./lifetime";
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
-async function command(args: string[], timeoutMs = 120_000): Promise<string> {
-  const process = Bun.spawn(args, { stdout: "pipe", stderr: "inherit", timeout: timeoutMs, killSignal: "SIGTERM" });
-  const output = await new Response(process.stdout).text();
-  const code = await process.exited;
-  if (code !== 0) throw new Error(`${args[0]} exited ${code}: ${output.slice(-3000)}`);
-  return output;
+class NativeUnavailable extends Error {}
+async function discoverMac(signal: AbortSignal): Promise<string> {
+  try {
+    const home = (await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", "printf '%s' \"$HOME\""], signal)).trim();
+    if (!home.startsWith("/Users/") || /[\r\n]/.test(home)) throw new Error("Unexpected Mac home from discovery");
+    await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", "python3 ~/.agents/skills/machine-fleet/scripts/availability.py check"], signal, 15_000);
+    return home;
+  } catch (error) { signal.throwIfAborted(); throw new NativeUnavailable(String(error)); }
 }
 export function combine(first: Report, second: Report): Report {
   validateReport(first); validateReport(second);
@@ -39,55 +42,87 @@ async function bundle(destination: string, source: Report["source"]): Promise<vo
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
   await writeFile(join(destination, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { playwright: "1.64.1" } }));
 }
-async function mac(config: Options, source: Report["source"], local: string): Promise<Report> {
-  const home = (await command(["mesh", "ssh", "mac", "--", "sh", "-lc", "printf '%s' \"$HOME\""])).trim();
-  if (!home.startsWith("/Users/") || /[\r\n]/.test(home)) throw new Error("Unexpected Mac home from discovery");
-  await command(["mesh", "ssh", "mac", "--", "zsh", "-lc", "python3 ~/.agents/skills/machine-fleet/scripts/availability.py check"], 15_000);
+async function verifyRemoteStopped(remote: string): Promise<void> {
+  const script = `set -eu; cd ${quote(remote)}; pid=$(cat runner.pid); if kill -0 "$pid" 2>/dev/null; then exit 75; fi; cat report/native-cleanup.json`;
+  const cleanup: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
+  if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true || !("lockRemoved" in cleanup) || cleanup.lockRemoved !== true) throw new Error("Remote driver/lock shutdown is unproved; retaining staging");
+}
+export async function removeStaging(remote: string, started: boolean, config: Options): Promise<void> {
+  if (started) await verifyRemoteStopped(remote);
+  await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
+  await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
+  await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
+}
+async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
+  const home = await discoverMac(signal);
+  const call = (args: string[]) => ownedCommand(args, signal);
   const remote = `${home}/tmp/bun-wasm-goals-${crypto.randomUUID()}`;
-  await command(["mesh", "ssh", "mac", "--", "mkdir", remote]);
+  let started = false;
+  let failure: unknown;
   try {
+    await call(["mesh", "ssh", "mac", "--", "mkdir", remote]);
     await bundle(local, source);
     await cp(config.root, join(local, "dist"), { recursive: true });
     if (config.resume) {
       await mkdir(join(local, "report"), { recursive: true });
       await cp(join(config.output, "TABLE.json"), join(local, "report/TABLE.json"));
     }
-    for (const name of await readdir(local)) await command(["mesh", "cp", "-r", join(local, name), `mac:${remote}/${name}`]);
-    const args = [`--root=${remote}/dist`, `--output=${remote}/report`, "--browsers=safari,iphone-safari", `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
-    const script = `set -eu; cd ${quote(remote)}; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; bun run.js ${args.map(quote).join(" ")}`;
-    const child = Bun.spawn(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], { stdout: "inherit", stderr: "inherit" });
-    const code = await child.exited;
-    if (code !== 0 && code !== 1) throw new Error(`Mac runner exited ${code}`);
-    await command(["mesh", "cp", "-r", `mac:${remote}/report`, local + "/collected"]);
-    const report: Report = JSON.parse(await readFile(join(local, "collected/TABLE.json"), "utf8"));
+    for (const name of await readdir(local)) await call(["mesh", "cp", "-r", join(local, name), `mac:${remote}/${name}`]);
+    const args = [`--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
+    const script = `set -eu; cd ${quote(remote)}; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; echo $$ > runner.pid; exec bun run.js ${args.map(quote).join(" ")}`;
+    signal.throwIfAborted(); started = true;
+    await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], signal, 86_400_000, true, [0, 1]);
+    await call(["mesh", "cp", "-r", `mac:${remote}/report`, local + "/collected"]);
+    const report: unknown = JSON.parse(await readFile(join(local, "collected/TABLE.json"), "utf8"));
     validateReport(report);
     await cp(join(local, "collected/logs"), join(config.output, "logs"), { recursive: true });
     await cp(join(local, "collected/native-cleanup.json"), join(config.output, "native-cleanup.json"));
     return report;
-  } finally {
-    // The remote runner owns driver/session/lock teardown before this task-owned staging is removed.
-    await command(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
-    await command(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
-    await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, at: new Date().toISOString() }, null, 2));
+  } catch (error) { failure = error; throw error; }
+  finally { await cleanupStaging(remote, started, config, failure); }
+}
+async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
+  try { await removeStaging(remote, started, config); }
+  catch (error) {
+    await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify runner, driver and owned lock have stopped before removing this staging directory" }, null, 2));
+    if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; cleanup: ${String(error)}`);
+    throw error;
   }
 }
-export async function fleet(config: Options): Promise<Report> {
-  if (!config.deviceUDID) throw new Error("Select an unclaimed simulator with T3 device_open and pass --device-udid");
+async function runFleet(config: Options, signal: AbortSignal): Promise<Report> {
+  const localBrowsers = config.browsers.filter(browser => browser === "chrome" || browser === "firefox");
+  const nativeBrowsers = config.browsers.filter(browser => browser === "safari" || browser === "iphone-safari");
+  const local = await run({ ...config, signal, browsers: localBrowsers });
+  signal.throwIfAborted();
+  if (!nativeBrowsers.length) return local;
+  const nativeConfig = { ...config, browsers: nativeBrowsers };
+  if (nativeBrowsers.includes("iphone-safari") && !config.deviceUDID) {
+    const unavailable = await unavailableReport({ ...nativeConfig, browsers: ["iphone-safari"] }, "No claimed iPhone simulator; use T3 device_open and pass --device-udid", local);
+    local.cells = combine(local, unavailable).cells;
+    nativeConfig.browsers = nativeBrowsers.filter(browser => browser !== "iphone-safari");
+    if (!nativeConfig.browsers.length) return local;
+  }
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-fleet-"));
+  try {
+    const native = await mac(nativeConfig, local.source, scratch, signal);
+    return combine(local, native);
+  } catch (error) {
+    if (!(error instanceof NativeUnavailable)) throw error;
+    return unavailableReport(nativeConfig, error, local);
+  } finally { await bounded(() => rm(scratch, { recursive: true, force: true }), 30_000); }
+}
+export async function fleet(config: Options): Promise<Report> { return withSignals(signal => lockedFleet(config, signal), config.signal); }
+async function lockedFleet(config: Options, signal: AbortSignal): Promise<Report> {
   await mkdir(config.output, { recursive: true });
   const lock = join(config.output, ".goals-fleet-lock");
   await mkdir(lock);
-  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-fleet-"));
   try {
-    const local = await run({ ...config, browsers: ["chrome", "firefox"] });
-    const native = await mac(config, local.source, scratch);
-    const merged = combine(local, native);
-    merged.command = "source env.sh && bun scripts/goals-matrix/fleet.ts " + process.argv.slice(2).map(quote).join(" ");
-    await saveReport(config.output, merged);
-    return merged;
-  } finally {
-    try { await bounded(() => rm(scratch, { recursive: true, force: true }), 30_000); }
-    finally { await rmdir(lock); }
-  }
+    signal.throwIfAborted();
+    const report = await runFleet(config, signal);
+    report.command = "source env.sh && bun scripts/goals-matrix/fleet.ts " + process.argv.slice(2).map(quote).join(" ");
+    await saveReport(config.output, report);
+    return report;
+  } finally { await rmdir(lock); }
 }
 if (import.meta.main) {
   const report = await fleet(options(process.argv.slice(2)));

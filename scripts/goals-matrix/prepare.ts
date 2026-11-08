@@ -1,4 +1,4 @@
-import { cp, readFile } from "node:fs/promises";
+import { cp, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pinnedBashWeb } from "../bash-web-guests";
 import { preflight, withStagedAssets } from "./preparation";
@@ -17,3 +17,11 @@ await withStagedAssets(join(delivery, "web"), async assets => {
 });
 await cp(join(delivery, "web/programs"), resolve("web/dist/programs"), { recursive: true });
 await preflight(resolve("web/dist"), ["browser", "quickjs", "jsc"]);
+
+const source = Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" });
+const commit = (await new Response(source.stdout).text()).trim();
+if (await source.exited !== 0) throw new Error("Cannot identify built host source");
+const status = Bun.spawn(["git", "status", "--porcelain"], { stdout: "pipe" });
+const dirty = Boolean((await new Response(status.stdout).text()).trim());
+if (await status.exited !== 0) throw new Error("Cannot identify built host state");
+await writeFile(resolve("web/dist/goals-host-source.json"), JSON.stringify({ commit, dirty, build: "bun web/build.ts" }));

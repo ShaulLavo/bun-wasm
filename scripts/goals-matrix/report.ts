@@ -3,6 +3,15 @@ import { join } from "node:path";
 import { browsers, browserLabels, engines, frameworks, boxId } from "./catalog";
 import { validateReport, type Cell, type Report } from "./model";
 function clean(value: string): string { return value.replace(/[\r\n|]/g, " ").replace(/\s+/g, " ").trim(); }
+function concise(error: string): string {
+  const terminal = error.indexOf("; terminal: ");
+  return clean(terminal >= 0 ? error.slice(terminal + 12) : error).slice(0, 600);
+}
+function provenance(value: unknown): unknown {
+  if (!value || typeof value !== "object" || !("files" in value)) return value;
+  const { files, ...metadata } = value;
+  return { ...metadata, fileCount: Array.isArray(files) ? files.length : null, inventory: "TABLE.json" };
+}
 function mark(cell: Cell): string {
   if (cell.status === "pass") return "PASS";
   if (cell.status === "fail") return `FAIL (${cell.phase})`;
@@ -26,9 +35,9 @@ export function markdown(report: Report): string {
   for (const cell of report.cells) {
     if (cell.status === "pass") continue;
     const error = cell.status === "fail" ? `${cell.phase}: ${cell.error}` : cell.reason;
-    lines.push(`- ${boxId(cell)}. ${clean(error)}`);
+    lines.push(`- ${boxId(cell)}. ${concise(error)}`);
   }
-  lines.push("", "## Provenance", "", "Artifact details, browser capabilities, phase evidence, previous attempts, and discovery are in TABLE.json.", "", "```json", JSON.stringify(report.source.assets, null, 2), "```", "");
+  lines.push("", "## Provenance", "", "Artifact details, browser capabilities, phase evidence, previous attempts, and discovery are in TABLE.json.", "", "```json", JSON.stringify(provenance(report.source.assets), null, 2), "```", "");
   return lines.join("\n");
 }
 export async function saveReport(directory: string, report: Report): Promise<void> {

@@ -13,6 +13,8 @@ expands the engine pairs in task-owned scratch, and builds with those inputs. It
 then checks embedded host fingerprints, engine-builds.json, and actual staged
 bytes. Copying WASM into an already built host is rejected before any cells run.
 Keep the WASM delivery source separate from the playground source commit.
+Preparation records the built host source in `goals-host-source.json`. Continuation
+compares every staged host, worker, template and guest file, not just WASM bytes.
 
 Run all 260 boxes:
 
@@ -62,3 +64,10 @@ inside the task directory; shared browser and download caches remain available.
 Native SafariDriver starts through `launchctl asuser` in the Mac GUI login session.
 An SSH-launched driver without that GUI context can time out waiting for
 RWIApplication even when remote automation is already enabled.
+
+Fleet browser selections are respected on both hosts. A Chrome-only run does not
+require a simulator or visit the Mac. Unavailable Mac prerequisites are saved as
+not runnable yet, without inventing per-box attempts. Interruption owns setup
+subprocesses as well as browser cleanup. If remote shutdown cannot be proved,
+the runner retains its unique staging directory and records its removal condition
+in `fleet-cleanup.json` instead of deleting files under a live process.
