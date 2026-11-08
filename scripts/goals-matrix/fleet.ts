@@ -79,13 +79,16 @@ async function mac(config: Options, source: Report["source"], local: string, sig
     signal.throwIfAborted(); started = true;
     await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], signal, 86_400_000, true, [0, 1]);
     await call(["mesh", "cp", "-r", `mac:${remote}/report`, local + "/collected"]);
-    const report: unknown = JSON.parse(await readFile(join(local, "collected/TABLE.json"), "utf8"));
-    validateReport(report);
-    await cp(join(local, "collected/logs"), join(config.output, "logs"), { recursive: true });
-    await cp(join(local, "collected/native-cleanup.json"), join(config.output, "native-cleanup.json"));
-    return report;
+    return await collectNativeReport(join(local, "collected"), config.output);
   } catch (error) { failure = error; throw error; }
   finally { await cleanupStaging(remote, started, config, failure); }
+}
+export async function collectNativeReport(collected: string, output: string): Promise<Report> {
+  const report: unknown = JSON.parse(await readFile(join(collected, "TABLE.json"), "utf8"));
+  validateReport(report);
+  await cp(join(collected, "logs"), join(output, "logs"), { recursive: true });
+  await cp(join(collected, "native-cleanup.json"), join(output, "native-cleanup.json"));
+  return report;
 }
 async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
   try { await removeStaging(remote, started, config); }

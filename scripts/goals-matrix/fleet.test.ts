@@ -1,7 +1,10 @@
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
 import { nativePlatformBlocker, blockedCell } from "./platform";
-import { combine } from "./fleet";
+import { combine, collectNativeReport } from "./fleet";
 import { initialCells, finish, phases, type Report, type Attempt } from "./model";
 function report(): Report { return { schema: 2, run: "unit", createdAt: "unit", command: "unit", deadlines: deadlinePolicy(180_000), source: { commit: "unit", dirty: false, assets: {} }, cells: initialCells() }; }
 test("merging disjoint shards retains failures and all pending and unavailable boxes", () => {
@@ -43,4 +46,20 @@ test("native platform discovery never erases an attempted failure or invents att
   expect(blockedCell(failed, blockers)).toBeUndefined();
   const pending = { framework: "nuxt", browser: "safari", engine: "browser", attempts: [], status: "pending", reason: "not attempted" } as const;
   expect(blockedCell({ ...pending, attempts: [] }, blockers)).toMatchObject({ status: "not runnable yet", attempts: [], discovery: { error: "session not created: RWIApplication" } });
+});
+
+
+test("pre-driver failure without attempts collects its report and cleanup without terminal logs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-collection-"));
+  try {
+    const collected = join(root, "collected"), output = join(root, "output");
+    await mkdir(collected); await mkdir(output);
+    const native = report();
+    native.cells[0] = { ...native.cells[0]!, status: "not runnable yet", reason: "setup failed", attempts: [], discovery: { error: "prelaunch ownership unproved" } };
+    const cleanup = { driverExited: true, safariExited: false, lockRemoved: false };
+    await writeFile(join(collected, "TABLE.json"), JSON.stringify(native));
+    await writeFile(join(collected, "native-cleanup.json"), JSON.stringify(cleanup));
+    expect(await collectNativeReport(collected, output)).toEqual(native);
+    expect(JSON.parse(await readFile(join(output, "native-cleanup.json"), "utf8"))).toEqual(cleanup);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

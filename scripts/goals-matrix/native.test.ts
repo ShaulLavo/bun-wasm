@@ -194,3 +194,14 @@ test("cleanup settles a delayed marked launch after open reports an error", asyn
   await stopDesktopSafari(f.state, f.io);
   expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual(["SIGTERM:42"]);
 });
+
+
+test("a task-spawned Safari without an environment marker still has positive ownership", async () => {
+  const f = fixture();
+  // This matches the actual macOS failure: exact ps eww has no launch marker.
+  f.io.owns = async () => false;
+  await prepareDesktopSafari(f.state, 501, f.controller.signal, f.io);
+  expect(f.state.launch).toMatchObject({ kind: "owned", application: f.application });
+  await stopDesktopSafari(f.state, f.io);
+  expect(f.calls.at(-1)).toBe("SIGTERM:42");
+});
