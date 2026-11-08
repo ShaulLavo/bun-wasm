@@ -15,3 +15,5 @@ builder. Qwik uses the Vite optimizer in client-rendering mode. Hono serves a
 counter page and a Bun-built client script. Each app has a development command,
 a production build, and a production start command. A failed framework command
 is evidence, not a reason for the runner to substitute a synthetic page.
+
+The Qwik 1.17.2 client optimizer drops a top-level `void render(...)` expression when `isServer` is false, including its call's side effects. The starter calls `render(...)` directly so its client entry remains in the development and production output. `scripts/qwik-starter.test.ts` runs the pinned optimizer against that source and checks that the render call survives. No Qwik upstream source is patched.
