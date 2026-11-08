@@ -63,3 +63,34 @@ test("pre-driver failure without attempts collects its report and cleanup withou
     expect(JSON.parse(await readFile(join(output, "native-cleanup.json"), "utf8"))).toEqual(cleanup);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+async function collectionFixture(operation: (collected: string, output: string, native: Report) => Promise<void>): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-collection-"));
+  try {
+    const collected = join(root, "collected"), output = join(root, "output");
+    await mkdir(collected); await mkdir(output);
+    await writeFile(join(collected, "native-cleanup.json"), JSON.stringify({ driverExited: false, lockRemoved: false }));
+    await operation(collected, output, report());
+  } finally { await rm(root, { recursive: true, force: true }); }
+}
+test("attempted native cells still require their terminal logs directory", async () => {
+  await collectionFixture(async (collected, output, native) => {
+    native.cells[0] = finish(native.cells[0]!, { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "startup", status: "fail", error: "session failed", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] });
+    await writeFile(join(collected, "TABLE.json"), JSON.stringify(native));
+    await expect(collectNativeReport(collected, output)).rejects.toThrow("ENOENT");
+  });
+});
+test("an invalid report cannot authorize missing logs", async () => {
+  await collectionFixture(async (collected, output, native) => {
+    await writeFile(join(collected, "TABLE.json"), JSON.stringify({ ...native, cells: [] }));
+    await expect(collectNativeReport(collected, output)).rejects.toThrow("260");
+  });
+});
+test("zero attempted cells still require the native cleanup receipt", async () => {
+  await collectionFixture(async (collected, output, native) => {
+    await writeFile(join(collected, "TABLE.json"), JSON.stringify(native));
+    await rm(join(collected, "native-cleanup.json"));
+    await expect(collectNativeReport(collected, output)).rejects.toThrow("ENOENT");
+  });
+});

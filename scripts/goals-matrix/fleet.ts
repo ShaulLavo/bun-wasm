@@ -86,7 +86,11 @@ async function mac(config: Options, source: Report["source"], local: string, sig
 export async function collectNativeReport(collected: string, output: string): Promise<Report> {
   const report: unknown = JSON.parse(await readFile(join(collected, "TABLE.json"), "utf8"));
   validateReport(report);
-  await cp(join(collected, "logs"), join(output, "logs"), { recursive: true });
+  try { await cp(join(collected, "logs"), join(output, "logs"), { recursive: true }); }
+  catch (error) {
+    const noAttempts = report.cells.every(cell => cell.attempts.length === 0);
+    if (!(noAttempts && error instanceof Error && "code" in error && error.code === "ENOENT" && "path" in error && error.path === join(collected, "logs"))) throw error;
+  }
   await cp(join(collected, "native-cleanup.json"), join(output, "native-cleanup.json"));
   return report;
 }
