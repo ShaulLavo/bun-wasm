@@ -126,8 +126,8 @@ test("metadata errors close other outstanding requests and local edges do not fe
     while (registry.trace.active.size && performance.now() < deadline) await new Promise(accept => setTimeout(accept, 10));
     assert.equal(registry.trace.active.size, 0, "failed resolution left HTTP requests open");
     const local = join(scratch, "local");
-    project(local, { child: "file:../child" });
-    project(join(scratch, "child"), {});
+    project(local, { child: "file:child" });
+    project(join(local, "child"), {});
     const before = registry.trace.requests.length;
     await install(local, registry.base);
     assert.equal(registry.trace.requests.length, before, "local install fetched metadata");
