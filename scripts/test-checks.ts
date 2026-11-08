@@ -9,9 +9,15 @@ export type NativeProfile = "split" | "shared-group";
 type Check = { path: string; localRuntime: boolean; batch: string } & (
   | { owner: "native-probe"; inputs: string[] }
   | { owner: "native"; profile?: "shared-group"; inputs?: never }
-  | { owner: Exclude<Owner, "native-probe" | "native">; inputs?: never; profile?: never }
+  | { owner: "browser-guest"; profile?: "shared-group"; inputs?: never }
+  | { owner: Exclude<Owner, "native-probe" | "native" | "browser-guest">; inputs?: never; profile?: never }
 );
 const root = resolve(import.meta.dir, "..");
+
+/** Owners whose checks consume a matching shared-group producer when a manifest selects one. */
+function hasProfile(owner: string): boolean {
+  return owner === "native" || owner === "browser-guest";
+}
 
 function parseOwner(value: unknown): Owner {
   for (const owner of owners) if (value === owner) return owner;
@@ -23,7 +29,7 @@ export function parseCheck(value: unknown, file: string): Check {
   if (!("owner" in value) || !("path" in value)) throw new Error(`Missing check fields: ${file}`);
   if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs", "profile"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
   const owner = parseOwner(value.owner);
-  if ("profile" in value && owner !== "native") throw new Error(`Only native checks select a profile: ${file}`);
+  if ("profile" in value && !hasProfile(owner)) throw new Error(`Only native and browser-guest checks select a profile: ${file}`);
   const profile = "profile" in value ? nativeProfile(value.profile) : "split";
   if (!file.startsWith(`${owner}-`)) throw new Error(`Owner must match manifest prefix: ${file}`);
   const path = value.path;
@@ -36,6 +42,7 @@ export function parseCheck(value: unknown, file: string): Check {
   if (owner !== "native-probe") {
     if ("inputs" in value) throw new Error(`Only native-probe checks declare input files: ${file}`);
     if (owner === "native" && profile === "shared-group") return { owner, path, localRuntime, batch, profile };
+    if (owner === "browser-guest" && profile === "shared-group") return { owner, path, localRuntime, batch, profile };
     return { owner, path, localRuntime, batch };
   }
   const inputs = "inputs" in value ? value.inputs : undefined;
@@ -73,7 +80,7 @@ export function nativeProfile(value: unknown): NativeProfile {
 export function selectChecks(owner: string, checks: readonly Check[] = discoverChecks(), profile: NativeProfile = "split"): string[] {
   if (owner === "local-runtime") return checks.filter(check => check.localRuntime).map(check => check.path);
   const selected = parseOwner(owner);
-  const paths = checks.filter(check => check.owner === selected && (check.owner !== "native" || (check.profile ?? "split") === profile)).map(check => check.path);
+  const paths = checks.filter(check => check.owner === selected && (check.owner === "native" || check.owner === "browser-guest" ? check.profile ?? "split" : profile) === profile).map(check => check.path);
   if (paths.length === 0) throw new Error(`Missing checks for ${owner}`);
   return paths;
 }
@@ -161,7 +168,7 @@ export function checkArguments(args: readonly string[]) {
   const options = args.slice(1);
   const at = options.indexOf("--profile");
   const profile = at < 0 ? "split" : nativeProfile(options[at + 1]);
-  if (at >= 0 && owner !== "native") throw new Error("Only native checks select a profile");
+  if (at >= 0 && !hasProfile(owner)) throw new Error("Only native and browser-guest checks select a profile");
   const rest = at < 0 ? options : options.slice(0, at).concat(options.slice(at + 2));
   if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--list")) throw new Error("Unexpected check arguments");
   return { owner, profile, list: rest.length === 1 };

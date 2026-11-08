@@ -1,6 +1,6 @@
 // Worker entry: Waffle's process bootstrap running Bun's executor (bun-executor.ts).
 import { bootstrap } from "waffle/browser/worker";
-import { createBunExecutor, hasTerminalMetadata, type RunRequest, type TerminalModule } from "./bun-executor.js";
+import { createBunExecutor, hasTerminalMetadata, type NestedModule, type RunRequest, type TerminalModule } from "./bun-executor.js";
 
 export type { Engine, RunRequest, SleepMode, WorkerMessage } from "./bun-executor.js";
 
@@ -21,7 +21,12 @@ const host = Object.freeze({
 const terminalModule = (request: RunRequest): Promise<TerminalModule> => hasTerminalMetadata(request)
   ? import("./bun-terminal.js").catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
   : Promise.resolve(undefined);
+// Regionized execution belongs only to a memory group member, so other workers never load it.
+const nestedModule = (request: RunRequest): Promise<NestedModule> => request.memoryGroup
+  ? import("./nested/host.js").catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
+  : Promise.resolve(undefined);
 ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const request = event.data;
-  await bootstrap(request, createBunExecutor(request, host, await terminalModule(request)), host);
+  const [terminal, nested] = await Promise.all([terminalModule(request), nestedModule(request)]);
+  await bootstrap(request, createBunExecutor(request, host, terminal, nested), host);
 };

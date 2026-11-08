@@ -63,8 +63,9 @@ The host wait functions and group-profile QuickJS Atomics use `runtime_shm`'s on
 wait queue, keyed by the effective group address within the stable region. Leases
 stay alive during synchronous waits. Negative/zero timeout and cancellation retain
 the provider's semantics. Ordinary split/native QuickJS uses its ordinary code.
-Single-agent tests are not cross-worker acceptance. Waffle, another embedded
-engine, another host, stock Vite and large-memory admission are not delivered here.
+Single-agent tests are not cross-worker acceptance. Another embedded engine, stock Vite and
+large-memory admission are not delivered here. The Browser host has
+[its own record](shared-nested-browser.md).
 
 Wasmtime retains instantiation allocations until its Store ends, including an
 instance whose start traps. The existing native Store limit remains 40 instances.
