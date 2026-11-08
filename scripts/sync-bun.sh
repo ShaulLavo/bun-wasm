@@ -54,8 +54,13 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 shopt -s nullglob
 patches=("$root"/patches/bun/*.patch)
+# Importing a patch needs a committer even in a clean CI checkout. Keep the
+# identity local to this command; git am still reads each patch's author.
+apply_source_patches() {
+  git -C "$1" -c user.name="bun-wasm source sync" -c user.email="source-sync@bun-wasm.invalid" am "${patches[@]}"
+}
 if [[ "$new_checkout" == 1 && ${#patches[@]} -gt 0 ]]; then
-  git -C "$bun_dir" am "${patches[@]}"
+  apply_source_patches "$bun_dir"
 fi
 GIT_INDEX_FILE="$scratch/index" git -C "$bun_dir" read-tree "$BUN_COMMIT"
 for patch in "${patches[@]}"; do
@@ -79,7 +84,7 @@ if [[ "$current" != "$desired" ]]; then
     # worktree may own. Only this disposable checkout can be removed on failure.
     git -C "$bun_dir" worktree add --detach "$scratch/patched" "$BUN_COMMIT"
     if [[ ${#patches[@]} -gt 0 ]]; then
-      git -C "$scratch/patched" am "${patches[@]}"
+      apply_source_patches "$scratch/patched"
     fi
     target=$(git -C "$scratch/patched" rev-parse HEAD)
     git -C "$bun_dir" update-ref refs/bun-wasm/patched "$target"

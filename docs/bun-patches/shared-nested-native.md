@@ -85,3 +85,7 @@ JS roots are released despite that native metadata retention. The fixture checks
 both normal recovery after a failure and explicit bounded Store exhaustion.
 Trace counters report attempts and failures, region reservations and visible bytes
 separately. These counters are not RSS measurements.
+
+Cold shared-profile CI imports the ordinary Bun patch series without relying on
+a runner Git identity. Source synchronization supplies only a command-local
+committer; patch authors, patch bytes and verified source trees stay unchanged.
