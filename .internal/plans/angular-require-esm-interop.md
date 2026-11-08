@@ -56,3 +56,23 @@ Native Bun 1.4.4 prints `true false [object Module]`, `1 1 true`, and `false`.
 The unchanged browser guest prints `true true [object Object]`, `1 0 false`, and
 `true`. This reproduces without Angular or its dependencies. Full output is
 `/work/reports/goals/astro-angular/split-marker/browser-differences.log`.
+
+### Later split-engine Angular failures
+
+One Chrome attempt per split engine used the fixed core from
+`39f5b3f7206911d33a70d585e18a04105b89aab9`, unchanged retained engine sides,
+and the unchanged 90000 ms phase bounds. Both install successfully. QuickJS
+installs in 55.751 seconds, reaches a preview URL, then times out in dev. Its
+terminal reports `The object cannot be cloned` during shutdown, with exit 130.
+JSC installs in 25.262 seconds and exits dev after 2.776 seconds with
+`Maximum call stack size exceeded`, exit 127. Neither terminal contains the old
+`yargs_1.default` error. Click, hot reload, build, and preview are not reached.
+These are observations, not a root-cause diagnosis or a full-cell pass.
+
+The exact matrix command is recorded in
+`/work/reports/goals/astro-angular/split-marker/chrome/TABLE.json`; the matching
+per-engine terminal logs are in its `logs/` directory. Asset hashes and source
+are in `split-marker/asset-source.json`. Both actual split guests pass the
+focused namespace fixture and nearby CommonJS controls, so the namespace marker
+is no longer the first blocker. The parent owns diagnosis of the later failures.
+No further Angular attempt was made by this worker.
