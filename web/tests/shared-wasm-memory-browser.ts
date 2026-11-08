@@ -79,8 +79,8 @@ async function runBrowser(type: BrowserType, name: string, port: number): Promis
   browser = undefined;
   launching = undefined;
   if (process.env.SHARED_WASM_CONTROL) { console.log(`control ${process.env.SHARED_WASM_CONTROL} observed`); return; }
-  assert.equal(value.thrown, undefined, value.thrown);
-  assert.equal(value.code, 0, value.stderr ?? value.error);
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
   assert.equal(value.stdout, await readFile(join(fixtureSource, "expected-browser.txt"), "utf8"));
   assert.deepEqual(consoleErrors, []);
   assert.ok((value.peak?.regions ?? 0) > 0, "the owner never saw a real nested region");

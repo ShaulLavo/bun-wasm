@@ -132,6 +132,15 @@ function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<stri
   }
 }
 
+/** A group core links only into a group admitted by the page, charged by that group's owner. */
+async function adoptRootProgram(subprocess: SubprocessBroker, transport: Parameters<SubprocessBroker["adoptRuntimeRoot"]>[0], module: WebAssembly.Module, cancelled: () => boolean) {
+  const group = isSharedGroupCore(module);
+  const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
+  if (!controlGrant) return undefined;
+  const member = group ? await subprocess.admitRootGroup() : undefined;
+  return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
+}
+
 function acceptRootSharedConnection(route: SharedObjectRoute | undefined, message: BunSharedConnection, terminal: boolean): string | undefined {
   if (terminal) { route?.close(); message.port.close(); return; }
   try {
@@ -403,12 +412,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     if (preparationStopped()) return;
     if (!subprocess) return;
-    // A group core links only into a group admitted by the page, charged by that group's owner.
-    const memberOfGroup = isSharedGroupCore(request.module);
-    const controlGrant = await subprocess.adoptRuntimeRoot(transport, memberOfGroup ? "group" : programMemory(request.module), () => finished);
-    if (!controlGrant) return;
-    const groupMember = memberOfGroup ? await subprocess.admitRootGroup() : undefined;
-    if (groupMember) request.memoryGroup = groupMember.request;
+    const adopted = await adoptRootProgram(subprocess, transport, request.module, () => finished);
+    if (!adopted) return;
+    const { controlGrant, groupTransfer } = adopted;
+    request.memoryGroup = adopted.memoryGroup;
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
@@ -454,7 +461,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         .concat(request.lookupPort ? [request.lookupPort] : [])
         .concat(request.notifications ? [request.notifications.port] : [])
         .concat(request.network ? [request.network.port] : [])
-        .concat(groupMember ? Array.from(groupMember.transfer as Iterable<MessagePort>) : []);
+        .concat(groupTransfer);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();
