@@ -80,6 +80,7 @@ export function playgroundURL(base: string, framework: Framework, engine: Engine
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
+  if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
 }
 async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal): Promise<Cell> {
@@ -87,10 +88,19 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   if (missing) return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: cell.attempts, status: "not runnable yet", ...missing };
   const framework = frameworks.find(framework => framework.id === cell.framework);
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
-  return execute({ box: cell, framework, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
+  const port = framework.rootPreview ? await availablePort() : 5173;
+  return execute({ box: cell, framework, port, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
+}
+async function availablePort(): Promise<number> {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
+  try {
+    if (server.port === undefined) throw new Error("Missing loopback preview port");
+    return server.port;
+  }
+  finally { await server.stop(true); }
 }
 export async function run(config: Options): Promise<Report> {
   return withSignals(async signal => {
@@ -114,7 +124,7 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);
   signal.throwIfAborted();
-  const server = Bun.spawn(["bun", "web/serve.ts"], { env: { ...process.env, ROOT: config.root, HOST: "127.0.0.1", PORT: "0" }, stdout: "pipe", stderr: "inherit" });
+  const server = Bun.spawn(["bun", "web/serve.ts"], { env: { ...process.env, ROOT: config.root, HOST: "127.0.0.1", PORT: "0", PREVIEW_ORIGINS: "1" }, stdout: "pipe", stderr: "inherit" });
   const resource = { kind: "asset-server" as const, host: hostname(), pid: server.pid, stopped: false };
   report.resources = (report.resources ?? []).concat([resource]);
   let base = "";

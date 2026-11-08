@@ -14,6 +14,7 @@ export interface Framework {
   text: string;
   button: string;
   clicked: string;
+  rootPreview?: { dev: string; start: string };
 }
 function starter(id: string, label: string, source: string): Framework {
   return { id, label, template: id, source, selector: "#message", text: `Hello from ${id}`, button: "#increment", clicked: "#count" };
@@ -23,7 +24,8 @@ export const frameworks: readonly Framework[] = [
   starter("nuxt", "Nuxt", "app.vue"),
   starter("sveltekit", "SvelteKit", "src/routes/+page.svelte"),
   starter("astro", "Astro", "src/pages/index.astro"),
-  starter("react-router", "React Router / Remix", "app/routes/home.tsx"),
+  { ...starter("react-router", "React Router / Remix", "app/routes/home.tsx"),
+    rootPreview: { dev: "bun run dev --port {port}", start: "PORT={port} bun run start" } },
   starter("solidstart", "SolidStart", "src/routes/index.tsx"),
   starter("tanstack-start", "TanStack Start", "src/routes/index.tsx"),
   starter("angular", "Angular", "src/main.ts"),
