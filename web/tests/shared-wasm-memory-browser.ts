@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert";
 import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
+import { programKind, programProfile } from "../../src/engine-kind.ts";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 
 const web = resolve(import.meta.dir, "..");
@@ -42,7 +43,10 @@ async function prepareSite(program: string): Promise<string> {
   await Bun.write(join(out, "fixture/index.json"), JSON.stringify(names));
   await mkdir(join(out, "program"));
   await copyFile(program, join(out, "program/bun.wasm"));
-  await copyFile(join(dirname(program), "quickjs.wasm"), join(out, "program/quickjs.wasm"));
+  const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
+  if (kind === "single") throw new Error("The shared Browser fixture requires a paired core");
+  await copyFile(join(dirname(program), programProfile(kind).side), join(out, "program/side.wasm"));
+  await Bun.write(join(out, "program/kind.json"), JSON.stringify(kind));
   return out;
 }
 

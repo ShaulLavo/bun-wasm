@@ -20,3 +20,7 @@ TanStack Start's local production launcher reads `PORT` before its positional
 port. This lets its root-origin preview use the runner's selected free port in
 both development and production. The root-origin adapter keeps the browser URL
 at `/`, matching the server-rendered route without changing upstream router code.
+
+The Qwik 1.17.2 client optimizer drops a top-level `void render(...)` expression when `isServer` is false, including its call's side effects. The starter calls `render(...)` directly so its client entry remains in the development and production output. `scripts/qwik-starter.test.ts` runs the pinned optimizer against that source and checks that the render call survives. No Qwik upstream source is patched.
+
+The Qwik CSR HTML loads the packaged `qwikloader.js` as a module entry, which registers the delegated browser event listeners needed by `onClick$`. A side-effect import from the TypeScript entry is insufficient because Qwik declares `sideEffects: false`, so production bundling removes it. Vite preserves HTML module entries. Production preview omits the Qwik plugin so Vite serves the built client assets without installing Qwik's SSR preview middleware. Development and production compilation still run the real Qwik optimizer.

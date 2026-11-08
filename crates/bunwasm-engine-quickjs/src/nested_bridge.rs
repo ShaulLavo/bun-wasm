@@ -1,7 +1,6 @@
 //! Engine-side roots and pending thrown values. The core never owns JS values.
 use crate::engine::{Engine, NativeError, Val};
-use crate::vm::QuickJs;
-use rquickjs::Value;
+use crate::vm::NestedEngine;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -12,11 +11,13 @@ mod frame;
 mod nested_token;
 use nested_token::next_token;
 
+type Value = <NestedEngine as Engine>::Value;
+
 struct Invocation {
     token: u32,
-    engine: QuickJs,
-    callback: Value<'static>,
-    thrown: RefCell<Option<Value<'static>>>,
+    engine: NestedEngine,
+    callback: Value,
+    thrown: RefCell<Option<Value>>,
 }
 thread_local! {
     static NEXT: Cell<u32> = const { Cell::new(0) };
@@ -32,10 +33,10 @@ impl Drop for Guard {
 }
 
 pub(crate) fn execute(
-    engine: &QuickJs,
-    operation: &Value<'static>,
-    callback: &Value<'static>,
-) -> Result<Value<'static>, Value<'static>> {
+    engine: &NestedEngine,
+    operation: &Value,
+    callback: &Value,
+) -> Result<Value, Value> {
     if ACTIVE.with(|stack| stack.borrow().len()) >= frame::MAX_DEPTH {
         return Err(engine.error_value(&NativeError::range_error(
             "Nested WebAssembly call depth exceeded",
@@ -93,14 +94,14 @@ pub(crate) extern "C" fn dispatch(token: u32, callback: u32, pointer: u32) -> u3
         }
     }
 }
-fn invalid(engine: &QuickJs) -> Value<'static> {
+fn invalid(engine: &NestedEngine) -> Value {
     engine.error_value(&NativeError::type_error("Invalid nested callback frame"))
 }
 fn run_callback(
     invocation: &Invocation,
     callback: u32,
     frame: &mut frame::CallbackFrame,
-) -> Result<(), Value<'static>> {
+) -> Result<(), Value> {
     let engine = &invocation.engine;
     let arguments = frame.slots[..frame.arguments as usize]
         .iter()

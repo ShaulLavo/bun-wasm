@@ -3,7 +3,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sharedGroupPair } from '../src/engine-kind.ts';
+import { programKind, programProfile, sharedGroupPair } from '../src/engine-kind.ts';
 import { selectChecks } from './test-checks.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -13,10 +13,12 @@ export function profileArtifacts(env: NodeJS.ProcessEnv) {
   const launcher = env.BUN_WASM_LAUNCHER;
   if (!program || !launcher) throw new Error('Shared native checks require BUN_WASM_PROFILE_PROGRAM and BUN_WASM_LAUNCHER');
   if (!statSync(program).isFile() || !statSync(launcher).isFile()) throw new Error('Shared native artifact is not a file');
-  const bytes = readFileSync(program);
-  const side = readFileSync(join(resolve(program, '..'), 'quickjs.wasm'));
-  if (!sharedGroupPair(new WebAssembly.Module(bytes), side)) throw new Error('Shared native checks require a matching shared-group core and QuickJS side');
-  return { program: resolve(program), launcher: resolve(launcher) };
+  const module = new WebAssembly.Module(readFileSync(program));
+  const engine = programKind(module);
+  if (engine === 'single') throw new Error('Shared native checks require a paired core');
+  const side = readFileSync(join(resolve(program, '..'), programProfile(engine).side));
+  if (!sharedGroupPair(module, side)) throw new Error('Shared native checks require a matching shared-group core and engine side');
+  return { program: resolve(program), launcher: resolve(launcher), engine };
 }
 
 export function runProfileFixtures(paths: readonly string[], env: NodeJS.ProcessEnv = process.env) {
@@ -42,7 +44,7 @@ function runFixture(path: string, artifacts: ReturnType<typeof profileArtifacts>
     if (result.status !== 0) throw new Error(`${path}: guest failed with ${result.signal ?? result.status}`);
     const expected = readFileSync(join(scratch, 'expected.txt'), 'utf8');
     if (result.stdout !== expected) throw new Error(`${path}: shared native output differs from expected.txt`);
-    return { path, wallMs: performance.now() - started, kind: 'real-quickjs-shared-group-native' };
+    return { path, wallMs: performance.now() - started, kind: `real-${artifacts.engine}-shared-group-native` };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

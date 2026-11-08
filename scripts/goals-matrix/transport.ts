@@ -1,14 +1,25 @@
-import { chromium, firefox } from "playwright";
+import { chromium, firefox, type Page } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
+type EvaluationOptions = { observation: true };
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
   navigate(url: string): Promise<void>;
-  evaluate<T>(expression: string): Promise<T>;
+  evaluate<T>(expression: string, options?: EvaluationOptions): Promise<T>;
   openPreview(url: string): Promise<void>;
   useHost(): Promise<void>;
   usePreview(): Promise<void>;
   closePreview(): Promise<void>;
   close(): Promise<void>;
+}
+export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, options?: EvaluationOptions): Promise<T> {
+  if (!options?.observation) return page.evaluate(expression);
+  const handle = await page.waitForFunction(`(async () => JSON.stringify({ value: await (${expression}) }))()`, undefined, { timeout: timeoutMs });
+  try {
+    const serialized = await handle.jsonValue();
+    if (typeof serialized !== "string") throw new Error("DOM observation returned no serialized value");
+    return JSON.parse(serialized).value;
+  }
+  finally { await handle.dispose(); }
 }
 export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
@@ -27,7 +38,7 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     return {
       capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() },
       async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
-      evaluate: expression => page.evaluate(expression),
+      evaluate: (expression, options) => evaluatePage(page, expression, timeoutMs, options),
       async openPreview(url) {
         if (preview) await preview.close();
         preview = await context.newPage(); page = preview;

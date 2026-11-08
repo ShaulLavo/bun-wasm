@@ -29,7 +29,13 @@ test('shared fixtures cannot silently become an ordinary split passing skip', ()
   const status: unknown = JSON.parse(source('tests/fixtures/shared-wasm-memory/fixture.json'));
   expect(status).toMatchObject({ status: 'shared-profile-blocking' });
   const runner = source('scripts/shared-nested-native.ts');
-  expect(runner).toContain('real-quickjs-shared-group-native');
+  expect(source('scripts/native-profile-fixtures.ts')).toContain('-shared-group-native');
   expect(source('scripts/native-profile-fixtures.ts')).toContain('output differs from expected.txt');
   expect(runner).not.toMatch(/\bskip\(/);
+});
+
+test('group bridge declarations stay in the two engines that register its cfg', () => {
+  expect(source('crates/bunwasm-engine-quickjs/src/side_modules.rs')).not.toContain('#[cfg(bun_wasm_shared_group)]');
+  expect(source('crates/bunwasm-engine-quickjs/src/lib.rs')).toContain('#[cfg(bun_wasm_shared_group)]\nmod nested_bridge;');
+  expect(source('crates/bunwasm-engine-jsc/src/lib.rs')).toContain('#[cfg(bun_wasm_shared_group)]\n#[path = "../../bunwasm-engine-quickjs/src/nested_bridge.rs"]\nmod nested_bridge;');
 });

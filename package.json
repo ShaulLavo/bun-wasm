@@ -63,6 +63,7 @@
     "web/src/shared-objects",
     "web/src/nested",
     "web/src/native-stream-state.ts",
+    "web/src/native-wasm-lifetime.ts",
     "web/src/native-readable-iterator.ts",
     "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
@@ -103,6 +104,7 @@
     "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.111/waffle-relay-0.0.111.tgz"
   },
   "devDependencies": {
+    "@builder.io/qwik": "1.17.2",
     "@types/bun": "^1.4.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
