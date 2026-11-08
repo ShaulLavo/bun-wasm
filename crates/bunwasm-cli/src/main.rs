@@ -59,15 +59,19 @@ mod bun_transpiler {
     fn record(
         out: Result<bunwasm_transpiler::Transpiled, bunwasm_transpiler::Failure>,
     ) -> Result<Transpiled, RecordError> {
-        let out = out.map_err(|failure| match failure {
-            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
-            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
-        })?;
+        let out = out.map_err(compile_failure)?;
         Ok(Transpiled {
             code: out.code,
             mappings: (!out.mappings.is_empty()).then_some(out.mappings),
             ..Default::default()
         })
+    }
+
+    fn compile_failure(failure: bunwasm_transpiler::Failure) -> RecordError {
+        match failure {
+            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
+            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
+        }
     }
 
     fn runtime_imports(
@@ -230,7 +234,7 @@ mod bun_transpiler {
             path: &str,
             loader: Loader,
             intern: &mut bunwasm_runtime::import_requests::InternImport<'_>,
-        ) -> Result<Transpiled, String> {
+        ) -> Result<Transpiled, RecordError> {
             use bunwasm_runtime::import_requests::{ImportMode, ImportRequest};
             let loader = compiler_loader(loader);
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
@@ -249,7 +253,8 @@ mod bun_transpiler {
                         .to_owned()
                     },
                 )
-            })?;
+            })
+            .map_err(compile_failure)?;
             Ok(runtime_output(out))
         }
 

@@ -412,11 +412,11 @@ pub fn prepare_module(
     preserve_source: bool,
     redirect_dynamic: bool,
     intern: &mut InternTextRequest<'_>,
-) -> Result<Transpiled, String> {
+) -> Result<Transpiled, Failure> {
     let mut collector = ChunkCollector::default();
     let (out, imports) = bun_js_printer::with_bunwasm_imports(|| {
         with_state(|state| {
-            prepare_file(
+            Ok(prepare_file(
                 state,
                 source,
                 path,
@@ -427,10 +427,10 @@ pub fn prepare_module(
                     intern,
                     redirect_dynamic,
                 },
-            )
+            ))
         })
     });
-    let mut out = out?;
+    let mut out = out.map_err(Failure::Other)??;
     if !out.preserved {
         out.imports = imports
             .into_iter()
@@ -453,7 +453,7 @@ fn prepare_file(
     preserve_source: bool,
     collector: &mut ChunkCollector,
     preparation: Preparation<'_>,
-) -> Result<Transpiled, String> {
+) -> Result<Transpiled, Failure> {
     let redirect = preparation.redirect_dynamic;
     let run = |state: &mut State| {
         run_with_scan(
@@ -468,10 +468,11 @@ fn prepare_file(
                 preparation: Some(preparation),
             },
         )
-        .map_err(String::from)
     };
     let compile = || {
-        if MODULE_RECORDS.with(|on| on.get()) {
+        // A semantic scan of unchanged JS must not reject run-time constant
+        // writes or fold expressions before the engine evaluates the module.
+        if preserve_source || MODULE_RECORDS.with(|on| on.get()) {
             return with_record_parse(state, run);
         }
         run(state)

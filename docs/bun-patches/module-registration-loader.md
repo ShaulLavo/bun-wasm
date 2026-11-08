@@ -65,3 +65,15 @@ Default CommonJS resolution and the native module-host interface are unchanged.
 
 This support applies to compiled file ESM and CommonJS. Generated Function/eval/vm
 and require-of-ESM bundler paths are not qualified by these controls.
+
+## File preparation error contracts
+
+The runtime's semantic preparation pass carries the compiler's existing
+`Syntax`/`Other` failure classification through the CLI adapter. Invalid module
+source reaches the engine as `SyntaxError`; initialization and printer failures
+remain `BuildError`. Public transpiler and bundler error contracts are unchanged.
+Source-preserving file preparation uses the existing non-folding runtime parser
+mode, including when text or dynamic-import lowering forces printing. That scan
+must not turn a deferred write to a constant into a load-time build failure.
+Native STORE evaluation still supplies the run-time `TypeError`; it is not routed
+through registration records. No additional upstream patch is needed.

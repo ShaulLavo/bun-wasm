@@ -75,3 +75,32 @@ fn runtime_lowering_keeps_default_requests_and_static_grammar_errors() {
         .is_err()
     );
 }
+
+#[test]
+fn runtime_preparation_preserves_deferred_constant_writes() {
+    let _guard = PARSER_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for suffix in [
+        "",
+        " import './page.html' with { type: 'text' };",
+        " void import('./dep.mjs');",
+    ] {
+        let source =
+            format!("export const value = 1; export function change() {{ value = 2; }}{suffix}");
+        let (out, _) = prepare(&source, "const-write.mjs");
+        assert!(out.code.contains("value = 2"), "{}", out.code);
+        assert_eq!(out.preserved, suffix.is_empty());
+    }
+}
+
+#[test]
+fn runtime_preparation_keeps_syntax_failures_classified() {
+    let _guard = PARSER_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for source in ["export const = ;", "export {}; arguments = 1;"] {
+        let error = prepare_module(source, "bad.mjs", Loader::Js, true, false, &mut |_| {
+            panic!("invalid source must not issue a request")
+        })
+        .err()
+        .expect("invalid module source");
+        assert!(format!("{error:?}").starts_with("Syntax("), "{error:?}");
+    }
+}
