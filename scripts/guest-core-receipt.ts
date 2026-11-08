@@ -121,7 +121,7 @@ function outputSelection(inputs: ProgramInputSnapshot): string {
   if (JSON.stringify(command.buildStd) !== JSON.stringify(buildStd)) throw new Error("Invalid retained program standard library profile");
   if (inputs.scope === "core" && JSON.stringify(command.optimizer) !== JSON.stringify(shared ? SHARED_GROUP_OPTIMIZER : optimizer)) throw new Error("Invalid retained core optimizer profile");
   if (inputs.scope !== "core" && (command.smokeExports !== false || command.spillPointers !== (inputs.scope === "jsc"))) throw new Error("Invalid retained engine finalization profile");
-  if (shared && ((inputs.scope !== "core" && inputs.scope !== "quickjs") || !record(inputs.content.sharedSysroot))) throw new Error("Invalid retained shared-group inputs");
+  if (shared && ((inputs.scope !== "core" && inputs.scope !== "quickjs" && inputs.scope !== "jsc") || !record(inputs.content.sharedSysroot))) throw new Error("Invalid retained shared-group inputs");
   const selection = inputs.content.selection;
   if (inputs.scope === "core") return selectionKey(coreSelection(selection));
   if (!record(selection) || Object.keys(selection).sort().join() !== (shared ? "kind,profile" : "kind") || selection.kind !== inputs.scope) throw new Error("Invalid engine input profile");
