@@ -760,25 +760,45 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
 
-test("Firefox QuickJS keeps its normal stack budget instead of Safari's reduced budget", controlled(() => {
+const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
+const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
+const stackHosts = [
+  { name: "Firefox", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "192" },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: undefined },
+  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+];
+
+function stackEnvironment(host: typeof stackHosts[number], engine: RunRequest["engine"], env: Record<string, string> = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
-  const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), {
-    stack: "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1",
-  }));
+  const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: host.stack }));
   const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module: guest(1), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env,
     filesystem: connection.client, runtimeProcess, trace: false, net: null };
   try {
-    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Mozilla/5.0 Gecko/20100101 Firefox/147.0" } });
-    expect(createBunExecutor(request).env?.(request)).toEqual({});
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: host.agent } });
+    return createBunExecutor(request).env?.(request);
   } finally {
     capture.mockRestore();
     if (navigator) Object.defineProperty(globalThis, "navigator", navigator);
     else Reflect.deleteProperty(globalThis, "navigator");
     connection.client.port.close(); connection.server.port.close();
   }
-}));
+}
+
+for (const host of stackHosts) {
+  test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => {
+    expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
+    expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
+    expect(stackEnvironment(host, "browser")).toEqual({});
+    expect(stackEnvironment(host, "spidermonkey")).toEqual({});
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
+    expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+  }));
+}
 
 let control: Awaited<ReturnType<typeof workerControlFixture>>;
 

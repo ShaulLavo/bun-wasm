@@ -46,13 +46,12 @@ export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapsho
 
 export type SleepMode = "atomics" | "busy-wait";
 
-// The engines' default stack budgets are measured on V8, whose first wasm tier uses frames close to
-// its optimized ones. JavaScriptCore starts in an interpreter with frames up to three times larger,
-// in 512 KiB worker stacks on Apple platforms, so other engines get the budgets measured there
-// (docs/stack-limits.md). V8 is the engine whose stack traces have "    at " frames.
+// Safari's first wasm tier needs smaller budgets (docs/stack-limits.md). Firefox QuickJS
+// catches every measured recursion path at 190 KiB, above its 152 KiB guest default.
+// Keep JSC and unknown hosts conservative. Firefox on iOS is WebKit, not Gecko.
 const smallStackKib = (): Partial<Record<Engine, string>> | null => /\n\s+at /.test(new Error().stack ?? "")
   ? null
-  : { quickjs: "32", jsc: "192" };
+  : { quickjs: typeof navigator !== "undefined" && /\bFirefox\/\d/.test(navigator.userAgent) ? undefined : "32", jsc: "192" };
 
 export interface BunExecutorHost extends BunSharedNativeHost {
   /** The worker's global scope: its location and fetch, and where network requests are posted. */
