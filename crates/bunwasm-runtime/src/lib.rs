@@ -26,6 +26,7 @@ pub mod engine_host;
 mod glob;
 pub mod host;
 mod html_rewriter;
+pub mod import_requests;
 pub mod init;
 pub mod install;
 mod intl;
@@ -89,6 +90,7 @@ pub struct Options {
 /// natives and the event loop.
 pub(crate) struct State {
     resolver: resolve::Resolver,
+    import_requests: RefCell<import_requests::ImportRequests>,
     transpiler: Box<dyn Transpiler>,
     /// Absolute path of the entry module (for `import.meta.main`).
     main: RefCell<String>,
@@ -132,6 +134,7 @@ impl State {
     ) -> Self {
         State {
             resolver: resolve::Resolver::with_conditions(conditions),
+            import_requests: RefCell::new(import_requests::ImportRequests::default()),
             transpiler,
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),

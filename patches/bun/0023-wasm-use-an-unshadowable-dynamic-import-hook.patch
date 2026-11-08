@@ -1,0 +1,22 @@
+From 059a877565d365d725358cb37aeab6474e9179b2 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 8 Nov 2026 11:22:43 +0200
+Subject: [PATCH] wasm: use an unshadowable dynamic import hook
+
+---
+ src/js_printer/lib.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index 68fbb9e5..f45ff703 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -6797,7 +6797,7 @@ pub(crate) mod __gated_printer {
+             }
+             super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
+                 if let Some(from) = from {
+-                    self.print(b"globalThis.__bunwasm_dynamicImport(");
++                    self.print(b"(function(){})[\"__bunwasmFunctionImport\"](");
+                     self.print_string_literal_utf8(from, false);
+                     self.print(b")(");
+                 } else {

@@ -39,6 +39,8 @@ declare namespace BunWasm {
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
+    resolveImport(specifier: string, referrer: string, mode: "inferred" | "text"): string;
+    modulePath(name: string): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     nodePath: {
@@ -305,7 +307,8 @@ declare namespace BunWasm {
   }
 }
 
-declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare function __bunwasm_meta(meta: object, path: string): void;
+declare function __bunwasm_dynamicImport(from: string): (specifier: unknown, options?: unknown) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }
   interface InspectOptions {

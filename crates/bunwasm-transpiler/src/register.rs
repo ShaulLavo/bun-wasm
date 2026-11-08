@@ -689,10 +689,7 @@ pub fn assemble(module: &Module, as_module: bool) -> Assembled {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Loader, register};
-
-    /// Bun's parser keeps process-wide state; one transpile at a time.
-    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::{Loader, PARSER_TEST_SERIAL as SERIAL, register};
 
     fn register_one(source: &str, path: &str) -> String {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());

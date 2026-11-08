@@ -144,6 +144,7 @@ pub struct Resolver {
     #[cfg(test)]
     packuments: BTreeMap<String, Value>,
     responses: BTreeMap<String, Vec<u8>>,
+    downloads: io::Downloads,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -162,6 +163,7 @@ impl Resolver {
             #[cfg(test)]
             packuments: BTreeMap::new(),
             responses: BTreeMap::new(),
+            downloads: io::Downloads::default(),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
@@ -171,16 +173,28 @@ impl Resolver {
     }
 
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
+        let result = self.resolve_graph(manifest, production);
+        self.downloads.clear();
+        result
+    }
+
+    fn resolve_graph(&mut self, manifest: &Value, production: bool) -> Result<()> {
         self.production = production;
         self.overrides = Overrides::new(manifest, &self.locked)?;
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
             self.add(&name, "workspace:*", vec![name.clone()], false)?;
         }
-        for (name, (range, optional, _)) in dependencies(manifest, production, true) {
-            let range = self.overrides.target(&name, &range).to_owned();
-            self.add(&name, &range, vec![name.clone()], optional)?;
+        let dependencies: Vec<_> = dependencies(manifest, production, true)
+            .into_iter()
+            .collect();
+        let mut lookahead = dependencies.iter();
+        for (name, (range, optional, _)) in &dependencies {
+            self.prefetch_dependencies(&mut lookahead, None);
+            let range = self.overrides.target(name, range).to_owned();
+            self.add(name, &range, vec![name.clone()], *optional)?;
         }
+        self.downloads.clear();
         let mut pending_peers = VecDeque::new();
         loop {
             while let Some(key) = self.pending.pop_front() {
@@ -293,30 +307,128 @@ impl Resolver {
     }
 
     fn children(&mut self, parent: &Package, peers: bool) -> Result<()> {
-        for (name, (range, optional, peer)) in dependencies(
+        let dependencies: Vec<_> = dependencies(
             &parent.meta,
             self.production,
             parent.local.as_ref().is_some_and(|p| p.workspace),
-        ) {
-            if peer != peers {
-                continue;
-            }
-            let range = self
-                .overrides
-                .replacement(&name, &range)
-                .map(str::to_owned)
-                .unwrap_or_else(|| declared_local_target(parent, range));
-            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
+        )
+        .into_iter()
+        .filter(|(_, (_, _, peer))| *peer == peers)
+        .collect();
+        let mut lookahead = dependencies.iter();
+        for (name, (range, optional, peer)) in &dependencies {
+            self.prefetch_dependencies(&mut lookahead, Some(parent));
+            let range = self.edge_range(Some(parent), name, range);
+            let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
             else {
                 continue;
             };
-            let chain = self.placement(parent, &name, &target, peer, optional || parent.optional);
+            let chain = self.placement(parent, name, &target, *peer, *optional || parent.optional);
             let Some(chain) = chain else {
                 continue;
             };
-            self.add(&name, &target, chain, optional || parent.optional)?;
+            self.add(name, &target, chain, *optional || parent.optional)?;
         }
+        self.downloads.clear();
         Ok(())
+    }
+
+    fn edge_range(&self, parent: Option<&Package>, name: &str, range: &str) -> String {
+        let Some(parent) = parent else {
+            return self.overrides.target(name, range).into();
+        };
+        self.overrides
+            .replacement(name, range)
+            .map(str::to_owned)
+            .unwrap_or_else(|| declared_local_target(parent, range.into()))
+    }
+
+    fn prefetch_dependencies<'a>(
+        &mut self,
+        lookahead: &mut impl Iterator<Item = &'a (String, (String, bool, bool))>,
+        parent: Option<&Package>,
+    ) {
+        while !self.downloads.is_full() {
+            let Some((name, (range, optional, _))) = lookahead.next() else {
+                break;
+            };
+            let range = self.edge_range(parent, name, range);
+            let Some(target) = self.prefetch_name(parent, name, &range, *optional) else {
+                continue;
+            };
+            self.downloads.prefetch(
+                &self.metadata_url(&target),
+                false,
+                self.refresh,
+                &self.registry,
+            );
+        }
+    }
+
+    fn prefetch_name(
+        &self,
+        parent: Option<&Package>,
+        name: &str,
+        range: &str,
+        optional: bool,
+    ) -> Option<String> {
+        // Existing placements can satisfy or reject peers without fetching anything.
+        if self.packages.contains_key(name)
+            || parent.is_some_and(|parent| self.dependency_key(parent, name).is_some())
+        {
+            return None;
+        }
+        let mut lookup = if self.overrides.changed.contains(name) {
+            LockLookup::Skip
+        } else {
+            LockLookup::Use
+        };
+        let mut range = range.to_owned();
+        if let Some(parent) = parent {
+            let updating = self.member_update.as_ref().is_some_and(|update| {
+                update.member == parent.name && update.dependencies.contains(name)
+            });
+            if updating {
+                lookup = LockLookup::Skip;
+            } else if let Some(locked) = self.locked_child(parent, name, &range) {
+                range = locked;
+            }
+        }
+        self.metadata_name(name, &range, &[name.into()], optional, lookup)
+    }
+
+    fn metadata_name(
+        &self,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+        lookup: LockLookup,
+    ) -> Option<String> {
+        valid_name(name).ok()?;
+        if let Some(alias) = range.strip_prefix("npm:") {
+            let (name, range) = spec(alias).ok()?;
+            return self.metadata_name(&name, &range, chain, optional, lookup);
+        }
+        if self.local_package(name, range).ok()?.is_some() || self.responses.contains_key(name) {
+            return None;
+        }
+        #[cfg(test)]
+        if self.packuments.contains_key(name) {
+            return None;
+        }
+        if matches!(lookup, LockLookup::Use)
+            && self
+                .resolve_from_lock(name, range, chain, optional)
+                .is_some()
+        {
+            return None;
+        }
+        Some(name.into())
+    }
+
+    fn metadata_url(&self, name: &str) -> String {
+        format!("{}/{}", self.registry.url, name.replace('/', "%2f"))
     }
 
     fn target(
@@ -577,9 +689,8 @@ impl Resolver {
             return Ok(());
         }
         if !self.responses.contains_key(name) {
-            let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(
-                &format!("{}/{encoded}", self.registry.url),
+            let bytes = self.downloads.fetch(
+                &self.metadata_url(name),
                 false,
                 self.refresh,
                 &self.registry,
