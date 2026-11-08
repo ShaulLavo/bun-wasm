@@ -1673,3 +1673,47 @@ jobs:
         run: |
           bun install --cwd .. --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest
+
+  update-status:
+    name: Report automated update statuses
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-sysroot, web, process-bundles, browser-process]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
+      - name: Report each required result on the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD: ${{ github.sha }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          while IFS='|' read -r context job selection; do
+            result=$(jq -er --arg job "$job" '.[$job].result' <<< "$RESULTS")
+            state=failure
+            if [[ "$result" == success ]]; then state=success; fi
+            # A classifier-disabled job is an intentional skip, just as in PR CI.
+            if [[ "$result" == skipped && -n "$selection" ]] &&
+              jq -e --arg selection "$selection" '.quality.result == "success" and .quality.outputs[$selection] == "false"' <<< "$RESULTS" >/dev/null; then
+              state=success
+            fi
+            gh api --method POST "repos/$GH_REPO/statuses/$HEAD" \
+              -f context="$context" -f state="$state" -f target_url="$RUN_URL" \
+              -f description="Dispatched CI: $result"
+          done <<'STATUSES'
+          Code quality|quality|
+          JSC C/C++ prebuild|jsc-prebuild|rust
+          Native quality checkpoint|native-quality|rust
+          Rust workspace tests (QuickJS host)|rust|rust
+          Browser adapter package|package|
+          Shared PIC sysroot proof|shared-sysroot|shared
+          Web host|web|
+          Shared process browser bundles|process-bundles|
+          Processes (chromium)|browser-process|
+          Processes (firefox)|browser-process|
+          Processes (webkit)|browser-process|
+          STATUSES
