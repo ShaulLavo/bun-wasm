@@ -73,3 +73,10 @@ through atomic cells and owned copies. The group backing outlives the member's S
 member is released once its thread has stopped and its instances are destroyed. A fatal signal
 interrupts a member blocked in a futex wait.
 
+## Processes on the Browser host
+
+The page admits a group core as the first member of a new group, and a spawned group core
+starts its own group. The runtime that hosts it needs the `memoryGroups` policy above.
+[The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs
+from the native host.
+

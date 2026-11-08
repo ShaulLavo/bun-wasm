@@ -1,6 +1,6 @@
 import { programMemory } from "../../src/program-memory.ts";
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
-import { pairedEngines } from "../../src/engine-kind.ts";
+import { isSharedGroupCore, pairedEngines } from "../../src/engine-kind.ts";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -130,6 +130,15 @@ function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<stri
       : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
     registerEngineCommands(subprocess, programs, engine, module);
   }
+}
+
+/** A group core links only into a group admitted by the page, charged by that group's owner. */
+async function adoptRootProgram(subprocess: SubprocessBroker, transport: Parameters<SubprocessBroker["adoptRuntimeRoot"]>[0], module: WebAssembly.Module, cancelled: () => boolean) {
+  const group = isSharedGroupCore(module);
+  const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
+  if (!controlGrant) return undefined;
+  const member = group ? await subprocess.admitRootGroup() : undefined;
+  return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
 }
 
 function acceptRootSharedConnection(route: SharedObjectRoute | undefined, message: BunSharedConnection, terminal: boolean): string | undefined {
@@ -403,8 +412,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     if (preparationStopped()) return;
     if (!subprocess) return;
-    const controlGrant = await subprocess.adoptRuntimeRoot(transport, programMemory(request.module), () => finished);
-    if (!controlGrant) return;
+    const adopted = await adoptRootProgram(subprocess, transport, request.module, () => finished);
+    if (!adopted) return;
+    const { controlGrant, groupTransfer } = adopted;
+    request.memoryGroup = adopted.memoryGroup;
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
@@ -449,7 +460,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       const transfers = [request.filesystem.port]
         .concat(request.lookupPort ? [request.lookupPort] : [])
         .concat(request.notifications ? [request.notifications.port] : [])
-        .concat(request.network ? [request.network.port] : []);
+        .concat(request.network ? [request.network.port] : [])
+        .concat(groupTransfer);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();

@@ -108,11 +108,10 @@ export { read as readTelemetryRecord, count as telemetryCount };
 export type EngineDiagnostics = (memory: WebAssembly.Memory, exports: WebAssembly.Exports) => Record<string, number | null>;
 
 /** `limitBytes` is the core's declared memory maximum (crates/bunwasm-cli/max-memory.txt at link time). */
-export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity, diagnostics?: EngineDiagnostics) {
+export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity, diagnostics?: EngineDiagnostics, memory: unknown = core.exports.memory) {
   const id = identity?.id ?? crypto.randomUUID();
   const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence }
     : { id, commandId: id, commandStartedAt: Date.now(), commandSequence: 0 };
-  const memory = core.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) throw new TypeError("Missing telemetry memory");
   let terminal = false;
   let failed = false;
