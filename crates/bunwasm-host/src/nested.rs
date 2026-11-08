@@ -18,11 +18,78 @@ pub(crate) struct State {
     instances: Vec<Guest>,
     functions: Vec<Func>,
     function_keys: std::collections::HashMap<usize, u32>,
-    memories: Vec<Option<NestedMemory>>,
+    memories: Resources<NestedMemory>,
+    core_failed: bool,
+    admission_error: Option<String>,
     invocations: Vec<u32>,
     entries: Option<Entries>,
     instantiation_attempts: u64,
     failed_instantiations: u64,
+}
+
+// Memory slots are reused, but identities never are. Retire a slot rather than wrap.
+const SLOT_BITS: u32 = 12;
+const MAX_GENERATION: u32 = (BACKEND - 1) >> SLOT_BITS;
+struct Resource<T> {
+    generation: u32,
+    value: Option<T>,
+}
+struct Resources<T> {
+    slots: Vec<Resource<T>>,
+    free: Vec<usize>,
+}
+impl<T> Default for Resources<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+}
+impl<T> Resources<T> {
+    fn insert(&mut self, value: T) -> Result<u32> {
+        let slot = match self.free.pop() {
+            Some(slot) => slot,
+            None => {
+                ensure!(self.slots.len() < MAX_RESOURCES, "nested resource limit");
+                self.slots.push(Resource {
+                    generation: 0,
+                    value: None,
+                });
+                self.slots.len() - 1
+            }
+        };
+        let entry = &mut self.slots[slot];
+        entry.value = Some(value);
+        Ok(BACKEND | (entry.generation << SLOT_BITS) | slot as u32)
+    }
+    fn slot(&self, id: u32) -> Result<usize> {
+        let raw = index(id)?;
+        let slot = raw & (MAX_RESOURCES - 1);
+        let entry = self.slots.get(slot).context("invalid nested memory")?;
+        ensure!(
+            entry.generation == (raw >> SLOT_BITS) as u32 && entry.value.is_some(),
+            "invalid nested memory"
+        );
+        Ok(slot)
+    }
+    fn get(&self, id: u32) -> Result<&T> {
+        self.slots[self.slot(id)?]
+            .value
+            .as_ref()
+            .context("invalid nested memory")
+    }
+    fn release(&mut self, id: u32) -> Result<()> {
+        let slot = self.slot(id)?;
+        let entry = &mut self.slots[slot];
+        entry.value.take();
+        if entry.generation == MAX_GENERATION {
+            return Ok(());
+        }
+        entry.generation += 1;
+        self.free.push(slot);
+        Ok(())
+    }
 }
 
 struct Guest {
@@ -32,7 +99,11 @@ struct Guest {
 
 impl State {
     pub(crate) fn snapshot(&self) -> serde_json::Value {
-        let memories = self.memories.iter().flatten();
+        let memories = self
+            .memories
+            .slots
+            .iter()
+            .filter_map(|slot| slot.value.as_ref());
         let committed: u64 = memories
             .clone()
             .map(|memory| u64::from(memory.maximum().max(1)) * 65536)
@@ -41,7 +112,8 @@ impl State {
         serde_json::json!({ "modules": self.modules.len(), "instances": self.instances.len(),
             "functions": self.functions.len(), "memories": memories.count(),
             "reserved_committed_bytes": committed, "visible_bytes": visible,
-            "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations })
+            "memory_slots": self.memories.slots.len(), "core_failed": self.core_failed,
+            "admission_closed": self.admission_error.is_some(), "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations })
     }
 }
 
@@ -60,6 +132,15 @@ impl std::fmt::Display for PendingException {
     }
 }
 impl std::error::Error for PendingException {}
+
+#[derive(Debug)]
+struct NestedExecution;
+impl std::fmt::Display for NestedExecution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("nested execution failed")
+    }
+}
+impl std::error::Error for NestedExecution {}
 
 pub(crate) fn bind(core: Instance, store: &mut wasmtime::Store<Host>) -> Result<()> {
     let entries = Entries {
@@ -88,13 +169,7 @@ fn insert<T>(items: &mut Vec<T>, value: T) -> Result<u32> {
     Ok(id)
 }
 fn memory(caller: &Caller<'_, Host>, id: u32) -> Result<NestedMemory> {
-    caller
-        .data()
-        .nested
-        .memories
-        .get(index(id)?)
-        .and_then(Clone::clone)
-        .context("invalid nested memory")
+    caller.data().nested.memories.get(id).cloned()
 }
 fn guest_memory(caller: &Caller<'_, Host>) -> Result<crate::guest::GuestMemory> {
     caller
@@ -122,10 +197,11 @@ fn allocate(caller: &mut Caller<'_, Host>, bytes: u32) -> Result<u32> {
         .nested
         .entries
         .context("nested entries are not bound")?;
-    let pointer = entries
+    let result = entries
         .alloc
         .typed::<(u32, u32), u32>(&*caller)?
-        .call(&mut *caller, (bytes, 8))?;
+        .call(&mut *caller, (bytes, 8));
+    let pointer = core_result(caller, result)?;
     ensure!(pointer != 0, "nested transport allocation failed");
     Ok(pointer)
 }
@@ -135,10 +211,34 @@ fn free(caller: &mut Caller<'_, Host>, pointer: u32, bytes: u32) -> Result<()> {
         .nested
         .entries
         .context("nested entries are not bound")?;
-    entries
+    let result = entries
         .free
         .typed::<(u32, u32, u32), ()>(&*caller)?
-        .call(caller, (pointer, bytes, 8))
+        .call(&mut *caller, (pointer, bytes, 8));
+    core_result(caller, result)
+}
+
+#[derive(Debug)]
+struct CoreFailure;
+impl std::fmt::Display for CoreFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("reentered core failed")
+    }
+}
+impl std::error::Error for CoreFailure {}
+
+pub(crate) fn fatal_diagnostic(error: &anyhow::Error) -> Option<String> {
+    error.downcast_ref::<CoreFailure>()?;
+    Some(format!("reentered core failed: {}", error.root_cause()))
+}
+fn core_result<T>(caller: &mut Caller<'_, Host>, result: Result<T>) -> Result<T> {
+    match result {
+        Err(error) if !error.is::<PendingException>() => {
+            caller.data_mut().nested.core_failed = true;
+            Err(error.context(CoreFailure))
+        }
+        result => result,
+    }
 }
 
 pub(crate) fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
@@ -156,6 +256,7 @@ pub(crate) fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
             };
             let reply = match execute(&mut caller, request) {
                 Ok(reply) => reply,
+                Err(error) if caller.data().nested.core_failed => return Err(error),
                 Err(error) => error_reply(error, category),
             };
             caller.data().cancel.check()?;
@@ -180,7 +281,9 @@ fn error_reply(error: anyhow::Error, category: &str) -> Reply {
     if error.downcast_ref::<PendingException>().is_some() {
         return Reply::PendingException;
     }
-    let category = if error.downcast_ref::<wasmtime::Trap>().is_some() {
+    let category = if error.downcast_ref::<wasmtime::Trap>().is_some()
+        || error.downcast_ref::<NestedExecution>().is_some()
+    {
         "RuntimeError"
     } else {
         category
@@ -201,10 +304,9 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 .context("shared memory needs a group member")?;
             let region = NestedMemory::new(member, initial, maximum)
                 .map_err(|error| anyhow!("region admission: {error:?}"))?;
-            Ok(Reply::Handle(insert(
-                &mut caller.data_mut().nested.memories,
-                Some(region),
-            )?))
+            Ok(Reply::Handle(
+                caller.data_mut().nested.memories.insert(region)?,
+            ))
         }
         Request::Span { memory: id } => {
             let region = memory(caller, id)?;
@@ -221,13 +323,7 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 .map_err(|error| anyhow!("memory growth: {error:?}"))?,
         )),
         Request::Release { memory: id } => {
-            caller
-                .data_mut()
-                .nested
-                .memories
-                .get_mut(index(id)?)
-                .context("invalid memory")?
-                .take();
+            caller.data_mut().nested.memories.release(id)?;
             Ok(Reply::Count(0))
         }
         Request::Compile { pointer, length } => {
@@ -305,6 +401,10 @@ fn instantiate(
         caller.data().nested.instances.len() < MAX_RESOURCES,
         "nested instance limit"
     );
+    if let Some(message) = &caller.data().nested.admission_error {
+        bail!("{message}");
+    }
+    validate_bindings(caller, &module, &bindings)?;
     let mut imports = Vec::new();
     let mut bindings = bindings.iter();
     for import in module.imports() {
@@ -332,6 +432,14 @@ fn instantiate(
         Err(error) => {
             caller.data_mut().nested.failed_instantiations =
                 caller.data().nested.failed_instantiations.saturating_add(1);
+            // All import types were checked before allocating Store objects. Non-execution
+            // failures close admission, so a saturated Store cannot retain more wrappers.
+            if error.downcast_ref::<wasmtime::Trap>().is_none()
+                && error.downcast_ref::<PendingException>().is_none()
+                && error.downcast_ref::<NestedExecution>().is_none()
+            {
+                caller.data_mut().nested.admission_error = Some(format!("{error:#}"));
+            }
             return Err(error);
         }
     };
@@ -342,6 +450,75 @@ fn instantiate(
             _memory: region,
         },
     )?))
+}
+
+fn validate_bindings(
+    caller: &Caller<'_, Host>,
+    module: &Module,
+    bindings: &[Binding],
+) -> Result<()> {
+    let imports = module
+        .imports()
+        .filter(|import| import.module() != "bunwasm_region");
+    ensure!(
+        module
+            .imports()
+            .filter(|import| import.module() != "bunwasm_region")
+            .count()
+            == bindings.len(),
+        "nested import count"
+    );
+    for (import, binding) in imports.zip(bindings) {
+        validate_binding(caller, import, binding)?;
+    }
+    Ok(())
+}
+fn validate_binding(
+    caller: &Caller<'_, Host>,
+    import: wasmtime::ImportType<'_>,
+    binding: &Binding,
+) -> Result<()> {
+    let (module, name) = match binding {
+        Binding::Callback { module, name, .. }
+        | Binding::Function { module, name, .. }
+        | Binding::Global { module, name, .. } => (module, name),
+    };
+    ensure!(
+        module == import.module() && name == import.name(),
+        "nested import order mismatch"
+    );
+    let expected = import.ty();
+    match binding {
+        Binding::Callback { .. } => {
+            let ty = expected.func().context("callback import type")?;
+            ensure!(
+                ty.params().len() <= frame::MAX_VALUES && ty.results().len() <= frame::MAX_VALUES,
+                "callback value limit"
+            );
+        }
+        Binding::Function { id, .. } => {
+            let function = caller
+                .data()
+                .nested
+                .functions
+                .get(index(*id)?)
+                .context("invalid nested function import")?;
+            let ty = expected.func().context("function import type")?;
+            ensure!(
+                function.ty(caller).matches(ty),
+                "incompatible nested function import type"
+            );
+        }
+        Binding::Global { value, .. } => {
+            let ty = expected.global().context("global import type")?;
+            ensure!(
+                ty.mutability() == Mutability::Const
+                    && ValType::eq(&number(*value).ty(caller)?, ty.content()),
+                "incompatible nested global import type"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn import_value(
@@ -391,7 +568,7 @@ fn callback_import(
     );
     let results: Vec<_> = ty.results().collect();
     Ok(Func::new(&mut *caller, ty, move |mut caller, args, out| {
-        dispatch(&mut caller, id, args, out, &results)
+        dispatch(&mut caller, id, args, out, &results).context(NestedExecution)
     })
     .into())
 }
@@ -427,15 +604,21 @@ fn region_import(
         )?
         .into()),
         "length" => Ok(Func::wrap(&mut *caller, move || -> Result<i64> {
-            Ok(upgrade(&weak)?.len() as i64)
+            upgrade(&weak)
+                .map(|region| region.len() as i64)
+                .context(NestedExecution)
         })
         .into()),
         "pages" => Ok(Func::wrap(&mut *caller, move || -> Result<i32> {
-            Ok(upgrade(&weak)?.pages() as i32)
+            upgrade(&weak)
+                .map(|region| region.pages() as i32)
+                .context(NestedExecution)
         })
         .into()),
         "grow" => Ok(Func::wrap(&mut *caller, move |delta: u32| -> Result<i32> {
-            Ok(upgrade(&weak)?.grow(delta).map_or(-1, |old| old as i32))
+            upgrade(&weak)
+                .map(|region| region.grow(delta).map_or(-1, |old| old as i32))
+                .context(NestedExecution)
         })
         .into()),
         "wait32" => Ok(wait32_import(caller, weak)),
@@ -452,13 +635,17 @@ fn wait32_import(caller: &mut Caller<'_, Host>, weak: shm::nested::WeakNestedMem
     Func::wrap(
         caller,
         move |caller: Caller<'_, Host>, addr: u32, expected: i32, timeout: i64| -> Result<i32> {
-            let region = upgrade(&weak)?;
-            ensure!(region.contains(addr, 4), "nested wait32 outside region");
-            let member = caller.data().shm.as_ref().context("group member")?;
-            let status = shm::futex_wait32(member, addr, expected, timeout, &caller.data().cancel);
-            caller.data().cancel.check()?;
-            ensure!(status >= 0, "nested wait32 failed: {status}");
-            Ok(status)
+            (|| {
+                let region = upgrade(&weak)?;
+                ensure!(region.contains(addr, 4), "nested wait32 outside region");
+                let member = caller.data().shm.as_ref().context("group member")?;
+                let status =
+                    shm::futex_wait32(member, addr, expected, timeout, &caller.data().cancel);
+                caller.data().cancel.check()?;
+                ensure!(status >= 0, "nested wait32 failed: {status}");
+                Ok(status)
+            })()
+            .context(NestedExecution)
         },
     )
     .into()
@@ -467,13 +654,17 @@ fn wait64_import(caller: &mut Caller<'_, Host>, weak: shm::nested::WeakNestedMem
     Func::wrap(
         caller,
         move |caller: Caller<'_, Host>, addr: u32, expected: i64, timeout: i64| -> Result<i32> {
-            let region = upgrade(&weak)?;
-            ensure!(region.contains(addr, 8), "nested wait64 outside region");
-            let member = caller.data().shm.as_ref().context("group member")?;
-            let status = shm::futex_wait64(member, addr, expected, timeout, &caller.data().cancel);
-            caller.data().cancel.check()?;
-            ensure!(status >= 0, "nested wait64 failed: {status}");
-            Ok(status)
+            (|| {
+                let region = upgrade(&weak)?;
+                ensure!(region.contains(addr, 8), "nested wait64 outside region");
+                let member = caller.data().shm.as_ref().context("group member")?;
+                let status =
+                    shm::futex_wait64(member, addr, expected, timeout, &caller.data().cancel);
+                caller.data().cancel.check()?;
+                ensure!(status >= 0, "nested wait64 failed: {status}");
+                Ok(status)
+            })()
+            .context(NestedExecution)
         },
     )
     .into()
@@ -482,13 +673,16 @@ fn notify_import(caller: &mut Caller<'_, Host>, weak: shm::nested::WeakNestedMem
     Func::wrap(
         caller,
         move |caller: Caller<'_, Host>, addr: u32, count: u32| -> Result<i32> {
-            let region = upgrade(&weak)?;
-            ensure!(region.contains(addr, 4), "nested notify outside region");
-            Ok(shm::futex_wake(
-                caller.data().shm.as_ref().context("group member")?,
-                addr,
-                count,
-            ))
+            (|| {
+                let region = upgrade(&weak)?;
+                ensure!(region.contains(addr, 4), "nested notify outside region");
+                Ok(shm::futex_wake(
+                    caller.data().shm.as_ref().context("group member")?,
+                    addr,
+                    count,
+                ))
+            })()
+            .context(NestedExecution)
         },
     )
     .into()
@@ -520,6 +714,7 @@ fn type_name(ty: ValType) -> Result<String> {
         ValType::I64 => "i64",
         ValType::F32 => "f32",
         ValType::F64 => "f64",
+        ValType::V128 => "v128",
         _ => bail!("reference/SIMD values cannot cross this nested JS ABI"),
     }
     .to_owned())
@@ -618,7 +813,9 @@ fn dispatch(
     };
     write(caller, pointer, bytes)?;
     let result = dispatch_frame(caller, invocation, callback, pointer, out, types);
-    free(caller, pointer, frame::FRAME_BYTES)?;
+    if !caller.data().nested.core_failed {
+        free(caller, pointer, frame::FRAME_BYTES)?;
+    }
     result
 }
 fn dispatch_frame(
@@ -635,9 +832,10 @@ fn dispatch_frame(
         .entries
         .context("nested entries")?
         .dispatch;
-    let status = dispatch
+    let result = dispatch
         .typed::<(u32, u32, u32), u32>(&*caller)?
-        .call(&mut *caller, (invocation, callback, pointer))?;
+        .call(&mut *caller, (invocation, callback, pointer));
+    let status = core_result(caller, result)?;
     if status == frame::PENDING_EXCEPTION {
         return Err(PendingException.into());
     }
@@ -709,11 +907,19 @@ mod tests {
         .unwrap();
         let member = group.reserve(702).unwrap().launch();
         let region = NestedMemory::new(&member, 1, 2).unwrap();
-        let mut full: Vec<Option<NestedMemory>> = vec![None; MAX_RESOURCES];
-        assert!(insert(&mut full, Some(region)).is_err());
+        let mut full = Resources::default();
+        for _ in 0..MAX_RESOURCES {
+            full.insert(region.clone()).unwrap();
+        }
+        assert!(full.insert(region).is_err());
+        drop(full);
         assert_eq!(group.snapshot().regions, 0);
         member.physical_stopped();
         drop(group);
         assert_eq!(budget.committed_bytes(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "nested_tests.rs"]
+mod runtime_controls;

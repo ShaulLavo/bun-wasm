@@ -8,6 +8,9 @@ use std::{
 };
 #[path = "../../bunwasm-runtime/src/wasm/nested_frame.rs"]
 mod frame;
+#[path = "nested_token.rs"]
+mod nested_token;
+use nested_token::next_token;
 
 struct Invocation {
     token: u32,
@@ -38,17 +41,16 @@ pub(crate) fn execute(
             "Nested WebAssembly call depth exceeded",
         )));
     }
-    let token = NEXT
-        .with(|next| {
-            let token = next.get().checked_add(1)?;
-            next.set(token);
-            Some(token)
-        })
-        .ok_or_else(|| {
-            engine.error_value(&NativeError::range_error(
-                "Nested invocation tokens exhausted",
-            ))
-        })?;
+    let token = NEXT.with(|next| {
+        let token = ACTIVE.with(|stack| {
+            let stack = stack.borrow();
+            next_token(next.get(), |token| {
+                stack.iter().any(|entry| entry.token == token)
+            })
+        });
+        next.set(token);
+        token
+    });
     let invocation = Rc::new(Invocation {
         token,
         engine: engine.clone(),

@@ -44,7 +44,7 @@ pub extern "C" fn bun_core_bind_nested(dispatch: Dispatch) {
 pub extern "C" fn bun_nested_dispatch(invocation: u32, callback: u32, pointer: u32) -> u32 {
     let active = super::nested_invocation::active();
     if active != Some(invocation)
-        || crate::split::nested_transport_read(pointer, frame::FRAME_BYTES).is_err()
+        || !crate::split::nested_transport_validate(pointer, frame::FRAME_BYTES)
     {
         return frame::BAD_FRAME;
     }
@@ -176,21 +176,9 @@ fn describe(bytes: &[u8], memory: MemoryPlan) -> Result<Description, NativeError
     let mut types = Vec::new();
     for payload in Parser::new(0).parse_all(bytes) {
         match payload.map_err(error)? {
-            Payload::TypeSection(section) => {
-                for ty in section.into_iter_err_on_gc_types() {
-                    types.push(ty.map_err(error)?);
-                }
-            }
-            Payload::ImportSection(section) => {
-                for item in section {
-                    imports.push(describe_import(item.map_err(error)?, &types)?);
-                }
-            }
-            Payload::ExportSection(section) => {
-                for item in section {
-                    exports.push(describe_export(item.map_err(error)?)?);
-                }
-            }
+            Payload::TypeSection(section) => describe_types(section, &mut types)?,
+            Payload::ImportSection(section) => describe_imports(section, &types, &mut imports)?,
+            Payload::ExportSection(section) => describe_exports(section, &mut exports)?,
             _ => {}
         }
     }
@@ -199,6 +187,34 @@ fn describe(bytes: &[u8], memory: MemoryPlan) -> Result<Description, NativeError
         imports,
         exports,
     })
+}
+fn describe_types(
+    section: wasmparser::TypeSectionReader<'_>,
+    types: &mut Vec<wasmparser::FuncType>,
+) -> Result<(), NativeError> {
+    for ty in section.into_iter_err_on_gc_types() {
+        types.push(ty.map_err(error)?);
+    }
+    Ok(())
+}
+fn describe_imports(
+    section: wasmparser::ImportSectionReader<'_>,
+    types: &[wasmparser::FuncType],
+    imports: &mut Vec<Import>,
+) -> Result<(), NativeError> {
+    for item in section {
+        imports.push(describe_import(item.map_err(error)?, types)?);
+    }
+    Ok(())
+}
+fn describe_exports(
+    section: wasmparser::ExportSectionReader<'_>,
+    exports: &mut Vec<Val>,
+) -> Result<(), NativeError> {
+    for item in section {
+        exports.push(describe_export(item.map_err(error)?)?);
+    }
+    Ok(())
 }
 fn describe_import(
     item: wasmparser::Import<'_>,

@@ -495,12 +495,20 @@ fn select_instance_outcome(
                 // observed by epoch, poll, or stdio already selected signal death.
                 let outcome = cancel.select(FinalOutcome::Exit(134));
                 if matches!(outcome, FinalOutcome::Exit(_)) {
-                    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
+                    report_instance_trap(&error);
                 }
                 outcome
             }
         },
     }
+}
+
+fn report_instance_trap(error: &anyhow::Error) {
+    if let Some(diagnostic) = nested::fatal_diagnostic(error) {
+        eprintln!("bun-wasm: bun.wasm trapped: {diagnostic}");
+        return;
+    }
+    eprintln!("bun-wasm: bun.wasm trapped: {error:?}");
 }
 
 fn main() -> ExitCode {

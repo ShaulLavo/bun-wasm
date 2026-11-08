@@ -27,6 +27,10 @@ for (let attemptIndex = 0; attemptIndex < 64; attemptIndex++) {
   break;
 }
 assert(exhausted, 'The unchanged native Store instance bound must apply');
+for (let index = 0; index < 5000; index++) assert.equal(attempt(), 'limit');
+const fresh = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
+assert.equal(fresh.buffer.byteLength, 65536);
+assert.equal(fresh.grow(1), 1);
 assert.equal(read(), 73);
 assert.equal(Atomics.load(words, 0), 73);
 assert.equal(memory.grow(1), 1);

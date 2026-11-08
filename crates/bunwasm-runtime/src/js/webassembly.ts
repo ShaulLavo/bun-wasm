@@ -251,6 +251,7 @@
     return fn;
   }
   function invoke(info: BunWasm.WasmFunction, args: unknown[]) {
+    if (info.results.includes('v128')) throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
     const inputs = info.params.map((type, index) => coerce(args[index], type));
     let result = info.backend === 'nested' ? nestedExecute(token => native.call(info.id, inputs, token)) : execute(() => native.call(info.id, inputs));
     while ('import' in result) result = imported(result);
@@ -261,7 +262,6 @@
   function nestedCallback(id: number, args: BunWasm.WasmValue[]) {
     const entry = nestedCallbacks.get(id);
     if (!entry) throw new RuntimeError('Invalid nested callback');
-    sync(refreshMemory);
     return callbackResults(entry, args).map((value, index) => ({ type: entry.results[index], value }));
   }
   function nestedExecute<T>(action: (token: number) => T): T {
@@ -271,7 +271,7 @@
         if (error instanceof Error && error.name === 'LinkError') throw new LinkError(error.message);
         if (error instanceof Error && error.name === 'RuntimeError') throw new RuntimeError(error.message);
         throw error;
-      } finally { sync(refreshMemory); }
+      }
     }, nestedCallback);
   }
   function callbackResults(entry: Callback, args: BunWasm.WasmValue[]) {
@@ -307,10 +307,10 @@
         if (info.backend === 'nested') throw error;
         throw new LinkError(message(error));
       }
-      finally { sync(refreshMemory); }
+      finally { if (info.backend !== 'nested') sync(refreshMemory); }
       const exports: Exports = Object.create(null);
       for (const item of info.exports) installExport(id, exports, item);
-      sync(refreshMemory);
+      if (info.backend !== 'nested') sync(refreshMemory);
       Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
     }
   }
@@ -342,8 +342,18 @@
     }
     if (item.kind === 'memory' && value instanceof Memory) return memoryState(value).resource;
     if (item.kind === 'table' && value instanceof Table) return tableState(value).id;
-    if (item.kind === 'global') return coerce(value instanceof Global ? value.value : value, item.type);
+    if (item.kind === 'global' && backend === 'nested') return globalImport(item, value);
     throw new LinkError(`Missing or unsupported WebAssembly import ${item.module}.${item.name}`);
+  }
+  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown) {
+    if (value instanceof Global) {
+      const state = globalStates.get(value);
+      if (!state || state.type !== item.type || state.mutable !== item.mutable) throw new LinkError('Incompatible WebAssembly global import');
+      return coerce(value.value, item.type);
+    }
+    const expected = item.type === 'i64' ? 'bigint' : 'number';
+    if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
+    return coerce(value, item.type);
   }
   function installExport(id: number, exports: Exports, item: BunWasm.WasmExport) {
     const name = item.name;

@@ -49,6 +49,11 @@ pub(crate) fn nested_transport_read(pointer: u32, bytes: u32) -> Result<Vec<u8>,
         .map_err(|_| NativeError::error("invalid owned nested frame"))
 }
 
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn nested_transport_validate(pointer: u32, bytes: u32) -> bool {
+    TRANSPORT.with(|transport| transport.validate(pointer, bytes).is_ok())
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn core_checkpoint() -> u32 {
     u32::from(crate::host::signal(0, 4) < 0)
