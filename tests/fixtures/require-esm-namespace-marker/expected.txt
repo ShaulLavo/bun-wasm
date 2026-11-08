@@ -1,0 +1,5 @@
+default marker, call, and cached identity
+live exports across require and import
+named-only namespace marker
+explicit markers stay live and unchanged
+CommonJS exports unchanged
