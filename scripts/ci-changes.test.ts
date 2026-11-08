@@ -204,16 +204,22 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
   if (!fixture) throw new Error("Fixture not initialized");
   const first = commitInput("package.json");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.1", scripts: { quality: "bun quality.ts" } }));
-  git(["commit", "-qam", "manifest inputs"]);
+  mkdirSync(join(fixture, "checks"), { recursive: true });
+  writeFileSync(join(fixture, "checks/native-shared-release.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/shared-release", profile: "shared-group" }));
+  git(["add", "."]);
+  git(["commit", "-qm", "manifest inputs"]);
   const manifestBase = git(["rev-parse", "HEAD"]);
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.2", scripts: { quality: "bun quality.ts" } }));
   git(["commit", "-qam", "patch bump"]);
   const bumped = git(["rev-parse", "HEAD"]);
   expect(select(manifestBase, bumped)).toBe("rust=false\njsc=false");
   expect(select(manifestBase, bumped, "push")).toBe("rust=false\njsc=false");
+  expect(selectionOutput(manifestBase, bumped)).toEndWith("shared_native=false");
+  expect(selectionOutput(manifestBase, bumped, "push")).toEndWith("shared_native=false");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
   git(["commit", "-qam", "change native driver"]);
   expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=false");
+  expect(selectionOutput(bumped, git(["rev-parse", "HEAD"]))).toEndWith("shared_native=true");
   expect(() => select(first, bumped)).toThrow();
 });
 

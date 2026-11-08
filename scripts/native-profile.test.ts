@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { checkArguments, checkCommand, parseCheck, selectChecks } from './test-checks.ts';
 import { profileArtifacts } from './native-profile-fixtures.ts';
-import { needsSharedNative } from './ci-changes.ts';
+import { needsRust, needsSharedNative, sharedNativeFiles } from './ci-changes.ts';
 
 const split = parseCheck({ owner: 'native', path: 'tests/fixtures/regular' }, 'native-regular.json');
 const shared = parseCheck({ owner: 'native', path: 'tests/fixtures/shared', profile: 'shared-group' }, 'native-shared.json');
@@ -36,4 +36,30 @@ test('group source and feature metadata select the existing blocking profile own
   expect(needsSharedNative(['crates/bunwasm-runtime/src/wasm/nested.rs'])).toBe(true);
   expect(needsSharedNative(['tests/fixtures/shared-wasm-memory/index.ts'])).toBe(true);
   expect(needsSharedNative(['site/style.css'])).toBe(false);
+});
+
+for (const path of sharedNativeFiles) {
+  test(`shared producer input ${path} selects its consumer and launcher`, () => {
+    expect(needsSharedNative([path])).toBe(true);
+    expect(needsRust([path])).toBe(true);
+  });
+}
+
+test.each([
+  'scripts/sync-bun.sh', 'scripts/sync-crypto.sh', 'scripts/transpile-runtime.ts',
+  'scripts/generate-bun-wrap.ts', 'scripts/generate-node-path.ts', 'scripts/generate-direct-stream.ts',
+  'web/src/native-direct-stream.ts', 'src/engine-kind.ts',
+  'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake',
+])('shared core input %s selects the consumer and launcher', path => {
+  expect(needsSharedNative([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  'crates/bunwasm-runtime/src/js/runtime.d.ts',
+  'crates/bunwasm-engine-hermes/src/vm.rs',
+  'scripts/build-engine-hermes.sh', 'scripts/build-bun-hermes.sh',
+  'checks/native-hermes-smoke.json',
+])('unrelated profile or type-only input %s keeps shared native skipped', path => {
+  expect(needsSharedNative([path])).toBe(false);
 });
