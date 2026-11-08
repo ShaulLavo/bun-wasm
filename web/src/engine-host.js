@@ -1,3 +1,4 @@
+import { installNativeWasmLifetime } from "./native-wasm-lifetime.ts";
 import { createScriptEvaluation } from "./script-evaluation.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
@@ -774,6 +775,7 @@ class EngineHost {
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
     this.installContextHooks(hidden);
+    installNativeWasmLifetime(WebAssembly, promise => host.track(promise, observePromise), (promise, fulfilled, rejected) => host.promiseThen(promise, fulfilled, rejected));
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }
@@ -1070,7 +1072,6 @@ class EngineHost {
 
   // --- the event loop ---
 
-  /** Keep the process alive until `promise` settles; wake the loop then. */
   /** Keeps the loop alive until `promise` settles; `then`, when given, is a captured reaction. */
   track(promise, then) {
     this.pendingAsync++;
@@ -1078,8 +1079,13 @@ class EngineHost {
       this.pendingAsync--;
       this.schedule(0);
     };
-    if (then) then(promise, done, done);
-    else promise.then(done, done);
+    try {
+      if (then) then(promise, done, done);
+      else promise.then(done, done);
+    } catch (error) {
+      done();
+      throw error;
+    }
     return promise;
   }
 
