@@ -15,3 +15,8 @@ builder. Qwik uses the Vite optimizer in client-rendering mode. Hono serves a
 counter page and a Bun-built client script. Each app has a development command,
 a production build, and a production start command. A failed framework command
 is evidence, not a reason for the runner to substitute a synthetic page.
+
+TanStack Start's local production launcher reads `PORT` before its positional
+port. This lets its root-origin preview use the runner's selected free port in
+both development and production. The root-origin adapter keeps the browser URL
+at `/`, matching the server-rendered route without changing upstream router code.
