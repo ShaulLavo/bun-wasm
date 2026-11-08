@@ -104,7 +104,7 @@ jobs:
     name: JSC C/C++ prebuild
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat-large' }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -339,7 +339,7 @@ jobs:
     needs: [quality, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat-large' }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -785,7 +785,7 @@ jobs:
     needs: [quality, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat-large' }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1288,7 +1288,7 @@ jobs:
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Browser adapter package
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat' }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1318,7 +1318,7 @@ jobs:
     name: Shared PIC sysroot proof
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true') }}
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat-large' }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1456,7 +1456,7 @@ jobs:
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
@@ -1557,7 +1557,7 @@ jobs:
     needs: [quality, rust, process-bundles]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
     name: Processes (${{ matrix.browser }})
-    runs-on: ${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || 'boat' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false

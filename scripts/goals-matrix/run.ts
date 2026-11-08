@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import { browsers, engines, boxId, frameworks, type Browser, type Engine } from "./catalog";
 import { initialCells, validateReport, type Report, type Cell } from "./model";
 import { saveReport } from "./report";
+import { deadlinePolicy, parseInstallTimeouts, parseTimeout, sameDeadlines } from "./deadlines";
 import { prerequisites } from "./discovery";
 import { execute, bounded } from "./execute";
 import { createPlaywrightTransport, type Transport } from "./transport";
@@ -16,7 +17,7 @@ import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./plat
 
 export interface Options {
   signal?: AbortSignal;
-  root: string; output: string; timeoutMs: number; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
+  root: string; output: string; timeoutMs: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
 }
 function selected<T extends string>(value: string, all: readonly T[]): T[] {
@@ -29,16 +30,16 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file"];
+    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
-  const timeoutMs = Number(values.get("timeout-ms") ?? "180000");
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 900_000) throw new Error("timeout-ms must be 100 through 900000");
+  const timeoutMs = parseTimeout(values.get("timeout-ms") ?? "180000");
+  const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
   return {
-    root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs,
+    root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
     browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
     frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
@@ -60,11 +61,12 @@ export async function initialReport(config: Options): Promise<Report> {
   const files = await assetIdentity(config.root);
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 1, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
+  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: deadlinePolicy(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
-  const previous: Report = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
+  const previous: unknown = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
   validateReport(previous);
+  if (!sameDeadlines(previous.deadlines, report.deadlines)) throw new Error("Resume requires the same effective deadline policy; use a new output directory");
   if (previous.source.commit !== commit || previous.source.dirty || dirty || JSON.stringify(previous.source.assets) !== JSON.stringify(report.source.assets)) throw new Error("Resume requires the same clean source commit and asset identity");
   return { ...previous, command: report.command };
 }
@@ -82,7 +84,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", cell.engine);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
-  return execute({ box: cell, framework, url: url.href, timeoutMs: config.timeoutMs, signal,
+  return execute({ box: cell, framework, url: url.href, timeoutMs: config.timeoutMs, installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
