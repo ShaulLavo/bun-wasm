@@ -33,7 +33,7 @@ type RegistrationApi = {
   n: object[];
   ns(request: number): object;
   readonly meta: object;
-  import(specifier: unknown): Promise<object>;
+  import(specifier: unknown, options?: unknown): Promise<object>;
   ga(): unknown;
   gt(): string;
 };
@@ -90,7 +90,12 @@ type RegistrationApi = {
   const NativePromise = Promise;
   const NativeMap = Map;
   const NativeSyntaxError = SyntaxError;
-  const NativeString = String;
+  let importRequests = globalThis.__bunwasm_importRequests;
+  if (importRequests === undefined) {
+    defineProperty(globalThis, "__bunwasm_initializeImportRequests", {
+      value: (imports: BunWasm.ImportRequests) => { importRequests = imports; }, configurable: true,
+    });
+  }
   const NativeNumber = Number;
   const min = Math.min;
   const { toStringTag, iterator: iteratorSymbol, asyncIterator: asyncIteratorSymbol } = Symbol;
@@ -167,8 +172,8 @@ type RegistrationApi = {
       native.initMeta(this.mod.name, meta);
       return meta;
     }
-    import(specifier: unknown): Promise<object> {
-      return dynamicImport(specifier, this.mod.name);
+    import(specifier: unknown, options?: unknown): Promise<object> {
+      return dynamicImport(specifier, this.mod.name, options);
     }
     // A module's `arguments` is the global binding, read in the global scope.
     ga(): unknown {
@@ -699,24 +704,26 @@ type RegistrationApi = {
 
   // `import()` inside a module: loads in a later job, like a host fetch, once the
   // host has readied the module's graph.
-  function dynamicImport(specifier: unknown, referrer: string): Promise<object> {
-    return track(settled<object>((resolve, reject) => then(resolvePromise(), () => {
+  function dynamicImport(specifier: unknown, referrer: string, options?: unknown): Promise<object> {
+    const requests = importRequests;
+    if (requests === undefined) throw new NativeSyntaxError("Import helpers are not initialized");
+    return track(requests.request<object>(specifier, options, (text, mode, resolve, reject) => {
       if (!active()) return;
       let name: string;
       let ready: Promise<void>;
       try {
-        name = native.resolve(NativeString(specifier), referrer);
+        name = mode === "text" ? requests.resolve(text, referrer, mode) : native.resolve(text, referrer);
         ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
       } catch (error) {
         reject(error);
         return;
       }
       then(ready, () => then(settleGraph(added => loadName(name, added)), value => resolve(value as object), reject), reject);
-    }, reject)));
+    }));
   }
 
   defineProperty(globalThis, "__bunwasm_import", descriptor({
-    value: (referrer: string) => (specifier: unknown) => dynamicImport(specifier, referrer),
+    value: (referrer: string) => (specifier: unknown, options?: unknown) => dynamicImport(specifier, referrer, options),
     configurable: true,
   }));
 

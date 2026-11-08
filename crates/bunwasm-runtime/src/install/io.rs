@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -285,11 +286,98 @@ pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Re
         }
         fs::remove_file(&cache).map_err(|_| "Could not discard unsafe registry cache data")?;
     }
-    let bytes = request(&url_value, tarball, refresh, registry)?;
-    if cacheable(&bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
-        let _ = write(&cache, &bytes);
+    Download::start(&url_value, tarball, refresh, registry)?.finish(registry)
+}
+
+// Reserve one handle for a demand lookup that conservative lookahead did not predict.
+const MAX_PREFETCHES: usize = 7;
+
+/// Owns only handles. Unconsumed bodies stay under the host's per-handle backpressure.
+#[derive(Default)]
+pub struct Downloads {
+    pending: BTreeMap<String, Result<Download>>,
+}
+
+impl Downloads {
+    pub fn is_full(&self) -> bool {
+        self.pending.len() >= MAX_PREFETCHES
     }
-    Ok(bytes)
+
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
+
+    pub fn prefetch(&mut self, url: &str, tarball: bool, refresh: bool, registry: &Registry) {
+        if self.is_full() || self.pending.contains_key(url) {
+            return;
+        }
+        let request = request_url(url).and_then(|url| {
+            let cache = cache_dir().join(format!("{:x}", Sha256::digest(url.as_str().as_bytes())));
+            let fresh = tarball
+                || fs::metadata(&cache)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                    .is_some_and(|age| age < Duration::from_secs(300));
+            if !refresh && fresh && cache.is_file() {
+                return Ok(None);
+            }
+            Download::start(&url, tarball, refresh, registry).map(Some)
+        });
+        match request {
+            Ok(None) => {}
+            Ok(Some(request)) => {
+                self.pending.insert(url.into(), Ok(request));
+            }
+            Err(error) => {
+                self.pending.insert(url.into(), Err(error));
+            }
+        }
+    }
+
+    pub fn fetch(
+        &mut self,
+        url: &str,
+        tarball: bool,
+        refresh: bool,
+        registry: &Registry,
+    ) -> Result<Vec<u8>> {
+        match self.pending.remove(url) {
+            Some(request) => request?.finish(registry),
+            None => fetch(url, tarball, refresh, registry),
+        }
+    }
+}
+
+struct Download {
+    handle: i32,
+    url: String,
+    tarball: bool,
+}
+
+impl Download {
+    fn start(url: &url::Url, tarball: bool, refresh: bool, registry: &Registry) -> Result<Self> {
+        Ok(Self {
+            handle: start_request(url, tarball, refresh, registry)?,
+            url: url.as_str().into(),
+            tarball,
+        })
+    }
+
+    fn finish(self, registry: &Registry) -> Result<Vec<u8>> {
+        let bytes = response(self.handle, &self.url, registry)?;
+        if cacheable(&bytes, self.tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
+            let cache = cache_dir().join(format!("{:x}", Sha256::digest(self.url.as_bytes())));
+            let _ = write(&cache, &bytes);
+        }
+        Ok(bytes)
+    }
+}
+
+impl Drop for Download {
+    fn drop(&mut self) {
+        host::close(self.handle);
+    }
 }
 
 fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
@@ -302,12 +390,12 @@ fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
     registry.safe_metadata(&metadata)
 }
 
-fn request(
+fn start_request(
     url_value: &url::Url,
     tarball: bool,
     refresh: bool,
     registry: &Registry,
-) -> Result<Vec<u8>> {
+) -> Result<i32> {
     let url = url_value.as_str();
     let accept = if tarball {
         "application/vnd.bun.install-tarball"
@@ -332,9 +420,7 @@ fn request(
     if handle < 0 {
         return Err(network_error(handle, registry));
     }
-    let result = response(handle, url, registry);
-    host::close(handle);
-    result
+    Ok(handle)
 }
 
 fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
