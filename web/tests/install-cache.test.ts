@@ -316,9 +316,9 @@ test("body errors discard partial captures", async () => {
   });
 });
 
-function cloningCache(): { cache: CacheDouble; published: Promise<void> } {
+function cloningCache(initial?: Response): { cache: CacheDouble; published: Promise<void> } {
   const published = deferred<void>();
-  let stored: Response | undefined;
+  let stored = initial;
   return {
     published: published.promise,
     cache: cacheDouble({
@@ -331,6 +331,27 @@ function cloningCache(): { cache: CacheDouble; published: Promise<void> } {
     }),
   };
 }
+
+test("guest cache-control no-cache refreshes a warm tarball and replaces the cached bytes", async () => {
+  const url = "https://registry.invalid/pkg/-/pkg-1.0.0.tgz";
+  const { cache, published } = cloningCache(new Response("old tarball"));
+  let networkCalls = 0;
+  const refresh: RequestInit = {
+    method: "GET",
+    headers: [["accept", TARBALL], ["accept-encoding", "gzip"], ["cache-control", "no-cache"]],
+  };
+  await withEnvironment(cache, async () => {
+    networkCalls++;
+    return new Response("new tarball");
+  }, async () => {
+    expect(await (await installFetch(url, requestOptions())).text()).toBe("old tarball");
+    expect(networkCalls).toBe(0);
+    expect(await (await installFetch(url, refresh)).text()).toBe("new tarball");
+    await published;
+    expect(await (await installFetch(url, requestOptions())).text()).toBe("new tarball");
+    expect(networkCalls).toBe(1);
+  });
+});
 
 async function expectResponseMetadata(response: Response, expected: Response): Promise<void> {
   const clone = response.clone();
