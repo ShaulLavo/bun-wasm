@@ -1,8 +1,10 @@
 #[cfg(bun_wasm_shared_group)]
 mod nested;
 #[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/nested_frame.rs"]
 mod nested_frame;
 #[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/nested_invocation.rs"]
 mod nested_invocation;
 
 #[cfg(bun_wasm_shared_group)]
