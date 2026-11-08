@@ -142,3 +142,10 @@ test("libcxx source validation does not fetch excluded blobs from its sparse clo
   expect(warm.exitCode, warm.stderr.toString()).toBe(0);
   expect(absent()).toBe(true);
 }));
+
+test("libcxx verifies SDK patches that update the same file in sequence", () => withHarness(h => {
+  writeFileSync(join(h.root, "patches/llvm-undo-part-of-194317.patch"), "diff --git a/libcxx/a.txt b/libcxx/a.txt\n--- a/libcxx/a.txt\n+++ b/libcxx/a.txt\n@@ -1 +1 @@\n-after\n+twice\n");
+  build(h);
+  expect(readFileSync(join(h.source, "libcxx/a.txt"), "utf8")).toBe("twice\n");
+  build(h);
+}));
