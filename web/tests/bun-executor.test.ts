@@ -760,6 +760,29 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
 
+test("Firefox QuickJS keeps its normal stack budget instead of Safari's reduced budget", controlled(() => {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const originalError = globalThis.Error;
+  const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module: guest(1), args: ["bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  try {
+    spyOn(globalThis, "Error").mockImplementation(() => {
+      const error = new originalError();
+      error.stack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
+      return error;
+    });
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Mozilla/5.0 Gecko/20100101 Firefox/147.0" } });
+    expect(createBunExecutor(request).env?.(request)).toEqual({});
+  } finally {
+    mock.restore();
+    if (navigator) Object.defineProperty(globalThis, "navigator", navigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+    connection.client.port.close(); connection.server.port.close();
+  }
+}));
+
 let control: Awaited<ReturnType<typeof workerControlFixture>>;
 
 
