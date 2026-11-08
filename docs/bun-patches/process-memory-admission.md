@@ -15,9 +15,11 @@ with Waffle's public `pages` constructor and records the same source through
 `src/assets.ts` records single-module preparation from its owned byte snapshot,
 and paired preparation from the exact prepared link-plan source. The streaming
 and cached compilation paths in `web/src/engine-loader.ts` retain the same
-association. The streaming path shares one owned Blob and one materialized byte
-snapshot between declarations, integrity checking and cache storage. It releases
-the temporary chunk list rather than restaging the complete source for caching.
+association. The streaming path assembles decompressed chunks directly into one
+owned Uint8Array and releases the chunk list. Declarations and asynchronous
+integrity checking share that immutable snapshot. Cache storage consumes a stream
+of the same bytes, avoiding both Blob materialization and the complete copy made
+by a BufferSource Response. Caller-visible native RESULT copies remain independent.
 An unknown compiled root is rejected, not declared memory-free.
 The package file list includes the new source helper.
 
@@ -71,7 +73,10 @@ admission grant identity, allocation receipts and deferred physical-stop release
 `runner-stop-ownership.test.ts` controls normal exit followed immediately by page
 disposal with synchronous, delayed and rejected physical stops. The loader copy
 control uses real HTTP streaming, compilation, declarations and verified cache
-bytes to require one source snapshot. Package
+bytes to require one source snapshot. It counts whole-source typed-array
+allocations and chunk writes through deferred cache preparation, excluding only
+the cache consumer's reconstruction. Mutation controls require it to reject extra
+constructor, static-from and slice snapshots. Package
 controls preserve the existing memory-limit reader result shape and verify source
 snapshots, all memory origins and an actual omitted Wasm maximum. The existing
 bootstrap, IPC, signal, network and package tests retain their assertions. The

@@ -127,3 +127,16 @@ allocator-only reader before constructor execution, and publish cached terminal
 data before disposal. Linking and memory reservation remain Waffle's public
 implementation. The shared cells, schema, allocator wrappers, and root
 attribution are original adapters.
+
+## Shared channel framing
+
+The original host transport keeps its 8192-byte shared channel and 32-byte header.
+Namespaced engine counters are grouped by their first dot only in the wire frame,
+then expanded to their original flat keys when read. This removes repeated JSC
+allocation-boundary prefixes without omitting counters, changing their values, or
+increasing the channel or guest memory limit. Snapshots without namespaced
+counters keep their existing wire representation.
+
+The JSC allocation-boundary check manifest also runs the channel regression. It
+round-trips a complete wide diagnostic record through publication and teardown,
+including null counters and the unchanged guest memory limit.

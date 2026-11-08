@@ -25,12 +25,40 @@ export function readMemoryChannel(buffer: SharedArrayBuffer): unknown {
     if (!length) return null;
     if (length < 0 || length > buffer.byteLength - payloadOffset) throw new RangeError("Invalid telemetry frame length");
     const bytes = new Uint8Array(buffer, payloadOffset, length).slice();
-    if (Atomics.load(words, 3) === sequence) return JSON.parse(decoder.decode(bytes));
+    if (Atomics.load(words, 3) === sequence) return expandCounterGroups(JSON.parse(decoder.decode(bytes)));
   }
   return null;
 }
+function groupSnapshotCounters(snapshot: MemorySnapshot): unknown {
+  if (!Object.keys(snapshot.engineCounters).some(name => name.indexOf(".") > 0)) return snapshot;
+  const plain: [string, number | null][] = [];
+  const groups = new Map<string, Map<string, number | null>>();
+  for (const [name, value] of Object.entries(snapshot.engineCounters)) {
+    const dot = name.indexOf(".");
+    if (dot <= 0) { plain.push([name, value]); continue; }
+    const prefix = name.slice(0, dot);
+    let group = groups.get(prefix);
+    if (!group) { group = new Map(); groups.set(prefix, group); }
+    group.set(name.slice(dot + 1), value);
+  }
+  return { ...snapshot, engineCounters: Object.fromEntries(plain),
+    counterGroups: Object.fromEntries(Array.from(groups, ([prefix, values]) => [prefix, Object.fromEntries(values)])) };
+}
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function expandCounterGroups(value: unknown): unknown {
+  if (!record(value) || !("counterGroups" in value)) return value;
+  const { counterGroups, ...snapshot } = value;
+  if (!record(counterGroups) || !record(snapshot.engineCounters)) throw new TypeError("Invalid telemetry counter groups");
+  const grouped = Object.entries(counterGroups).flatMap(([prefix, counters]) => {
+    if (!prefix || !record(counters)) throw new TypeError("Invalid telemetry counter group");
+    return Object.entries(counters).map(([name, count]): [string, unknown] => [`${prefix}.${name}`, count]);
+  });
+  return { ...snapshot, engineCounters: Object.fromEntries(Object.entries(snapshot.engineCounters).concat(grouped)) };
+}
 function writeMemoryChannel(buffer: SharedArrayBuffer, snapshot: MemorySnapshot, generation: number, normal: boolean): void {
-  const bytes = encoder.encode(JSON.stringify(snapshot));
+  const bytes = encoder.encode(JSON.stringify(groupSnapshotCounters(snapshot)));
   if (bytes.byteLength > buffer.byteLength - payloadOffset) throw new RangeError("Telemetry frame exceeds fixed capacity");
   const words = new Int32Array(buffer, 0, 8);
   Atomics.add(words, 3, 1);
