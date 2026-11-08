@@ -54,9 +54,15 @@ console.log("raw UTF-8, BOM, shebang, JSON and ordinary CommonJS are preserved")
 const events = [];
 const failure = { exact: "rejection identity" };
 const specifier = { toString() { events.push("coerce"); return "./page.html"; } };
-const operation = import(specifier, { get with() { events.push("with"); return { get ignored() { events.push("ignored"); return "yes"; }, type: "text" }; } });
-assert.deepEqual(events, ["coerce", "with", "ignored"]);
+const operation = import((events.push("specifier expression"), specifier),
+  (events.push("options expression"), { get with() { events.push("with"); return { get ignored() { events.push("ignored"); return "yes"; }, type: "text" }; } }));
+assert.deepEqual(events, ["specifier expression", "options expression", "coerce", "with", "ignored"]);
 assert.equal(await operation, namespace);
+let coercedAfterAbrupt = false;
+const beforeAbrupt = { toString() { coercedAfterAbrupt = true; return "./page.html"; } };
+const abruptOptions = () => { throw failure; };
+assert.throws(() => import(beforeAbrupt, abruptOptions()), error => error === failure);
+assert.equal(coercedAfterAbrupt, false);
 for (const [specifier, options] of [
   [{ toString() { throw failure; } }, undefined],
   ["./page.html", { get with() { throw failure; } }],
