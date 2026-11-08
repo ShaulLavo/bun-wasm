@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { installNativeWasmLifetime } from "../web/src/native-wasm-lifetime";
+import { observePromise } from "../web/src/promise-reactions";
 import { SLOT_NAMES } from "../web/src/net/trampoline";
 
 const source = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8")
@@ -13,12 +14,13 @@ const methods = ["compile", "compileStreaming", "instantiate", "instantiateStrea
 function fixture(name: typeof methods[number]) {
   const gate = Promise.withResolvers<object>();
   const wasm = { [name]: () => gate.promise };
-  const context = createContext({ WebAssembly: wasm, installNativeWasmLifetime, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
+  const context = createContext({ WebAssembly: wasm, installNativeWasmLifetime, observePromise, SLOT_NAMES, memoryViews: () => ({}), Promise, setTimeout, clearTimeout, queueMicrotask, TextEncoder, TextDecoder, URL });
   const Host = runInContext(source + "\nEngineHost;", context);
   const host = new Host({ instance: { exports: {} } }, () => {});
   host.internal = {};
   host.native = { hostCaps: {} };
   host.installGlobals();
+  host.promiseThen = observePromise;
   return {
     host, gate,
     run(): Promise<unknown> { return runInContext(`WebAssembly.${name}()`, context); },
