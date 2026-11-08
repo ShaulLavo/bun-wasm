@@ -1,3 +1,4 @@
+import { releaseDownload } from "./ci-release-download";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -44,7 +45,9 @@ async function installPin(tools: string, stage: string, pin: Pin) {
   const cached = await Bun.file(archive).exists();
   const input = cached ? archive : join(stage, pin.archive);
   if (!cached) {
-    execFileSync("curl", ["--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15", "--max-time", "300", pin.url, "-o", input]);
+    const response = await releaseDownload(pin.url, { timeoutMs: 300_000 });
+    if (!response.ok) throw new Error(`Build tool download failed: ${response.status}`);
+    await Bun.write(input, response);
   }
   await verifyBuildToolArchive(pin, input);
   if (!cached) await rename(input, archive);

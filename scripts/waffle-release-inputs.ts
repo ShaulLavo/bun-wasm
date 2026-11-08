@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import release from "./waffle-release-inputs.json";
+import { releaseDownload } from "./ci-release-download";
 
 type Release = typeof release;
 type Download = (url: string) => Promise<Response>;
@@ -58,7 +59,7 @@ async function pinnedFile(path: string, url: string, sha256: string, download: D
 export async function prepareWaffleReleaseArchive(
   peer: string,
   archive: string,
-  download: Download = fetch,
+  download: Download = releaseDownload,
   selected: Release = release,
 ): Promise<string> {
   if (peer !== selected.url) throw new Error("Waffle release pin does not match its checked source inputs");
@@ -71,7 +72,7 @@ export async function prepareWaffleReleaseArchive(
 export async function prepareWaffleNativeInputs(
   repository: string,
   directory: string,
-  download: Download = fetch,
+  download: Download = releaseDownload,
   selected: Release = release,
 ): Promise<string> {
   const manifest = await Bun.file(join(repository, "package.json")).json();

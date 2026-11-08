@@ -46,18 +46,18 @@ test("native checks share one cached target through the quality checkpoint", () 
   expect(rust).toContain("--lib modules::tests::host_");
 });
 
-test("the native job keeps its 60-minute guard and only the new prebuild job adds a budget or name", () => {
+test("native job budgets and names stay unchanged beside the lightweight update reporter", () => {
   const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
     package: "Browser adapter package", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
-    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})",
+    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
 });
@@ -795,7 +795,7 @@ test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () =>
 });
 
 test("source cache runs in real browsers using one source-built host guest", () => {
-  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(rust).toContain("--no-default-features --features engine-host,bun-build");
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
@@ -815,7 +815,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
 test("Bun acceptance has one distinct shared producer and no per-browser build", () => {
   const producer = readFileSync(new URL("../web/scripts/ci-process-bundles.ts", import.meta.url), "utf8");
   const controller = readFileSync(new URL("../web/tests/bun-runtime-proc-browser.ts", import.meta.url), "utf8");
-  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   const acceptance = processes.split("      - name: Real Bun source cache in one Waffle browser runtime\n")[1]!;
   expect(producer).toContain('["supervisor", "runtime-proc", "interrupt", "bun-runtime-proc"]');
   expect(producer).toContain('fixture === "bun-runtime-proc" ? "bun-runtime-proc-main"');
@@ -895,11 +895,11 @@ function runPinnedCliSetup(archiveName: string, script: string, contents?: strin
     mkdirSync(bin);
     mkdirSync(tools);
     writeFileSync(githubPath, "");
-    writeFileSync(join(bin, "curl"), '#!/bin/sh\necho curl >> "$TRACE"\nexit 23\n', { mode: 0o700 });
+    writeFileSync(join(bin, "bun"), '#!/bin/sh\necho release-download >> "$TRACE"\nexit 23\n', { mode: 0o700 });
     writeFileSync(join(bin, "tar"), '#!/bin/sh\necho tar >> "$TRACE"\nexit 29\n', { mode: 0o700 });
     if (contents !== undefined) writeFileSync(join(tools, archiveName), contents);
     const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
-      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_WORKSPACE: directory, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
     });
     return { status: result.status, stderr: result.stderr, stdout: result.stdout, files: readdirSync(tools), path: readFileSync(githubPath, "utf8"), calls: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
   } finally {
@@ -910,7 +910,7 @@ function runPinnedCliSetup(archiveName: string, script: string, contents?: strin
 test("wasm-tools cold download failure stops before extraction or PATH publication", () => {
   const result = runPinnedCliSetup(wasmToolsArchive, wasmToolsSetup());
   expect(result.status).toBe(23);
-  expect(result.calls).toBe("curl\n");
+  expect(result.calls).toBe("release-download\n");
   expect(result.files).toEqual([]);
   expect(result.path).toBe("");
 });
@@ -950,7 +950,7 @@ test("Wasmtime is pinned and cached, then fixture commands are checked before na
 test("Wasmtime download failure cannot extract or publish PATH", () => {
   const result = runPinnedCliSetup(wasmtimeArchive, wasmtimeSetup());
   expect(result.status).toBe(23);
-  expect(result.calls).toBe("curl\n");
+  expect(result.calls).toBe("release-download\n");
   expect(result.files).toEqual([]);
   expect(result.path).toBe("");
 });
