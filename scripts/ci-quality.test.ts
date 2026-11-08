@@ -895,11 +895,11 @@ function runPinnedCliSetup(archiveName: string, script: string, contents?: strin
     mkdirSync(bin);
     mkdirSync(tools);
     writeFileSync(githubPath, "");
-    writeFileSync(join(bin, "curl"), '#!/bin/sh\necho curl >> "$TRACE"\nexit 23\n', { mode: 0o700 });
+    writeFileSync(join(bin, "bun"), '#!/bin/sh\necho release-download >> "$TRACE"\nexit 23\n', { mode: 0o700 });
     writeFileSync(join(bin, "tar"), '#!/bin/sh\necho tar >> "$TRACE"\nexit 29\n', { mode: 0o700 });
     if (contents !== undefined) writeFileSync(join(tools, archiveName), contents);
     const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
-      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_WORKSPACE: directory, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
     });
     return { status: result.status, stderr: result.stderr, stdout: result.stdout, files: readdirSync(tools), path: readFileSync(githubPath, "utf8"), calls: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
   } finally {
@@ -910,7 +910,7 @@ function runPinnedCliSetup(archiveName: string, script: string, contents?: strin
 test("wasm-tools cold download failure stops before extraction or PATH publication", () => {
   const result = runPinnedCliSetup(wasmToolsArchive, wasmToolsSetup());
   expect(result.status).toBe(23);
-  expect(result.calls).toBe("curl\n");
+  expect(result.calls).toBe("release-download\n");
   expect(result.files).toEqual([]);
   expect(result.path).toBe("");
 });
@@ -950,7 +950,7 @@ test("Wasmtime is pinned and cached, then fixture commands are checked before na
 test("Wasmtime download failure cannot extract or publish PATH", () => {
   const result = runPinnedCliSetup(wasmtimeArchive, wasmtimeSetup());
   expect(result.status).toBe(23);
-  expect(result.calls).toBe("curl\n");
+  expect(result.calls).toBe("release-download\n");
   expect(result.files).toEqual([]);
   expect(result.path).toBe("");
 });

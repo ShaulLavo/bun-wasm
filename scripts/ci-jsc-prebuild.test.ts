@@ -116,7 +116,7 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
       "Save completed sdk setup", "Install pinned Binaryen", "Save completed binaryen-cache setup", "Identify JSC prebuild inputs"].includes(name)
       || ["sdk", "binaryen-cache"].includes(id) || uses.startsWith("oven-sh/setup-bun") || uses === "actions/checkout@v4"
       || item.run === "bun install --frozen-lockfile --ignore-scripts"
-      || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes("~/.bun/install/cache"));
+      || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
   });
   const producerShared = shared(producer);
   expect(producerShared).toHaveLength(14);
