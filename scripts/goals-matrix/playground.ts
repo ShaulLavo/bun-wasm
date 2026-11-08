@@ -5,7 +5,7 @@ interface Playground {
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
   previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
-  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
+  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
 }
 declare const playground: Playground;
 type PreviewState = { status: "pending" | "ready" } | { status: "failed"; error: unknown };
@@ -34,11 +34,15 @@ export async function ready(transport: Transport, engine: string, timeoutMs: num
   return state;
 }
 function transcript(): Promise<string> {
-  return new Promise(resolve => playground.term.write("", () => {
+  function logicalLines(): string {
     const buffer = playground.term.buffer.active;
-    const lines = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "");
-    resolve(lines.join("\n").trimEnd());
-  }));
+    const lines = Array.from({ length: buffer.length }, (_, index) => {
+      const line = buffer.getLine(index);
+      return (index && !line?.isWrapped ? "\n" : "") + (line?.translateToString(true) ?? "");
+    });
+    return lines.join("").trimEnd();
+  }
+  return new Promise(resolve => playground.term.write("", () => resolve(logicalLines())));
 }
 export async function terminal(transport: Transport): Promise<string> {
   await transport.useHost();
@@ -63,10 +67,10 @@ export async function command(transport: Transport, text: string, timeoutMs: num
   if (result.code !== 0 || result.error) throw new Error(`${text} exited ${result.code}: ${result.error ?? output.slice(-6000)}`);
   return { ...result, output };
 }
-function listener(): { listening: boolean; running: boolean; url: string | null } {
+function listener(port: number): { listening: boolean; running: boolean; url: string | null } {
   if (typeof playground === "undefined") return { listening: false, running: false, url: null };
-  const listening = playground.previews.serves(5173);
-  return { listening, running: playground.shell.running, url: listening ? playground.previews.url(5173) : null };
+  const listening = playground.previews.serves(port);
+  return { listening, running: playground.shell.running, url: listening ? playground.previews.url(port) : null };
 }
 function previewReady(): boolean {
   if (!globalThis.__goalsPreview) {
@@ -79,13 +83,13 @@ function previewReady(): boolean {
   if (state.status === "failed") throw state.error;
   return state.status === "ready";
 }
-export async function start(transport: Transport, text: string, timeoutMs: number): Promise<string> {
+export async function start(transport: Transport, text: string, timeoutMs: number, port = 5173): Promise<string> {
   await transport.useHost();
   await transport.evaluate<boolean>(expression(previewReady, undefined));
-  const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined));
+  const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port));
   if (before.running || before.listening) throw new Error("Cannot start with an existing foreground or listener");
   const token = await transport.evaluate<string>(expression(launch, text));
-  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
+  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
   await until(() => transport.evaluate<boolean>(expression(previewReady, undefined)), value => value, timeoutMs);
   return result.url;
@@ -95,17 +99,17 @@ function stop(): void {
   if (playground.shell.running) playground.shell.input("\x03");
   if (playground.shell.running) playground.shell.input("\x03");
 }
-export async function stopServer(transport: Transport, timeoutMs: number): Promise<void> {
+export async function stopServer(transport: Transport, timeoutMs: number, port = 5173): Promise<void> {
   await transport.useHost();
   await transport.evaluate(expression(stop, undefined));
-  await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), value => !value.running && !value.listening, timeoutMs);
+  await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => !value.running && !value.listening, timeoutMs);
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
   return { text, matched: text.trim() === input.text };
 }
 export async function render(transport: Transport, framework: Framework, text: string, timeoutMs: number): Promise<unknown> {
-  return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text })), value => value.matched, timeoutMs);
+  return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text }), { observation: true }), value => value.matched, timeoutMs);
 }
 function click(input: { button: string; clicked: string }): { before: string; clicked: boolean } {
   const before = document.querySelector(input.clicked)?.textContent?.trim() ?? "";
@@ -136,6 +140,6 @@ export async function edit(transport: Transport, framework: Framework, timeoutMs
   await transport.evaluate(expression(saveEdit, { source: framework.source, original: framework.text, edited: updated }));
   await transport.usePreview();
   const result = await render(transport, framework, updated, timeoutMs);
-  const retained = await transport.evaluate<boolean>(`globalThis.__goalsIdentity === ${JSON.stringify(identity)}`);
+  const retained = await transport.evaluate<boolean>(`globalThis.__goalsIdentity === ${JSON.stringify(identity)}`, { observation: true });
   return { updated, before: state, sameDocument: retained, result, manualNavigations: 0 };
 }

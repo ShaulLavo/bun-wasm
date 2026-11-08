@@ -5,6 +5,7 @@ export const cleanupTimeoutMs = 20_000;
 export interface DeadlinePolicy {
   timeoutMs: number;
   installTimeouts: Record<string, number>;
+  buildTimeouts: Record<string, number>;
   cleanupTimeoutMs: typeof cleanupTimeoutMs;
 }
 export function parseTimeout(value: string, option = "timeout-ms"): number {
@@ -25,7 +26,8 @@ export function parseInstallTimeouts(value: string | undefined): Record<string, 
   return Object.fromEntries(entries);
 }
 export function deadlinePolicy(timeoutMs: number, overrides: Readonly<Record<string, number>> = {}): DeadlinePolicy {
-  return { timeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs])), cleanupTimeoutMs };
+  return { timeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs])),
+    buildTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, framework.id === "next" ? Math.max(timeoutMs, 110_000) : timeoutMs])), cleanupTimeoutMs };
 }
 export function validateDeadlines(value: unknown): DeadlinePolicy {
   const data = object(value), installs = object(data.installTimeouts);
@@ -38,8 +40,11 @@ export function validateDeadlines(value: unknown): DeadlinePolicy {
     if (typeof timeout !== "number") throw new Error(`Missing install deadline for ${framework.id}`);
     normalized[framework.id] = parseTimeout(String(timeout));
   }
-  return deadlinePolicy(data.timeoutMs, normalized);
+  const policy = deadlinePolicy(data.timeoutMs, normalized);
+  const builds = object(data.buildTimeouts);
+  if (Object.keys(builds).length !== frameworks.length || frameworks.some(framework => builds[framework.id] !== policy.buildTimeouts[framework.id])) throw new Error("Invalid framework build deadline policy");
+  return policy;
 }
 export function sameDeadlines(first: DeadlinePolicy, second: DeadlinePolicy): boolean {
-  return first.timeoutMs === second.timeoutMs && first.cleanupTimeoutMs === second.cleanupTimeoutMs && frameworks.every(framework => first.installTimeouts[framework.id] === second.installTimeouts[framework.id]);
+  return first.timeoutMs === second.timeoutMs && first.cleanupTimeoutMs === second.cleanupTimeoutMs && frameworks.every(framework => first.installTimeouts[framework.id] === second.installTimeouts[framework.id] && first.buildTimeouts[framework.id] === second.buildTimeouts[framework.id]);
 }
