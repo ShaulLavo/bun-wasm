@@ -2,14 +2,25 @@ import assert from "node:assert/strict";
 
 const widths = [320, 375, 393, 430];
 
-async function fits(page, label) {
+export async function fits(page, label) {
   await page.waitForTimeout(60);
   const size = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth }));
   assert.ok(size.scroll <= size.width, `${label}: page width ${size.scroll} exceeds viewport ${size.width}`);
   // A clipped header also passes scrollWidth, so check the controls themselves.
-  for (const selector of ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal"]) {
-    const box = await page.locator(selector).boundingBox();
-    assert.ok(box && box.width > 0 && box.x >= 0 && box.x + box.width <= size.width, `${label}: ${selector} outside viewport`);
+  const selectors = ["header h1", "header a.nav", "#engine", "#run, #restart", "#copy-terminal"];
+  const groups = await page.evaluate(selectors => selectors.map(selector =>
+    Array.from(document.querySelectorAll(selector))
+      .filter(control => control.checkVisibility({ visibilityProperty: true }))
+      .map(control => {
+        const box = control.getBoundingClientRect();
+        return { x: box.x, width: box.width, height: box.height };
+      })), selectors);
+  for (const [index, boxes] of groups.entries()) {
+    const selector = selectors[index];
+    assert.ok(boxes.length > 0, `${label}: ${selector} missing or hidden`);
+    for (const box of boxes) {
+      assert.ok(box.width > 0 && box.height > 0 && box.x >= 0 && box.x + box.width <= size.width, `${label}: ${selector} outside viewport`);
+    }
   }
   // Nothing may sit past either edge, even inside a pane that scrolls sideways (the owner wants
   // no left-right scrolling at all on phones, not only no page panning).
