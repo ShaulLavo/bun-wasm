@@ -26,3 +26,25 @@ exported separately.
 | `src/engine-kind.ts`, `src/quickjs-program.ts` | Host feature | Pair profile agreement from the side's `env.memory` import. Waffle 0.0.106 (`d49714f8e4fb04cfcf47eb2a5b24cfbafdfe315a`, `packages/waffle/link/plan.ts` and `link/group.ts`) requires separate `initializeMemory` and `initialize` lists. Shared-core memory initialization and relocation run before the instance escapes; core constructors then precede side memory initialization, relocation, constructors and registration. Split cores retain their active data initialization at instantiation and declare no explicit memory stages. |
 
 The original executable fixture in `tests/package/engine-initialization-fixture.ts` uses passive data segments and trapping relocation/constructor checks. Its package test runs the released Waffle loader for all three split engine profiles and shared QuickJS, including repeated initialization. No upstream fixture or implementation is copied.
+
+### J11 real-build prerequisite repairs
+
+The first current shared-group build reproduced the unresolved TLS `errno` side
+relocation and core PIE layout/C++ link failures. The J11 integration reuses the
+concrete previously reviewed source from bun-wasm commits `0fc40ef0a8879567e12a83d922390135bead686f`,
+`9feec7bc9e08aea805d20795fcf676a21a688b05` and
+`b8094a4d8489dfd733334d6aff1c455c95c468ce`. These are original host adapters,
+not changes to upstream algorithms. No worker messaging code is imported.
+
+The core does not export nonexistent PIE stack/heap layout symbols or a TLS-offset
+`errno` data symbol. Its libc accessor returns its actual member-local errno.
+The side defines local TLS errno and copies failure errno for the four real std
+imports `write`, `writev`, `clock_gettime` and `getcwd`. The archive-based producer
+guard rejects additional unclassified std imports. Split builds keep their old
+exports, link flags and libc ownership.
+
+The shared core supplies the two C++ override points actually required by
+BoringSSL, sized delete and libc++ verbose abort, with the same free/diagnostic/abort
+behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. The shared crypto build omits the
+non-atomic SDK C++ archives. Unknown runtime dependencies fail the link. Target
+feature admission and selected-member link-map proof remain enabled.

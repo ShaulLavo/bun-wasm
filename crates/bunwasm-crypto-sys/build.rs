@@ -219,9 +219,9 @@ impl Profile {
 
     /// A PIE link prefers a shared library for `-l`; a group member must not depend on one.
     fn link_cxx_runtime(self) {
-        let names: [&str; 2] = match self {
-            Self::Split => ["static=c++", "static=c++abi"],
-            Self::SharedGroup => ["static:+verbatim=libc++.a", "static:+verbatim=libc++abi.a"],
+        let names: &[&str] = match self {
+            Self::Split => &["static=c++", "static=c++abi"],
+            Self::SharedGroup => &[],
         };
         for name in names {
             println!("cargo:rustc-link-lib={name}");
