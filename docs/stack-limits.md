@@ -125,8 +125,9 @@ Desktop Firefox was measured with all 25 recursion cases below, each in a fresh
 browser context. At both 152 KiB and a 190 KiB margin, every case completed or
 threw a catchable exception and continued. Both stack-overflow fixtures also
 passed at 190 KiB. Giving Firefox the smaller WebKit budget needlessly rejects
-React Router's ordinary CommonJS dependency loading. Firefox on iOS still uses
-WebKit and keeps the smaller budget. Other unmeasured hosts keep it too.
+React Router's ordinary CommonJS dependency loading. Firefox on Android remains unmeasured and keeps the smaller budget. Firefox on iOS
+still uses WebKit and keeps it too. Unknown Firefox platforms also keep the
+smaller budget.
 
 ## JSC
 
