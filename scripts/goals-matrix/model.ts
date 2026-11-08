@@ -1,8 +1,9 @@
 import { boxId, inventory, browsers, engines, frameworks, type Box } from "./catalog";
+import { validateDeadlines, type DeadlinePolicy } from "./deadlines";
 import { object, text, observed } from "./evidence";
 export const phases = ["startup", "install", "dev", "render", "click", "hot-reload", "build", "preview", "cleanup"] as const;
 export type Phase = typeof phases[number];
-export type PhaseResult = { phase: Phase; startedAt: string; durationMs: number } & (
+export type PhaseResult = { phase: Phase; startedAt: string; durationMs: number; timeoutMs: number } & (
   | { status: "pass"; evidence: unknown }
   | { status: "fail"; error: string }
 );
@@ -14,10 +15,11 @@ export type Cell = Box & { attempts: Attempt[] } & (
   | { status: "fail"; phase: Phase; error: string }
 );
 export interface Report {
-  schema: 1;
+  schema: 2;
   run: string;
   createdAt: string;
   command: string;
+  deadlines: DeadlinePolicy;
   source: { commit: string; dirty: boolean; assets: unknown };
   cells: Cell[];
   resources?: { kind: "asset-server"; host: string; pid: number; stopped: boolean }[];
@@ -43,27 +45,29 @@ function array(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new Error("Expected an array");
   return value;
 }
-function phaseResult(value: unknown, engine: string): PhaseResult {
+function phaseResult(value: unknown, engine: string, framework: string, deadlines: DeadlinePolicy): PhaseResult {
   const data = object(value);
   const phase = phases.find(phase => phase === data.phase);
   if (!phase || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid phase or duration");
-  const base = { phase, startedAt: text(data.startedAt), durationMs: data.durationMs };
+  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
+  if (data.timeoutMs !== timeoutMs) throw new Error("Phase timeout differs from report deadline policy");
+  const base = { phase, timeoutMs: data.timeoutMs, startedAt: text(data.startedAt), durationMs: data.durationMs };
   if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };
   if (data.status !== "pass") throw new Error("Unknown phase status");
   observed(phase, data.evidence, engine);
   return { ...base, status: "pass", evidence: data.evidence };
 }
-function attempt(value: unknown, engine: string): Attempt {
+function attempt(value: unknown, engine: string, framework: string, deadlines: DeadlinePolicy): Attempt {
   const data = object(value);
-  return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, engine)) };
+  return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, engine, framework, deadlines)) };
 }
-function validateCell(value: unknown): Box {
+function validateCell(value: unknown, deadlines: DeadlinePolicy): Box {
   const data = object(value);
   const browser = browsers.find(value => value === data.browser), engine = engines.find(value => value === data.engine);
   const framework = frameworks.find(value => value.id === data.framework)?.id;
   if (!browser || !engine || !framework) throw new Error("Unknown box");
   const box = { framework, browser, engine };
-  const attempts = array(data.attempts).map(value => attempt(value, engine));
+  const attempts = array(data.attempts).map(value => attempt(value, engine, framework, deadlines));
   if (data.status === "pending") { text(data.reason); if (attempts.length) throw new Error("Pending box has attempts"); return box; }
   if (data.status === "not runnable yet") { text(data.reason); object(data.discovery); return box; }
   if (data.status !== "pass" && data.status !== "fail") throw new Error("Unknown cell status");
@@ -76,15 +80,16 @@ function validateCell(value: unknown): Box {
 }
 export function validateReport(value: unknown): asserts value is Report {
   const report = object(value);
-  if (report.schema !== 1) throw new Error("Unknown report schema");
+  if (report.schema !== 2) throw new Error("Unknown report schema");
   for (const field of ["run", "createdAt", "command"]) text(report[field]);
   const source = object(report.source); text(source.commit);
   if (typeof source.dirty !== "boolean" || source.assets === undefined) throw new Error("Invalid source identity");
+  const deadlines = validateDeadlines(report.deadlines);
   const expected = new Set(inventory().map(boxId));
   const cells = array(report.cells);
   if (cells.length !== expected.size) throw new Error("Report must include all 260 boxes");
   for (const cell of cells) {
-    const box = validateCell(cell);
+    const box = validateCell(cell, deadlines);
     if (!expected.delete(boxId(box))) throw new Error(`Unknown or duplicate box ${boxId(box)}`);
   }
   for (const value of report.resources === undefined ? [] : array(report.resources)) validateResource(value);

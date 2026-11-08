@@ -2,6 +2,7 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rm, rmdir, writeFile } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { run, options, unavailableReport, type Options } from "./run";
+import { sameDeadlines } from "./deadlines";
 import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
 import { bounded } from "./execute";
@@ -19,6 +20,7 @@ async function discoverMac(signal: AbortSignal): Promise<string> {
 export function combine(first: Report, second: Report): Report {
   validateReport(first); validateReport(second);
   if (JSON.stringify(first.source) !== JSON.stringify(second.source)) throw new Error("Shard sources and assets differ");
+  if (!sameDeadlines(first.deadlines, second.deadlines)) throw new Error("Shard deadline policies differ");
   const cells = first.cells.map((cell, index) => {
     const other = second.cells[index];
     if (!other || other.framework !== cell.framework || other.browser !== cell.browser || other.engine !== cell.engine) throw new Error("Shard ordering differs");
@@ -53,6 +55,10 @@ export async function removeStaging(remote: string, started: boolean, config: Op
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
 }
+export function nativeRunnerArgs(config: Options, remote: string): string[] {
+  const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
+  return [`--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
+}
 async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
   const home = await discoverMac(signal);
   const call = (args: string[]) => ownedCommand(args, signal);
@@ -68,7 +74,7 @@ async function mac(config: Options, source: Report["source"], local: string, sig
       await cp(join(config.output, "TABLE.json"), join(local, "report/TABLE.json"));
     }
     for (const name of await readdir(local)) await call(["mesh", "cp", "-r", join(local, name), `mac:${remote}/${name}`]);
-    const args = [`--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
+    const args = nativeRunnerArgs(config, remote);
     const script = `set -eu; cd ${quote(remote)}; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; echo $$ > runner.pid; exec bun run.js ${args.map(quote).join(" ")}`;
     signal.throwIfAborted(); started = true;
     await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], signal, 86_400_000, true, [0, 1]);

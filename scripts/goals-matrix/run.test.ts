@@ -1,3 +1,4 @@
+import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
 import { mkdtemp, mkdir, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,7 +30,7 @@ test("a rejected incomplete report never replaces the previous saved report", as
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-test-"));
   try {
     await Bun.write(join(scratch, "TABLE.json"), "previous result");
-    await expect(saveReport(scratch, { schema: 1, run: "test", createdAt: "now", command: "test", source: { commit: "test", dirty: false, assets: {} }, cells: [] })).rejects.toThrow("260");
+    await expect(saveReport(scratch, { schema: 2, run: "test", createdAt: "now", command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: [] })).rejects.toThrow("260");
     expect(await Bun.file(join(scratch, "TABLE.json")).text()).toBe("previous result");
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });

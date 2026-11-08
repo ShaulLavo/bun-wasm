@@ -1,3 +1,4 @@
+import { deadlinePolicy } from "./deadlines";
 import { completeAttempt } from "./test-fixture";
 import { describe, expect, test } from "bun:test";
 import { inventory, browsers, engines } from "./catalog";
@@ -9,7 +10,7 @@ import { prerequisites } from "./discovery";
 const box = { framework: "vite-react", browser: "chrome", engine: "browser" } as const;
 const complete = completeAttempt;
 function report(): Report {
-  return { schema: 1, run: "test-only", createdAt: new Date().toISOString(), command: "test", source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() };
+  return { schema: 2, run: "test-only", createdAt: new Date().toISOString(), command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() };
 }
 describe("honest goals matrix", () => {
   test("keeps every one of the 260 boxes, including unavailable engines and Safari", () => {
@@ -27,8 +28,8 @@ describe("honest goals matrix", () => {
   });
   test("never overwrites first failure with later cleanup failure", () => {
     const attempt = complete();
-    attempt.phases[0] = { phase: "startup", status: "fail", startedAt: "now", durationMs: 0, error: "real error" };
-    attempt.phases.push({ phase: "cleanup", status: "fail", startedAt: "now", durationMs: 0, error: "cleanup error" });
+    attempt.phases[0] = { phase: "startup", status: "fail", startedAt: "now", durationMs: 0, timeoutMs: 180_000, error: "real error" };
+    attempt.phases.push({ phase: "cleanup", status: "fail", startedAt: "now", durationMs: 0, timeoutMs: 20_000, error: "cleanup error" });
     expect(finish(box, attempt)).toMatchObject({ status: "fail", phase: "startup", error: "real error" });
     const retried = finish(box, complete(), [attempt]);
     expect(retried.attempts).toHaveLength(2);
