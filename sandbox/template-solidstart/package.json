@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run node_modules/vinxi/bin/cli.mjs dev",
-    "build": "bun run node_modules/vinxi/bin/cli.mjs build --preset node-server",
+    "dev": "ESBUILD_WORKER_THREADS=0 bun run node_modules/vinxi/bin/cli.mjs dev",
+    "build": "ESBUILD_WORKER_THREADS=0 bun run node_modules/vinxi/bin/cli.mjs build --preset node-server",
     "start": "bun run node_modules/vinxi/bin/cli.mjs start --preset node-server --host 127.0.0.1"
   },
   "dependencies": {

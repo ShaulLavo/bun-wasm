@@ -17,3 +17,16 @@ The template's development and production scripts omit their fixed `--port 5173`
 Vinxi receives the allocated port once. Repeated flags made development fall
 back to port 3000, which was already occupied on the test host. Separate
 regressions check each script's composed command before the real browser run.
+
+Vinxi analyzes file routes with esbuild's synchronous API. On the in-guest
+engines, esbuild's default worker path tries to post a SharedArrayBuffer that
+cannot be cloned. The development and build commands set the upstream-supported
+`ESBUILD_WORKER_THREADS=0` before Vinxi imports esbuild. They still use its real
+synchronous service and transform API. Production start is unchanged.
+
+The guest resolves Vinxi's esbuild dependency to esbuild-wasm. Its exact installed
+version and worker guard are captured by the real browser diagnostic. The focused
+command regressions use the installed host esbuild from the locked Wrangler graph
+and call `transformSync` without mocking the API. They check that each template
+command overrides an inherited worker setting before loading esbuild. No shared
+runtime, global environment, or generic esbuild default-mode test changes.
