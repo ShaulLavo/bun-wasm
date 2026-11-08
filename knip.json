@@ -87,6 +87,7 @@
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
         "guest-tests/*.test.ts",
+        "tests/fixtures/require-esm-meta/nested/meta.ts",
         "tests/browser-*.{ts,mjs}",
         "tests/ten-app-finishline.ts",
         "tests/body-consumer-capability.ts",
