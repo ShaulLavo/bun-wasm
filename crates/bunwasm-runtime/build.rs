@@ -7,6 +7,8 @@ use std::process::Command;
 
 #[path = "build/polyfills.rs"]
 mod polyfills;
+#[path = "build/program_profile.rs"]
+mod program_profile;
 
 /// Google Brotli 1.2.0 (third_party/brotli), the revision Bun pins.
 fn build_brotli() {
@@ -116,6 +118,7 @@ fn build_zlib_ng() {
 }
 
 fn main() {
+    program_profile::configure();
     build_brotli();
     build_zlib_ng();
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();

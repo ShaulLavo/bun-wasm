@@ -17,7 +17,7 @@ exported separately.
 | --- | --- | --- |
 | `scripts/src/program-profile.ts`, `crates/bunwasm-cli/shared-group-link.txt` | Host feature | Original profile types, flags, J2 sysroot identity check, split/shared sysroot separation, and the selected C++ runtime member proof read from the core's link map. |
 | `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table`, plus `--max-memory` from `max-memory.txt` as for every core) and PIC+atomics split entry and allocator telemetry objects, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
-| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile, a profile stamp refusing reuse of another profile's build directory, and C++ runtime archives linked by exact file name so a PIE never depends on `libc++abi.so`. |
+| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile and a profile stamp refusing reuse of another profile's build directory. Split builds retain their static C++ archives. The group core supplies the required C++ functions compiled with atomics, without admitting non-atomic SDK archive members. |
 | `scripts/build-bun-core.sh`, `scripts/build-engine-quickjs.sh` | Host feature | `--shared-group` / `QUICKJS_PROFILE=shared-group` producers: `-Zbuild-std`, `--shared-memory`, `--enable-threads`, group finalization. |
 | `scripts/src/engine-explicit-init.ts` | Host feature | Original core converter (start → `core_initialize_memory`) and a group side variant that never re-exports the group memory. |
 | `scripts/guest-core-receipt.ts`, `scripts/guest-engine-receipt.ts` | Host feature | Profile recorded only for `shared-group`, checked before the input digest. |
@@ -26,3 +26,38 @@ exported separately.
 | `src/engine-kind.ts`, `src/quickjs-program.ts` | Host feature | Pair profile agreement from the side's `env.memory` import. Waffle 0.0.106 (`d49714f8e4fb04cfcf47eb2a5b24cfbafdfe315a`, `packages/waffle/link/plan.ts` and `link/group.ts`) requires separate `initializeMemory` and `initialize` lists. Shared-core memory initialization and relocation run before the instance escapes; core constructors then precede side memory initialization, relocation, constructors and registration. Split cores retain their active data initialization at instantiation and declare no explicit memory stages. |
 
 The original executable fixture in `tests/package/engine-initialization-fixture.ts` uses passive data segments and trapping relocation/constructor checks. Its package test runs the released Waffle loader for all three split engine profiles and shared QuickJS, including repeated initialization. No upstream fixture or implementation is copied.
+
+### J11 real-build prerequisite repairs
+
+The first current shared-group build reproduced the unresolved TLS `errno` side
+relocation and core PIE layout/C++ link failures. The J11 integration reuses the
+concrete previously reviewed source from bun-wasm commits `0fc40ef0a8879567e12a83d922390135bead686f`,
+`9feec7bc9e08aea805d20795fcf676a21a688b05` and
+`b8094a4d8489dfd733334d6aff1c455c95c468ce`. These are original host adapters,
+not changes to upstream algorithms. No worker messaging code is imported.
+
+The core does not export nonexistent PIE stack/heap layout symbols or a TLS-offset
+`errno` data symbol. Its libc accessor returns its actual member-local errno.
+The side defines local TLS errno and copies failure errno for the four real std
+imports `write`, `writev`, `clock_gettime` and `getcwd`. The archive-based producer
+guard rejects additional unclassified std imports. Split builds keep their old
+exports, link flags and libc ownership.
+
+The shared core supplies the two replaceable C++ functions required by
+BoringSSL, sized delete and libc++ verbose abort, with the same free, diagnostic and abort
+behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. Its real unsigned-short sort
+specialization is classified separately in [Shared core libc++ sort specialization](shared-cxx-sort.md). The shared crypto build omits the
+non-atomic SDK C++ archives. Unknown runtime dependencies fail the link. Target
+feature admission and selected-member link-map proof remain enabled.
+
+The real group-core admission also needs the reviewed member stack-bound binding
+from bun-wasm `36b0e20cef8d6a047ed90a0638ad9acf43583a05`. Reuse its exact host
+change, including the core-only GOT metadata exception and negative side tests.
+Only `GOT.mem.__stack_low` and `GOT.mem.__stack_high` receive the actual carved
+member stack bounds. Sides do not get the exception. Existing profile, feature,
+maximum, growth and library admission remains closed.
+
+The matching core metadata parser repair is reused from reviewed bun-wasm commit
+`38e33e7802ff7801fc9607cee0855eaf198d1f56`. CoreLayout reads the already-admitted
+group metadata rather than the deliberately narrower paired-side parser.
+The paired-side parser's closed subsection admission is unchanged.

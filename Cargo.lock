@@ -1519,6 +1519,7 @@ dependencies = [
  "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
+ "bunwasm-nested",
  "bunwasm-posix",
  "bunwasm-semver",
  "bytemuck",
@@ -1545,6 +1546,7 @@ dependencies = [
  "pbkdf2",
  "pkcs8",
  "rand_core 0.6.4",
+ "serde",
  "serde_json",
  "sha1",
  "sha2",
@@ -1554,6 +1556,7 @@ dependencies = [
  "tar",
  "url",
  "wasmi",
+ "wasmparser 0.228.0",
  "x25519-dalek",
  "zstd-sys",
 ]

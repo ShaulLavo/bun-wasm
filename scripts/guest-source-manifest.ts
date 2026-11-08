@@ -195,10 +195,10 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
 function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
   const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts",
     // The guest memory maximum: the core links at it and JSC's helpers size their heap from it.
-    "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs"];
+    "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs", "crates/bunwasm-runtime/build/program_profile.rs"];
   if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts",
     "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts", "web/src/native-direct-stream.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]);
-  const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
+  const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs", "wasm/nested_frame.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
   const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs", "side_modules.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
   const owned = {
     quickjs: ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"],

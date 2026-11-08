@@ -19,7 +19,11 @@ in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, gue
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
 Native paths name a directory under
-`tests/fixtures/`. Other paths
+`tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
+keeps the ordinary split producer and selection. The shared PIC job consumes the
+Rust job's launcher and one matching group core/QuickJS pair through
+`bun scripts/test-checks.ts native --profile shared-group`. Missing artifacts or
+capability fail this blocking gate. Other paths
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.

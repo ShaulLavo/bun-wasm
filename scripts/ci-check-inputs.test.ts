@@ -31,7 +31,7 @@ function repository() {
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr);
-    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), inputs: result.stderr.trim() };
+    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), profile: result.stdout.trim().split("\n")[3], inputs: result.stderr.trim() };
   }
   git(["init", "-q"]);
   write("base.txt", "fixture\n");
@@ -220,4 +220,21 @@ test("diverged TLS probe deletion still selects secondary inputs from its merge 
   const selected = repo.select(base, head, "pull_request");
   expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toContain("scripts/fixture-ancestor-driver.ts");
+});
+
+for (const event of ["pull_request", "push"]) test(`${event} selects shared profiles from introduced and removed metadata`, () => {
+  const repo = repository();
+  const base = repo.commit();
+  const manifest = "checks/native-group.json";
+  const input = "tests/fixtures/group-only/guest.ts";
+  repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/group-only", profile: "shared-group" }));
+  repo.write(input, "group fixture\n");
+  const registered = repo.commit();
+  expect(repo.select(base, registered, event).profile).toBe("shared_native=true");
+  repo.write(input, "changed group fixture\n");
+  const changed = repo.commit();
+  expect(repo.select(registered, changed, event).profile).toBe("shared_native=true");
+  rmSync(join(repo.directory, manifest));
+  rmSync(join(repo.directory, input));
+  expect(repo.select(changed, repo.commit(), event).profile).toBe("shared_native=true");
 });

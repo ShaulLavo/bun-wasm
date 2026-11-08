@@ -50,6 +50,7 @@ function sourceApi() {
     value.generation++;
   }
   const native = {
+    sharedMemorySupported: () => false,
     compile(bytes: Uint8Array<ArrayBuffer>) {
       const module = new host.Module(bytes);
       modules.push(module);

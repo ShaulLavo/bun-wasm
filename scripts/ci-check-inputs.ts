@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
-import { parseCheck } from "./test-checks";
+import { parseCheck, type NativeProfile } from "./test-checks";
 
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
@@ -19,7 +19,7 @@ function treeEntry(entry: string) {
   return { mode, kind, object, path: entry.slice(separator + 1) };
 }
 
-export function nativeCheckInputsAt(ref: string): string[] {
+export function nativeCheckInputsAt(ref: string, profile?: NativeProfile): string[] {
   if (/^0{40}$/.test(ref)) return [];
   const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8" });
   const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
@@ -41,6 +41,7 @@ export function nativeCheckInputsAt(ref: string): string[] {
     if (object !== manifest.object || kind !== "blob" || !Number.isSafeInteger(length) || length < 0 || blobs[start + length] !== 10) throw new Error(`Invalid check blob at ${ref}: ${manifest.path}`);
     const check = parseCheck(JSON.parse(blobs.toString("utf8", start, start + length)), basename(manifest.path));
     offset = start + length + 1;
+    if (profile !== undefined && (check.owner !== "native" || (check.profile ?? "split") !== profile)) return [];
     const inputs = checkInputPaths(check);
     return inputs.length ? inputs.concat([manifest.path]) : [];
   });

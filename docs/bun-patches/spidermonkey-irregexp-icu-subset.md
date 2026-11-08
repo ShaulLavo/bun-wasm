@@ -7,6 +7,10 @@ RegExp support.
 
 ## Classification
 
+The generator records the full Cargo lockfile. Regenerate its input record after
+lockfile changes, even when the selected ICU dependencies and generated C++ stay
+unchanged. Refreshing this source record does not qualify an old native archive.
+
 The Mozilla pin is `a5df22d986d4b626f771b4f8885241941601c35c`.
 ICU4X dependencies and Unicode data are pinned to 2.4.0 and Unicode 18.0.0.
 SpiderMonkey's own tables remain Unicode 17.0.0.

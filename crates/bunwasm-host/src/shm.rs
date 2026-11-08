@@ -5,6 +5,8 @@
 //! provided. Nested Wasm users must call this same futex service rather than
 //! Wasmtime's separate built-in futex table.
 
+pub(crate) mod nested;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};

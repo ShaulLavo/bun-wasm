@@ -36,7 +36,9 @@ fn download_wasi_sdk() -> PathBuf {
             other => panic!("Unsupported platform tuple {:?}", other),
         };
 
-        let uri = format!("https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{major_version}/wasi-sdk-{major_version}.{minor_version}-{file_suffix}.tar.gz");
+        let uri = format!(
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{major_version}/wasi-sdk-{major_version}.{minor_version}-{file_suffix}.tar.gz"
+        );
 
         println!("Downloading WASI SDK archive from {uri} to {archive_path:?}");
 
@@ -152,6 +154,12 @@ fn main() {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
+
+    println!("cargo:rerun-if-env-changed=BUN_WASM_PROGRAM_PROFILE");
+    if env::var("BUN_WASM_PROGRAM_PROFILE").as_deref() == Ok("shared-group") {
+        assert_eq!(target_os, "wasi", "shared-group QuickJS targets WASI");
+        defines.push(("BUN_WASM_SHARED_GROUP".into(), Some("1")));
+    }
 
     let mut builder = cc::Build::new();
     builder

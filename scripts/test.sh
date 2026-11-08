@@ -189,7 +189,12 @@ if [[ $update == 0 && $engine != browser && ! ( -f "$shell_wasm" && -f "$env_was
 fi
 
 if [[ ${#names[@]} == 0 ]]; then
-  for dir in "$root"/tests/fixtures/*/; do names+=("$(basename "$dir")"); done
+  group_fixtures=$(bun "$root/scripts/test-checks.ts" native --profile shared-group --list)
+  for dir in "$root"/tests/fixtures/*/; do
+    name=$(basename "$dir")
+    if grep -Fxq "tests/fixtures/$name" <<< "$group_fixtures"; then continue; fi
+    names+=("$name")
+  done
 fi
 
 normalize() {
