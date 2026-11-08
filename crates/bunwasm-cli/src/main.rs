@@ -59,15 +59,19 @@ mod bun_transpiler {
     fn record(
         out: Result<bunwasm_transpiler::Transpiled, bunwasm_transpiler::Failure>,
     ) -> Result<Transpiled, RecordError> {
-        let out = out.map_err(|failure| match failure {
-            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
-            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
-        })?;
+        let out = out.map_err(compile_failure)?;
         Ok(Transpiled {
             code: out.code,
             mappings: (!out.mappings.is_empty()).then_some(out.mappings),
             ..Default::default()
         })
+    }
+
+    fn compile_failure(failure: bunwasm_transpiler::Failure) -> RecordError {
+        match failure {
+            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
+            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
+        }
     }
 
     fn runtime_imports(
@@ -85,6 +89,46 @@ mod bun_transpiler {
                 },
             })
             .collect()
+    }
+
+    fn compiler_loader(loader: Loader) -> BunLoader {
+        use BunLoader::{Js, Json, Json5, Jsonc, Jsx, Text, Toml, Ts, Tsx, Yaml};
+        match loader {
+            Loader::Js => Js,
+            Loader::Jsx => Jsx,
+            Loader::Ts => Ts,
+            Loader::Tsx => Tsx,
+            Loader::Json => Json,
+            Loader::Toml => Toml,
+            Loader::Yaml => Yaml,
+            Loader::Json5 => Json5,
+            Loader::Jsonc => Jsonc,
+            Loader::Text => Text,
+        }
+    }
+
+    fn preserve_source(source: &str, loader: BunLoader) -> bool {
+        loader == BunLoader::Js
+            && !(AWAIT_HOOKS
+                && (source.contains("await")
+                    || source.contains("yield")
+                    || source.contains("eval")
+                    || source.contains("\\u")))
+    }
+
+    fn runtime_output(out: bunwasm_transpiler::Transpiled) -> Transpiled {
+        use bunwasm_runtime::transpiler::ModuleKind;
+        use bunwasm_transpiler::ModuleKind as ParsedKind;
+        Transpiled {
+            code: out.code,
+            mappings: (!out.preserved && !out.mappings.is_empty()).then_some(out.mappings),
+            imports: runtime_imports(out.imports),
+            module_kind: Some(match out.module_kind {
+                ParsedKind::Script => ModuleKind::Script,
+                ParsedKind::CommonJs => ModuleKind::CommonJs,
+                ParsedKind::Esm => ModuleKind::Esm,
+            }),
+        }
     }
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
@@ -157,26 +201,8 @@ mod bun_transpiler {
             path: &str,
             loader: Loader,
         ) -> Result<Transpiled, String> {
-            let loader = match loader {
-                // The browser engine needs every `await` printed with its
-                // AsyncLocalStorage hooks, plain JavaScript included.
-                Loader::Js => BunLoader::Js,
-                Loader::Jsx => BunLoader::Jsx,
-                Loader::Ts => BunLoader::Ts,
-                Loader::Tsx => BunLoader::Tsx,
-                Loader::Json => BunLoader::Json,
-                Loader::Toml => BunLoader::Toml,
-                Loader::Yaml => BunLoader::Yaml,
-                Loader::Json5 => BunLoader::Json5,
-                Loader::Jsonc => BunLoader::Jsonc,
-                Loader::Text => BunLoader::Text,
-            };
-            let preserve_source = loader == BunLoader::Js
-                && !(AWAIT_HOOKS
-                    && (source.contains("await")
-                        || source.contains("yield")
-                        || source.contains("eval")
-                        || source.contains("\\u")));
+            let loader = compiler_loader(loader);
+            let preserve_source = preserve_source(source, loader);
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {
@@ -199,23 +225,37 @@ mod bun_transpiler {
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 bunwasm_transpiler::transpile_with_source_map(source, path, loader, preserve_source)
             })?;
-            use bunwasm_runtime::transpiler::ModuleKind;
-            use bunwasm_transpiler::ModuleKind as ParsedKind;
-            let module_kind = Some(match out.module_kind {
-                ParsedKind::Script => ModuleKind::Script,
-                ParsedKind::CommonJs => ModuleKind::CommonJs,
-                ParsedKind::Esm => ModuleKind::Esm,
-            });
-            Ok(Transpiled {
-                code: out.code,
-                mappings: if preserve_source {
-                    None
-                } else {
-                    Some(out.mappings)
-                },
-                imports: runtime_imports(out.imports),
-                module_kind,
+            Ok(runtime_output(out))
+        }
+
+        fn prepare_module(
+            &self,
+            source: &str,
+            path: &str,
+            loader: Loader,
+            intern: &mut bunwasm_runtime::import_requests::InternImport<'_>,
+        ) -> Result<Transpiled, RecordError> {
+            use bunwasm_runtime::import_requests::{ImportMode, ImportRequest};
+            let loader = compiler_loader(loader);
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+                bunwasm_transpiler::prepare_module(
+                    source,
+                    path,
+                    loader,
+                    preserve_source(source, loader),
+                    !AWAIT_HOOKS,
+                    &mut |specifier| {
+                        intern(ImportRequest {
+                            specifier,
+                            mode: ImportMode::Text,
+                        })
+                        .as_str()
+                        .to_owned()
+                    },
+                )
             })
+            .map_err(compile_failure)?;
+            Ok(runtime_output(out))
         }
 
         fn use_module_records(&self) {

@@ -135,6 +135,19 @@ pub trait Transpiler {
         })
     }
 
+    /// File-module preparation, with process-owned semantic import identity.
+    /// Keep syntax errors distinct from infrastructure and printer failures.
+    fn prepare_module(
+        &self,
+        source: &str,
+        path: &str,
+        loader: Loader,
+        _intern: &mut crate::import_requests::InternImport<'_>,
+    ) -> Result<Transpiled, RecordError> {
+        self.transpile_with_map(source, path, loader)
+            .map_err(RecordError::Other)
+    }
+
     /// From now on [`Transpiler::transpile_with_map`] prepares modules for
     /// registration records (module-level `this` and literal expressions kept
     /// as written): the host runs every ES module of this process through the
@@ -268,8 +281,8 @@ pub enum ModuleKind {
     Esm,
 }
 
-/// Why [`Transpiler::register`] made no record. Both carry the transpiler's report
-/// (`file:line:col: message` lines).
+/// Why file preparation or module registration failed. Both carry the compiler's
+/// report (`file:line:col: message` lines).
 #[derive(Clone, Debug)]
 pub enum RecordError {
     /// The module's source is invalid: a parse error or a module early error, which a

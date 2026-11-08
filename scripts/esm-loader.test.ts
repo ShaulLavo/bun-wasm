@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { fixtureCases } from "./esm-loader-harness";
+import { fixtureCases, withImportRequests } from "./esm-loader-harness";
 import { runCase } from "./esm-loader-run";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "bun-wasm-esm-loader-"));
@@ -11,7 +11,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const loaderPath = join(scratch, "esm_loader.js");
 execFileSync("node", ["--disable-warning=ExperimentalWarning", join(import.meta.dir, "transpile-runtime.ts"),
   join(import.meta.dir, "../crates/bunwasm-runtime/src/js/esm_loader.ts"), loaderPath]);
-const loader = `require("node:vm").runInThisContext(${JSON.stringify(readFileSync(loaderPath, "utf8"))})`;
+const loader = withImportRequests(`require("node:vm").runInThisContext(${JSON.stringify(readFileSync(loaderPath, "utf8"))})`);
 
 for (const name of fixtureCases()) {
   test(`esm loader: ${name} matches Node`, () => {

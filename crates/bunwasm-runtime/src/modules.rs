@@ -166,12 +166,9 @@ fn build_error(report: &str, source: &str) -> NativeError {
         .prop("__bunwasmFormatted", text)
 }
 
-/// A registration record's [`crate::RecordError`]: invalid module source is a
-/// `SyntaxError`, as loading the module natively reports it, printed with its source line
-/// and location like a build error but labelled `SyntaxError`; anything else stays a build
-/// error.
-#[cfg(any(feature = "engine-split", feature = "engine-host"))]
-fn record_error(error: crate::RecordError, source: &str) -> NativeError {
+/// Preparation and registration keep invalid module source as `SyntaxError`;
+/// infrastructure and printer failures retain their `BuildError` contract.
+fn module_compile_error(error: crate::RecordError, source: &str) -> NativeError {
     let report = match error {
         crate::RecordError::Syntax(report) => report,
         crate::RecordError::Other(report) => return build_error(&report, source),
@@ -357,7 +354,7 @@ impl State {
             true => self.transpiler.register_module(&source, name),
             false => self.transpiler.register(&source, name),
         }
-        .map_err(|error| record_error(error, &source))?;
+        .map_err(|error| module_compile_error(error, &source))?;
         self.positions
             .borrow_mut()
             .entry(name.to_owned())
@@ -399,6 +396,9 @@ impl State {
     /// Read, transpile and classify a file. Results are cached while the
     /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        if let Some(code) = self.load_text_module(path)? {
+            return Ok((Rc::from(code), Format::Esm));
+        }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
@@ -451,8 +451,10 @@ impl State {
                 let adapted = next_swc::adapt(&raw, path);
                 let out = self
                     .transpiler
-                    .transpile_with_map(&adapted, path, loader)
-                    .map_err(|msg| build_error(&msg, &raw))?;
+                    .prepare_module(&adapted, path, loader, &mut |request| {
+                        self.intern_import_request(request)
+                    })
+                    .map_err(|error| module_compile_error(error, &raw))?;
                 let format = self.detect_format(path, &out.code, out.module_kind);
                 #[cfg(feature = "engine-host")]
                 self.source_imports
@@ -716,13 +718,12 @@ mod tests {
 
     /// A record's invalid source is a SyntaxError with the source line and location; any other
     /// record failure stays a build error.
-    #[cfg(any(feature = "engine-split", feature = "engine-host"))]
     #[test]
-    fn record_errors_keep_syntax_and_build_classes() {
+    fn module_compile_errors_keep_syntax_and_build_classes() {
         use crate::data::ErrorKind;
         let source = "console.log(1);\nexport const = ;\n";
         let formatted = |error: &NativeError| format!("{:?}", error.props);
-        let syntax = record_error(
+        let syntax = module_compile_error(
             crate::RecordError::Syntax("/bad.mjs:2:14: Unexpected \"=\"\n".into()),
             source,
         );
@@ -743,7 +744,7 @@ mod tests {
             "{}",
             formatted(&syntax)
         );
-        let other = record_error(
+        let other = module_compile_error(
             crate::RecordError::Other("failed to print /bad.mjs: Oom".into()),
             source,
         );

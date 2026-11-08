@@ -671,6 +671,7 @@
   };
 
   internal.initImportMeta = function initImportMeta(meta, path, isMain) {
+    path = native.modulePath(path);
     defineHidden(meta, {
       url: pathToFileHref(path),
       dir: dirname(path),
@@ -906,6 +907,7 @@
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("import_requests");
   internal.require("source_prepare");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
