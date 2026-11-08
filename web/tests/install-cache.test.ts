@@ -25,7 +25,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
-async function withEnvironment<T>(cache: CacheDouble | undefined, fetcher: () => Promise<Response>, run: () => Promise<T>): Promise<T> {
+async function withEnvironment<T>(cache: CacheDouble | undefined, fetcher: (...args: Parameters<typeof fetch>) => Promise<Response>, run: () => Promise<T>): Promise<T> {
   const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
   const originalFetch = globalThis.fetch;
   if (cache) {
@@ -316,9 +316,9 @@ test("body errors discard partial captures", async () => {
   });
 });
 
-function cloningCache(): { cache: CacheDouble; published: Promise<void> } {
+function cloningCache(initial?: Response): { cache: CacheDouble; published: Promise<void> } {
   const published = deferred<void>();
-  let stored: Response | undefined;
+  let stored = initial;
   return {
     published: published.promise,
     cache: cacheDouble({
@@ -331,6 +331,81 @@ function cloningCache(): { cache: CacheDouble; published: Promise<void> } {
     }),
   };
 }
+
+test("guest cache-control no-cache refreshes a warm tarball and replaces the cached bytes", async () => {
+  const url = "https://registry.invalid/pkg/-/pkg-1.0.0.tgz";
+  const { cache, published } = cloningCache(new Response("old tarball"));
+  let networkCalls = 0;
+  const controller = new AbortController();
+  const refresh: RequestInit = {
+    method: "GET",
+    signal: controller.signal,
+    headers: [["accept", TARBALL], ["accept-encoding", "gzip"], ["cache-control", "no-cache"]],
+  };
+  await withEnvironment(cache, async (input, options) => {
+    networkCalls++;
+    expect(input).toBe(url);
+    expect(Array.from(new Headers(options?.headers))).toEqual(Array.from(new Headers(refresh.headers)));
+    expect(options?.signal).toBe(controller.signal);
+    expect(options?.redirect).toBe("manual");
+    return new Response("new tarball", { headers: { "content-type": "application/octet-stream", "x-version": "new" } });
+  }, async () => {
+    expect(await (await installFetch(url, requestOptions())).text()).toBe("old tarball");
+    expect(networkCalls).toBe(0);
+    const refreshed = await installFetch(url, refresh);
+    expect(refreshed.headers.get("x-version")).toBe("new");
+    expect(await refreshed.text()).toBe("new tarball");
+    await published;
+    const hit = await installFetch(url, requestOptions());
+    expect(Array.from(hit.headers)).toEqual(Array.from(refreshed.headers));
+    expect(await hit.text()).toBe("new tarball");
+    expect(networkCalls).toBe(1);
+  });
+});
+
+test.each([
+  { cacheControl: "NO-CACHE", refresh: true },
+  { cacheControl: "max-age=60, no-cache", refresh: true },
+  { cacheControl: "no-cache\t, max-age=0", refresh: true },
+  { cacheControl: "max-age=0", refresh: false },
+  { cacheControl: "x-no-cache, no-cacheable", refresh: false },
+  { cacheControl: 'extension="no-cache"', refresh: false },
+  { cacheControl: 'extension=", no-cache, "', refresh: false },
+  { cacheControl: 'extension="a,b", no-cache', refresh: true },
+])("tarball refresh recognizes exact Cache-Control directives: $cacheControl", async ({ cacheControl, refresh }) => {
+  const { cache, published } = cloningCache(new Response("old tarball"));
+  let networkCalls = 0;
+  await withEnvironment(cache, async () => {
+    networkCalls++;
+    return new Response("new tarball");
+  }, async () => {
+    const options: RequestInit = { method: "GET", headers: { accept: TARBALL, "cache-control": cacheControl } };
+    const response = await installFetch("https://registry.invalid/pkg.tgz", options);
+    expect(await response.text()).toBe(refresh ? "new tarball" : "old tarball");
+    if (refresh) await published;
+    expect(networkCalls).toBe(refresh ? 1 : 0);
+  });
+});
+
+test("authenticated refresh forwards credentials without reading or replacing the shared cache", async () => {
+  let cacheOperations = 0;
+  const cache = cacheDouble({
+    async match() { cacheOperations++; return new Response("public tarball"); },
+    async put() { cacheOperations++; },
+  });
+  const options: RequestInit = {
+    method: "GET",
+    headers: { accept: TARBALL, "cache-control": "no-cache", authorization: "Bearer fixture-token" },
+  };
+  await withEnvironment(cache, async (_input, forwarded) => {
+    expect(Array.from(new Headers(forwarded?.headers))).toEqual(Array.from(new Headers(options.headers)));
+    return new Response("private tarball");
+  }, async () => {
+    const response = await installFetch("https://registry.invalid/private.tgz", options);
+    expect(await response.text()).toBe("private tarball");
+    expect(cacheOperations).toBe(0);
+  });
+});
 
 async function expectResponseMetadata(response: Response, expected: Response): Promise<void> {
   const clone = response.clone();

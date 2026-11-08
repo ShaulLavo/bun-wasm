@@ -15,15 +15,17 @@ type CaptureState =
 
 /** Cache npm downloads across playground runs, without caching ordinary user fetches. */
 export async function installFetch(url: string, options: RequestInit): Promise<Response> {
-  const header = new Headers(options.headers).get("accept") ?? "";
+  const headers = new Headers(options.headers);
+  const header = headers.get("accept") ?? "";
   const accept = header.split(";", 1)[0];
-  const refresh = header.includes("; no-cache");
   if (options.method !== "GET" || accept !== METADATA && accept !== TARBALL) {
     return fetch(url, options);
   }
-  if (accept === METADATA || typeof caches === "undefined" || new Headers(options.headers).has("authorization")) {
+  if (accept === METADATA || typeof caches === "undefined" || headers.has("authorization")) {
     return packageFetch(url, options);
   }
+  const directives = headers.get("cache-control")?.match(/(?:[^,"]|"(?:[^"\\]|\\.)*")+/g);
+  const refresh = header.includes("; no-cache") || (directives?.some(value => value.trim().toLowerCase() === "no-cache") ?? false);
   let cache: Cache | undefined;
   try {
     cache = await caches.open(CACHE);
