@@ -289,11 +289,14 @@ mod bun_transpiler {
         #[cfg(feature = "bun-build")]
         fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
             use bunwasm_build::{BuildArgs, Format, SourceMap, Target};
+            let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+            let meta = bunwasm_transpiler::commonjs_metadata_name(&source);
             let args = BuildArgs {
                 entry_points: vec![path.to_owned()],
                 target: Some(Target::Bun),
                 format: Format::Cjs,
                 external: vec!["*".to_owned()],
+                define: vec![("import.meta".to_owned(), meta.clone())],
                 sourcemap: SourceMap::Inline,
                 write: false,
                 ..BuildArgs::default()
@@ -315,6 +318,11 @@ mod bun_transpiler {
             if code.is_empty() {
                 return Err(format!("bun build produced no output for {path}"));
             }
+            let code = code.replacen(
+                "(function(exports, require, module, __filename, __dirname) {",
+                &format!("(function(exports, require, module, __filename, __dirname, {meta}) {{"),
+                1,
+            );
             const MARK: &str = "\n//# sourceMappingURL=data:application/json;base64,";
             let (code, mappings) = match code.rfind(MARK) {
                 Some(at) => {
