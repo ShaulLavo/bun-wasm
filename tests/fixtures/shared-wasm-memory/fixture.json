@@ -1,0 +1,1 @@
+{"status":"pending","scope":"QuickJS shared-group guest on bunwasm-host","reference":"bun index.ts","note":"This fixture is not in blocking discovery until real shared execution exists. A native reference pass does not count as embedded acceptance."}
