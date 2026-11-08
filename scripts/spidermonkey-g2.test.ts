@@ -109,3 +109,14 @@ test("G2 smoke rejects unrelated patch state before compilation without changing
     expect(readFileSync(join(fixture.source, "probe"), "utf8")).toBe("unrelated edit\n");
   } finally { rmSync(fixture.root, { recursive: true, force: true }); }
 });
+
+
+test("G2 smoke retains its real linked probe and uses the experimental initializer converter", () => {
+  const smoke = readFileSync(resolve("spidermonkey/smoke.sh"), "utf8");
+  const launcher = readFileSync(resolve("crates/bunwasm-host/src/main.rs"), "utf8");
+  expect(smoke).toContain("spidermonkey-side-core-receipt.ts convert-side");
+  expect(smoke).not.toContain("engine-explicit-init.ts spidermonkey");
+  expect(smoke).toContain("spidermonkey_g2::real_side_loading");
+  expect(launcher).toContain("mod spidermonkey_g2 {");
+  expect(launcher).toContain("fn real_side_loading()");
+});

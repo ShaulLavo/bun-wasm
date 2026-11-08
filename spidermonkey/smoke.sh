@@ -48,7 +48,7 @@ timeout 60s node "$repo/spidermonkey/check-oom.ts" "$smoke" 2>&1 | tee "$report/
  --export=spidermonkey_register --export=spidermonkey_run \
  -Map="$SPIDERMONKEY_G2_DIR/side.map" -o "$SPIDERMONKEY_G2_DIR/side.implicit.wasm" \
  "$SPIDERMONKEY_G2_DIR/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/examples/libside.a"
-bun scripts/src/engine-explicit-init.ts spidermonkey "$SPIDERMONKEY_G2_DIR/side.implicit.wasm" "$SPIDERMONKEY_G2_DIR/spidermonkey-engine.wasm"
+bun scripts/spidermonkey-side-core-receipt.ts convert-side "$SPIDERMONKEY_G2_DIR/side.implicit.wasm" "$SPIDERMONKEY_G2_DIR/spidermonkey-engine.wasm"
 wasm-tools validate "$SPIDERMONKEY_G2_DIR/spidermonkey-engine.wasm"
 bun scripts/side-import-delta.ts "$SPIDERMONKEY_G2_DIR/spidermonkey-engine.wasm" > "$report/import-delta.txt"
 

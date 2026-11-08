@@ -120,7 +120,7 @@ const nonTranscriptCallers = [
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
 ];
-const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts"];
+const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 
 test("every playground helper reader has a maintained transcript or public-state classification", async () => {
   const root = new URL("../../", import.meta.url).pathname;
@@ -132,6 +132,12 @@ test("every playground helper reader has a maintained transcript or public-state
   for (const path of transcriptCallers) {
     const source = await Bun.file(new URL(path, `file://${root}`)).text();
     expect(source).toMatch(/prompt=off|searchParams\.set\("prompt", "off"\)/);
+  }
+  const driver = await Bun.file(new URL("scripts/engine-playground-driver.ts", `file://${root}`)).text();
+  expect(driver).toContain('url.searchParams.set("prompt", "off")');
+  for (const path of ["scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"]) {
+    const source = await Bun.file(new URL(path, `file://${root}`)).text();
+    expect(source).toContain("playgroundChromiumDriver");
   }
   const workers = await Bun.file(new URL("./browser-workers.ts", import.meta.url)).text();
   expect(workers).toContain("await run(");

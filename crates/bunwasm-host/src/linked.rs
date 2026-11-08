@@ -269,6 +269,8 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
             b"spidermonkey" => ProgramKind::SpiderMonkey,
+            #[cfg(test)]
+            b"spidermonkey-g2" => ProgramKind::SpiderMonkey,
             _ => bail!("invalid bun-wasm-engine payload"),
         };
         tag = Some(kind);
@@ -632,6 +634,15 @@ mod tests {
         .into_iter()
         .chain(payload)
         .collect()
+    }
+
+    #[test]
+    fn retained_g2_probe_uses_only_the_test_loader() {
+        let bytes = wasm_custom(b"bun-wasm-engine", b"spidermonkey-g2");
+        assert_eq!(
+            parse_program_kind(&bytes, true).unwrap(),
+            Some(ProgramKind::SpiderMonkey)
+        );
     }
 
     #[test]
