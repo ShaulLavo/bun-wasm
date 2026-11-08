@@ -70,7 +70,7 @@ test("a hung page cannot extend the sample deadline through failure diagnostics"
   const output = join(scratch, "result.json");
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
-    child = Bun.spawn([process.execPath, "scripts/measure-react-startup.ts", "--url", new URL("/hung", server.url).href,
+    child = Bun.spawn([process.execPath, join(import.meta.dir, "measure-react-startup.ts"), "--url", new URL("/hung", server.url).href,
       "--samples", "1", "--deadline-ms", "250", "--output", output], { stdout: "ignore", stderr: "ignore" });
     expect(await sampleDeadline(child.exited, 5000)).toBe(1);
     const result = await Bun.file(output).json();
