@@ -164,10 +164,9 @@ for (const [kind, path] of [["core", "scripts/src/engine-explicit-init.ts"], ["c
   });
 }
 
-test("only the QuickJS engine is qualified for the shared-group profile", () => {
-  expect(engineEnvironment("quickjs", "/sysroot", "shared-group").BUN_WASM_PROGRAM_PROFILE).toBe("shared-group");
-  for (const engine of ["jsc"] as const) {
-    expect(() => engineEnvironment(engine, "/sysroot", "shared-group")).toThrow(/not qualified/);
+test("the QuickJS and JSC engines select the shared-group profile only when asked", () => {
+  for (const engine of ["quickjs", "jsc"] as const) {
+    expect(engineEnvironment(engine, "/sysroot", "shared-group").BUN_WASM_PROGRAM_PROFILE).toBe("shared-group");
     expect(engineEnvironment(engine, "/sysroot").BUN_WASM_PROGRAM_PROFILE).toBeUndefined();
   }
 });
