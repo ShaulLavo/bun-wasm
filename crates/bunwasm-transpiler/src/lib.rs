@@ -9,6 +9,7 @@ pub mod data;
 pub mod prepare;
 mod record_fixup;
 mod register;
+pub use register::commonjs_metadata_name;
 
 use bun_alloc::Arena;
 use bun_ast::Loader as BunLoader;
