@@ -183,3 +183,16 @@ placement are unchanged. Generic production Resolver tests cover this ordering,
 peer-only graphs, root priority, cycles and determinism. A native Bun 1.4.4
 lockfile-only control supplies the generic placement reference. No upstream
 implementation is copied, and no package name, pin or loader exception is added.
+
+The original installer overlaps metadata transport for known sibling edges and
+archive transport for the resolved install list. It retains deterministic version,
+placement, peer, extraction and publication order. Seven lookahead handles leave
+one slot for a demand request that lookahead conservatively skips. Local edges,
+usable locks, existing placements and fresh cache files do not start speculative
+requests. Cached bytes still pass the existing safety validation before use.
+Each request owns its handle and closes it on consumption or cancellation. Only
+the current response is accumulated in guest memory; other bodies use existing
+host backpressure. No parsed packument cache or archive preload is added.
+`install-metadata.test.ts` uses real delayed registry I/O, including responses
+larger than the host body window, to check overlap, bounds, cancellation and
+request-free locked, local and no-op installs. No upstream code is copied.
