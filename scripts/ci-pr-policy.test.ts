@@ -56,38 +56,9 @@ test("update statuses run only for manual checks of the standing update branch",
   expect(record(reporter.permissions)).toEqual({ statuses: "write" });
 });
 
-function selectedRunner(job: Record<string, unknown>, actor: string): string {
-  const configured = job["runs-on"];
-  if (typeof configured !== "string") throw new Error("Expected a runner label");
-  if (!configured.startsWith("${{")) return configured;
-  const expression = configured.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-    .replaceAll("github.actor", JSON.stringify(actor));
-  const runner: unknown = new Function(`return (${expression})`)();
-  if (typeof runner !== "string") throw new Error("Expected a selected runner label");
-  return runner;
-}
-
-test("only the built-in Actions bot routes Boat jobs to hosted runners", () => {
-  const original: Record<string, string> = {
-    "jsc-prebuild": "boat-large",
-    "native-quality": "boat-large",
-    rust: "boat-large",
-    package: "boat",
-    "shared-sysroot": "boat-large",
-    web: "boat",
-    "browser-process": "boat",
-  };
-  const routed = Object.entries(jobs).filter(([, value]) => {
-    const runner = record(value)["runs-on"];
-    return typeof runner === "string" && runner.includes("boat");
-  });
-  expect(routed.map(([id]) => id).toSorted()).toEqual(Object.keys(original).toSorted());
-  for (const [id, originalRunner] of Object.entries(original)) {
-    const job = record(jobs[id]);
-    expect(job["runs-on"], id).toBe(`\${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || '${originalRunner}' }}`);
-    expect(selectedRunner(job, "github-actions[bot]"), id).toBe("ubuntu-latest");
-    for (const actor of ["ShaulLavo", "contributor", "dependabot[bot]", "github-actions[bot]-other", ""]) {
-      expect(selectedRunner(job, actor), `${id}/${actor}`).toBe(originalRunner);
-    }
-  }
+test("no job runs on Boat runners", () => {
+  const formerBoatJobs = ["jsc-prebuild", "native-quality", "rust", "package", "shared-sysroot", "web", "browser-process"];
+  for (const id of formerBoatJobs) expect(record(jobs[id])["runs-on"], id).toBe("ubuntu-latest");
+  const boatJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(record(value)["runs-on"]).includes("boat"));
+  expect(boatJobs.map(([id]) => id)).toEqual([]);
 });
