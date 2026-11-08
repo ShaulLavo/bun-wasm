@@ -87,3 +87,11 @@ or a pre-import fixture observer; no production mutable hook or export was added
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+CI release retrieval uses the original `scripts/ci-release-download.ts` host adapter.
+With the ephemeral job token, it resolves the exact release URL through GitHub's
+release-asset API. Only API requests carry authorization; signed asset redirects
+receive no credentials. Its public byte cache uses SHA-256 of the entire original
+URL. The native adapter still verifies the selected archive digest, size, host
+interface, installed builder and source hashes on every use. No upstream code is
+copied by this download adapter.
