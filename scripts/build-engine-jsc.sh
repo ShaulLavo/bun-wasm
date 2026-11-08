@@ -59,6 +59,9 @@ if [[ ${#group_errno_wraps[@]} -gt 0 ]]; then
   "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC "${init_profile[@]}" -O2 \
     -c "$root/crates/bunwasm-engine-quickjs/group-errno.c" -o "$out/group-errno.o"
   group_objects=("$out/group-errno.o")
+  # shellcheck source=scripts/src/group-errno-wraps.sh
+  source "$root/scripts/src/group-errno-wraps.sh"
+  check_group_errno_wraps "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_jsc.a" "$out" "${group_errno_wraps[@]}"
 fi
 # Undefined symbols are emitted as imports, never accepted as proof of closure.
 # The separately released real gate must admit every retained import against core.
