@@ -151,6 +151,18 @@ function runCase(directory: string, wasm: string, modules: "store" | "records", 
 }
 
 export function testModuleRecordControls(wasm: string): void {
+  test("required ES modules preserve default imports and CommonJS namespace identity", () => {
+    const fixture = join(root, "web/tests/fixtures/require-esm-interop");
+    const expected = readFileSync(join(fixture, "expected.txt"), "utf8");
+    for (const modules of ["store", "records"] as const) {
+      const child = runCase(fixture, wasm, modules, ["run", "/index.cts"]);
+      expect(child.error).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      expect(child.stderr).toBe("");
+      expect(child.stdout).toBe(expected);
+    }
+  }, 60000);
+
   test("required ES modules retain their own metadata without capturing source names", () => {
     const fixture = join(root, "web/tests/fixtures/require-esm-meta");
     const expected = readFileSync(join(fixture, "expected.txt"), "utf8");
