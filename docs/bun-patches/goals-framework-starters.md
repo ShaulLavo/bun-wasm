@@ -17,3 +17,5 @@ a production build, and a production start command. A failed framework command
 is evidence, not a reason for the runner to substitute a synthetic page.
 
 The Qwik 1.17.2 client optimizer drops a top-level `void render(...)` expression when `isServer` is false, including its call's side effects. The starter calls `render(...)` directly so its client entry remains in the development and production output. `scripts/qwik-starter.test.ts` runs the pinned optimizer against that source and checks that the render call survives. No Qwik upstream source is patched.
+
+The Qwik CSR entry explicitly imports `@builder.io/qwik/qwikloader.js`, which registers the delegated browser event listeners needed by `onClick$`. Production preview omits the Qwik plugin so Vite serves the built client assets without installing Qwik's SSR preview middleware. Development and production compilation still run the real Qwik optimizer.
