@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const config: NextConfig = {
-  experimental: { cpus: 1 },
+  experimental: { cpus: 1, parallelServerBuildTraces: true },
 };
 
 export default config;
