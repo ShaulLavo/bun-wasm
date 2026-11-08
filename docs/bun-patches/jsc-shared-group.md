@@ -44,6 +44,8 @@ setup checks and completes each SDK patch, then rejects any other source changes
 - `crates/bunwasm-engine-jsc/src/vm.rs`, `lib.rs`: the shared region view, nested execution and
   stack origin. The bridge in `crates/bunwasm-engine-quickjs/src/nested_bridge.rs` is shared, named
   through a `NestedEngine` alias.
+  Only the QuickJS and JSC crate roots declare the group bridge. The common side module list
+  also compiles in SpiderMonkey and Hermes, which do not register or enable the group cfg.
 
 ## Limits
 

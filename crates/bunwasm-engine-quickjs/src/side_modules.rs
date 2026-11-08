@@ -16,9 +16,6 @@ mod engine;
 mod loader;
 #[path = "natives.rs"]
 mod natives;
-#[cfg(bun_wasm_shared_group)]
-#[path = "nested_bridge.rs"]
-mod nested_bridge;
 #[allow(dead_code, unexpected_cfgs)]
 #[path = "../../bunwasm-runtime/src/ops.rs"]
 mod ops;
