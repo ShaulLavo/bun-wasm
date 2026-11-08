@@ -17,7 +17,7 @@ exported separately.
 | --- | --- | --- |
 | `scripts/src/program-profile.ts`, `crates/bunwasm-cli/shared-group-link.txt` | Host feature | Original profile types, flags, J2 sysroot identity check, split/shared sysroot separation, and the selected C++ runtime member proof read from the core's link map. |
 | `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table`, plus `--max-memory` from `max-memory.txt` as for every core) and PIC+atomics split entry and allocator telemetry objects, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
-| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile, a profile stamp refusing reuse of another profile's build directory, and C++ runtime archives linked by exact file name so a PIE never depends on `libc++abi.so`. |
+| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile and a profile stamp refusing reuse of another profile's build directory. Split builds retain their static C++ archives. The group core supplies the required C++ functions compiled with atomics, without admitting non-atomic SDK archive members. |
 | `scripts/build-bun-core.sh`, `scripts/build-engine-quickjs.sh` | Host feature | `--shared-group` / `QUICKJS_PROFILE=shared-group` producers: `-Zbuild-std`, `--shared-memory`, `--enable-threads`, group finalization. |
 | `scripts/src/engine-explicit-init.ts` | Host feature | Original core converter (start → `core_initialize_memory`) and a group side variant that never re-exports the group memory. |
 | `scripts/guest-core-receipt.ts`, `scripts/guest-engine-receipt.ts` | Host feature | Profile recorded only for `shared-group`, checked before the input digest. |
@@ -43,9 +43,10 @@ imports `write`, `writev`, `clock_gettime` and `getcwd`. The archive-based produ
 guard rejects additional unclassified std imports. Split builds keep their old
 exports, link flags and libc ownership.
 
-The shared core supplies the two C++ override points actually required by
-BoringSSL, sized delete and libc++ verbose abort, with the same free/diagnostic/abort
-behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. The shared crypto build omits the
+The shared core supplies the two replaceable C++ functions required by
+BoringSSL, sized delete and libc++ verbose abort, with the same free, diagnostic and abort
+behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. Its real unsigned-short sort
+specialization is classified separately in [Shared core libc++ sort specialization](shared-cxx-sort.md). The shared crypto build omits the
 non-atomic SDK C++ archives. Unknown runtime dependencies fail the link. Target
 feature admission and selected-member link-map proof remain enabled.
 
