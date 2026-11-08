@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 for (const entry of ["default-first.mjs", "text-first.ts"]) {
   const child = Bun.spawnSync([process.execPath, "run", entry]);
@@ -14,7 +15,7 @@ assert.equal(second.page, expected);
 assert.equal(first.ordinary, second.ordinary);
 assert.equal(require("./page.html"), first.ordinary);
 assert.equal(Object.prototype.toString.call(first.ordinary), "[object HTMLBundle]");
-assert.equal(first.ordinary.index, import.meta.dir + "/page.html");
+assert.equal(first.ordinary.index, join(import.meta.dir, "page.html"));
 console.log("text and default HTML identities coexist in both orders");
 
 const reexports = await import("./reexports.mjs");
@@ -46,7 +47,7 @@ assert.equal(data.default, readFileSync("side-effect.mjs", "utf8"));
 assert.equal(globalThis.textImportSideEffect, undefined);
 assert.deepEqual((await import("./data.json")).default, { unchanged: true });
 assert.equal(require("./ordinary.cjs").value, 42);
-assert.equal(require.resolve("./page.html"), import.meta.dir + "/page.html");
+assert.equal(require.resolve("./page.html"), join(import.meta.dir, "page.html"));
 assert.equal(import.meta.resolve("./page.html"), import.meta.url.replace(/index.ts$/, "page.html"));
 console.log("raw UTF-8, BOM, shebang, JSON and ordinary CommonJS are preserved");
 
@@ -72,7 +73,7 @@ await assert.rejects(import("./missing-static.mjs"), error => {
   assert.equal(error.name, "ResolveMessage");
   assert.equal(error.code, "ERR_MODULE_NOT_FOUND");
   assert.equal(error.specifier, "./absent.html");
-  assert.equal(error.referrer, import.meta.dir + "/missing-static.mjs");
+  assert.equal(error.referrer, join(import.meta.dir, "missing-static.mjs"));
   return true;
 });
 assert.equal((await import("./page.html", { with: { type: "text" } })).default, expected);
