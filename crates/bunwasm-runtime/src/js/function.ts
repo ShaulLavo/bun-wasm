@@ -8,7 +8,7 @@
   });
 
   if (native.engine === "host") Object.defineProperty(Function.prototype, "__bunwasmModuleMeta", {
-    value: (meta: Parameters<BunWasm.Internal["initImportMeta"]>[0], path: string) => internal.initImportMeta(meta, path, path === internal.mainPath),
+    value: (meta: object, path: string) => global.__bunwasm_meta(meta, path),
   });
   if (native.engine === "jsc") return {};
   const callerSourceOrigin = internal.require("builtins")["bun:jsc"]().callerSourceOrigin;

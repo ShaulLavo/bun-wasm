@@ -307,6 +307,7 @@ declare namespace BunWasm {
   }
 }
 
+declare function __bunwasm_meta(meta: object, path: string): void;
 declare function __bunwasm_dynamicImport(from: string): (specifier: unknown, options?: unknown) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }

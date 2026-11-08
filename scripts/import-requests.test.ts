@@ -119,3 +119,23 @@ test("native import hooks ignore lexical globalThis bindings, including JSC", as
   expect(await result).toBe("./page.html");
   expect(calls).toEqual([["/entry.mjs", "./page.html", { with: { type: "text" } }]]);
 });
+
+test("Browser metadata helpers follow the current host dispatch after replacement", () => {
+  const context = vm.createContext({});
+  const functionSource = readFileSync(new URL("../crates/bunwasm-runtime/src/js/function.ts", import.meta.url), "utf8");
+  const factory = vm.runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.functionFactory = ${functionSource}`), context);
+  factory({
+    native: { engine: "host" },
+    require: () => ({ "bun:jsc": () => ({ callerSourceOrigin: () => null }) }),
+    defineGlobal(name: string, value: unknown) { context[name] = value; },
+    initImportMeta() { throw new Error("Must not retain bootstrap metadata state"); },
+  });
+  const meta = {};
+  context.__bunwasm_meta = (value: object, path: string) => Object.assign(value, { owner: "first", path });
+  const initialize = vm.runInContext('(function(){})["__bunwasmModuleMeta"]', context);
+  Reflect.apply(initialize, undefined, [meta, "/first.mjs"]);
+  expect(meta).toEqual({ owner: "first", path: "/first.mjs" });
+  context.__bunwasm_meta = (value: object, path: string) => Object.assign(value, { owner: "second", path });
+  Reflect.apply(initialize, undefined, [meta, "/second.mjs"]);
+  expect(meta).toEqual({ owner: "second", path: "/second.mjs" });
+});
