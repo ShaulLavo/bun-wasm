@@ -189,10 +189,15 @@ function isIdentity(value: unknown): value is number {
   return isCount(value) && value > 0 && value <= 0xffffffff;
 }
 
-function observedFieldFinding(field: string, value: number | null, index: number, mask: bigint, label: string): string[] {
+function absentFirstFailureSize(slot: BoundarySlot, field: string): boolean {
+  if (field === "coreBefore.firstFailureSize") return slot["coreBefore.failures"] === 0 && slot["coreBefore.firstFailureCategory"] === 0;
+  if (field === "coreAfter.firstFailureSize") return slot["coreAfter.failures"] === 0 && slot["coreAfter.firstFailureCategory"] === 0;
+  return false;
+}
+function observedFieldFinding(slot: BoundarySlot, field: string, value: number | null, index: number, mask: bigint, label: string): string[] {
   if (index < 2) return [];
   const observed = ((mask >> BigInt(index)) & 1n) !== 0n;
-  if (observed && !isCount(value)) return [`${label}.${field} is not an observed safe integer`];
+  if (observed && !isCount(value) && !(value === null && absentFirstFailureSize(slot, field))) return [`${label}.${field} is not an observed safe integer`];
   if (!observed && value !== null) return [`${label}.${field} is present without availability`];
   if ((field === "errnoBefore" || field === "errnoAfterCall") && value !== null && value > 0xffffffff) return [`${label}.${field} exceeds the raw uint32 errno width`];
   return [];
@@ -204,11 +209,12 @@ function availabilityFindings(slot: BoundarySlot, label: string, complete: boole
   if (!isCount(slot.availability) || BigInt(slot.availability) > full) return [`${label} availability is malformed`];
   const mask = BigInt(slot.availability);
   const required = fields.reduce((bits, field, index) => {
+    if (field === "heap.sizeAfterLastCollection") return bits;
     const after = field.startsWith("coreAfter.") || field === "errnoAfterCall" || field === "resultNull";
     return complete || !after ? bits | (1n << BigInt(index)) : bits;
   }, 0n);
   const findings = (mask & required) === required ? [] : [`${label} lacks required availability`];
-  return findings.concat(Object.entries(slot).flatMap(([field, value], index) => observedFieldFinding(field, value, index, mask, label)));
+  return findings.concat(Object.entries(slot).flatMap(([field, value], index) => observedFieldFinding(slot, field, value, index, mask, label)));
 }
 
 function slotFindings(slot: BoundarySlot, record: AllocationBoundary, label: string, complete: boolean): string[] {
