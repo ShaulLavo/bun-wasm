@@ -2,9 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "./catalog";
-const programs: Record<string, readonly string[]> = {
-  browser: ["bun-browser.wasm"], quickjs: ["bun.wasm", "quickjs.wasm"], jsc: ["bun-jsc.wasm", "jsc-engine.wasm"],
-};
+import { engineFiles, registeredEngineGroups } from "./engines";
 function hashes(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preparation error: expected an engine fingerprint map");
   const entries = Object.entries(value);
@@ -17,13 +15,20 @@ async function bytes(root: string, name: string): Promise<Uint8Array | undefined
   const plain = Bun.file(join(root, name));
   return await plain.exists() ? plain.bytes() : undefined;
 }
-export async function preflight(root: string, engines: readonly Engine[]): Promise<void> {
-  const required = Array.from(new Set(engines.flatMap(engine => programs[engine] ?? [])));
+async function stagedEngine(root: string, names: readonly string[]): Promise<{ name: string; data: Uint8Array }[]> {
   const staged: { name: string; data: Uint8Array }[] = [];
-  for (const name of required) {
+  const missing: string[] = [];
+  for (const name of names) {
     const data = await bytes(root, name);
     if (data) staged.push({ name, data });
+    else missing.push(name);
   }
+  if (staged.length && missing.length) throw new Error(`Preparation error: Missing engine assets: ${missing.join(", ")}`);
+  return staged;
+}
+export async function preflight(root: string, engines: readonly Engine[]): Promise<void> {
+  const staged: { name: string; data: Uint8Array }[] = [];
+  for (const engine of engines) staged.push(...await stagedEngine(root, engineFiles(engine)));
   if (!staged.length) return;
   const index = await readFile(join(root, "index.html"), "utf8");
   const embedded = /globalThis\.__bunwasmBuilds\s*=\s*(\{[^;]*?\})\s*;/.exec(index)?.[1];
@@ -35,14 +40,14 @@ export async function preflight(root: string, engines: readonly Engine[]): Promi
     if (host[name] !== actual || manifest[name] !== actual) throw new Error(`Preparation error: ${name} embedded host, manifest, and staged bytes disagree; stage assets before building the playground`);
   }
 }
+async function writeStagedEngine(source: string, directory: string, names: readonly string[]): Promise<void> {
+  for (const { name, data } of await stagedEngine(source, names)) await writeFile(join(directory, name), data);
+}
 export async function withStagedAssets<T>(source: string, build: (directory: string) => Promise<T>): Promise<T> {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-assets-"));
   try {
     await mkdir(scratch, { recursive: true });
-    for (const name of Object.values(programs).flat().concat(["bun-tools.wasm"])) {
-      const data = await bytes(source, name);
-      if (data) await writeFile(join(scratch, name), data);
-    }
+    for (const names of registeredEngineGroups().concat([["bun-tools.wasm"]])) await writeStagedEngine(source, scratch, names);
     return await build(scratch);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
