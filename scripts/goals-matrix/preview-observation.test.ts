@@ -24,13 +24,13 @@ function previewDocument(message: string): string {
     <script>${message === framework.text ? "fetch('/reload').then(() => location.reload())" : ""}</script>`;
 }
 
-async function withPreview(action: (transport: Transport, state: { navigations: number; observations: number }) => Promise<void>): Promise<void> {
+async function withPreview(action: (transport: Transport, state: { navigations: number; observations: number; saves: number }) => Promise<void>): Promise<void> {
   let message = framework.text;
   const reload = Promise.withResolvers<void>();
-  const state = { navigations: 0, observations: 0 };
+  const state = { navigations: 0, observations: 0, saves: 0 };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === "/save") { message = await request.text(); return new Response("saved"); }
+    if (path === "/save") { state.saves++; message = await request.text(); return new Response("saved"); }
     if (path === "/reload") { await reload.promise; return new Response("reload"); }
     if (path === "/observing") { state.observations++; reload.resolve(); return new Response("observing"); }
     if (path === "/preview") state.navigations++;
@@ -70,13 +70,20 @@ test("Astro hot reload survives a document replacement during its DOM observatio
     const evidence = await edit(transport, framework, timeoutMs);
     expect(evidence).toMatchObject({ before: "1", sameDocument: false, manualNavigations: 0,
       result: { text: `${framework.text} hot updated`, matched: true } });
-    expect(state).toEqual({ navigations: 2, observations: 1 });
+    expect(state).toEqual({ navigations: 2, observations: 1, saves: 1 });
   });
 }, 10_000);
 
 test("an unchanged preview still fails its original render bound", async () => {
   await withPreview(async transport => {
     await expect(render(transport, { ...framework, selector: "#absent" }, "missing update", 100)).rejects.toThrow("Timed out after 100 ms");
+  });
+}, 10_000);
+
+test("a one-shot action is not replayed when navigation destroys its result", async () => {
+  await withPreview(async (transport, state) => {
+    await expect(transport.evaluate("(async () => { await fetch('/observing'); return new Promise(() => {}); })()")).rejects.toThrow("Execution context was destroyed");
+    expect(state).toEqual({ navigations: 2, observations: 1, saves: 0 });
   });
 }, 10_000);
 

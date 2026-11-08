@@ -11,8 +11,15 @@ export interface Transport {
   closePreview(): Promise<void>;
   close(): Promise<void>;
 }
-export async function evaluatePage<T>(page: Page, expression: string, _timeoutMs: number, _options?: EvaluationOptions): Promise<T> {
-  return page.evaluate(expression);
+export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, options?: EvaluationOptions): Promise<T> {
+  if (!options?.observation) return page.evaluate(expression);
+  const handle = await page.waitForFunction(`(async () => JSON.stringify({ value: await (${expression}) }))()`, undefined, { timeout: timeoutMs });
+  try {
+    const serialized = await handle.jsonValue();
+    if (typeof serialized !== "string") throw new Error("DOM observation returned no serialized value");
+    return JSON.parse(serialized).value;
+  }
+  finally { await handle.dispose(); }
 }
 export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
