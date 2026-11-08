@@ -506,6 +506,9 @@ fn main() -> ExitCode {
 }
 
 #[cfg(test)]
+mod startup_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use process::{Cancellation, FinalOutcome};

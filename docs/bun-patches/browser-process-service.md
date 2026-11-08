@@ -49,6 +49,15 @@ or ignored. A shared atomic terminal-result primitive arbitrates guest completio
 failures and default actions, preserving the winning status and whether it came from an ordinary
 exit or a signal. The native Wasmtime adapter also retains an immutable typed outcome: default
 actions select immediately, while handled signals do not take the fatal cancellation path.
+The native child adapter selects its terminal outcome before reporting an instance-setup
+error, including failures in Wasm start sections, networking slots and paired initializers
+before `_start`. An already-selected fatal signal remains signal death without a false
+startup diagnostic. A genuine startup failure keeps its portable errno and diagnostic;
+ignored or pending handled signals do not hide it. Store and descriptor teardown still
+precedes child completion publication. Original `startup_tests.rs` tiny-Wasm and writer
+controls cancel inside slots and Wasm start sections, cancel before entry, preserve genuine
+malformed-slot and trap failures, and reject late kills during diagnostic writes without
+rebuilding a guest engine or timing a race.
 The original `runtime_proc.wait` adapter returns the immutable outcome kind and code on
 every host; no child-pipe metadata selector remains. The guest allocates its two directional
 worker control pipes through `runtime_proc.pipe` and binds their dynamically assigned child fds
