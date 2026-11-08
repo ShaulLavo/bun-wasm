@@ -1131,6 +1131,22 @@ mod tests {
         ENGINE.get_or_init(Engine::default)
     }
 
+    // The caller keeps `memory` alive until `store` and its instances have dropped.
+    unsafe fn instantiate_test_member(
+        store: &mut Store<()>,
+        module: &Module,
+        memory: &SharedMemoryLease,
+        lease: &MemberLease,
+    ) -> (Instance, MemberImage, Placement) {
+        let placement = carve(lease, &layout()).unwrap();
+        let linker = Linker::new(store.engine());
+        // SAFETY: forwarded to this helper's caller.
+        let (instance, image) =
+            unsafe { instantiate_core(store, &linker, module, &layout(), memory, &placement) }
+                .unwrap();
+        (instance, image, placement)
+    }
+
     #[test]
     fn constant_immutable_core_exports_are_base_relative() {
         let relative = relative_exports(&image(CORE)).unwrap();
@@ -1144,16 +1160,12 @@ mod tests {
         let memory = group.memory_lease();
         let module = Module::new(&engine, image(CORE)).unwrap();
         let mut store = Store::new(&engine, ());
-        let linker = Linker::new(&engine);
         let mut members = Vec::new();
         for pid in [1, 2] {
             let lease = group.reserve(pid).unwrap().launch();
-            let placement = carve(&lease, &layout()).unwrap();
             // SAFETY: `memory` is declared before `store`, so it outlives the Store.
-            let (instance, image) = unsafe {
-                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
-            }
-            .unwrap();
+            let (instance, image, _) =
+                unsafe { instantiate_test_member(&mut store, &module, &memory, &lease) };
             members.push((lease, instance, image));
         }
         assert_ne!(members[0].2.memory_base, members[1].2.memory_base);
@@ -1209,16 +1221,12 @@ mod tests {
         );
         let module = Module::new(&engine, bytes).unwrap();
         let mut store = Store::new(&engine, ());
-        let linker = Linker::new(&engine);
         let mut members = Vec::new();
         for pid in [1, 2] {
             let lease = group.reserve(pid).unwrap().launch();
-            let placement = carve(&lease, &layout()).unwrap();
             // SAFETY: `memory` is declared before `store`, so it outlives the Store.
-            let (instance, image) = unsafe {
-                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
-            }
-            .unwrap();
+            let (instance, image, placement) =
+                unsafe { instantiate_test_member(&mut store, &module, &memory, &lease) };
             let low = global_u32(&mut store, &instance, "stack_low");
             let high = global_u32(&mut store, &instance, "stack_high");
             assert_eq!(low, page_address(placement.stack).unwrap());
