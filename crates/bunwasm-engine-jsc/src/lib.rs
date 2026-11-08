@@ -1,4 +1,7 @@
 include!("../../bunwasm-engine-quickjs/src/side_modules.rs");
+#[cfg(bun_wasm_shared_group)]
+#[path = "../../bunwasm-engine-quickjs/src/nested_bridge.rs"]
+mod nested_bridge;
 mod vm;
 
 unsafe extern "C" {
