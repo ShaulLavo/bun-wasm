@@ -3,12 +3,48 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type BrowserContext } from "playwright";
 import type { Server } from "bun";
 import { browserRegistryRoute } from "./app-matrix/registry-request";
 import { stoppedPreviewError } from "./app-matrix/server-browser";
 import { browserBuildConfig } from "./browser-build";
 import { PreviewOwnerHost, type OwnerSession } from "../web/scripts/preview-owner-host";
+
+function reservePreviewPort(reservations: Server<undefined>[], minimum = 1024): number {
+  while (true) {
+    const reservation = Bun.serve<undefined>({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 503 }) });
+    reservations.push(reservation);
+    const port = reservation.port;
+    if (port === undefined) throw new Error("Missing reserved preview port");
+    if (port >= minimum) return port;
+  }
+}
+
+async function expectInvalidFixturePorts(context: BrowserContext, boot: URL): Promise<void> {
+  const invalid = await context.newPage();
+  const cases = [
+    ["rootPort", null, "Invalid fixture port: rootPort"],
+    ["rootPort", "65536", "Invalid fixture port: rootPort"],
+    ["siblingPort", "3.5", "Invalid fixture port: siblingPort"],
+    ["siblingPort", boot.searchParams.get("rootPort"), "Fixture ports must be distinct"],
+    ["extraPort", "49151", "Invalid fixture port: extraPort"],
+    ["extra", "1", "Invalid extra fixture port selection"],
+    ["bridge", "https://127.0.0.2/", "Invalid native fixture bridge"],
+  ] as const;
+  try {
+    for (const [key, value, message] of cases) {
+      const url = new URL(boot);
+      if (value === null) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+      const failure = invalid.waitForEvent("pageerror");
+      await invalid.goto(url.href);
+      expect((await failure).message).toBe(message);
+      expect(await invalid.evaluate(() => Reflect.has(globalThis, "previewOwnerFixture"))).toBe(false);
+    }
+  } finally {
+    await invalid.close();
+  }
+}
 
 const isolation = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
 
@@ -19,6 +55,7 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
   let bridge: Server<{ upstream: Socket | null }> | undefined;
   let native: Server<undefined> | undefined;
   let directory: string | undefined;
+  const reservations: Server<undefined>[] = [];
   const publicRequests: Headers[] = [];
   const incomingHeaders: { port: number; originPresent: boolean; cookiePresent: boolean }[] = [];
   const bind = host.origins.bind.bind(host.origins);
@@ -27,6 +64,9 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     return endpoint.fetch(request);
   } });
   try {
+    const ports = { root: reservePreviewPort(reservations), sibling: reservePreviewPort(reservations), extra: reservePreviewPort(reservations, 49152) };
+    expect(new Set(Object.values(ports)).size).toBe(3);
+    expect(ports.extra).toBeGreaterThanOrEqual(49152);
     directory = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bw-owner-"));
     native = Bun.serve<undefined>({ hostname: "127.0.0.2", port: 0, websocket: { message(socket, message) { socket.send(message); } },
       async fetch(request, server) {
@@ -79,9 +119,16 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     await context.route("**/*", route => browserRegistryRoute(route, owner!.url.origin, external));
     const page = await context.newPage();
     let root = await context.newPage();
-    const boot = `${owner.url}?bridge=${encodeURIComponent(bridge.url.href.replace("http:", "ws:"))}`;
+    const bootURL = new URL(owner.url);
+    bootURL.search = new URLSearchParams({ bridge: bridge.url.href.replace("http:", "ws:"),
+      rootPort: String(ports.root), siblingPort: String(ports.sibling), extraPort: String(ports.extra) }).toString();
+    const boot = bootURL.href;
+    await expectInvalidFixturePorts(context, bootURL);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
+    // PreviewOwnerHost cannot adopt reservations. Release just before boot; another process can still win this gap.
+    await Promise.all(reservations.map(server => server.stop(true)));
+    reservations.length = 0;
     await page.goto(boot);
     await page.waitForFunction(() => Reflect.has(globalThis, "previewOwnerFixture"));
     expect(await page.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").ready())).toBe("ready");
@@ -98,7 +145,7 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     expect(response?.fromServiceWorker()).toBe(false);
     expect(await root.locator("#client").textContent()).toBe("/");
     expect(await root.locator("#server").textContent()).toBe("/");
-    expect(await page.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").paths().some((entry: { port: number; target: string }) => entry.port === 3137 && entry.target === "/"))).toBe(true);
+    expect(await page.evaluate(port => Reflect.get(globalThis, "previewOwnerFixture").paths().some((entry: { port: number; target: string }) => entry.port === port && entry.target === "/"), ports.root)).toBe(true);
     expect(await root.evaluate(() => crossOriginIsolated)).toBe(true);
     expect(await root.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(0);
     await root.getByRole("button").click();
@@ -118,14 +165,14 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     const ownerOrigin = owner.url.origin;
     expect(await root.evaluate(async origin => { try { await fetch(`${origin}/__bun_preview_owner/bootstrap`, { method: "POST" }); return true; } catch { return false; } }, ownerOrigin)).toBe(false);
     expect(await context.cookies()).toEqual([]);
-    const other = await page.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").url(3138));
+    const other = await page.evaluate(port => Reflect.get(globalThis, "previewOwnerFixture").url(port), ports.sibling);
     await root.evaluate(() => { document.cookie = "owner_fixture=private; Path=/; SameSite=Strict"; });
     const receivedHeaders = await root.evaluate(async () => (await fetch("/headers", { method: "POST" })).json());
     const receivedCookie = await root.evaluate(async () => { await fetch("/server-cookie"); return document.cookie.includes("server_fixture="); });
     const receivedSecondCookie = await root.evaluate(() => document.cookie.includes("server_second_fixture="));
     const responseCookieConstructor = await page.evaluate(() => new Response("fixture", { headers: { "set-cookie": "unregistered_fixture=1" } }).headers.has("set-cookie"));
     console.log(JSON.stringify({ headerWitness: { nativeHost: incomingHeaders, nativeApp: receivedHeaders, receivedCookie, receivedSecondCookie, responseCookieConstructor } }));
-    expect(incomingHeaders).toEqual([{ port: 3137, originPresent: true, cookiePresent: true }]);
+    expect(incomingHeaders).toEqual([{ port: ports.root, originPresent: true, cookiePresent: true }]);
     expect(receivedHeaders).toEqual({ originPresent: true, cookiePresent: true });
     expect(receivedCookie).toBe(true);
     expect(receivedSecondCookie).toBe(true);
@@ -151,33 +198,33 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
       socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
       socket.onerror = () => reject(new Error("Owned sibling socket rejected"));
     }), new URL(other).origin)).toBe("owned-sibling");
-    expect(await root.evaluate(() => new Promise<string>((resolve, reject) => {
-      const socket = new WebSocket("ws://127.0.0.1:49153/_build/", "fixture-hmr");
+    expect(await root.evaluate(port => new Promise<string>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/_build/`, "fixture-hmr");
       socket.onopen = () => socket.send("owned-extra-port");
       socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
       socket.onerror = () => reject(new Error("Owned extra virtual port rejected"));
-    }))).toBe("owned-extra-port");
-    expect(await root.evaluate(() => new Promise<string>((resolve, reject) => {
+    }), ports.extra)).toBe("owned-extra-port");
+    expect(await root.evaluate(port => new Promise<string>((resolve, reject) => {
       const url = new URL("/_build/?token=unit-fixture", location.origin);
-      url.protocol = "ws:"; url.port = "49153";
+      url.protocol = "ws:"; url.port = String(port);
       const socket = new WebSocket(url, "fixture-hmr");
       socket.onopen = () => socket.send("owned-root-host-secondary");
       socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
       socket.onerror = () => reject(new Error("Owned root hostname secondary port refused"));
-    }))).toBe("owned-root-host-secondary");
-    expect(await root.evaluate(async () => {
-      const response = await fetch("http://127.0.0.1:49153/extra-http", { method: "POST", body: "owned-extra-http" });
+    }), ports.extra)).toBe("owned-root-host-secondary");
+    expect(await root.evaluate(async port => {
+      const response = await fetch(`http://127.0.0.1:${port}/extra-http`, { method: "POST", body: "owned-extra-http" });
       return [response.status, await response.text()];
-    })).toEqual([201, "owned-extra-http"]);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(49153))).toBe(true);
-    expect(await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(49153))).toBe(false);
+    }, ports.extra)).toEqual([201, "owned-extra-http"]);
+    expect(await page.evaluate(port => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(port), ports.extra)).toBe(true);
+    expect(await replacement.evaluate(port => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(port), ports.extra)).toBe(false);
     const survivor = await context.newPage();
     await survivor.goto(otherOwner);
-    expect(await survivor.evaluate(() => new Promise<boolean>(resolve => {
-      const socket = new WebSocket("ws://127.0.0.1:49153/_build/", "fixture-hmr");
+    expect(await survivor.evaluate(port => new Promise<boolean>(resolve => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/_build/`, "fixture-hmr");
       socket.onopen = () => { socket.close(); resolve(false); };
       socket.onerror = () => resolve(true);
-    }))).toBe(true);
+    }), ports.extra)).toBe(true);
     await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").addExtra());
     expect(await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").ready())).toBe("ready");
     await root.evaluate(() => new Promise<void>((resolve, reject) => {
@@ -193,14 +240,14 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     await root.waitForFunction(() => Reflect.get(globalThis, "nativeSocketClosed") === true);
     await root.waitForFunction(async origin => { try { await fetch(origin); return false; } catch { return true; } }, url);
     await root.waitForFunction(async origin => { try { await fetch(origin); return false; } catch { return true; } }, other);
-    expect(await survivor.evaluate(() => new Promise<string>((resolve, reject) => {
-      const socket = new WebSocket("ws://127.0.0.1:49153/_build/", "fixture-hmr");
+    expect(await survivor.evaluate(port => new Promise<string>((resolve, reject) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/_build/`, "fixture-hmr");
       socket.onopen = () => socket.send("surviving-owner");
       socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
       socket.onerror = () => reject(new Error("Other owner socket stopped"));
-    }))).toBe("surviving-owner");
+    }), ports.extra)).toBe("surviving-owner");
     await survivor.close();
-    expect(await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(49153))).toBe(true);
+    expect(await replacement.evaluate(port => Reflect.get(globalThis, "previewOwnerFixture").connects().includes(port), ports.extra)).toBe(true);
     const before = await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").url());
     await replacement.evaluate(() => Reflect.get(globalThis, "previewOwnerFixture").stop());
     await root.waitForFunction(async origin => { try { await fetch(origin); return false; } catch { return true; } }, before);
@@ -218,9 +265,10 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     expect(external).toEqual([]);
     await context.close();
     console.log(JSON.stringify({ stagedWaffleSource: process.env.BUN_WASM_STAGED_WAFFLE_SOURCE, realRelay: true,
-      nativeHTTP: true, nativeWebSocket: true, rootPaths: true, rootRelativeModule: true, historyReload: true,
+      fixturePorts: ports, nativeHTTP: true, nativeWebSocket: true, rootPaths: true, rootRelativeModule: true, historyReload: true,
       publicAuthDenied: true, cookieIsolation: true, foreignOwnerSocketDenied: true, ownedExtraPortSocket: true, pageCloseRevokes: true, runtimeDisposeRevokes: true, portReuseLateClose: true }));
   } finally {
+    await Promise.all(reservations.map(server => server.stop(true)));
     await browser?.close();
     await host.close();
     await owner?.stop(true);
