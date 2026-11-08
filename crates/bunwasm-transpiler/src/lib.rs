@@ -180,11 +180,11 @@ pub fn public_transpile(
         loader,
         None,
         false,
-        if action == "transform" {
+        Compilation::from(if action == "transform" {
             Pass::Print
         } else {
             Pass::Scan
-        },
+        }),
     )?;
     if action == "scanImports" {
         let scan: serde_json::Value = serde_json::from_str(&out.code).map_err(|e| e.to_string())?;
@@ -323,6 +323,8 @@ pub enum ModuleKind {
 
 /// Output plus its source map.
 pub struct Transpiled {
+    /// Whether the source was returned unchanged instead of printed.
+    pub preserved: bool,
     pub module_kind: ModuleKind,
     pub code: String,
     /// Source map v3 `mappings` (base64 VLQ, one source: the input file).
@@ -359,7 +361,7 @@ pub fn transpile_with_source_map(
         })
     });
     let mut out = out?;
-    if !preserve_source {
+    if !out.preserved {
         out.imports = imports
             .into_iter()
             .map(|import| ModuleImport {
@@ -374,6 +376,111 @@ pub fn transpile_with_source_map(
         .map(|chunk| String::from_utf8_lossy(chunk.buffer.list.as_slice()).into_owned())
         .unwrap_or_default();
     Ok(out)
+}
+
+/// The runtime owns request identity; the compiler owns this callback boundary.
+pub type InternTextRequest<'a> = dyn FnMut(&str) -> String + 'a;
+
+struct Preparation<'a> {
+    intern: &'a mut InternTextRequest<'a>,
+    redirect_dynamic: bool,
+}
+
+fn lower_text_requests(
+    ast: &mut bun_ast::Ast<'_>,
+    arena: &'static Arena,
+    intern: &mut InternTextRequest<'_>,
+) -> bool {
+    let mut changed = false;
+    for record in ast.import_records.as_mut_slice() {
+        if record.kind != bun_ast::ImportKind::Stmt || record.loader != Some(BunLoader::Text) {
+            continue;
+        }
+        let token = intern(&String::from_utf8_lossy(record.path.text));
+        record.path.text = arena.alloc_slice_copy(token.as_bytes());
+        record.loader = None;
+        changed = true;
+    }
+    changed
+}
+
+/// Prepare file code only, before any engine sees or caches module requests.
+pub fn prepare_module(
+    source: &str,
+    path: &str,
+    loader: Loader,
+    preserve_source: bool,
+    redirect_dynamic: bool,
+    intern: &mut InternTextRequest<'_>,
+) -> Result<Transpiled, Failure> {
+    let mut collector = ChunkCollector::default();
+    let (out, imports) = bun_js_printer::with_bunwasm_imports(|| {
+        with_state(|state| {
+            Ok(prepare_file(
+                state,
+                source,
+                path,
+                loader,
+                preserve_source,
+                &mut collector,
+                Preparation {
+                    intern,
+                    redirect_dynamic,
+                },
+            ))
+        })
+    });
+    let mut out = out.map_err(Failure::Other)??;
+    if !out.preserved {
+        out.imports = imports
+            .into_iter()
+            .map(|import| ModuleImport {
+                start: import.start,
+                end: import.end,
+                specifier: import.specifier,
+            })
+            .collect();
+    }
+    out.mappings = collector.mappings();
+    Ok(out)
+}
+
+fn prepare_file(
+    state: &mut State,
+    source: &str,
+    path: &str,
+    loader: Loader,
+    preserve_source: bool,
+    collector: &mut ChunkCollector,
+    preparation: Preparation<'_>,
+) -> Result<Transpiled, Failure> {
+    let redirect = preparation.redirect_dynamic;
+    let run = |state: &mut State| {
+        run_with_scan(
+            state,
+            source,
+            path,
+            loader,
+            Some(collector),
+            preserve_source,
+            Compilation {
+                pass: Pass::Print,
+                preparation: Some(preparation),
+            },
+        )
+    };
+    let compile = || {
+        // A semantic scan of unchanged JS must not reject run-time constant
+        // writes or fold expressions before the engine evaluates the module.
+        if preserve_source || MODULE_RECORDS.with(|on| on.get()) {
+            return with_record_parse(state, run);
+        }
+        run(state)
+    };
+    if redirect {
+        return with_dynamic_import_referrer(path, compile);
+    }
+    compile()
 }
 
 /// Print host `require(esm)` dynamic imports directly in the bundler's pass.
@@ -475,7 +582,7 @@ fn run(
         loader,
         source_map,
         preserve_source,
-        Pass::Print,
+        Pass::Print.into(),
     )
     .map_err(String::from)
 }
@@ -521,6 +628,20 @@ enum Pass {
     RegisterModule,
 }
 
+struct Compilation<'a> {
+    pass: Pass,
+    preparation: Option<Preparation<'a>>,
+}
+
+impl From<Pass> for Compilation<'_> {
+    fn from(pass: Pass) -> Self {
+        Self {
+            pass,
+            preparation: None,
+        }
+    }
+}
+
 /// The ES module `source` as a registration record: a script expression for
 /// engines without native ES modules, linked and evaluated by the runtime's
 /// `esm_loader.ts`. See `register.rs` for the format.
@@ -550,7 +671,7 @@ fn register_with(
                 loader,
                 Some(&mut collector),
                 false,
-                pass,
+                pass.into(),
             )
         }))
     })
@@ -661,8 +782,12 @@ fn run_with_scan(
     loader: Loader,
     mut source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
-    pass: Pass,
+    compilation: Compilation<'_>,
 ) -> Result<Transpiled, Failure> {
+    let Compilation {
+        pass,
+        mut preparation,
+    } = compilation;
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();
@@ -748,9 +873,14 @@ fn run_with_scan(
             mappings: String::new(),
             imports: Vec::new(),
             module_kind,
+            preserved: pass != Pass::Scan,
         });
     }
-    if preserve_source {
+    let lowered = preparation.as_mut().is_some_and(|prepare| {
+        lower_text_requests(&mut parsed.ast, arena_ref, prepare.intern)
+            | (prepare.redirect_dynamic && !dynamic.is_empty())
+    });
+    if preserve_source && !lowered {
         let mut imports = static_imports(&parsed.ast.import_records);
         imports.extend(dynamic.into_iter().map(|start| ModuleImport {
             start,
@@ -765,6 +895,7 @@ fn run_with_scan(
             mappings: String::new(),
             imports,
             module_kind,
+            preserved: pass != Pass::Scan,
         });
     }
     let registering = matches!(pass, Pass::Register | Pass::RegisterModule);
@@ -819,6 +950,7 @@ fn run_with_scan(
         mappings: String::new(),
         imports: Vec::new(),
         module_kind,
+        preserved: false,
     })
 }
 
@@ -887,3 +1019,10 @@ fn format_log(log: &bun_ast::Log, path: &str) -> String {
     }
     out
 }
+
+/// Bun's parser tests share process-wide state, including across test modules.
+#[cfg(test)]
+static PARSER_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod import_tests;

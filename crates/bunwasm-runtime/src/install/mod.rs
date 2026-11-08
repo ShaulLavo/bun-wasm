@@ -396,12 +396,20 @@ fn package_present(package: &Package) -> bool {
 fn install_packages(resolver: &mut Resolver) -> Result<usize> {
     let mut installed = 0;
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
-    for key in keys {
-        let package = &resolver.packages[&key];
+    let mut downloads = io::Downloads::default();
+    let mut lookahead = keys.iter();
+    for key in &keys {
+        prefetch_packages(resolver, &mut lookahead, &mut downloads);
+        let package = &resolver.packages[key];
         if package_present(package) {
             continue;
         }
-        if let Err(error) = install_package(package, resolver.refresh, &resolver.registry) {
+        if let Err(error) = install_package(
+            package,
+            resolver.refresh,
+            &resolver.registry,
+            &mut downloads,
+        ) {
             if !package.optional {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
@@ -410,7 +418,7 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
                 package.name,
                 resolver.registry.redact(&error)
             );
-            resolver.packages.remove(&key);
+            resolver.packages.remove(key);
             continue;
         }
         installed += 1;
@@ -418,11 +426,35 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
     Ok(installed)
 }
 
-fn install_package(package: &Package, refresh: bool, registry: &io::Registry) -> Result<()> {
+fn prefetch_packages<'a>(
+    resolver: &Resolver,
+    lookahead: &mut impl Iterator<Item = &'a String>,
+    downloads: &mut io::Downloads,
+) {
+    while !downloads.is_full() {
+        let Some(key) = lookahead.next() else {
+            break;
+        };
+        let Some(package) = resolver.packages.get(key) else {
+            continue;
+        };
+        if package.local.is_some() || package_present(package) {
+            continue;
+        }
+        downloads.prefetch(&package.tarball, true, resolver.refresh, &resolver.registry);
+    }
+}
+
+fn install_package(
+    package: &Package,
+    refresh: bool,
+    registry: &io::Registry,
+    downloads: &mut io::Downloads,
+) -> Result<()> {
     if let Some(local) = &package.local {
         return local::link(&local.path, &package.path());
     }
-    let bytes = io::fetch(&package.tarball, true, refresh, registry)?;
+    let bytes = downloads.fetch(&package.tarball, true, refresh, registry)?;
     io::integrity(&bytes, &package.integrity)?;
     let path = package.path();
     let staging = path.with_file_name(format!(

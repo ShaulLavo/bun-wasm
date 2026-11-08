@@ -1123,6 +1123,25 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         }
     });
     let st = state.clone();
+    t.add("resolveImport", move |a| {
+        use crate::import_requests::{ImportMode, ImportRequest};
+        let mode = match a.str(2)? {
+            "inferred" => ImportMode::Inferred,
+            "text" => ImportMode::Text,
+            _ => return Err(NativeError::type_error("Invalid import mode")),
+        };
+        let name = st.resolve_import(
+            ImportRequest {
+                specifier: a.str(0)?,
+                mode,
+            },
+            a.str(1)?,
+        )?;
+        Ok(name.as_str().into())
+    });
+    let st = state.clone();
+    t.add("modulePath", move |a| Ok(st.module_path(a.str(0)?).into()));
+    let st = state.clone();
     t.add("workerSource", move |a| {
         let path = a.str(1)?;
         st.transpiler
