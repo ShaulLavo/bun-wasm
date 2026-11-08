@@ -11,6 +11,7 @@ test("Firefox keeps QuickJS's standard guarded budget instead of the smaller Saf
 
 test("Safari and unmeasured hosts retain both conservative stack budgets", () => {
   expect(engineStackBudgets(geckoStack, safari)).toEqual({ quickjs: "32", jsc: "192" });
+  expect(engineStackBudgets(geckoStack, "Mozilla/5.0 AppleWebKit/605.1.15 FxiOS/144.0 Mobile Safari/605.1.15")).toEqual({ quickjs: "32", jsc: "192" });
   expect(engineStackBudgets("", "")).toEqual({ quickjs: "32", jsc: "192" });
 });
 

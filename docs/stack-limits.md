@@ -114,13 +114,19 @@ depths.
 `BUN_WASM_STACK_KIB` is clamped to 7 MiB in both engines, below the 8 MiB shadow
 stack, so no value can wrap to "no limit". Values that are not positive decimal
 numbers keep the default. The clamp keeps the guard alive, but it does not make a
-budget fit the host: a budget larger than the host stack allows traps as before. The browser worker (`web/src/worker.ts`) passes 32 KiB unless the
-page runs on V8. In WebKit on the Mac with every function in its first tier, getters,
+budget fit the host: a budget larger than the host stack allows traps as before. The browser executor (`web/src/engine-stack-budget.ts`) passes 32 KiB to
+QuickJS on WebKit and unmeasured hosts. V8 and desktop Firefox keep QuickJS's
+152 KiB default. Firefox retains the conservative 192 KiB JSC budget. In WebKit on the Mac with every function in its first tier, getters,
 `JSON.stringify` and `toString` reentry trap at 50 KiB, and the fixture's
 `JSON.stringify` traps at 45 KiB while building its RangeError, so the room there is
 about 43 to 47 KiB. At 40 KiB (1.25 times 32) every path and fixture still passes.
 Linux WebKit under `ulimit -s 512` has more room (54 KiB for its tightest path).
-Engines other than V8 and JavaScriptCore are unmeasured and get the smaller budget.
+Desktop Firefox was measured with all 25 recursion cases below, each in a fresh
+browser context. At both 152 KiB and a 190 KiB margin, every case completed or
+threw a catchable exception and continued. Both stack-overflow fixtures also
+passed at 190 KiB. Giving Firefox the smaller WebKit budget needlessly rejects
+React Router's ordinary CommonJS dependency loading. Firefox on iOS still uses
+WebKit and keeps the smaller budget. Other unmeasured hosts keep it too.
 
 ## JSC
 
