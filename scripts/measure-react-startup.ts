@@ -13,6 +13,8 @@ export interface StartupSample {
   interactiveMs: number;
   phases: { name: string; startMs: number; durationMs: number }[];
   requests: { url: string; status: number; bytes: number }[];
+  dependencies: Record<string, string>;
+  cacheMarks: string[];
 }
 
 export function median(values: readonly number[]): number {
@@ -23,6 +25,7 @@ export function median(values: readonly number[]): number {
 }
 
 export function checkStartupLimit(samples: readonly StartupSample[], limitMs: number): void {
+  assert.ok(Number.isFinite(limitMs) && limitMs > 0, "limit must be positive and finite");
   for (const cache of ["cold", "warm"] as const) {
     const duration = median(samples.filter(sample => sample.cache === cache).map(sample => sample.renderMs));
     assert.ok(duration <= limitMs, `${cache} React render ${duration.toFixed(1)} ms exceeds ${limitMs} ms`);
@@ -53,8 +56,30 @@ async function measure(page: Page, options: { revision: string; url: string; ite
     else await page.reload({ waitUntil: "domcontentloaded" });
     const timing = await renderedReact(page);
     const phases = await page.evaluate(() => performance.getEntriesByType("measure").map(entry => ({ name: entry.name, startMs: entry.startTime, durationMs: entry.duration })));
-    return { ...options, ...timing, phases, requests };
+    const dependencies = await resolvedDependencies(page);
+    const cacheMarks = await page.evaluate(() => performance.getEntriesByType("mark").map(entry => entry.name).filter(name => name.includes("cache")));
+    return { ...options, ...timing, phases, requests, dependencies, cacheMarks };
   } finally { page.off("response", capture); }
+}
+
+async function resolvedDependencies(page: Page): Promise<Record<string, string>> {
+  return page.evaluate(async () => {
+    const sandbox: unknown = Reflect.get(globalThis, "sandbox");
+    if (!sandbox || typeof sandbox !== "object") throw new Error("Missing sandbox");
+    const fs: unknown = Reflect.get(sandbox, "fs");
+    if (!fs || typeof fs !== "object") throw new Error("Missing sandbox filesystem");
+    const read: unknown = Reflect.get(fs, "readFile");
+    if (typeof read !== "function") throw new Error("Missing sandbox readFile");
+    const dependencies: Record<string, string> = {};
+    for (const name of ["react", "react-dom", "vite", "@vitejs/plugin-react"]) {
+      const bytes: unknown = await read.call(fs, `/home/user/app/node_modules/${name}/package.json`);
+      if (!(bytes instanceof Uint8Array)) throw new Error(`Missing installed ${name}`);
+      const manifest: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      if (!manifest || typeof manifest !== "object" || !("version" in manifest) || typeof manifest.version !== "string") throw new Error(`Missing ${name} version`);
+      dependencies[name] = manifest.version;
+    }
+    return dependencies;
+  });
 }
 
 async function main(): Promise<void> {
@@ -68,6 +93,9 @@ async function main(): Promise<void> {
   const samples = Number(values.samples), deadline = Number(values["deadline-ms"]);
   assert.ok(Number.isInteger(samples) && samples > 0 && samples <= 20, "samples must be 1 to 20");
   assert.ok(Number.isFinite(deadline) && deadline > 0 && deadline <= 300_000, "deadline must be at most 300000 ms");
+  const limit = values["limit-ms"] === undefined ? undefined : Number(values["limit-ms"]);
+  assert.ok(limit === undefined || Number.isFinite(limit) && limit > 0, "limit must be positive and finite");
+  const launchArgs = values.headed && process.env.WAYLAND_DISPLAY ? ["--ozone-platform=wayland"] : [];
   const variants = [{ revision: values.revision, url: values.url }].concat(values.baseline ? [{ revision: values["baseline-revision"], url: values.baseline }] : []);
   for (const variant of variants) new URL(variant.url);
   let browser: Browser | undefined;
@@ -78,7 +106,7 @@ async function main(): Promise<void> {
   const cleanup = () => cleaning ??= (async () => { await (browser ?? await launching?.catch(() => undefined))?.close(); })();
   const save = async () => writeFile(values.output!, JSON.stringify({
     date: new Date().toISOString(), host: hostname(), cpu: cpus()[0]?.model, kernel: release(), bun: Bun.version,
-    browser: browser?.version(), headed: values.headed, variants,
+    browser: browser?.version(), headed: values.headed, launchArgs, variants,
     method: "Real unmodified React template. Cold fresh context, then warm reload in the same context. Each pair closes its context. Alternating revision order. No OS cache flush or network interception. Render requires visible heading, zero counter and two animation frames; interaction requires counter increment.",
     samples: rows, errors, cleanup: { browserClosed: !browser?.isConnected() },
   }, null, 2) + "\n");
@@ -86,12 +114,13 @@ async function main(): Promise<void> {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, interrupt);
   const timer = setTimeout(interrupt, samples * variants.length * deadline * 2 + 30_000);
   try {
-    launching = chromium.launch({ headless: !values.headed });
+    launching = chromium.launch({ headless: !values.headed, args: launchArgs });
     browser = await launching;
     for (let iteration = 0; iteration < samples; iteration++) {
       await measureIteration(browser, iteration);
     }
-    if (values["limit-ms"]) checkStartupLimit(rows, Number(values["limit-ms"]));
+    assert.deepEqual(errors, [], "startup must not produce page errors");
+    if (limit !== undefined) checkStartupLimit(rows.filter(row => row.revision === values.revision), limit);
   } catch (error) { errors.push(String(error)); throw error; }
   finally { clearTimeout(timer); await cleanup(); await save(); }
 
