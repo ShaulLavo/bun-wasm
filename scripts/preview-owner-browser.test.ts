@@ -10,15 +10,62 @@ import { stoppedPreviewError } from "./app-matrix/server-browser";
 import { browserBuildConfig } from "./browser-build";
 import { PreviewOwnerHost, type OwnerSession } from "../web/scripts/preview-owner-host";
 
-function reservePreviewPort(reservations: Server<undefined>[], minimum = 1024): number {
-  while (true) {
-    const reservation = Bun.serve<undefined>({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 503 }) });
-    reservations.push(reservation);
-    const port = reservation.port;
-    if (port === undefined) throw new Error("Missing reserved preview port");
-    if (port >= minimum) return port;
-  }
+type PreviewPortReservation = Pick<Server<undefined>, "port" | "stop">;
+
+function openPreviewPort(port: number): PreviewPortReservation {
+  return Bun.serve<undefined>({ hostname: "127.0.0.1", port, fetch: () => new Response(null, { status: 503 }) });
 }
+
+function reservePreviewPort(reservations: PreviewPortReservation[], minimum = 1024, reserve = openPreviewPort): number {
+  const range = 65536 - minimum;
+  const first = minimum === 1024 ? 0 : Math.floor(Math.random() * range);
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const requested = minimum === 1024 ? 0 : minimum + (first + attempt) % range;
+    let reservation: PreviewPortReservation;
+    try { reservation = reserve(requested); }
+    catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "EADDRINUSE") throw error;
+      continue;
+    }
+    const port = reservation.port;
+    if (port === undefined || port < minimum) {
+      void reservation.stop(true);
+      throw new Error("Invalid reserved preview port");
+    }
+    reservations.push(reservation);
+    return port;
+  }
+  throw new Error("Unable to reserve a preview port after 64 attempts");
+}
+
+test("fixture high ports do not depend on the OS ephemeral range", async () => {
+  const reservations: PreviewPortReservation[] = [];
+  const requests: number[] = [];
+  let stopped = 0;
+  const reserve = (port: number): PreviewPortReservation => {
+    if (requests.length === 64) throw new Error("Constrained allocator safety cutoff");
+    requests.push(port);
+    return { port: port || 49151, stop: async () => { stopped++; } };
+  };
+  try {
+    expect(reservePreviewPort(reservations, 49152, reserve)).toBeGreaterThanOrEqual(49152);
+    expect(requests).toHaveLength(1);
+    expect(reservations).toHaveLength(1);
+  } finally { await Promise.all(reservations.map(server => server.stop(true))); }
+  expect(stopped).toBe(1);
+});
+
+test("fixture port search stops after a bounded set of occupied candidates", () => {
+  const reservations: PreviewPortReservation[] = [];
+  let attempts = 0;
+  const reserve = (): PreviewPortReservation => {
+    attempts++;
+    throw Object.assign(new Error("Occupied candidate"), { code: "EADDRINUSE" });
+  };
+  expect(() => reservePreviewPort(reservations, 49152, reserve)).toThrow("Unable to reserve a preview port after 64 attempts");
+  expect(attempts).toBe(64);
+  expect(reservations).toEqual([]);
+});
 
 async function expectInvalidFixturePorts(context: BrowserContext, boot: URL): Promise<void> {
   const invalid = await context.newPage();
@@ -55,7 +102,7 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
   let bridge: Server<{ upstream: Socket | null }> | undefined;
   let native: Server<undefined> | undefined;
   let directory: string | undefined;
-  const reservations: Server<undefined>[] = [];
+  const reservations: PreviewPortReservation[] = [];
   const publicRequests: Headers[] = [];
   const incomingHeaders: { port: number; originPresent: boolean; cookiePresent: boolean }[] = [];
   const bind = host.origins.bind.bind(host.origins);
