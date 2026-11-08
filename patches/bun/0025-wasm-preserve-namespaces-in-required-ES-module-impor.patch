@@ -1,4 +1,4 @@
-From 518faae20dc319707e2f7b3b741df9e7bdaab172 Mon Sep 17 00:00:00 2001
+From 37974cf2c6fc3bc383f1f7d96bd5d7658db0cfe7 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 22:43:51 +0200
 Subject: [PATCH 25/25] wasm: preserve namespaces in required ES module imports
@@ -8,28 +8,25 @@ Subject: [PATCH 25/25] wasm: preserve namespaces in required ES module imports
  1 file changed, 33 insertions(+)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index f45ff7037..b0880dd77 100644
+index f45ff7037..fedd84f98 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -3103,6 +3103,13 @@ pub(crate) mod __gated_printer {
+@@ -3103,6 +3103,10 @@ pub(crate) mod __gated_printer {
  
                  let wrap_with_to_esm = record.flags.contains(ImportRecordFlags::WRAP_WITH_TO_ESM);
  
-+                if wrap_with_to_esm && self.print_bunwasm_require_namespace(record) {
-+                    if wrap {
-+                        self.print(b")");
-+                    }
++                if wrap_with_to_esm && self.print_bunwasm_require_namespace(record, wrap) {
 +                    return;
 +                }
 +
                  if module_type == bundle_opts::Format::InternalBakeDev {
                      self.print_space_before_identifier();
                      self.print_symbol(self.options.hmr_ref);
-@@ -3224,6 +3231,17 @@ pub(crate) mod __gated_printer {
+@@ -3224,6 +3228,20 @@ pub(crate) mod __gated_printer {
              }
          }
  
-+        fn print_bunwasm_require_namespace(&mut self, record: &ImportRecord) -> bool {
++        fn print_bunwasm_require_namespace(&mut self, record: &ImportRecord, wrap: bool) -> bool {
 +            let metadata = super::BUNWASM_REQUIRE_NAMESPACE.with_borrow(Clone::clone);
 +            let Some(metadata) = metadata else { return false };
 +            self.print_space_before_identifier();
@@ -37,6 +34,9 @@ index f45ff7037..b0880dd77 100644
 +            self.print(b".requireNamespace(");
 +            self.print_import_record_path(record);
 +            self.print(b")");
++            if wrap {
++                self.print(b")");
++            }
 +            true
 +        }
 +
