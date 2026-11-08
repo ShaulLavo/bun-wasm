@@ -70,6 +70,23 @@ The adapter targets `mozilla-firefox/firefox` revision
 It checks source structure and executes extracted host-only CommonJS recognition
 and Rust finalizer logic. The Rust control uses the already installed stable
 compiler through `rustup run stable`, which does not install a toolchain.
+Both extracted controls compile during test module setup, before either
+five-second runtime test starts. Compiler diagnostics and status still fail the
+quality gate. Setup reads each compiled executable into a buffer, then removes
+its scratch directory in `finally`. Each runtime test writes and executes those
+bytes in its own scratch directory and removes it in `finally`. Filtering out
+every test therefore leaves no setup outputs. No engine code or runtime
+assertion changes.
+
+`scripts/spidermonkey-semantics-setup.test.ts` runs disposable copies of that
+same suite. Real C++ and Rust compiler wrappers each delay startup by six seconds,
+then compile and execute the production extracts with the unchanged test deadline.
+A second copy destroys callbacks while the registry is borrowed and must fail
+with `RefCell already borrowed`. A failed compiler must also fail the suite.
+Each control checks that child scratch is empty after success, failure, or a run
+that filters out every test.
+Both test files remain owned by the blocking quality gate.
+
 `crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` is a deferred native
 regression driver. Its syntax is checked against retained headers, but it has not
 been linked or run. It does not add a native build recipe or CI build demand.
