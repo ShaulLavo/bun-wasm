@@ -135,6 +135,17 @@ pub trait Transpiler {
         })
     }
 
+    /// File-module preparation, with process-owned semantic import identity.
+    fn prepare_module(
+        &self,
+        source: &str,
+        path: &str,
+        loader: Loader,
+        _intern: &mut crate::import_requests::InternImport<'_>,
+    ) -> Result<Transpiled, String> {
+        self.transpile_with_map(source, path, loader)
+    }
+
     /// From now on [`Transpiler::transpile_with_map`] prepares modules for
     /// registration records (module-level `this` and literal expressions kept
     /// as written): the host runs every ES module of this process through the

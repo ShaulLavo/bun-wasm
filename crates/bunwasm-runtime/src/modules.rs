@@ -399,6 +399,9 @@ impl State {
     /// Read, transpile and classify a file. Results are cached while the
     /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        if let Some(code) = self.load_text_module(path)? {
+            return Ok((Rc::from(code), Format::Esm));
+        }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
@@ -451,7 +454,9 @@ impl State {
                 let adapted = next_swc::adapt(&raw, path);
                 let out = self
                     .transpiler
-                    .transpile_with_map(&adapted, path, loader)
+                    .prepare_module(&adapted, path, loader, &mut |request| {
+                        self.intern_import_request(request)
+                    })
                     .map_err(|msg| build_error(&msg, &raw))?;
                 let format = self.detect_format(path, &out.code, out.module_kind);
                 #[cfg(feature = "engine-host")]

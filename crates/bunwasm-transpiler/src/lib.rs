@@ -417,26 +417,68 @@ pub fn prepare_module(
     let mut collector = ChunkCollector::default();
     let (out, imports) = bun_js_printer::with_bunwasm_imports(|| {
         with_state(|state| {
-            let run = |state: &mut State| run_with_scan(
-                state, source, path, loader, Some(&mut collector), preserve_source,
-                Pass::Print, Some(Preparation { intern, redirect_dynamic }),
-            ).map_err(String::from);
-            let compile = || {
-                if MODULE_RECORDS.with(|on| on.get()) { with_record_parse(state, run) }
-                else { run(state) }
-            };
-            if redirect_dynamic { with_dynamic_import_referrer(path, compile) }
-            else { compile() }
+            prepare_file(
+                state,
+                source,
+                path,
+                loader,
+                preserve_source,
+                &mut collector,
+                Preparation {
+                    intern,
+                    redirect_dynamic,
+                },
+            )
         })
     });
     let mut out = out?;
     if !out.preserved {
-        out.imports = imports.into_iter().map(|import| ModuleImport {
-            start: import.start, end: import.end, specifier: import.specifier,
-        }).collect();
+        out.imports = imports
+            .into_iter()
+            .map(|import| ModuleImport {
+                start: import.start,
+                end: import.end,
+                specifier: import.specifier,
+            })
+            .collect();
     }
     out.mappings = collector.mappings();
     Ok(out)
+}
+
+fn prepare_file(
+    state: &mut State,
+    source: &str,
+    path: &str,
+    loader: Loader,
+    preserve_source: bool,
+    collector: &mut ChunkCollector,
+    preparation: Preparation<'_>,
+) -> Result<Transpiled, String> {
+    let redirect = preparation.redirect_dynamic;
+    let mut run = |state: &mut State| {
+        run_with_scan(
+            state,
+            source,
+            path,
+            loader,
+            Some(collector),
+            preserve_source,
+            Pass::Print,
+            Some(preparation),
+        )
+        .map_err(String::from)
+    };
+    let compile = || {
+        if MODULE_RECORDS.with(|on| on.get()) {
+            return with_record_parse(state, run);
+        }
+        run(state)
+    };
+    if redirect {
+        return with_dynamic_import_referrer(path, compile);
+    }
+    compile()
 }
 
 /// Print host `require(esm)` dynamic imports directly in the bundler's pass.

@@ -6,11 +6,7 @@
   const callerSourceOrigin = internal.require("builtins")["bun:jsc"]().callerSourceOrigin;
   const helper = "__bunwasmFunctionImport";
   Object.defineProperty(Function.prototype, helper, {
-    value: (from: string) => async (spec: unknown) => {
-      const text = `${spec}`;
-      if (native.engine === "host") return global.__bunwasm_dynamicImport(from)(text);
-      return native.importModule(native.resolve(text, from, false));
-    },
+    value: (from: string) => (spec: unknown, options?: unknown) => global.__bunwasm_dynamicImport(from)(spec, options),
   });
 
   function prepareArguments(args: readonly unknown[], kind: BunWasm.FunctionKind): string[] {

@@ -107,25 +107,9 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
 fn resolve(state: &State, args: Args<'_>) -> NativeResult {
     let specifier = args.str(0)?;
     let referrer = args.str(1)?;
-    let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
-        format!("{}/", state.cwd())
-    } else {
-        referrer.to_owned()
-    };
-    match state
-        .resolver
-        .resolve(specifier, &from, resolve::Kind::Import)
-    {
-        Ok(resolve::Resolved::Builtin(name)) => Ok(Val::Array(vec![name.into(), true.into()])),
-        Ok(resolve::Resolved::File(name)) => Ok(Val::Array(vec![name.into(), false.into()])),
-        Err(message) => Err(modules::resolve_error(
-            &message,
-            specifier,
-            &from,
-            resolve::Kind::Import,
-            state.resolver.notes(),
-        )),
-    }
+    let name = state.resolve_module_name(specifier, referrer)?;
+    let builtin = resolve::builtin_name(name.as_str()).is_some();
+    Ok(Val::Array(vec![name.as_str().into(), builtin.into()]))
 }
 
 fn wrapper(args: Args<'_>) -> NativeResult {

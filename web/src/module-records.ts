@@ -70,14 +70,14 @@ type LoaderNative = {
 
 export type LoaderFactory = (native: LoaderNative) => {
   importName(name: string): Promise<object>;
-  dynamicImport(specifier: unknown, referrer: string): Promise<object>;
+  dynamicImport(specifier: unknown, referrer: string, options?: unknown): Promise<object>;
 };
 
 export interface ModuleRecords {
   /** Imports the module `key` (a resolved path or built-in name). */
   importKey(key: string): Promise<object>;
   /** `import(specifier)` from `referrer` (CommonJS and eval code). */
-  importFrom(specifier: unknown, referrer: string): Promise<object>;
+  importFrom(specifier: unknown, referrer: string, options?: unknown): Promise<object>;
 }
 
 const { create, defineProperty } = Object;
@@ -131,7 +131,7 @@ export function createModuleRecords(host: RecordHost, factory: LoaderFactory, th
   });
   return {
     importKey,
-    importFrom: (specifier, referrer) => loader.dynamicImport(specifier, referrer),
+    importFrom: (specifier, referrer, options) => loader.dynamicImport(specifier, referrer, options),
   };
 }
 

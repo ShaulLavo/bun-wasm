@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::data::{Args, DataFn, NativeError, Record, Val};
 use crate::modules;
 use crate::natives::Table;
-use crate::resolve::{self, Kind, Resolved};
+use crate::resolve;
 use crate::{Entry, State};
 
 const T_UNDEFINED: u8 = 0;
@@ -408,14 +408,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
             ModuleImportKind::Static(specifier) => specifier,
         };
         rec.push("kind", "static");
-        match state.resolver.resolve(specifier, path, Kind::Import) {
-            Ok(Resolved::Builtin(b)) => rec.push("key", b),
-            Ok(Resolved::File(f)) => rec.push("key", f),
-            Err(msg) => {
-                rec.push("key", Val::Null);
-                rec.push("error", msg);
-            }
-        }
+        rec.push("key", state.resolve_module_name(specifier, path)?.as_str());
         imports.push(rec.into());
     }
     Ok(Record::new()

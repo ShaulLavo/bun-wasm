@@ -5,7 +5,8 @@ fn prepare(source: &str, path: &str) -> (Transpiled, Vec<String>) {
     let output = prepare_module(source, path, Loader::Js, true, true, &mut |specifier| {
         requests.push(specifier.to_owned());
         "bunwasm:request:0".to_owned()
-    }).unwrap();
+    })
+    .unwrap();
     (output, requests)
 }
 
@@ -22,7 +23,11 @@ fn runtime_static_text_requests_include_direct_reexports() {
         assert!(out.code.contains("bunwasm:request:0"), "{}", out.code);
         assert!(!out.code.contains("with {"));
         assert!(!out.mappings.is_empty());
-        let span = out.imports.iter().find(|import| import.specifier.is_some()).unwrap();
+        let span = out
+            .imports
+            .iter()
+            .find(|import| import.specifier.is_some())
+            .unwrap();
         assert!(out.code[span.start..span.end].contains("bunwasm:request:0"));
     }
 }
@@ -30,12 +35,19 @@ fn runtime_static_text_requests_include_direct_reexports() {
 #[test]
 fn runtime_dynamic_options_roundtrip_in_preserved_extensions() {
     for path in ["importer.js", "importer.mjs", "importer.cjs"] {
-        for args in ["'./page.html', { with: { type: 'text' } }", "specifier(), options()"] {
+        for args in [
+            "'./page.html', { with: { type: 'text' } }",
+            "specifier(), options()",
+        ] {
             let (out, requests) = prepare(&format!("void import({args});"), path);
             assert!(requests.is_empty());
             assert!(!out.preserved);
-            assert!(out.code.contains("options()") || out.code.contains("type:"), "{}", out.code);
-            assert!(out.code.contains("__bunwasm_import"), "{}", out.code);
+            assert!(
+                out.code.contains("options()") || out.code.contains("type:"),
+                "{}",
+                out.code
+            );
+            assert!(out.code.contains("__bunwasm_dynamicImport"), "{}", out.code);
             assert!(!out.mappings.is_empty());
         }
     }

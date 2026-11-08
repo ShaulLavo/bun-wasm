@@ -46,3 +46,22 @@ CommonJS constructor identity and live ES module default re-exports. An
 The fixture's `.mjs` and `.cjs` files are deliberate JavaScript module-format
 inputs, classified in `scripts/typescript-source-runtime-inputs.txt`, not host
 helpers or new legacy-source exceptions.
+
+## Runtime text requests
+
+File preparation consumes explicit static text selectors before registration request
+collection. A process-owned request table resolves those requests to distinct text
+module names. The shared loader receives generated default-only ESM records, so a
+text namespace cannot collide with the same file's ordinary HTMLBundle or CommonJS
+cache. Compiler callbacks remain compiler-owned and their token bytes are copied
+into the per-call AST arena. The direct re-export metadata correction is classified
+separately in `0022-reexport-loader-selectors.md`.
+
+`import_requests.ts` normalizes dynamic specifiers and options synchronously inside
+a fresh import promise, before any deferred load. The bootstrap initializes the
+record loader's captured helper without adding a Hermes factory-native method.
+Browser record graph preparation and linking both use import-only resolution.
+Default CommonJS resolution and the native module-host interface are unchanged.
+
+This support applies to compiled file ESM and CommonJS. Generated Function/eval/vm
+and require-of-ESM bundler paths are not qualified by these controls.
