@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -151,6 +151,18 @@ function runCase(directory: string, wasm: string, modules: "store" | "records", 
 }
 
 export function testModuleRecordControls(wasm: string): void {
+  test("required ES modules retain their own metadata without capturing source names", () => {
+    const fixture = join(root, "tests/fixtures/require-esm-meta");
+    const expected = readFileSync(join(fixture, "expected.txt"), "utf8");
+    for (const modules of ["store", "records"] as const) {
+      const child = runCase(fixture, wasm, modules, ["run", "/index.cts"]);
+      expect(child.error).toBeUndefined();
+      expect(child.stderr).toBe("");
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe(expected);
+    }
+  }, 60000);
+
   test("module records match the module store on the source review's controls", () => {
     const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-record-controls-"));
     try {
