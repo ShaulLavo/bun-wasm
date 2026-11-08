@@ -32,6 +32,15 @@ export function checkStartupLimit(samples: readonly StartupSample[], limitMs: nu
   }
 }
 
+export async function sampleDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`React startup sample exceeded ${timeoutMs} ms`)), timeoutMs);
+  });
+  try { return await Promise.race([operation, timeout]); }
+  finally { clearTimeout(timer); }
+}
+
 export async function renderedReact(page: Page): Promise<{ renderMs: number; interactiveMs: number }> {
   const preview = page.frameLocator("#preview");
   await preview.getByRole("heading", { name: "Hello from bun.wasm", exact: true }).waitFor({ state: "visible" });
@@ -52,34 +61,35 @@ async function measure(page: Page, options: { revision: string; url: string; ite
   };
   page.on("response", capture);
   try {
-    if (options.cache === "cold") await page.goto(options.url, { waitUntil: "domcontentloaded" });
-    else await page.reload({ waitUntil: "domcontentloaded" });
+    const response = options.cache === "cold"
+      ? await page.goto(options.url, { waitUntil: "domcontentloaded" })
+      : await page.reload({ waitUntil: "domcontentloaded" });
+    assert.ok(response?.ok(), `React navigation HTTP ${response?.status() ?? "missing response"}`);
     const timing = await renderedReact(page);
     const phases = await page.evaluate(() => performance.getEntriesByType("measure").map(entry => ({ name: entry.name, startMs: entry.startTime, durationMs: entry.duration })));
-    const dependencies = await resolvedDependencies(page);
+    assert.deepEqual(requests.filter(request => request.status >= 400), [], "React startup HTTP errors");
+    const dependencies = await page.evaluate(installedDependencies);
     const cacheMarks = await page.evaluate(() => performance.getEntriesByType("mark").map(entry => entry.name).filter(name => name.includes("cache")));
     return { ...options, ...timing, phases, requests, dependencies, cacheMarks };
   } finally { page.off("response", capture); }
 }
 
-async function resolvedDependencies(page: Page): Promise<Record<string, string>> {
-  return page.evaluate(async () => {
-    const sandbox: unknown = Reflect.get(globalThis, "sandbox");
-    if (!sandbox || typeof sandbox !== "object") throw new Error("Missing sandbox");
-    const fs: unknown = Reflect.get(sandbox, "fs");
-    if (!fs || typeof fs !== "object") throw new Error("Missing sandbox filesystem");
-    const read: unknown = Reflect.get(fs, "readFile");
-    if (typeof read !== "function") throw new Error("Missing sandbox readFile");
-    const dependencies: Record<string, string> = {};
-    for (const name of ["react", "react-dom", "vite", "@vitejs/plugin-react"]) {
-      const bytes: unknown = await read.call(fs, `/home/user/app/node_modules/${name}/package.json`);
-      if (!(bytes instanceof Uint8Array)) throw new Error(`Missing installed ${name}`);
-      const manifest: unknown = JSON.parse(new TextDecoder().decode(bytes));
-      if (!manifest || typeof manifest !== "object" || !("version" in manifest) || typeof manifest.version !== "string") throw new Error(`Missing ${name} version`);
-      dependencies[name] = manifest.version;
-    }
-    return dependencies;
-  });
+async function installedDependencies(): Promise<Record<string, string>> {
+  const sandbox: unknown = Reflect.get(globalThis, "sandbox");
+  if (!sandbox || typeof sandbox !== "object") throw new Error("Missing sandbox");
+  const fs: unknown = Reflect.get(sandbox, "fs");
+  if (!fs || typeof fs !== "object") throw new Error("Missing sandbox filesystem");
+  const read: unknown = Reflect.get(fs, "readFile");
+  if (typeof read !== "function") throw new Error("Missing sandbox readFile");
+  const dependencies: Record<string, string> = {};
+  for (const name of ["react", "react-dom", "vite", "@vitejs/plugin-react"]) {
+    const bytes: unknown = await read.call(fs, `/home/user/app/node_modules/${name}/package.json`);
+    if (!(bytes instanceof Uint8Array)) throw new Error(`Missing installed ${name}`);
+    const manifest: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!manifest || typeof manifest !== "object" || !("version" in manifest) || typeof manifest.version !== "string") throw new Error(`Missing ${name} version`);
+    dependencies[name] = manifest.version;
+  }
+  return dependencies;
 }
 
 async function main(): Promise<void> {
@@ -97,7 +107,8 @@ async function main(): Promise<void> {
   assert.ok(limit === undefined || Number.isFinite(limit) && limit > 0, "limit must be positive and finite");
   const launchArgs = values.headed && process.env.WAYLAND_DISPLAY ? ["--ozone-platform=wayland"] : [];
   const variants = [{ revision: values.revision, url: values.url }].concat(values.baseline ? [{ revision: values["baseline-revision"], url: values.baseline }] : []);
-  for (const variant of variants) new URL(variant.url);
+  for (const variant of variants) assert.match(new URL(variant.url).protocol, /^https?:$/, "startup requires HTTP URLs");
+  assert.equal(new Set(variants.map(variant => variant.revision)).size, variants.length, "revision labels must be unique");
   let browser: Browser | undefined;
   let launching: Promise<Browser> | undefined;
   let cleaning: Promise<void> | undefined;
@@ -142,7 +153,7 @@ async function main(): Promise<void> {
   async function record(page: Page, options: Parameters<typeof measure>[1]): Promise<void> {
     console.error(`React startup ${options.revision} ${options.iteration + 1} ${options.cache}`);
     try {
-      const sample = await measure(page, options);
+      const sample = await sampleDeadline(measure(page, options), deadline);
       rows.push(sample);
       await save();
       console.error(`React rendered ${sample.renderMs.toFixed(1)} ms; interactive ${sample.interactiveMs.toFixed(1)} ms`);

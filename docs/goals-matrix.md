@@ -137,3 +137,39 @@ The exact measurement evidence is `/work/reports/goals/installs/nuxt-tail/RESULT
 `/work/reports/goals/installs/nuxt-tail/collected/safari.json`.
 Those runs used source `c55a206ed38e8cc0737bfea5f8eec1a357015cf6` and guest SHA-256
 `05952225469a7647ff726149236561cc9f54a90f6f96f0a65b2b86002eb853db`.
+
+## Measure the root React sandbox
+
+For a PC campaign, pass `--react-startup-url=http://127.0.0.1:PORT/` to
+`run.ts` or `fleet.ts`. Serve the matching production sandbox build on that
+explicit free port first. This check runs once on the local controller before
+the matrix and writes `react-startup.json` beside `TABLE.json`.
+
+The check uses three fresh Chromium contexts. Each cold navigation starts without
+HTTP, service worker, guest filesystem, or package state. Each warm measurement
+reloads the same context after the cold preview renders and its counter works.
+The browser process and OS cache remain shared. The renderer must display the
+React heading and counter, paint two frames, and increment the counter. Listening
+or an iframe load alone does not pass. Observed HTTP errors fail the check.
+
+The cold median render budget is 6,900 ms. Warm samples cannot replace cold
+samples. Each complete sample has a fixed 30,000 ms failure deadline, independent
+of campaign or install overrides. The budget is about 14.9 percent above the
+6,004.2 ms local good cold median measured on November 8, 2026. Recalibrate on a
+named execution host before treating that number as portable to other machines.
+This flag does not enable itself in existing scheduled campaigns.
+
+To compare two builds without enforcing that machine-specific budget, run:
+
+```sh
+source env.sh
+bun scripts/measure-react-startup.ts --url http://127.0.0.1:48941/ \
+  --baseline http://127.0.0.1:48942/ --samples 3 --headed \
+  --revision current --baseline-revision previous --output /absolute/startup.json
+```
+
+Use the same host and browser for both URLs. The runner alternates revision order
+and records installed React and Vite versions, startup phases, cache-hit marks,
+response statuses, browser version, and browser cleanup. `--limit-ms` enforces a
+cold median limit for the current revision, never the average of both revisions.
+Warm renders also must stay below that limit.
