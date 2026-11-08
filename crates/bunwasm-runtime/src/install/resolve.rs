@@ -1050,3 +1050,7 @@ mod wasm_peer_graph_tests;
 
 #[cfg(test)]
 mod test_support;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "local_lookahead_tests.rs"]
+mod local_lookahead_tests;
