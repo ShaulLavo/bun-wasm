@@ -1,17 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
 import { ownedCommand } from "./lifetime";
+import { bounded } from "./execute";
 
 export type SafariApplication = { pid: number; started: number };
-type SafariLaunch = { kind: "none" } | { kind: "pending"; token: string } | { kind: "owned"; token: string; application: SafariApplication };
+type SafariProcess = Pick<ReturnType<typeof Bun.spawn>, "pid" | "exitCode" | "signalCode" | "exited" | "kill">;
+type SafariLaunch = { kind: "none" } | { kind: "spawned"; process: SafariProcess } | { kind: "owned"; process: SafariProcess; application: SafariApplication };
 export type DesktopSafari = { launch: SafariLaunch };
 export interface SafariApplicationHost {
   applications(signal?: AbortSignal): Promise<SafariApplication[]>;
-  open(uid: number, token: string, signal: AbortSignal): Promise<void>;
-  owns(application: SafariApplication, token: string, signal?: AbortSignal): Promise<boolean>;
+  spawn(uid: number): SafariProcess;
   wait(ms: number, signal?: AbortSignal): Promise<void>;
   now(): number;
-  terminate(pid: number, kind: "SIGTERM" | "SIGKILL"): void;
 }
 
 export function parseSafariApplications(output: string): SafariApplication[] {
@@ -26,68 +25,58 @@ export function parseSafariApplications(output: string): SafariApplication[] {
   }
   return applications;
 }
-const marker = "BUN_WASM_GOALS_SAFARI_OWNER=";
 const host: SafariApplicationHost = {
   applications: async signal => parseSafariApplications(await ownedCommand(["/usr/bin/env", "LC_ALL=C", "/bin/ps", "-axo", "pid=,lstart=,comm="], signal, 2000)),
-  open: async (uid, token, signal) => { await ownedCommand(["/bin/launchctl", "asuser", String(uid), "/usr/bin/open", "-a", "Safari", "--env", marker + token], signal, 10_000); },
-  owns: async (application, token, signal) => {
-    const output = await ownedCommand(["/bin/ps", "eww", "-p", String(application.pid), "-o", "command="], signal, 2000, false, [0, 1]);
-    return output.split(/\s+/).includes(marker + token);
-  },
+  spawn: uid => Bun.spawn(["/bin/launchctl", "asuser", String(uid), "/Applications/Safari.app/Contents/MacOS/Safari"], { stdout: "ignore", stderr: "inherit" }),
   wait: async (ms, signal) => { await setTimeout(ms, undefined, { signal }); },
   now: Date.now,
-  terminate: (pid, kind) => { try { process.kill(pid, kind); } catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; } },
 };
+function exited(child: SafariProcess): boolean { return child.exitCode !== null || child.signalCode !== null; }
 async function capture(state: DesktopSafari, io: SafariApplicationHost, signal?: AbortSignal): Promise<SafariApplication | undefined> {
   const launch = state.launch;
-  if (launch.kind === "none") return undefined;
+  if (launch.kind === "none" || exited(launch.process)) return undefined;
   const applications = await io.applications(signal);
-  for (const application of applications) {
-    if (launch.kind === "owned" && (application.pid !== launch.application.pid || application.started !== launch.application.started)) continue;
-    if (!await io.owns(application, launch.token, signal)) continue;
-    state.launch = { kind: "owned", token: launch.token, application };
-    return application;
-  }
+  const application = applications.find(application => application.pid === launch.process.pid);
+  if (!application || exited(launch.process)) return undefined;
+  if (launch.kind === "owned" && application.started !== launch.application.started) return undefined;
+  state.launch = { kind: "owned", process: launch.process, application };
+  return application;
 }
 export async function prepareDesktopSafari(state: DesktopSafari, uid: number, signal: AbortSignal, io: SafariApplicationHost = host): Promise<void> {
   signal.throwIfAborted();
   if ((await io.applications(signal)).length) return;
   signal.throwIfAborted();
-  const token = randomUUID();
-  state.launch = { kind: "pending", token };
-  await io.open(uid, token, signal);
+  state.launch = { kind: "spawned", process: io.spawn(uid) };
   await capture(state, io, signal);
-  // open returns before Safari registers its automation target. This verified
-  // GUI allowance is setup time, not a change to any product phase deadline.
+  // Direct launch retains a child handle while Safari registers its GUI target.
+  // This setup allowance does not change any product phase deadline.
   await io.wait(5000, signal);
   signal.throwIfAborted();
   if (!await capture(state, io, signal)) throw new Error("Desktop Safari did not finish its bounded prelaunch with proved ownership");
+  const pid = state.launch.process.pid;
+  if ((await io.applications(signal)).some(application => application.pid !== pid)) throw new Error("Owner Safari raced desktop prelaunch; refusing driver startup");
 }
-async function settleLaunch(state: DesktopSafari, io: SafariApplicationHost): Promise<void> {
+async function settleLaunch(state: DesktopSafari, io: SafariApplicationHost): Promise<SafariApplication | undefined> {
   const deadline = io.now() + 2000;
-  while (!await capture(state, io)) {
+  while (state.launch.kind !== "none") {
+    const application = await capture(state, io);
+    if (application) return application;
+    const stopped = exited(state.launch.process);
+    if (stopped && state.launch.kind !== "owned") throw new Error("Desktop Safari exited before ownership was proved; preserving application and lock");
+    if (stopped) { await state.launch.process.exited; return undefined; }
     if (io.now() >= deadline) throw new Error("Desktop Safari launch ownership is unproved; preserving application and lock");
     await io.wait(50);
   }
 }
-async function waitForExit(state: DesktopSafari, io: SafariApplicationHost): Promise<boolean> {
-  const deadline = io.now() + 2000;
-  while (await capture(state, io)) {
-    if (io.now() >= deadline) return false;
-    await io.wait(50);
-  }
-  return true;
-}
 export async function stopDesktopSafari(state: DesktopSafari, io: SafariApplicationHost = host): Promise<void> {
   if (state.launch.kind === "none") return;
-  // An asynchronous open can still complete after interruption. Empty process
-  // snapshots do not prove its absence, and only our launch marker proves ownership.
-  if (state.launch.kind === "pending") await settleLaunch(state, io);
+  const child = state.launch.process;
   for (const kind of ["SIGTERM", "SIGKILL"] as const) {
-    const application = await capture(state, io);
+    const application = await settleLaunch(state, io);
     if (!application) return;
-    io.terminate(application.pid, kind);
-    if (await waitForExit(state, io)) return;
+    // kill uses the retained child, never an unrelated PID found in a snapshot.
+    child.kill(kind);
+    if (await bounded(() => child.exited, 2000).then(() => true, () => false)) return;
   }
   throw new Error("Owned desktop Safari shutdown is unproved");
 }
