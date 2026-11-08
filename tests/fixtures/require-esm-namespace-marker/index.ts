@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { types } from "node:util";
 
 const namespace = require("./default.mts");
 assert.equal(namespace.__esModule, true, "require(esm) marks a default namespace");
@@ -17,6 +18,9 @@ console.log("default marker, call, and cached identity");
 namespace.increment();
 assert.equal(namespace.count, 1);
 const imported = await import("./default.mts");
+assert.equal(namespace, imported, "require and dynamic import preserve namespace identity");
+assert.equal(require("./reexport.mts").child, namespace, "namespace re-exports preserve identity");
+assert.equal(types.isModuleNamespaceObject(namespace), true, "required values remain recognized module namespaces");
 assert.equal(imported.count, 1);
 imported.increment();
 assert.equal(namespace.count, 2);
