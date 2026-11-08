@@ -17,7 +17,7 @@ export async function withNativeDriver<T>(operation: (endpoint: string, signal: 
   return withSignals(signal => runNative(operation, uid, signal, config));
 }
 async function runNative<T>(operation: (endpoint: string, signal: AbortSignal) => Promise<T>, uid: number, signal: AbortSignal, config: NativeOptions): Promise<T> {
-  const state: NativeResources = { safari: { launchedAfter: null, observed: new Map() }, safariStopped: true, lock: join(homedir(), "tmp/.agent-mac-lock"), locked: false, stopped: true, port: 0 };
+  const state: NativeResources = { safari: { launch: { kind: "none" } }, safariStopped: true, lock: join(homedir(), "tmp/.agent-mac-lock"), locked: false, stopped: true, port: 0 };
   try {
     await checkAvailability(signal);
     signal.throwIfAborted(); await mkdir(state.lock); state.locked = true;
@@ -43,16 +43,18 @@ async function driverReady(endpoint: string, signal: AbortSignal): Promise<boole
   signal.throwIfAborted();
   return fetch(endpoint + "/status", { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false);
 }
+async function stopNativeDriver(state: NativeResources): Promise<void> {
+  if (state.owned) await stopSafariDriver(state.owned, state.port);
+  if (state.driver) await state.driver.exited;
+  state.stopped = true;
+}
 async function cleanupNative(state: NativeResources, cleanupFile?: string): Promise<void> {
   try {
-    try {
-      if (state.owned) await stopSafariDriver(state.owned, state.port);
-      if (state.driver) await state.driver.exited;
-      state.stopped = true;
-    } finally { await stopDesktopSafari(state.safari); state.safariStopped = true; }
+    await stopNativeDriver(state);
+    await stopDesktopSafari(state.safari); state.safariStopped = true;
   } finally {
     if (state.locked && state.stopped && state.safariStopped) { await rm(join(state.lock, "owner"), { force: true }); await rmdir(state.lock); state.locked = false; }
-    if (cleanupFile) await receipt(cleanupFile, { safariPids: Array.from(state.safari.observed.keys()), safariExited: state.safariStopped, driverPid: state.driver?.pid ?? null, port: state.port, driverExited: state.stopped, lockRemoved: !state.locked, simulatorChanged: false, at: new Date().toISOString() });
+    if (cleanupFile) await receipt(cleanupFile, { safariPids: state.safari.launch.kind === "owned" ? [state.safari.launch.application.pid] : [], safariLaunch: state.safari.launch.kind, safariExited: state.safariStopped, driverPid: state.driver?.pid ?? null, port: state.port, driverExited: state.stopped, lockRemoved: !state.locked, simulatorChanged: false, at: new Date().toISOString() });
   }
 }
 async function receipt(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(value, null, 2)); }
