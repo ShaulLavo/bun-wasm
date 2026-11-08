@@ -211,3 +211,13 @@ next selected parent's children remain open. Those children wait about two
 seconds before consumption under a one-second idle timeout. The check preserves
 the nested alias placement, reaches exactly eight handles, and confirms that
 queue residence does not consume the response reader's idle budget.
+
+Lookahead eligibility advances once through each current dependency list instead
+of rescanning every remaining suffix. Candidate names from the same bounded
+queued-parent window are also prepared once per current parent. Only the next
+seven transport handles are retained. Local file, link and workspace specifiers
+never open manifests during transport eligibility checks; demand-time resolution
+still validates them. Linux resolver regressions observe actual manifest opens
+with an armed inotify control, covering root lists and selected local parents.
+This avoids quadratic filesystem work without changing package selection or the
+reserved demand slot. No upstream code is copied.

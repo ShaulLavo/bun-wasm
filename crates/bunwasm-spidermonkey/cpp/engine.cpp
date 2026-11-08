@@ -562,6 +562,7 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetNativeStackQuota(context, config->stack_high - config->stack_low - 65536);
   require(JS::InitSelfHostedCode(context), "self-hosted initialization failed");
   JS::RealmOptions options;
+  options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
   JS::RootedObject object(context, JS_NewGlobalObject(context, &globalClass, nullptr, JS::FireOnNewGlobalHook, options));
   require(object != nullptr, "global creation failed");
   global = new JS::PersistentRootedObject(context, object);

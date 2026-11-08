@@ -32,6 +32,7 @@
 //! loader. In module form the record is `export default (…)`.
 //! `crates/bunwasm-runtime/src/js/esm_loader.ts` links and evaluates the records.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use bun_alloc::Arena;
@@ -102,14 +103,14 @@ impl Module {
 /// substring of the source, also after decoding its `\u`/`\x` escapes. Since a fresh
 /// name appears nowhere in the module's own tokens, strings or comments, every printed
 /// occurrence of it is one the record put there.
-struct Names {
+struct Names<'source> {
     taken: HashSet<String>,
-    source: String,
-    decoded: String,
+    source: &'source str,
+    decoded: Cow<'source, str>,
 }
 
-impl Names {
-    fn new(ast: &js_ast::Ast<'_>, source: &str) -> Names {
+impl<'source> Names<'source> {
+    fn new(ast: &js_ast::Ast<'_>, source: &'source str) -> Self {
         let taken = ast
             .symbols
             .iter()
@@ -117,7 +118,7 @@ impl Names {
             .collect();
         Names {
             taken,
-            source: source.to_owned(),
+            source,
             decoded: decode_escapes(source),
         }
     }
@@ -138,7 +139,10 @@ impl Names {
 
 /// `source` with its `\uXXXX`, `\u{…}` and `\xXX` escapes decoded, which an identifier,
 /// property name or string can spell a name with.
-fn decode_escapes(source: &str) -> String {
+fn decode_escapes(source: &str) -> Cow<'_, str> {
+    if !source.contains("\\u") && !source.contains("\\x") {
+        return Cow::Borrowed(source);
+    }
     let mut out = String::with_capacity(source.len());
     let mut rest = source;
     while let Some(at) = rest.find('\\') {
@@ -151,7 +155,7 @@ fn decode_escapes(source: &str) -> String {
         rest = &rest[at + 1 + used..];
     }
     out.push_str(rest);
-    out
+    Cow::Owned(out)
 }
 
 /// The escape after a backslash and the bytes it used (none when it is not one).
@@ -311,7 +315,7 @@ fn rename_global_arguments(ast: &mut js_ast::Ast<'_>, arena: &Arena, placeholder
 /// A name the parser generated (an anonymous default export's binding) that would print
 /// the same as a name the module uses gets a fresh one. A named default function or class
 /// keeps its own name.
-fn rename_generated(names: &mut Names, ast: &mut js_ast::Ast<'_>, arena: &Arena, r: Ref) {
+fn rename_generated(names: &mut Names<'_>, ast: &mut js_ast::Ast<'_>, arena: &Arena, r: Ref) {
     if ast.symbols[r.inner_index() as usize].kind != js_ast::symbol::Kind::Other {
         return;
     }
@@ -392,7 +396,7 @@ fn export_named(module: &mut Module, ast: &js_ast::Ast<'_>, name: Option<Ref>) {
 
 fn rewrite(
     module: &mut Module,
-    names: &mut Names,
+    names: &mut Names<'_>,
     ast: &mut js_ast::Ast<'_>,
     arena: &Arena,
     stmt: Stmt,
@@ -429,7 +433,7 @@ fn rewrite(
 
 fn import(
     module: &mut Module,
-    names: &mut Names,
+    names: &mut Names<'_>,
     ast: &mut js_ast::Ast<'_>,
     arena: &Arena,
     st: &S::Import,
@@ -1306,6 +1310,48 @@ mod tests {
                 "stale record for {}; rerun scripts/esm-loader-fixtures.ts",
                 file.display()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_memory_tests {
+    use super::{Arena, Names, decode_escapes, js_ast};
+
+    #[test]
+    fn registration_names_borrow_the_source() {
+        let arena = Arena::new();
+        let ast = js_ast::Ast::empty_in(&arena);
+        let source = format!("/*{}*/", "x".repeat(297_832));
+        let names = Names::new(&ast, &source);
+        assert_eq!(names.source.as_ptr(), source.as_ptr());
+    }
+
+    #[test]
+    fn undecoded_names_borrow_even_with_other_backslashes() {
+        let source = r"const pattern = /\s+\d+\\/; // no encoded identifier";
+        let decoded = decode_escapes(source);
+        assert_eq!(&*decoded, source);
+        assert_eq!(decoded.as_ptr(), source.as_ptr());
+    }
+
+    #[test]
+    fn decoded_name_spellings_still_collide() {
+        let arena = Arena::new();
+        let ast = js_ast::Ast::empty_in(&arena);
+        let mut names = Names::new(&ast, r"\u005f\x5fbunwasm_m");
+        assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$1");
+        assert_eq!(names.fresh("__bunwasm_m"), "__bunwasm_m$2");
+    }
+
+    #[test]
+    fn decoding_keeps_supported_and_unknown_spelling() {
+        for (source, expected) in [
+            (r"\u0061\x62\u{1f600}", "ab😀"),
+            (r"\s\d\q\u12\xG0\uD800", r"\s\d\q\u12\xG0\uD800"),
+            (r"plain 😀 text", "plain 😀 text"),
+        ] {
+            assert_eq!(&*decode_escapes(source), expected);
         }
     }
 }

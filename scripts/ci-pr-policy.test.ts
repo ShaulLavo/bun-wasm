@@ -9,12 +9,14 @@ function record(value: unknown): Record<string, unknown> {
 const workflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
 const jobs = record(workflow.jobs);
 
-function admitted(job: Record<string, unknown>, event: string, draft: boolean): boolean {
+function admitted(job: Record<string, unknown>, event: string, draft: boolean, ref = "refs/heads/main"): boolean {
   if (typeof job.if !== "string") return true;
   const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(event))
     .replaceAll("github.event.pull_request.draft", String(draft))
     .replaceAll("!cancelled()", "true")
+    .replaceAll("always()", "true")
+    .replaceAll("github.ref", JSON.stringify(ref))
     .replace(/needs\.[\w-]+\.outputs\.[\w-]+/g, '"true"')
     .replace(/needs\.[\w-]+\.result/g, '"success"');
   const result: unknown = new Function(`return (${expression})`)();
@@ -26,6 +28,7 @@ test("draft PRs defer native and browser work until ready without changing push 
   const events = record(workflow.on);
   expect(record(events.pull_request).types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
   for (const [id, value] of Object.entries(jobs)) {
+    if (id === "update-status") continue;
     const job = record(value);
     expect(admitted(job, "pull_request", true), id).toBe(id === "quality");
     expect(admitted(job, "pull_request", false), id).toBe(true);
@@ -39,4 +42,16 @@ test("only PR updates cancel older runs and each non-PR run has a separate group
     group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
+});
+
+test("update statuses run only for manual checks of the standing update branch", () => {
+  const reporter = record(jobs["update-status"]);
+  const branch = "refs/heads/automation/owned-dependency-updates";
+  expect(admitted(reporter, "pull_request", true, branch)).toBe(false);
+  expect(admitted(reporter, "pull_request", false, branch)).toBe(false);
+  expect(admitted(reporter, "push", false, branch)).toBe(false);
+  expect(admitted(reporter, "workflow_dispatch", false)).toBe(false);
+  expect(admitted(reporter, "workflow_dispatch", false, branch)).toBe(true);
+  expect(reporter.needs).toEqual(Object.keys(jobs).filter(id => id !== "update-status"));
+  expect(record(reporter.permissions)).toEqual({ statuses: "write" });
 });
