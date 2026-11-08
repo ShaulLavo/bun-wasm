@@ -3,7 +3,8 @@
 import { strict as assert } from 'node:assert';
 import { Worker } from 'node:worker_threads';
 
-const module = new WebAssembly.Module(await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer());
+const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
+const module = new WebAssembly.Module(moduleBytes);
 const child = `${import.meta.dir}/cross-worker-child.ts`;
 type Exports = {
   read(address: number): number;
@@ -114,6 +115,29 @@ async function postedLoad(memory: WebAssembly.Memory, view: Int32Array) {
   assert.equal(await exited, 0);
 }
 
+async function reentrantDelivery() {
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
+  const module = new WebAssembly.Module(moduleBytes);
+  const view = new Int32Array(memory.buffer);
+  view[0] = 91;
+  const { worker, exited } = spawn('reentrant');
+  try {
+    assert.deepEqual(await reply(worker), { ready: true });
+    const received = reply(worker);
+    const failed = new Error('outer serialization failed after inner delivery');
+    const message = { memory, module, get fail() {
+      worker.postMessage({ memory, module });
+      throw failed;
+    } };
+    assert.throws(() => worker.postMessage(message), error => error === failed);
+    assert.deepEqual(await received, { value: 91 });
+    assert.equal(view[1], 92, 'inner Memory and Module receipt survives outer abort');
+    assert.equal(await exited, 0);
+  } finally {
+    await worker.terminate();
+  }
+}
+
 const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
 const view = new Int32Array(memory.buffer);
 const exports = exported(memory);
@@ -125,4 +149,5 @@ await terminated(memory, view, 'nested');
 await terminated(memory, view, 'js');
 await senderExit();
 await postedLoad(memory, view);
+await reentrantDelivery();
 console.log('shared-wasm-memory cross-worker: pass');

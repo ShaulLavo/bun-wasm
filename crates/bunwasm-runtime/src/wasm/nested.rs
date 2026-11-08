@@ -61,8 +61,9 @@ fn exchange(input: &Request) -> Result<Reply, NativeError> {
         fn request(pointer: *const u8, length: u32, out: *mut [u32; 2]) -> i32;
     }
     let bytes = serde_json::to_vec(input).map_err(error)?;
+    let length = wire::request_length(bytes.len()).ok_or_else(|| error("nested request limit"))?;
     let mut out = [0; 2];
-    let status = unsafe { request(bytes.as_ptr(), bytes.len() as u32, &mut out) };
+    let status = unsafe { request(bytes.as_ptr(), length, &mut out) };
     if status != 0 {
         return Err(error("nested host transport failed"));
     }

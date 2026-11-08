@@ -113,3 +113,16 @@ separately. These counters are not RSS measurements.
 Cold shared-profile CI imports the ordinary Bun patch series without relying on
 a runner Git identity. Source synchronization supplies only a command-local
 committer; patch authors, patch bytes and verified source trees stay unchanged.
+
+Publication transactions retain their rollback until delivery. Overlapping preparations
+share a per-token pending record; a successful inner delivery marks that record as
+committed, so an outer getter failure cannot withdraw a token already observed by a
+receiver. Only the last abort of an undelivered token removes its directory entry.
+The codec commits publication when direct delivery succeeds, before later transfer
+finalization can fail. Broker routing commits only after its transaction succeeds.
+
+The core checks serialized request size against the same 1 MiB limit as the native
+host before crossing the import boundary, including checked conversion to its
+32-bit wire length. A valid module with an oversized publication description is
+refused with DataCloneError, rather than trapping at the host import. The discovered
+group fixture includes that case and a real reentrant Memory-and-Module delivery.

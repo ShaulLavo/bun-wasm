@@ -247,7 +247,10 @@ pub(crate) fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
         "request",
         |mut caller: Caller<'_, Host>, pointer: u32, length: u32, out: u32| -> Result<i32> {
             caller.data().cancel.check()?;
-            ensure!(length <= 1 << 20, "nested request limit");
+            ensure!(
+                wire::request_length(length as usize).is_some(),
+                "nested request limit"
+            );
             let request: Request = serde_json::from_slice(&read(&caller, pointer, length)?)?;
             let category = if matches!(request, Request::Instantiate { .. }) {
                 "LinkError"
