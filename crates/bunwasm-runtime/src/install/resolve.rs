@@ -19,6 +19,51 @@ use super::{
     overrides::Overrides,
 };
 
+type Dependency = (String, (String, bool, bool));
+
+struct MetadataCandidate {
+    edge: Option<usize>,
+    name: String,
+}
+
+impl MetadataCandidate {
+    fn needed(&self, index: usize, resolver: &Resolver) -> bool {
+        self.edge.is_none_or(|edge| edge >= index)
+            && !resolver.responses.contains_key(&self.name)
+            && !resolver.packages.contains_key(&self.name)
+    }
+}
+
+struct MetadataLookahead {
+    remaining: VecDeque<MetadataCandidate>,
+    selected: Vec<MetadataCandidate>,
+}
+
+impl MetadataLookahead {
+    fn urls(&mut self, index: usize, resolver: &Resolver) -> Vec<String> {
+        self.selected
+            .retain(|candidate| candidate.needed(index, resolver));
+        while self.selected.len() < io::MAX_PREFETCHES {
+            let Some(candidate) = self.remaining.pop_front() else {
+                break;
+            };
+            if !candidate.needed(index, resolver)
+                || self
+                    .selected
+                    .iter()
+                    .any(|ready| ready.name == candidate.name)
+            {
+                continue;
+            }
+            self.selected.push(candidate);
+        }
+        self.selected
+            .iter()
+            .map(|candidate| resolver.metadata_url(&candidate.name))
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 pub struct Package {
     pub name: String,
@@ -188,8 +233,9 @@ impl Resolver {
         let dependencies: Vec<_> = dependencies(manifest, production, true)
             .into_iter()
             .collect();
+        let mut lookahead = self.metadata_lookahead(&dependencies, None);
         for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
-            self.prefetch_dependencies(&dependencies[index..], None);
+            self.prefetch_dependencies(&mut lookahead, index);
             let range = self.overrides.target(name, range).to_owned();
             self.add(name, &range, vec![name.clone()], *optional)?;
         }
@@ -314,8 +360,9 @@ impl Resolver {
         .into_iter()
         .filter(|(_, (_, _, peer))| *peer == peers)
         .collect();
+        let mut lookahead = self.metadata_lookahead(&dependencies, Some(parent));
         for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
-            self.prefetch_dependencies(&dependencies[index..], Some(parent));
+            self.prefetch_dependencies(&mut lookahead, index);
             let range = self.edge_range(Some(parent), name, range);
             let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
             else {
@@ -340,20 +387,8 @@ impl Resolver {
             .unwrap_or_else(|| declared_local_target(parent, range.into()))
     }
 
-    fn prefetch_dependencies(
-        &mut self,
-        current: &[(String, (String, bool, bool))],
-        parent: Option<&Package>,
-    ) {
-        let mut urls = Vec::with_capacity(io::MAX_PREFETCHES);
-        self.metadata_lookahead(
-            current.iter().map(|(name, edge)| (name, edge)),
-            parent,
-            &mut urls,
-        );
-        if parent.is_some() {
-            self.pending_metadata(&mut urls);
-        }
+    fn prefetch_dependencies(&mut self, current: &mut MetadataLookahead, index: usize) {
+        let urls = current.urls(index, self);
         self.downloads.retain(&urls);
         for url in urls {
             self.downloads
@@ -361,43 +396,55 @@ impl Resolver {
         }
     }
 
-    fn pending_metadata(&self, urls: &mut Vec<String>) {
-        for key in self.pending.iter().take(io::MAX_PREFETCHES) {
-            if urls.len() == io::MAX_PREFETCHES {
-                break;
+    fn metadata_lookahead(
+        &self,
+        current: &[Dependency],
+        parent: Option<&Package>,
+    ) -> MetadataLookahead {
+        let mut remaining = VecDeque::new();
+        for (index, (name, (range, optional, _))) in current.iter().enumerate() {
+            let range = self.edge_range(parent, name, range);
+            if let Some(name) = self.prefetch_name(parent, name, &range, *optional) {
+                remaining.push_back(MetadataCandidate {
+                    edge: Some(index),
+                    name,
+                });
             }
-            let parent = &self.packages[key];
-            let children = dependencies(
-                &parent.meta,
-                self.production,
-                parent.local.as_ref().is_some_and(|local| local.workspace),
-            );
-            self.metadata_lookahead(
-                children.iter().filter(|(_, (_, _, peer))| !*peer),
-                Some(parent),
-                urls,
-            );
+        }
+        if parent.is_some() {
+            self.pending_metadata(&mut remaining);
+        }
+        MetadataLookahead {
+            remaining,
+            selected: Vec::with_capacity(io::MAX_PREFETCHES),
         }
     }
 
-    fn metadata_lookahead<'a>(
+    fn pending_metadata(&self, candidates: &mut VecDeque<MetadataCandidate>) {
+        for key in self.pending.iter().take(io::MAX_PREFETCHES) {
+            self.pending_parent_metadata(&self.packages[key], candidates);
+        }
+    }
+
+    fn pending_parent_metadata(
         &self,
-        children: impl Iterator<Item = (&'a String, &'a (String, bool, bool))>,
-        parent: Option<&Package>,
-        urls: &mut Vec<String>,
+        parent: &Package,
+        candidates: &mut VecDeque<MetadataCandidate>,
     ) {
-        for (name, (range, optional, _)) in children {
-            if urls.len() == io::MAX_PREFETCHES {
-                break;
+        let children = dependencies(
+            &parent.meta,
+            self.production,
+            parent.local.as_ref().is_some_and(|local| local.workspace),
+        );
+        for (name, (range, optional, peer)) in children {
+            if peer {
+                continue;
             }
-            let range = self.edge_range(parent, name, range);
-            let Some(target) = self.prefetch_name(parent, name, &range, *optional) else {
+            let range = self.edge_range(Some(parent), &name, &range);
+            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional) else {
                 continue;
             };
-            let url = self.metadata_url(&target);
-            if !urls.contains(&url) {
-                urls.push(url);
-            }
+            candidates.push_back(MetadataCandidate { edge: None, name });
         }
     }
 
@@ -446,7 +493,14 @@ impl Resolver {
             let (name, range) = spec(alias).ok()?;
             return self.metadata_name(&name, &range, chain, optional, lookup);
         }
-        if self.local_package(name, range).ok()?.is_some() || self.responses.contains_key(name) {
+        if range.starts_with("file:")
+            || range.starts_with("link:")
+            || range.starts_with("workspace:")
+            || self.responses.contains_key(name)
+        {
+            return None;
+        }
+        if self.local_package(name, range).ok()?.is_some() {
             return None;
         }
         #[cfg(test)]
