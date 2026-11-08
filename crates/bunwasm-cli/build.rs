@@ -105,6 +105,34 @@ fn shared_cxx_runtime() {
     );
     println!("cargo:rerun-if-changed={}", source.display());
     println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    shared_cxx_sort();
+}
+
+fn shared_cxx_sort() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cxx-sort.cpp");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("cxx-sort.o");
+    let compiler = std::env::var("CXX_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-std=c++20",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-D_LIBCPP_BUILDING_LIBRARY",
+            "-c",
+        ])
+        .args(entry_flags())
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(status.success(), "compile shared-group libc++ sort");
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
 }
 
 fn split_entry() {
