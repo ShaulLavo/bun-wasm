@@ -1450,8 +1450,25 @@ test("the JSC guest builds once in the background, overlapping only other builds
   expect(launch).toContain('bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c');
   expect(launch).not.toContain('"$!"');
   const cleanup = nativeWorkflowStep("name", "Stop the JSC Cargo guest build");
-  expect(workflowField(cleanup, "if")).toBe("${{ always() && needs.quality.outputs.jsc == 'true' }}");
+  expect(workflowField(nativeWorkflowStep("name", "Start the JSC Cargo guest build"), "id")).toBe("jsc-guest-start");
+  expect(workflowField(cleanup, "if")).toBe("${{ always() && contains(fromJSON('[\"success\", \"failure\", \"cancelled\"]'), steps.jsc-guest-start.outcome) }}");
   expect(workflowField(cleanup, "run")).toBe('bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"\n');
+});
+
+test("JSC cleanup is absent before producer admission and covers a partially failed start", () => {
+  const cleanup = workflowString(workflowField(nativeWorkflowStep("name", "Stop the JSC Cargo guest build"), "if"));
+  const evaluate = (outcome: string) => {
+    const expression = cleanup.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+      .replace("always()", "true")
+      .replace("steps.jsc-guest-start.outcome", JSON.stringify(outcome));
+    const contains = (values: string[], value: string) => values.includes(value);
+    const result: unknown = new Function("contains", "fromJSON", `return (${expression})`)(contains, JSON.parse);
+    expect(typeof result).toBe("boolean");
+    return result;
+  };
+  expect(evaluate("")).toBe(false);
+  expect(evaluate("skipped")).toBe(false);
+  for (const outcome of ["success", "failure", "cancelled"]) expect(evaluate(outcome)).toBe(true);
 });
 
 for (const [label, status, expected] of [

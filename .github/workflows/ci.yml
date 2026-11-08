@@ -1133,6 +1133,7 @@ jobs:
       # JSC builds at low priority beside QuickJS and host-engine work; timed checks
       # start only after the background producer finishes.
       - name: Start the JSC Cargo guest build
+        id: jsc-guest-start
         if: needs.quality.outputs.jsc == 'true'
         env:
           JOBS: "2"
@@ -1194,7 +1195,7 @@ jobs:
         run: |
           bun scripts/ci-jsc-worker.ts wait "$RUNNER_TEMP/jsc-guest"
       - name: Stop the JSC Cargo guest build
-        if: ${{ always() && needs.quality.outputs.jsc == 'true' }}
+        if: ${{ always() && contains(fromJSON('["success", "failure", "cancelled"]'), steps.jsc-guest-start.outcome) }}
         run: |
           bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"
       - name: Save the JSC Cargo cache once per input revision
