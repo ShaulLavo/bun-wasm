@@ -196,3 +196,13 @@ host backpressure. No parsed packument cache or archive preload is added.
 `install-metadata.test.ts` uses real delayed registry I/O, including responses
 larger than the host body window, to check overlap, bounds, cancellation and
 request-free locked, local and no-op installs. No upstream code is copied.
+
+Metadata lookahead also fills unused handles from required edges of already
+selected queued parents. It examines at most seven queued parents and retains
+only the next seven distinct request URLs. It never resolves a speculative
+package or fetches deferred peer edges. Current siblings keep priority, and
+version selection, placement and peer traversal still run in their original
+order. Handles survive parent boundaries when their URLs remain in the window;
+obsolete handles close before replacement requests start. The existing delayed
+registry also checks overlap between narrow child lists of successive parents.
+This is an original adapter change with no additional upstream source.

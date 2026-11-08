@@ -188,9 +188,8 @@ impl Resolver {
         let dependencies: Vec<_> = dependencies(manifest, production, true)
             .into_iter()
             .collect();
-        let mut lookahead = dependencies.iter();
-        for (name, (range, optional, _)) in &dependencies {
-            self.prefetch_dependencies(&mut lookahead, None);
+        for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
+            self.prefetch_dependencies(&dependencies[index..], None);
             let range = self.overrides.target(name, range).to_owned();
             self.add(name, &range, vec![name.clone()], *optional)?;
         }
@@ -315,9 +314,8 @@ impl Resolver {
         .into_iter()
         .filter(|(_, (_, _, peer))| *peer == peers)
         .collect();
-        let mut lookahead = dependencies.iter();
-        for (name, (range, optional, peer)) in &dependencies {
-            self.prefetch_dependencies(&mut lookahead, Some(parent));
+        for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
+            self.prefetch_dependencies(&dependencies[index..], Some(parent));
             let range = self.edge_range(Some(parent), name, range);
             let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
             else {
@@ -329,7 +327,6 @@ impl Resolver {
             };
             self.add(name, &target, chain, *optional || parent.optional)?;
         }
-        self.downloads.clear();
         Ok(())
     }
 
@@ -343,25 +340,64 @@ impl Resolver {
             .unwrap_or_else(|| declared_local_target(parent, range.into()))
     }
 
-    fn prefetch_dependencies<'a>(
+    fn prefetch_dependencies(
         &mut self,
-        lookahead: &mut impl Iterator<Item = &'a (String, (String, bool, bool))>,
+        current: &[(String, (String, bool, bool))],
         parent: Option<&Package>,
     ) {
-        while !self.downloads.is_full() {
-            let Some((name, (range, optional, _))) = lookahead.next() else {
+        let mut urls = Vec::with_capacity(io::MAX_PREFETCHES);
+        self.metadata_lookahead(
+            current.iter().map(|(name, edge)| (name, edge)),
+            parent,
+            &mut urls,
+        );
+        if parent.is_some() {
+            self.pending_metadata(&mut urls);
+        }
+        self.downloads.retain(&urls);
+        for url in urls {
+            self.downloads
+                .prefetch(&url, false, self.refresh, &self.registry);
+        }
+    }
+
+    fn pending_metadata(&self, urls: &mut Vec<String>) {
+        for key in self.pending.iter().take(io::MAX_PREFETCHES) {
+            if urls.len() == io::MAX_PREFETCHES {
                 break;
-            };
+            }
+            let parent = &self.packages[key];
+            let children = dependencies(
+                &parent.meta,
+                self.production,
+                parent.local.as_ref().is_some_and(|local| local.workspace),
+            );
+            self.metadata_lookahead(
+                children.iter().filter(|(_, (_, _, peer))| !*peer),
+                Some(parent),
+                urls,
+            );
+        }
+    }
+
+    fn metadata_lookahead<'a>(
+        &self,
+        children: impl Iterator<Item = (&'a String, &'a (String, bool, bool))>,
+        parent: Option<&Package>,
+        urls: &mut Vec<String>,
+    ) {
+        for (name, (range, optional, _)) in children {
+            if urls.len() == io::MAX_PREFETCHES {
+                break;
+            }
             let range = self.edge_range(parent, name, range);
             let Some(target) = self.prefetch_name(parent, name, &range, *optional) else {
                 continue;
             };
-            self.downloads.prefetch(
-                &self.metadata_url(&target),
-                false,
-                self.refresh,
-                &self.registry,
-            );
+            let url = self.metadata_url(&target);
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
         }
     }
 
