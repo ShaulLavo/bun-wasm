@@ -90,7 +90,7 @@ Reproduce, then size each reservation so host/shadow stays at or below 1.9:
 | `Array.prototype.flat` | 224 | 48 | `JS_FlattenIntoArray` 64 | 180 | 1.24 |
 | Async recursion | 1,360 | 566 | `async_func_resume` 128 | 819 | 1.66 |
 
-The budget is the host's choice. `crates/bunwasm-engine-quickjs/src/vm.rs`
+The budget is the host's choice. `crates/bunwasm-runtime/src/engine_quickjs.rs`
 uses `BUN_WASM_STACK_KIB` when the host sets it, and 152 KiB otherwise. The same
 variable sets JSC's budget below; the two engines have different defaults. The
 defaults fit wasmtime's 512 KiB default stack, so `wasmtime run` as in the README
@@ -114,19 +114,20 @@ depths.
 `BUN_WASM_STACK_KIB` is clamped to 7 MiB in both engines, below the 8 MiB shadow
 stack, so no value can wrap to "no limit". Values that are not positive decimal
 numbers keep the default. The clamp keeps the guard alive, but it does not make a
-budget fit the host: a budget larger than the host stack allows traps as before. The browser executor (`web/src/bun-executor.ts`) retains QuickJS's 152 KiB
-default on V8 and Gecko Firefox. It passes 32 KiB on other hosts. In WebKit on the Mac with every function in its first tier, getters,
+budget fit the host: a budget larger than the host stack allows traps as before. The browser executor (`web/src/engine-stack-budget.ts`) passes 32 KiB to
+QuickJS on WebKit and unmeasured hosts. V8 and desktop Firefox keep QuickJS's
+152 KiB default. Firefox retains the conservative 192 KiB JSC budget. In WebKit on the Mac with every function in its first tier, getters,
 `JSON.stringify` and `toString` reentry trap at 50 KiB, and the fixture's
 `JSON.stringify` traps at 45 KiB while building its RangeError, so the room there is
 about 43 to 47 KiB. At 40 KiB (1.25 times 32) every path and fixture still passes.
 Linux WebKit under `ulimit -s 512` has more room (54 KiB for its tightest path).
-Firefox 157 on Linux was measured on 2026-11-08. All 25 recursion paths in
-`tests/stack-depth.js` recover in fresh browser contexts at 190 KiB, 1.25 times
-the 152 KiB default. The `Array.isArray` and console controls complete. The
-other paths throw catchable errors instead of host traps. At 32 KiB, even 200
-plain calls fail, and framework module loading can exhaust the guest guard.
-Firefox on iOS uses WebKit and keeps the smaller budget. Unmeasured hosts also
-keep the smaller budget.
+Desktop Firefox was measured with all 25 recursion cases below, each in a fresh
+browser context. At both 152 KiB and a 190 KiB margin, every case completed or
+threw a catchable exception and continued. Both stack-overflow fixtures also
+passed at 190 KiB. Giving Firefox the smaller WebKit budget needlessly rejects
+React Router's ordinary CommonJS dependency loading. Firefox on Android remains unmeasured and keeps the smaller budget. Firefox on iOS
+still uses WebKit and keeps it too. Unknown Firefox platforms also keep the
+smaller budget.
 
 ## JSC
 
@@ -231,7 +232,7 @@ the same on every host with that budget:
 | Async recursion | trap 335 | 190 | 36 | 5,238 |
 
 With the 152 KiB default, every path is still caught when wasmtime's stack is cut
-to 320 KiB; at 256 KiB plain calls trap. The fixture suites pass with the reduced Safari browser
+to 320 KiB; at 256 KiB plain calls trap. The fixture suites pass with the browser
 budgets: `BUN_WASM_STACK_KIB=32` for QuickJS and `192` for JSC.
 
 ## Reproduce
@@ -257,18 +258,6 @@ scripts/test.sh --no-build --engine browser stack-overflow stack-overflow-consol
 
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
 sets the host stack independently of the linked shadow stack.
-
-The Firefox QuickJS regression and cold overflow-safety controls use the built
-playground and the existing stack-depth fixture:
-
-```sh
-source env.sh
-bun web/tests/browser-quickjs-stack.ts firefox chromium
-QUICKJS_STACK_KIB=190 bun web/tests/browser-quickjs-stack.ts firefox
-```
-
-Run browser commands through the machine's heavy-job wrapper. Each check closes
-its browser contexts and asset server, including on failure or interruption.
 
 ## Blocking browser check
 
