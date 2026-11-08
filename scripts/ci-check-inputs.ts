@@ -5,6 +5,7 @@ import { parseCheck, type NativeProfile } from "./test-checks";
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
   if (check.owner === "native") return [`${check.path}/`];
+  if (check.owner === "browser-guest") return check.profile ? [check.path] : [];
   return check.owner === "runtime" ? [check.path] : [];
 }
 
@@ -41,7 +42,7 @@ export function nativeCheckInputsAt(ref: string, profile?: NativeProfile): strin
     if (object !== manifest.object || kind !== "blob" || !Number.isSafeInteger(length) || length < 0 || blobs[start + length] !== 10) throw new Error(`Invalid check blob at ${ref}: ${manifest.path}`);
     const check = parseCheck(JSON.parse(blobs.toString("utf8", start, start + length)), basename(manifest.path));
     offset = start + length + 1;
-    if (profile !== undefined && (check.owner !== "native" || (check.profile ?? "split") !== profile)) return [];
+    if (profile !== undefined && ((check.owner !== "native" && check.owner !== "browser-guest") || (check.profile ?? "split") !== profile)) return [];
     const inputs = checkInputPaths(check);
     return inputs.length ? inputs.concat([manifest.path]) : [];
   });
