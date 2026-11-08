@@ -906,7 +906,7 @@
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   // A group guest's workers share Module and Memory objects through its host. The polyfill
   // owns them, so it loads only when a worker actually sends or receives one.
-  if (!internal.sharedObjects && native.wasm.sharedMemorySupported()) {
+  if (!internal.sharedObjects && native.wasm?.sharedMemorySupported?.()) {
     const group = () => { internal.require("webassembly"); return internal.groupSharedObjects; };
     internal.sharedObjects = {
       begin: () => group().begin(),
