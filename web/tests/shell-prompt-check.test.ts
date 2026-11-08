@@ -110,7 +110,7 @@ const transcriptCallers = [
   "web/tests/bench-engines.mjs", "web/tests/bench-memory.mjs", "web/tests/browser-async-context-runtime.ts",
   "web/tests/browser-crypto.mjs", "web/tests/browser-engine.mjs", "web/tests/browser-install.mjs",
   "web/tests/browser-installer-links.ts", "web/tests/browser-memory.mjs", "web/tests/browser-module-records.ts", "web/tests/browser-module-retry.ts",
-  "web/tests/browser-prepare-context.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
+  "web/tests/browser-prepare-context.ts", "web/tests/browser-solid-stack.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
   "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts", "web/tests/browser-next-production.ts",
   "web/tests/shell-stop-check.ts",
