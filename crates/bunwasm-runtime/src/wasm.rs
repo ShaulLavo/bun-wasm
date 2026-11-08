@@ -1,3 +1,8 @@
+mod nested;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+mod group;
+
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
 use wasmi::{
@@ -466,19 +471,38 @@ impl Runtime {
 }
 
 pub fn install(table: &mut Table) {
+    table.add("wasm.sharedMemorySupported", |_| {
+        Ok(Val::Bool(cfg!(all(
+            target_arch = "wasm32",
+            target_feature = "atomics"
+        ))))
+    });
+    table.add("wasm.createSharedMemory", move |a| {
+        nested::create_memory(a.u32(0)?, a.u32(1)?)
+    });
     let runtime = Rc::new(RefCell::new(Runtime::default()));
     let rt = runtime.clone();
     table.add("wasm.validate", move |a| {
-        Ok(Val::Bool(
-            Module::new(&rt.borrow().engine, a.bytes(0)?).is_ok(),
-        ))
+        let bytes = a.bytes(0)?;
+        if nested::shared(bytes) {
+            return Ok(Val::Bool(nested::validate(bytes)));
+        }
+        Ok(Val::Bool(Module::new(&rt.borrow().engine, bytes).is_ok()))
     });
     let rt = runtime.clone();
     table.add("wasm.compile", move |a| {
-        rt.borrow_mut().compile(a.bytes(0)?)
+        let bytes = a.bytes(0)?;
+        if nested::shared(bytes) {
+            return nested::compile(bytes);
+        }
+        rt.borrow_mut().compile(bytes)
     });
     let rt = runtime.clone();
     table.add("wasm.instantiate", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::instantiate(id, a.array(1).unwrap_or(&[]), a.u32(2)?);
+        }
         rt.borrow_mut()
             .instantiate(a.u32(0)?, a.array(1).unwrap_or(&[]))
     });
@@ -493,6 +517,10 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.call", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::call(id, a.array(1).unwrap_or(&[]), a.u32(2)?);
+        }
         rt.borrow_mut().call(a.u32(0)?, a.array(1).unwrap_or(&[]))
     });
     let rt = runtime.clone();
@@ -506,6 +534,10 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.functionIdentity", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::function(id, a.str(1)?);
+        }
         let mut rt = rt.borrow_mut();
         let function = rt
             .guest(a.u32(0)?)?
@@ -597,16 +629,28 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.memorySpan", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::span(id);
+        }
         rt.borrow().memory_span(a.u32(0)?)
     });
     let rt = runtime.clone();
     table.add("wasm.memoryIdentity", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::memory_identity(id);
+        }
         let mut rt = rt.borrow_mut();
         let memory = rt.guest(a.u32(0)?)?.memory(&rt.store, a.str(1)?)?;
         Ok(Val::Num(rt.intern_memory(memory) as f64))
     });
     let rt = runtime.clone();
     table.add("wasm.growMemory", move |a| {
+        let id = a.u32(0)?;
+        if nested::owns(id) {
+            return nested::grow(id, a.u32(1)?);
+        }
         let mut rt = rt.borrow_mut();
         let memory = rt.memory(a.u32(0)?)?;
         let old = memory

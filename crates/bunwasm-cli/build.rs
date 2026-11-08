@@ -169,6 +169,15 @@ fn split_entry() {
     println!("cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/libwasi-emulated-getpid.a");
     if shared_group() {
         println!("cargo:rustc-link-arg-bin=bun=--export=errno_location");
+        for name in [
+            "bun_futex_wait32",
+            "bun_futex_wait64",
+            "bun_futex_wake",
+            "bun_core_bind_nested",
+            "bun_nested_dispatch",
+        ] {
+            println!("cargo:rustc-link-arg-bin=bun=--export={name}");
+        }
     }
     for name in std::fs::read_to_string(exports).unwrap().lines() {
         // A PIE member imports its stack pointer; the side shares that same imported global.

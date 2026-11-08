@@ -257,6 +257,10 @@ impl Engine for QuickJs {
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
         // SAFETY: the context and its runtime are live and retained by Inner.
         let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        unsafe {
+            qjs::JS_SetCanBlock(runtime_raw, true)
+        };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
@@ -500,6 +504,24 @@ impl Engine for QuickJs {
                 JS_bunwasm_NewWasmMemoryBuffer(self.raw(), data, length),
             )
         }
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    fn nested_execute(&self, operation: &V, callback: &V) -> Result<V, V> {
+        crate::nested_bridge::execute(self, operation, callback)
+    }
+
+    unsafe fn shared_wasm_memory_buffer(&self, data: *mut u8, length: usize) -> Result<V, V> {
+        unsafe extern "C" {
+            fn JS_bunwasm_NewSharedWasmMemoryBuffer(
+                ctx: *mut qjs::JSContext,
+                data: *mut u8,
+                length: usize,
+            ) -> qjs::JSValue;
+        }
+        // SAFETY: the core validated this session's stable region and retains it
+        // until the member, engine roots and host instances have all stopped.
+        self.wrap(unsafe { JS_bunwasm_NewSharedWasmMemoryBuffer(self.raw(), data, length) })
     }
 
     fn detach_wasm_memory_buffer(&self, v: &V) -> bool {

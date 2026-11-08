@@ -240,6 +240,7 @@ impl Fixture {
         let mut store = Store::new(
             &engine,
             Host {
+                nested: crate::nested::State::default(),
                 wasi: wasi.build_p1(),
                 watches,
                 net,

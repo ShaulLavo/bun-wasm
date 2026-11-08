@@ -53,6 +53,10 @@ fn eval_arguments<E: Engine>(e: &E, args: &[E::Value]) -> Result<(String, String
 
 pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
     let mut list: Vec<(&'static str, ValueFn<E>)> = Vec::new();
+    list.push((
+        "wasmNestedExecute",
+        Rc::new(|e: &E, args: &[E::Value]| e.nested_execute(&arg(e, args, 0), &arg(e, args, 1))),
+    ));
     let c = core.clone();
     list.push((
         "compileCjs",
@@ -229,7 +233,15 @@ pub(crate) fn bootstrap<E: Engine>(
     e.set(
         &native,
         "wasmMemoryBuffer",
-        e.new_function("wasmMemoryBuffer", wasm_memory_buffer(memory_span)),
+        e.new_function("wasmMemoryBuffer", wasm_memory_buffer(memory_span.clone())),
+    )?;
+    e.set(
+        &native,
+        "wasmSharedMemoryBuffer",
+        e.new_function(
+            "wasmSharedMemoryBuffer",
+            wasm_memory_buffer(memory_span.clone()),
+        ),
     )?;
     let mut groups = std::collections::HashMap::new();
     for (name, function) in functions {
@@ -256,14 +268,19 @@ pub(crate) fn bootstrap<E: Engine>(
 /// session's memory resource; JavaScript never supplies an address.
 fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
     Rc::new(move |e: &E, args: &[E::Value]| {
+        let span = memory_span(e, &[arg(e, args, 0)])?;
+        let shared = e.to_val(&e.get(&span, "shared")?) == Val::Bool(true);
+        let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
+        if shared {
+            // SAFETY: group-backed resource storage stays stable and session-leased.
+            return unsafe { e.shared_wasm_memory_buffer(data, length) };
+        }
         let previous = arg(e, args, 1);
         if !e.is_undefined(&previous) && !e.detach_wasm_memory_buffer(&previous) {
             return Err(e.error_value(&NativeError::type_error(
                 "Expected a WebAssembly.Memory buffer",
             )));
         }
-        let span = memory_span(e, &[arg(e, args, 0)])?;
-        let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
         // SAFETY: the bytes lie inside this process's linear memory. Core's store keeps
         // them until the session ends and moves them only by growth, after which the
         // WebAssembly polyfill detaches this buffer before user code runs.

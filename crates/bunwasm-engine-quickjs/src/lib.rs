@@ -224,6 +224,8 @@ use driver::{Core, Entry};
 mod engine;
 mod loader;
 mod natives;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+mod nested_bridge;
 #[allow(dead_code, unexpected_cfgs)]
 #[path = "../../bunwasm-runtime/src/ops.rs"]
 mod ops;
@@ -245,6 +247,13 @@ pub extern "C" fn quickjs_register() {
         42,
         "side constructors once"
     );
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    unsafe {
+        unsafe extern "C" {
+            fn bun_core_bind_nested(dispatch: extern "C" fn(u32, u32, u32) -> u32);
+        }
+        bun_core_bind_nested(nested_bridge::dispatch);
+    }
     unsafe { bun_core_bind_engine(quickjs_run) };
 }
 

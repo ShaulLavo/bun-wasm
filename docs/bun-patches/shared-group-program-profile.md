@@ -48,3 +48,15 @@ BoringSSL, sized delete and libc++ verbose abort, with the same free/diagnostic/
 behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. The shared crypto build omits the
 non-atomic SDK C++ archives. Unknown runtime dependencies fail the link. Target
 feature admission and selected-member link-map proof remain enabled.
+
+The real group-core admission also needs the reviewed member stack-bound binding
+from bun-wasm `36b0e20cef8d6a047ed90a0638ad9acf43583a05`. Reuse its exact host
+change, including the core-only GOT metadata exception and negative side tests.
+Only `GOT.mem.__stack_low` and `GOT.mem.__stack_high` receive the actual carved
+member stack bounds. Sides do not get the exception. Existing profile, feature,
+maximum, growth and library admission remains closed.
+
+The matching core metadata parser repair is reused from reviewed bun-wasm commit
+`38e33e7802ff7801fc9607cee0855eaf198d1f56`. CoreLayout reads the already-admitted
+group metadata rather than the deliberately narrower paired-side parser.
+The paired-side parser's closed subsection admission is unchanged.

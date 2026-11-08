@@ -170,7 +170,11 @@ impl Transport {
         Ok(())
     }
 
-    #[cfg(any(test, not(feature = "engine-split")))]
+    #[cfg(any(
+        test,
+        not(feature = "engine-split"),
+        all(target_arch = "wasm32", target_feature = "atomics")
+    ))]
     pub fn read(&self, pointer: u32, bytes: u32) -> Result<Vec<u8>, Status> {
         self.allocation(pointer, bytes)?.copy()
     }

@@ -11,6 +11,7 @@ mod linked;
 #[path = "../../bunwasm-cli/max_memory.rs"]
 mod max_memory;
 mod net;
+mod nested;
 mod process;
 mod shm;
 mod slots;
@@ -53,6 +54,7 @@ BUN_WASM_HOST_STACK_KIB sets the host wasm stack limit (default 16384 KiB).
 ";
 
 pub struct Host {
+    pub(crate) nested: nested::State,
     pub wasi: WasiP1Ctx,
     pub net: net::Net,
     pub memory: Option<guest::GuestMemory>,
@@ -369,6 +371,7 @@ fn run_module_instance(
     processes.join_memory_group(member.as_ref().map(shm::MemberLease::group));
     let watches = fs_watch::Watches::new(net.notify());
     let host = Host {
+        nested: nested::State::default(),
         wasi: wasi.build_p1(),
         net,
         functions: Vec::new(),
@@ -431,6 +434,7 @@ fn run_store(
     slots::add_import(&mut linker, &mut *store)?;
     slots::add_shell_imports(&mut linker)?;
     shm::add_imports(&mut linker)?;
+    nested::add_imports(&mut linker)?;
     // SAFETY: run_module_instance holds the member's group backing lease (`_backing`) from
     // before this Store exists until after it is destroyed.
     let (instance, member) = unsafe {
