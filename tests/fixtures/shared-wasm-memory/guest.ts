@@ -9,5 +9,5 @@ await import('./worker-refusals.ts');
 await import('./binding-controls.ts');
 await import('./index.ts');
 await import('./mixed-backend.ts');
-await import('./metadata-budget.ts');
 await import('./instance-exports.ts');
+await import('./metadata-budget.ts');
