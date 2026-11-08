@@ -153,6 +153,10 @@ const INTERRUPT_POLLS: u32 = 8;
 #[derive(Clone)]
 pub struct QuickJs(Rc<Inner>);
 
+/// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) type NestedEngine = QuickJs;
+
 impl QuickJs {
     fn ctx(&self) -> &Ctx<'static> {
         &self.0.ctx

@@ -119,9 +119,10 @@ impl Programs {
             side == profile,
             "paired {kind:?} engine profile {side:?} does not match core profile {profile:?}"
         );
-        // Only the QuickJS pair is qualified for shared groups; JSC and SpiderMonkey inputs have no atomics.
+        // QuickJS and JSC have shared-group producers; SpiderMonkey inputs have no atomics.
         ensure!(
-            profile == group::Profile::Split || kind == ProgramKind::QuickJs,
+            profile == group::Profile::Split
+                || matches!(kind, ProgramKind::QuickJs | ProgramKind::Jsc),
             "a {kind:?} pair is not qualified for the shared-group profile"
         );
         let group = match profile {
