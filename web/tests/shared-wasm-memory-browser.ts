@@ -57,7 +57,7 @@ function serve(out: string): number {
   return server.port!;
 }
 
-type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; groups?: readonly { members: number; retained: number; regions: number; holds: number; pins: number; watches: number }[] };
+type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly { members: number; retained: number; regions: number; holds: number; pins: number; watches: number }[] };
 
 async function result(page: Page): Promise<Result> {
   await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: 240_000 });
@@ -88,9 +88,9 @@ try {
     assert.equal(value.code, 0, value.stderr ?? value.error);
     assert.equal(value.stdout, await readFile(join(fixtureSource, "expected-browser.txt"), "utf8"));
     assert.deepEqual(consoleErrors, []);
-    for (const group of value.groups ?? []) {
-      assert.deepEqual([group.members, group.retained, group.regions, group.holds, group.pins, group.watches], [0, 0, 0, 0, 0, 0], JSON.stringify(group));
-    }
+    assert.ok((value.peak?.regions ?? 0) > 0, "the owner never saw a real nested region");
+    assert.ok((value.peak?.committedBytes ?? 0) > 0, "the owner never charged group backing");
+    assert.deepEqual(value.groups, [], "members, regions, holds and pins are released after physical stop");
   }
 } finally {
   clearTimeout(deadline);

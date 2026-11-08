@@ -335,16 +335,29 @@ export class NestedHost {
 
   private reserve(initial: number, maximum: number): Reply {
     if (initial > maximum || maximum > MAX_GROUP_PAGES) throw new Error("region admission: Inval");
-    const memory = this.shared();
+    // A four-GiB reservation overflows the provider's 32-bit length, as it does natively.
+    if (maximum >= MAX_GROUP_PAGES) throw new Error("region admission: NoMem");
     const out = this.allocate(8);
     try {
       const status = this.region().shm_create(Math.max(maximum, 1) * PAGE_BYTES, PAGE_BYTES, out);
       if (status < 0) throw new Error(`region admission: ${SHM_ERRORS.get(-status) ?? status}`);
-      const view = new DataView(memory.buffer);
-      const region = new Region(() => this.shared(), view.getUint32(out, true), view.getUint32(out + 4, true), maximum, initial);
-      return { Handle: this.regions.insert(region) };
+      return { Handle: this.publish(this.createdRegion(out, initial, maximum)) };
     } finally {
-      this.inCore(entries => entries.free(out, 8, FRAME_ALIGN));
+      if (!this.coreFailed) this.inCore(entries => entries.free(out, 8, FRAME_ALIGN));
+    }
+  }
+
+  private createdRegion(out: number, initial: number, maximum: number): Region {
+    const view = new DataView(this.shared().buffer);
+    return new Region(() => this.shared(), view.getUint32(out, true), view.getUint32(out + 4, true), maximum, initial);
+  }
+
+  /** An unpublished region must not stay charged to the group. */
+  private publish(region: Region): number {
+    try { return this.regions.insert(region); }
+    catch (error) {
+      this.region().shm_detach(region.handle);
+      throw error;
     }
   }
 

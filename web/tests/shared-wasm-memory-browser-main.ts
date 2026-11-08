@@ -38,15 +38,25 @@ async function run() {
     stdout(data) { stdout += decoder.decode(data, { stream: true }); },
     stderr(data) { stderr += decoder.decode(data, { stream: true }); },
   });
-  const result = await job.done;
-  const wallMs = performance.now() - started;
+  // Owner-side counters while members live: proof real regions were reserved and charged.
   const processes = await runtime.processes();
+  const peak = { groups: 0, regions: 0, holds: 0, committedBytes: 0 };
+  const sampling = setInterval(() => {
+    const groups = processes.memoryGroups();
+    peak.groups = Math.max(peak.groups, groups.length);
+    peak.regions = Math.max(peak.regions, groups.reduce((sum, group) => sum + group.regions, 0));
+    peak.holds = Math.max(peak.holds, groups.reduce((sum, group) => sum + group.holds, 0));
+    peak.committedBytes = Math.max(peak.committedBytes, groups.reduce((sum, group) => sum + group.committedBytes, 0));
+  }, 1);
+  const result = await job.done;
+  clearInterval(sampling);
+  const wallMs = performance.now() - started;
   // The broker releases a member only after its physical stop, which trails run.done.
   const deadline = performance.now() + 10_000;
   while (performance.now() < deadline && processes.memoryGroups().some(group => group.members > 0 || group.retained > 0)) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  return { ...result, wallMs, stdout, stderr, groups: processes.memoryGroups() };
+  return { ...result, wallMs, stdout, stderr, peak, groups: processes.memoryGroups() };
 }
 
 void run().then(
