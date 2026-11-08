@@ -28,6 +28,15 @@ test("startup gate rejects invalid budgets", () => {
   for (const limit of [NaN, Infinity, 0, -1]) expect(() => checkStartupLimit(samples, limit)).toThrow("positive and finite");
 });
 
+test("startup gate rejects every invalid duration before taking a median", () => {
+  for (const cache of ["cold", "warm"] as const) {
+    for (const duration of [NaN, Infinity, -Infinity, -1]) {
+      const samples = [sample(cache, duration), sample(cache, 100), sample(cache, 200), sample(cache === "cold" ? "warm" : "cold", 90)];
+      expect(() => checkStartupLimit(samples, 6900)).toThrow("sample durations must be nonnegative and finite");
+    }
+  }
+});
+
 test("a sample has one deadline across all render and interaction steps", async () => {
   await expect(sampleDeadline(new Promise<never>(() => {}), 10)).rejects.toThrow("sample exceeded 10 ms");
   await expect(sampleDeadline(Promise.resolve("rendered"), 100)).resolves.toBe("rendered");

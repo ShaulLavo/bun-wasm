@@ -19,6 +19,7 @@ export interface StartupSample {
 
 export function median(values: readonly number[]): number {
   assert.ok(values.length > 0, "cannot summarize missing samples");
+  assert.ok(values.every(value => Number.isFinite(value) && value >= 0), "sample durations must be nonnegative and finite");
   const ordered = values.toSorted((a, b) => a - b);
   const middle = Math.floor(ordered.length / 2);
   return ordered.length % 2 ? ordered[middle]! : (ordered[middle - 1]! + ordered[middle]!) / 2;
@@ -158,15 +159,23 @@ async function main(): Promise<void> {
       await save();
       console.error(`React rendered ${sample.renderMs.toFixed(1)} ms; interactive ${sample.interactiveMs.toFixed(1)} ms`);
     } catch (error) {
-      errors.push(JSON.stringify({ frames: await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.locator("body").innerText({ timeout: 1000 }).catch(String) }))), page: await page.evaluate(() => ({
-        status: document.querySelector("#status")?.textContent,
-        terminal: document.querySelector(".xterm-rows")?.textContent,
-        frames: Array.from(document.querySelectorAll("iframe"), frame => ({ url: frame.src })),
-        phases: performance.getEntriesByType("measure").map(entry => ({ name: entry.name, duration: entry.duration })),
-      })).catch(() => "diagnostics unavailable") }));
+      errors.push(await sampleDeadline(failureDiagnostics(page), 1000).catch(() => "diagnostics unavailable"));
       throw error;
     }
   }
+}
+
+async function failureDiagnostics(page: Page): Promise<string> {
+  const frames = await Promise.all(page.frames().map(async frame => ({
+    url: frame.url(), text: await frame.locator("body").innerText({ timeout: 1000 }).catch(String),
+  })));
+  const state = await page.evaluate(() => ({
+    status: document.querySelector("#status")?.textContent,
+    terminal: document.querySelector(".xterm-rows")?.textContent,
+    frames: Array.from(document.querySelectorAll("iframe"), frame => ({ url: frame.src })),
+    phases: performance.getEntriesByType("measure").map(entry => ({ name: entry.name, duration: entry.duration })),
+  }));
+  return JSON.stringify({ frames, page: state });
 }
 
 if (import.meta.main) await main();

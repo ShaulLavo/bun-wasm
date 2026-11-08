@@ -4,7 +4,7 @@ import { mkdtemp, rm, mkdir, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, options } from "./goals-matrix/run";
-import { renderedReact } from "./measure-react-startup";
+import { renderedReact, sampleDeadline } from "./measure-react-startup";
 
 let browser: Browser;
 let server: ReturnType<typeof Bun.serve>;
@@ -12,6 +12,7 @@ beforeAll(async () => {
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/broken") return new Response("broken startup", { status: 500 });
+    if (url.pathname === "/hung") return new Response("<body>hung page<script>while (true) {}</script>", { headers: { "content-type": "text/html" } });
     if (url.pathname === "/frame") return new Response(`<div id="root"><h1>Hello from bun.wasm</h1><button ${url.searchParams.has("inert") ? "" : `onclick="this.textContent='count is 1'"`}>count is 0</button></div>`, { headers: { "content-type": "text/html" } });
     return new Response(`<span id="server-dot" data-state="up"></span><iframe id="preview" src="/frame${url.search}"></iframe>`, { headers: { "content-type": "text/html" } });
   } });
@@ -62,4 +63,24 @@ test("maintained goals invocation rejects an HTTP failure and reaps its startup 
     expect(result.samples).toEqual([]);
     await expect(access(join(output, ".goals-matrix-lock"))).rejects.toThrow();
   } finally { await rm(scratch, { recursive: true, force: true }); }
+}, 10_000);
+
+test("a hung page cannot extend the sample deadline through failure diagnostics", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-react-hung-"));
+  const output = join(scratch, "result.json");
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  try {
+    child = Bun.spawn([process.execPath, "scripts/measure-react-startup.ts", "--url", new URL("/hung", server.url).href,
+      "--samples", "1", "--deadline-ms", "250", "--output", output], { stdout: "ignore", stderr: "ignore" });
+    expect(await sampleDeadline(child.exited, 5000)).toBe(1);
+    const result = await Bun.file(output).json();
+    expect(result.errors.join("\n")).toMatch(/sample exceeded 250 ms|Timeout 250ms exceeded/);
+    expect(result.errors.join("\n")).not.toContain("total deadline exceeded");
+    expect(result.cleanup.browserClosed).toBe(true);
+    expect(result.samples).toEqual([]);
+  } finally {
+    if (child?.exitCode === null) child.kill("SIGTERM");
+    await child?.exited;
+    await rm(scratch, { recursive: true, force: true });
+  }
 }, 10_000);
