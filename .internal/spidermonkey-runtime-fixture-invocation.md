@@ -59,3 +59,24 @@ those files is outside this task. Full-suite success is not claimed. The native
 C++ semantics driver and the unresolved arbitrary negative classic-script offset
 contract also remain separate gates. This note does not replace the full G3
 coverage list or waive any required runtime gate.
+
+## Bounded cancellation-check observation, November 8
+
+The parent's JavaScript quality run at `b0b2f5851abe475d12b0b8639688ea0c34457fac`
+passed 2,254 probes but failed the existing `SIGTERM stops the active fixture
+child before removing its scratch` check. Exit 143 matched. The immediate
+`process.kill(pid, 0)` presence assertion did not throw. The failed process's
+state was not captured, so a live survivor versus delayed reaping is unproved.
+
+Two bounded focused controls with process-state readback both passed without
+changing the fixture, deadline, or assertion. The complete integration review
+had also passed this source suite. Treat this observation as not reproduced,
+retain it rather than attribute a cause, and require a normal green final CI
+run before merge. Do not add a sleep, broaden the deadline, accept live PIDs,
+or hide diagnostics to make it pass.
+
+Commands and the original failure are retained under
+`/work/reports/wave-20261108/engines/spidermonkey-review-reconciliation/`:
+`javascript-quality.log`, `sigterm-control-1.log`, `sigterm-control-2.log`, and
+`pid-readback.ts`. The normal discovered owner remains blocking. If it fails
+again, capture that PID's actual state and parent before fixture teardown.
