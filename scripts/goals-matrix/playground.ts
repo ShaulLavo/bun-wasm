@@ -3,7 +3,7 @@ import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import type { Framework } from "./catalog";
 interface Playground {
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
-  previews: { serves(port: number): boolean; url(port: number): string };
+  previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
   term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
 }
@@ -67,6 +67,10 @@ function listener(): { listening: boolean; running: boolean; url: string | null 
   const listening = playground.previews.serves(5173);
   return { listening, running: playground.shell.running, url: listening ? playground.previews.url(5173) : null };
 }
+async function previewReady(): Promise<void> {
+  const state = await playground.previews.ready;
+  if (state !== "ready") throw new Error(`Preview transport is ${state}`);
+}
 export async function start(transport: Transport, text: string, timeoutMs: number): Promise<string> {
   await transport.useHost();
   const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined));
@@ -74,6 +78,7 @@ export async function start(transport: Transport, text: string, timeoutMs: numbe
   const token = await transport.evaluate<string>(expression(launch, text));
   const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
+  await transport.evaluate(expression(previewReady, undefined));
   return result.url;
 }
 function stop(): void {

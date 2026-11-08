@@ -55,3 +55,11 @@ test.each(["failed", "unsupported"])("a server start rejects a %s preview transp
   const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, Promise.resolve(state));
   await expect(start(transport, "starts without preview transport", 1000)).rejects.toThrow(`Preview transport is ${state}`);
 });
+
+test("a preview activation rejection keeps its original error", async () => {
+  const error = new Error("preview registration rejected");
+  const activation = Promise.reject(error);
+  void activation.catch(() => {});
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation);
+  await expect(start(transport, "starts with rejected activation", 1000)).rejects.toBe(error);
+});
