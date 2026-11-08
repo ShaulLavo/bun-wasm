@@ -1,7 +1,7 @@
 (function (internal: BunWasm.WasmInternal) {
   'use strict';
-  type MemoryState = { resource: number; generation: bigint | undefined } & (
-    { kind: 'unshared'; buffer: ArrayBuffer } | { kind: 'shared'; buffer: SharedArrayBuffer }
+  type MemoryState = { resource: number; generation: bigint | undefined; token?: number } & (
+    { kind: 'unshared'; buffer: ArrayBuffer } | { kind: 'shared'; buffer: SharedArrayBuffer; prefixes?: Map<number, WeakRef<SharedArrayBuffer>> }
   );
   type Callback = { callback: (...args: unknown[]) => unknown; results: BunWasm.WasmType[] };
   type Callable = (...args: unknown[]) => unknown;
@@ -172,18 +172,20 @@
       action(state);
     }
   }
+  function memoryResourceState(resource: number) {
+    const known = memoryResources.get(resource)?.deref();
+    if (known) return known;
+    const span = native.memorySpan(resource);
+    const state: MemoryState = span.shared
+      ? { kind: 'shared', resource, buffer: internal.native.wasmSharedMemoryBuffer(resource), generation: span.generation }
+      : { kind: 'unshared', resource, buffer: new ArrayBuffer(0), generation: undefined };
+    if (state.kind === 'shared') { memoryBufferStates.set(state.buffer, state); memoryBuffers.add(state.buffer); }
+    memoryResources.set(resource, new WeakRef(state));
+    return state;
+  }
   function rememberMemory(resource: number, memory: Memory) {
     const reference = new WeakRef(memory);
-    let state = memoryResources.get(resource)?.deref();
-    if (!state) {
-      const span = native.memorySpan(resource);
-      state = span.shared
-        ? { kind: 'shared', resource, buffer: internal.native.wasmSharedMemoryBuffer(resource), generation: span.generation }
-        : { kind: 'unshared', resource, buffer: new ArrayBuffer(0), generation: undefined };
-      if (state.kind === 'shared') { memoryBufferStates.set(state.buffer, state); memoryBuffers.add(state.buffer); }
-    }
-    memoryStates.set(memory, state);
-    memoryResources.set(resource, new WeakRef(state));
+    memoryStates.set(memory, memoryResourceState(resource));
     memories.set(resource, reference);
     memoryCleanup.register(memory, { resource, reference });
   }
@@ -376,15 +378,122 @@
       exports[name] = table;
       return;
     }
-    const resource = native.memoryIdentity(id, name);
-    let memory = memories.get(resource)?.deref();
-    if (!memory) {
-      const created: Memory = Object.create(Memory.prototype);
-      rememberMemory(resource, created);
-      memory = created;
-    }
-    exports[name] = memory;
+    exports[name] = memoryObject(native.memoryIdentity(id, name));
   }
+  function memoryObject(resource: number) {
+    const known = memories.get(resource)?.deref();
+    if (known) return known;
+    const created: Memory = Object.create(Memory.prototype);
+    rememberMemory(resource, created);
+    return created;
+  }
+  // Workers of one group exchange references to objects its shm service owns. Every member
+  // leases the same region and shares the same compiled code; nothing is copied.
+  const sharedLength = typeof SharedArrayBuffer === 'function' ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')!.get! : undefined;
+  const localMemories = new Map<number, number>();
+  const localModules = new Map<number, BunWasm.WasmModule>();
+  const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
+  function cloneError(reason: unknown) { return new DOMException(message(reason), 'DataCloneError'); }
+  function directoryToken(id: string, kind: string) {
+    const [prefix, value] = id.split('/');
+    const token = Number(value);
+    if (prefix !== kind || !Number.isInteger(token) || token <= 0) throw cloneError('Invalid shared object reference');
+    return token;
+  }
+  function attachedMemory(token: number) {
+    let resource = localMemories.get(token);
+    if (resource === undefined) {
+      try { resource = native.attachSharedMemory(token); }
+      catch (error) { throw cloneError(error); }
+      localMemories.set(token, resource);
+    }
+    const state = memoryResourceState(resource);
+    state.token = token;
+    return state;
+  }
+  function attachedModule(token: number) {
+    let info = localModules.get(token);
+    if (!info) {
+      try { info = native.attachSharedModule(token); }
+      catch (error) { throw cloneError(error); }
+      localModules.set(token, info);
+      moduleTokens.set(info, token);
+    }
+    // Structured clone gives each receipt a new Module over the same compiled code.
+    const module: Module = Object.create(Module.prototype);
+    modules.set(module, info);
+    return module;
+  }
+  function memoryPrefix(state: MemoryState, byteLength: number) {
+    if (state.kind !== 'shared') throw cloneError('Expected a shared WebAssembly.Memory');
+    refreshMemory(state);
+    if (sharedLength!.call(state.buffer) === byteLength) return state.buffer;
+    state.prefixes ??= new Map();
+    const known = state.prefixes.get(byteLength)?.deref();
+    if (known) return known;
+    let view: SharedArrayBuffer;
+    try { view = internal.native.wasmSharedMemoryBuffer(state.resource, byteLength); }
+    catch (error) { throw cloneError(error); }
+    state.prefixes.set(byteLength, new WeakRef(view));
+    memoryBufferStates.set(view, state);
+    memoryBuffers.add(view);
+    return view;
+  }
+  function beginPublication(): BunWasm.SharedPublication {
+    const fresh: (() => void)[] = [];
+    function withdrawing(token: number, forget: () => void) {
+      fresh.push(() => { forget(); native.withdrawShared(token); });
+      return token;
+    }
+    function publishedMemory(state: MemoryState) {
+      if (state.kind !== 'shared') throw cloneError('Only shared WebAssembly memories can be sent to a worker');
+      if (state.token !== undefined) return state.token;
+      let token: number;
+      try { token = native.publishSharedMemory(state.resource); }
+      catch (error) { throw cloneError(error); }
+      state.token = token;
+      localMemories.set(token, state.resource);
+      return withdrawing(token, () => { state.token = undefined; localMemories.delete(token); });
+    }
+    function publishedModule(info: BunWasm.WasmModule) {
+      if (info.backend !== 'nested') throw cloneError('Only WebAssembly modules with a shared memory can be sent to a worker');
+      const known = moduleTokens.get(info);
+      if (known !== undefined) return known;
+      let token: number;
+      try { token = native.publishSharedModule(info.id); }
+      catch (error) { throw cloneError(error); }
+      moduleTokens.set(info, token);
+      localModules.set(token, info);
+      return withdrawing(token, () => { moduleTokens.delete(info); localModules.delete(token); });
+    }
+    function reference(buffer: SharedArrayBuffer): BunWasm.SharedReference {
+      const state = memoryBufferStates.get(buffer);
+      if (!state) throw cloneError('Only WebAssembly shared memory buffers can be sent to a worker on this host');
+      return { id: `buf/${publishedMemory(state)}`, byteLength: sharedLength!.call(buffer) };
+    }
+    function referenceWasm(value: WebAssembly.Module | WebAssembly.Memory): BunWasm.SharedReference {
+      if (value instanceof Module) return { id: `mod/${publishedModule(description(value))}`, byteLength: 0 };
+      if (value instanceof Memory) return { id: `mem/${publishedMemory(memoryState(value))}`, byteLength: 0 };
+      throw cloneError('Expected a WebAssembly Module or Memory');
+    }
+    function abort() {
+      for (const undo of fresh.splice(0)) {
+        // An abort must not mask the clone error that caused it.
+        try { undo(); } catch { /* the member is stopping */ }
+      }
+    }
+    return { reference, referenceWasm, publish() { fresh.length = 0; }, abort };
+  }
+  internal.groupSharedObjects = {
+    begin: beginPublication,
+    read: reference => memoryPrefix(attachedMemory(directoryToken(reference.id, 'buf')), reference.byteLength),
+    readWasm(reference) {
+      if (reference.id.startsWith('mod/')) return attachedModule(directoryToken(reference.id, 'mod'));
+      return memoryObject(attachedMemory(directoryToken(reference.id, 'mem')).resource);
+    },
+    // The directory is synchronous: a published reference is readable at once.
+    wait: () => null,
+  };
   async function compile(source: unknown) { return new Module(source); }
   async function instantiate(source: unknown, imports?: Imports) {
     if (source instanceof Module) return new Instance(source, imports);

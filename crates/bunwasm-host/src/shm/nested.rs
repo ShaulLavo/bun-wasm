@@ -24,7 +24,7 @@ struct LogicalMemory {
 
 /// What every member attached to one memory shares. It names the group only by handle, so a
 /// directory entry holding it cannot keep the group alive.
-struct SharedRegion {
+pub(super) struct SharedRegion {
     backing: SharedBacking,
     maximum: u32,
     pages: AtomicU32,

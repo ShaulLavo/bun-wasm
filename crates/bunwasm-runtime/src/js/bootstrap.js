@@ -904,6 +904,17 @@
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
+  // A group guest's workers share Module and Memory objects through its host. The polyfill
+  // owns them, so it loads only when a worker actually sends or receives one.
+  if (!internal.sharedObjects && native.wasm.sharedMemorySupported()) {
+    const group = () => { internal.require("webassembly"); return internal.groupSharedObjects; };
+    internal.sharedObjects = {
+      begin: () => group().begin(),
+      read: reference => group().read(reference),
+      readWasm: reference => group().readWasm(reference),
+      wait: () => null,
+    };
+  }
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
