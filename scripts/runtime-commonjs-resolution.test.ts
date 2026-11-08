@@ -35,6 +35,7 @@ const runtime = bootstrap({
   engine: "host",
   mainPath: () => filename,
   moduleFormat: () => "json",
+  modulePath: (name: string) => name,
   readFileUtf8: (path: string) => readFileSync(path, "utf8"),
   resolve(specifier: string, from: string) {
     const resolved = createRequire(from).resolve(specifier);

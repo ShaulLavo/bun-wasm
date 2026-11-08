@@ -54,3 +54,20 @@ fn runtime_dynamic_options_roundtrip_in_preserved_extensions() {
     let (out, _) = prepare("console.log('unchanged');", "ordinary.mjs");
     assert!(out.preserved);
 }
+
+#[test]
+fn runtime_lowering_keeps_default_requests_and_static_grammar_errors() {
+    let source = "import ordinary from './page.html'; import page from './page.html' with { type: 'text' }; console.log(ordinary, page);";
+    let (out, requests) = prepare(source, "mixed.mjs");
+    assert_eq!(requests, ["./page.html"]);
+    let record = register(&out.code, "mixed.mjs", Loader::Js).unwrap();
+    assert!(record.code.contains("./page.html"));
+    assert!(record.code.contains("bunwasm:request:0"));
+    let bad = "import page from './page.html' with { type: 1 };";
+    assert!(
+        prepare_module(bad, "invalid.mjs", Loader::Js, true, true, &mut |_| {
+            "unused".to_owned()
+        })
+        .is_err()
+    );
+}

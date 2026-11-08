@@ -84,7 +84,7 @@ console.log("normalization, resolution and evaluation errors retain their identi
 
 for (const extension of ["ts", "js", "mjs"]) {
   await assert.rejects(import(`./location.${extension}`), error => {
-    assert.match(error.stack, new RegExp(`location\\.${extension}:3[:)]`));
+    assert.match(Bun.inspect(error), new RegExp(`location\\.${extension}:3[:)]`));
     return true;
   });
 }

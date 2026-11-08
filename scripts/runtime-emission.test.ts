@@ -175,7 +175,7 @@ test("converted Function adapter preserves construction and module origins", asy
         version: 6, alreadyPrepared: false, edits: source.includes("import") ? [source.indexOf("import"), 6, 16] : [],
         columns: [], fallback: null, spreadEval: 0, unhookedAwaitUsing: 0,
       }))),
-      resolve(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },
+      resolveImport(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },
       importModule: async (path: string) => ({ path }),
     },
     mainPath: "/entry.ts",
@@ -183,11 +183,12 @@ test("converted Function adapter preserves construction and module origins", asy
     defineGlobal(name: string, value: unknown) { context[name] = value; },
   };
   runInContext(emit(join(root, "crates/bunwasm-runtime/src/js/source_prepare.ts")), context)(internal);
+  runInContext(emit(join(root, "crates/bunwasm-runtime/src/js/import_requests.ts")), context)(internal);
   factory(internal);
   expect(runInContext('new Function("return 7")()', context)).toBe(7);
   expect(() => runInContext('new Function("return @")', context)).toThrow();
   expect(await runInContext('new Function("return import(\\\"./leaf\\\")")()', context)).toEqual({ path: "/loaded.ts" });
-  expect(resolutions).toEqual([["./leaf", "/entry.ts", false]]);
+  expect(resolutions).toEqual([["./leaf", "/entry.ts", "inferred"]]);
 });
 
 test("prepared spread eval preserves concurrent context and iterable semantics", async () => {

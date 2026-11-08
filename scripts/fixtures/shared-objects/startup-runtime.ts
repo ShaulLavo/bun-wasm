@@ -59,7 +59,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "stack_capability" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare") throw new Error(`Unexpected startup module ${name}`);
+      if (name !== "stack_capability" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare" && name !== "import_requests") throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },

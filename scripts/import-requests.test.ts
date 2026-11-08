@@ -69,3 +69,33 @@ test("rejects Symbols and malformed options without coercing attribute values", 
   }
   expect((await normalized(imports, "page", { with: { other: "ignored", type: "unknown" } })).mode).toBe("inferred");
 });
+
+test("a record factory created before bootstrap initializes without a new Hermes native method", async () => {
+  const context = vm.createContext({});
+  const loaderText = readFileSync(new URL("../crates/bunwasm-runtime/src/js/esm_loader.ts", import.meta.url), "utf8");
+  const loaderCode = new Bun.Transpiler({ loader: "ts" }).transformSync(loaderText.replace("(function (", "globalThis.factory = (function ("));
+  const factory = vm.runInContext(loaderCode, context);
+  const native = {
+    resolve: (specifier: string) => specifier,
+    load: () => ({ namespace: { value: "text" }, default: "text" }),
+    initMeta() {},
+  };
+  const loader = factory(native);
+  expect(Object.keys(native).sort()).toEqual(["initMeta", "load", "resolve"]);
+  const initialize = vm.runInContext(code, context);
+  const resolved: string[][] = [];
+  initialize({
+    native: {
+      engine: "hermes",
+      resolveImport(specifier: string, referrer: string, mode: string) { resolved.push([specifier, referrer, mode]); return "bunwasm:text:0"; },
+      importModule: (name: string) => loader.importName(name),
+    },
+    defineGlobal(name: string, value: unknown) { context[name] = value; },
+  });
+  const first = loader.dynamicImport("./page.html", "/entry.mjs", { with: { type: "text" } });
+  const second = vm.runInContext('__bunwasm_dynamicImport("/entry.mjs")("./page.html", { with: { type: "text" } })', context);
+  expect(first).not.toBe(second);
+  expect(await first).toBe(await second);
+  expect((await first).default).toBe("text");
+  expect(resolved).toEqual([["./page.html", "/entry.mjs", "text"], ["./page.html", "/entry.mjs", "text"]]);
+});

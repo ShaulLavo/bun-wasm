@@ -180,12 +180,11 @@ pub fn public_transpile(
         loader,
         None,
         false,
-        if action == "transform" {
+        Compilation::from(if action == "transform" {
             Pass::Print
         } else {
             Pass::Scan
-        },
-        None,
+        }),
     )?;
     if action == "scanImports" {
         let scan: serde_json::Value = serde_json::from_str(&out.code).map_err(|e| e.to_string())?;
@@ -456,7 +455,7 @@ fn prepare_file(
     preparation: Preparation<'_>,
 ) -> Result<Transpiled, String> {
     let redirect = preparation.redirect_dynamic;
-    let mut run = |state: &mut State| {
+    let run = |state: &mut State| {
         run_with_scan(
             state,
             source,
@@ -464,8 +463,10 @@ fn prepare_file(
             loader,
             Some(collector),
             preserve_source,
-            Pass::Print,
-            Some(preparation),
+            Compilation {
+                pass: Pass::Print,
+                preparation: Some(preparation),
+            },
         )
         .map_err(String::from)
     };
@@ -580,8 +581,7 @@ fn run(
         loader,
         source_map,
         preserve_source,
-        Pass::Print,
-        None,
+        Pass::Print.into(),
     )
     .map_err(String::from)
 }
@@ -627,6 +627,20 @@ enum Pass {
     RegisterModule,
 }
 
+struct Compilation<'a> {
+    pass: Pass,
+    preparation: Option<Preparation<'a>>,
+}
+
+impl From<Pass> for Compilation<'_> {
+    fn from(pass: Pass) -> Self {
+        Self {
+            pass,
+            preparation: None,
+        }
+    }
+}
+
 /// The ES module `source` as a registration record: a script expression for
 /// engines without native ES modules, linked and evaluated by the runtime's
 /// `esm_loader.ts`. See `register.rs` for the format.
@@ -656,8 +670,7 @@ fn register_with(
                 loader,
                 Some(&mut collector),
                 false,
-                pass,
-                None,
+                pass.into(),
             )
         }))
     })
@@ -768,9 +781,12 @@ fn run_with_scan(
     loader: Loader,
     mut source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
-    pass: Pass,
-    mut preparation: Option<Preparation<'_>>,
+    compilation: Compilation<'_>,
 ) -> Result<Transpiled, Failure> {
+    let Compilation {
+        pass,
+        mut preparation,
+    } = compilation;
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _ast_scope = ast_alloc.enter();

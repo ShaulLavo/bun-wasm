@@ -39,7 +39,7 @@ declare namespace BunWasm {
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
-    resolveImport(specifier: string, referrer: string, mode: ImportMode): string;
+    resolveImport(specifier: string, referrer: string, mode: "inferred" | "text"): string;
     modulePath(name: string): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
