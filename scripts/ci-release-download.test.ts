@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { releaseCacheKey, releaseDownload } from "./ci-release-download";
+import { releaseCacheKey, releaseDownload as downloadRelease } from "./ci-release-download";
+
+function releaseDownload(url: string, options: Parameters<typeof downloadRelease>[1] = {}) {
+  return downloadRelease(url, { cache: undefined, ...options });
+}
 
 const url = "https://github.com/owner/project/releases/download/v1/input.tgz";
 const api = "https://api.github.com/repos/owner/project/releases/tags/v1";
