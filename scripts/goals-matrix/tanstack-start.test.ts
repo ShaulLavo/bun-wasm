@@ -27,7 +27,7 @@ async function launcherPort(port?: string): Promise<unknown> {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-tanstack-port-"));
   try {
     await mkdir(join(directory, ".output/server"), { recursive: true });
-    await writeFile(join(directory, "start.ts"), await readFile(new URL("../../sandbox/template-tanstack-start/start.ts", import.meta.url)));
+    await writeFile(join(directory, "start.ts"), await readFile(join(import.meta.dir, "../../sandbox/template-tanstack-start/start.ts")));
     await writeFile(join(directory, ".output/server/index.mjs"), "console.log(JSON.stringify({ port: process.env.PORT, nitroPort: process.env.NITRO_PORT }));");
     const env = { ...process.env };
     delete env.PORT;
