@@ -1,4 +1,4 @@
-import type { Engine } from "../../src/engine-kind";
+import type { Engine } from "../../src/engine-kind.js";
 
 export function engineStackBudgets(stack: string, userAgent: string): Partial<Record<Engine, string>> | null {
   if (/\n\s+at /.test(stack)) return null;

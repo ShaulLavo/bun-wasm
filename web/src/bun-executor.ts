@@ -8,7 +8,7 @@ import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
-import { engineStackBudgets } from "./engine-stack-budget";
+import { engineStackBudgets } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
