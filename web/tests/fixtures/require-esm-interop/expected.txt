@@ -2,3 +2,4 @@ true function function
 esm default 1
 2 nested default common named
 true 2 true
+public bundler unchanged

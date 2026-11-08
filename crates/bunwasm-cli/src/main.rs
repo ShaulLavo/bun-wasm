@@ -301,16 +301,16 @@ mod bun_transpiler {
                 write: false,
                 ..BuildArgs::default()
             };
-            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+            let bundle = || bunwasm_build::build(&args);
+            let namespace = || bunwasm_transpiler::with_require_esm_namespace(&meta, bundle);
+            let compile = || {
                 if AWAIT_HOOKS {
-                    bunwasm_transpiler::with_dynamic_import_referrer(path, || {
-                        bunwasm_build::build(&args)
-                    })
-                } else {
-                    bunwasm_build::build(&args)
+                    return bunwasm_transpiler::with_dynamic_import_referrer(path, namespace);
                 }
-            })
-            .map_err(|log| log.trim_end().to_owned())?;
+                namespace()
+            };
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, compile)
+                .map_err(|log| log.trim_end().to_owned())?;
             let code = out
                 .stdout
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
