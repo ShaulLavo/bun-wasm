@@ -142,11 +142,16 @@ test("metadata lookahead spans already resolved parents with narrow child lists"
     assert.equal(registry.trace.missedBarrier, false, "next resolved parent's metadata did not start before the current child response was released");
     assert.equal(registry.trace.requests.length, 40, "lookahead duplicated or speculated beyond known edges");
     assert.ok(registry.trace.peak <= 8, `metadata concurrency ${registry.trace.peak}`);
-    const lock = JSON.parse(readFileSync(join(directory, "bun.lock"), "utf8"));
+    const lock = Bun.JSONC.parse(readFileSync(join(directory, "bun.lock"), "utf8"));
+    assert.ok(lock && typeof lock === "object" && "packages" in lock);
+    const packages = lock.packages;
+    assert.ok(packages && typeof packages === "object");
     for (const name of Object.keys(registry.dependencies)) {
       const child = name.replace("parent-", "item-");
-      assert.equal(lock.packages[child][0], `${child}@1.0.0`);
-      assert.equal(lock.packages[name][0], `${name}@1.0.0`);
+      assert.ok(child in packages && Array.isArray(packages[child]));
+      assert.ok(name in packages && Array.isArray(packages[name]));
+      assert.equal(packages[child][0], `${child}@1.0.0`);
+      assert.equal(packages[name][0], `${name}@1.0.0`);
     }
     await assertClosed(registry.trace);
   } finally {
