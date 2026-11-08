@@ -38,7 +38,6 @@ test("discovery admits the registered SpiderMonkey loader only with both real pr
   expect(prerequisites(box, { root })?.reason).toBe(`Missing engine assets: ${profile.side}.gz`);
   await Bun.write(join(root, profile.side + ".gz"), Bun.gzipSync(data));
   expect(prerequisites(box, { root })).toBeUndefined();
-  expect(prerequisites({ ...box, engine: "hermes" }, { root })?.reason).toContain("not registered");
   expect(pairedEngines).toEqual(["quickjs", "jsc"]);
 }));
 

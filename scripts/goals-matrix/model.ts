@@ -87,7 +87,7 @@ export function validateReport(value: unknown): asserts value is Report {
   const deadlines = validateDeadlines(report.deadlines);
   const expected = new Set(inventory().map(boxId));
   const cells = array(report.cells);
-  if (cells.length !== expected.size) throw new Error("Report must include all 260 boxes");
+  if (cells.length !== expected.size) throw new Error(`Report must include all ${expected.size} boxes`);
   for (const cell of cells) {
     const box = validateCell(cell, deadlines);
     if (!expected.delete(boxId(box))) throw new Error(`Unknown or duplicate box ${boxId(box)}`);

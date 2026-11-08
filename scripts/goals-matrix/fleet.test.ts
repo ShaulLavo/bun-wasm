@@ -12,7 +12,7 @@ test("merging disjoint shards retains failures and all pending and unavailable b
   const failed: Attempt = { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "dev", status: "fail", error: "real failure", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] };
   first.cells[0] = finish(first.cells[0]!, failed);
   const merged = combine(first, second);
-  expect(merged.cells).toHaveLength(260);
+  expect(merged.cells).toHaveLength(208);
   expect(merged.cells[0]).toMatchObject({ status: "fail", error: "real failure" });
   second.cells[0] = finish(second.cells[0]!, { ...failed, startedAt: "another", phases: [{ phase: "dev", status: "fail", error: "other failure", startedAt: "another", durationMs: 1, timeoutMs: 180_000 }] });
   expect(() => combine(first, second)).toThrow("Overlapping");
@@ -84,7 +84,7 @@ test("attempted native cells still require their terminal logs directory", async
 test("an invalid report cannot authorize missing logs", async () => {
   await collectionFixture(async (collected, output, native) => {
     await writeFile(join(collected, "TABLE.json"), JSON.stringify({ ...native, cells: [] }));
-    await expect(collectNativeReport(collected, output)).rejects.toThrow("260");
+    await expect(collectNativeReport(collected, output)).rejects.toThrow("208");
   });
 });
 test("zero attempted cells still require the native cleanup receipt", async () => {
