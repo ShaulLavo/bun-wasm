@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 export const stableRuntimes = ["app-page", "app-route", "pages", "pages-api", "server"].map(name => `node_modules/next/dist/compiled/next-server/${name}.runtime.prod.js`);
@@ -38,7 +38,8 @@ function projectRelative(project: string, path: string): string {
 }
 
 export function assertRuntimeTrace(selected: ReadonlySet<string>): void {
-  for (const path of stableRuntimes) if (!selected.has(path)) throw new Error(`Required stable runtime missing from trace: ${path}`);
+  const required = "node_modules/next/dist/compiled/next-server/pages.runtime.prod.js";
+  if (!selected.has(required)) throw new Error(`Required stable runtime missing from trace: ${required}`);
   for (const path of alternateRuntimes) if (selected.has(path)) throw new Error(`Unused alternate runtime remains traced: ${path}`);
 }
 
@@ -72,7 +73,7 @@ function copyFile(source: string, destination: string): void {
   writeFileSync(destination, readFileSync(source));
 }
 
-export function stageTrace(project: string, destination: string): { selected: number; dependencies: number; selection: Record<string, string> } {
+export function stageTrace(project: string, destination: string): { selected: number; dependencies: number; dependencyBytes: number; excludedVariantBytes: number; selection: Record<string, string> } {
   const selection = assertPinnedSelection(project);
   const selected = tracedFiles(project);
   assertRuntimeTrace(selected);
@@ -81,7 +82,9 @@ export function stageTrace(project: string, destination: string): { selected: nu
   for (const path of files(join(project, ".next"))) copyFile(path, join(destination, projectRelative(project, path)));
   copyFile(join(project, "package.json"), join(destination, "package.json"));
   if (existsSync(join(destination, "node_modules/next/dist/bin/next"))) throw new Error("Restricted fixture unexpectedly copied the full Next package");
-  return { selected: selected.size, dependencies: dependencies.length, selection };
+  const dependencyBytes = dependencies.reduce((sum, path) => sum + statSync(join(destination, path)).size, 0);
+  const excludedVariantBytes = alternateRuntimes.reduce((sum, path) => sum + statSync(join(project, path)).size, 0);
+  return { selected: selected.size, dependencies: dependencies.length, dependencyBytes, excludedVariantBytes, selection };
 }
 
 if (import.meta.main) {

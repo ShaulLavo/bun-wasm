@@ -17,10 +17,15 @@ configuration. `next/dist/build/collect-build-traces.js` applies the named
 `next-server` exclusions before dependency analysis.
 
 `scripts/next-trace-fixture.ts` checks those installed pinned selectors, reads the
-generated trace manifests, rejects missing stable runtimes and alternate runtime
+generated trace manifests, requires the selected stable Pages runtime and rejects alternate runtime
 leaks, and copies only trace-selected dependencies into an isolated project. It
 moves the original dependency directory out of package resolution. The server
 fixture exercises production SSR from that restricted project. Omitting a
 required stable runtime is the negative control. Configuration and inventory
 regressions have a feature-owned blocking quality manifest. Timing and live
 correctness results are recorded by the lane, not inferred from these unit tests.
+
+Policy eligibility is not reachability. The config-policy test keeps all five
+stable variants eligible. The live Pages fixture does not require unused stable
+App Route files to appear in the trace. Its SSR route requires the stable Pages
+runtime, and restricted production execution tests the actual dependency closure.

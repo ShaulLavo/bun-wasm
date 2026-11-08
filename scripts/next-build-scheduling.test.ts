@@ -18,12 +18,14 @@ test("the pinned webpack starter traces stable runtimes, not alternate bundlers 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stableRuntimes, alternateRuntimes, assertRuntimeTrace, tracedFiles, selectedRuntime } from "./next-trace-fixture";
+import { stableRuntimes, alternateRuntimes, assertRuntimeTrace, tracedFiles, selectedRuntime, stageTrace } from "./next-trace-fixture";
 
 test("trace checks reject a required omission and an alternate-runtime leak", () => {
   const complete = new Set(stableRuntimes);
   expect(() => assertRuntimeTrace(complete)).not.toThrow();
-  for (const path of stableRuntimes) expect(() => assertRuntimeTrace(new Set(stableRuntimes.filter(file => file !== path)))).toThrow("Required stable runtime missing");
+  const pages = "node_modules/next/dist/compiled/next-server/pages.runtime.prod.js";
+  expect(() => assertRuntimeTrace(new Set([pages]))).not.toThrow();
+  expect(() => assertRuntimeTrace(new Set(stableRuntimes.filter(file => file !== pages)))).toThrow("Required stable runtime missing");
   for (const path of alternateRuntimes) expect(() => assertRuntimeTrace(new Set(stableRuntimes.concat([path])))).toThrow("Unused alternate runtime remains traced");
 });
 
@@ -59,7 +61,6 @@ test("staging copies only traced dependencies, not an available full package", (
     write(join(project, "package.json"), "{}");
     write(join(project, ".next/required-server-files.json"), JSON.stringify({ config: { experimental: { cpus: 1 } } }));
     write(join(project, ".next/next-server.js.nft.json"), JSON.stringify({ files: stableRuntimes.map(path => `../${path}`) }));
-    const { stageTrace } = require("./next-trace-fixture");
     expect(stageTrace(project, destination).dependencies).toBe(stableRuntimes.length);
     expect(tracedFiles(destination)).toEqual(new Set(stableRuntimes));
     for (const path of stableRuntimes) expect(Bun.file(join(destination, path)).size).toBe(8);
