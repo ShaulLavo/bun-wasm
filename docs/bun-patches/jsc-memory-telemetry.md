@@ -320,3 +320,11 @@ fixed at 1 after execution begins. Qualification checks the control's ordinal an
 total to the latest attempt; any subject must follow the control within those observations.
 Pending latest attempts retain their unavailable after-call fields. They do not manufacture a
 completed result or a latched subject. Unqualified records support no wrapped-libc attribution.
+
+The readout qualifier preserves the recorder's unknown values before any
+collection or allocation failure. `heap.sizeAfterLastCollection` may be
+unavailable until a collection runs. An observed first-failure-size sentinel is
+null only when that sample's failure count and category both report no failure.
+Its availability bit is still required. Neither case supplies a zero or
+establishes a failure attribution. Regression cases reject a missing observation
+and an unknown first-failure size paired with a nonzero count or category.

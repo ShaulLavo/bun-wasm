@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { allocationBoundaryBytes, allocationBoundaryDiagnostics, allocationBoundaryFromCounters, boundaryGenerationFindings, readAllocationBoundary,
   type AllocationBoundary } from "../web/src/jsc-allocation-boundary.ts";
 import { createMemoryReader } from "../web/src/memory-telemetry.ts";
+import { createMemoryChannel, createMemoryPublisher, readMemoryChannel } from "../web/src/memory-channel.ts";
 import { qualifyBinary, qualifyReadout } from "./jsc-allocation-boundary-qualify.ts";
 
 // Synthetic records and modules: they exercise the reader and qualifier, never a real guest.
@@ -127,6 +128,37 @@ test("after an allocation failure the cached record stays readable without enter
   expect(reader.finish().engineCounters["allocationBoundary.subject.resultNull"]).toBe(1);
 });
 
+test("the unchanged telemetry channel carries a complete armed JSC failure record", () => {
+  const subject = recorded(1124073472n, { failures: 1n, allocations: 0n }, { 2: 2n, 7: 1n, 12: 1n });
+  const f = telemetryFixture(record({ subject }));
+  const reader = createMemoryReader("jsc", f.core, f.side, 1073741824, undefined, allocationBoundaryCounters);
+  const channel = createMemoryChannel();
+  const snapshot = reader.sample();
+  const wide = { ...snapshot, engineCounters: Object.fromEntries(Object.entries(snapshot.engineCounters)
+    .map(([key, value]) => [key, value === null ? null : Number.MAX_SAFE_INTEGER])) };
+  const publisher = createMemoryPublisher(channel, { sample: () => wide, finish: () => ({ ...wide, terminal: true }) });
+  expect(channel.byteLength).toBe(8192);
+  expect(new TextEncoder().encode(JSON.stringify(wide)).byteLength).toBeGreaterThan(channel.byteLength);
+  const captured = publisher.capture(false, true);
+  expect(readMemoryChannel(channel)).toEqual(captured);
+  const terminal = publisher.finish();
+  expect(readMemoryChannel(channel)).toEqual(terminal);
+  expect(terminal?.engineCounters["allocationBoundary.subject.requestBytes"]).toBe(Number.MAX_SAFE_INTEGER);
+  expect(terminal?.memoryLimitBytes).toBe(1073741824);
+  expect(f.refreshes()).toBe(0);
+});
+
+test("grouped channel counters preserve dots, nulls and prototype-like names", () => {
+  const f = telemetryFixture(record());
+  const snapshot = createMemoryReader("jsc", f.core, f.side, 1073741824).sample();
+  const engineCounters = Object.fromEntries([["a", 1], ["a.x", 2], ["a..x", 3], [".x", 4], ["__proto__.x", 5], ["a.y", null]]);
+  const value = { ...snapshot, engineCounters };
+  const channel = createMemoryChannel();
+  const published = createMemoryPublisher(channel, { sample: () => value, finish: () => value }).capture(false, true);
+  expect(readMemoryChannel(channel)).toEqual(published);
+  expect(published?.engineCounters).toEqual(engineCounters);
+});
+
 test("a reader without the diagnostic keeps the existing JSC counters unchanged", () => {
   const f = telemetryFixture(record());
   const plain = createMemoryReader("jsc", f.core, f.side, null).sample();
@@ -218,6 +250,27 @@ test("readout qualification needs an acknowledged control in every JSC process",
   expect(qualifyReadout([snapshot(record({ misses: 2n }))], false).processes[0]?.findings).toEqual(["2 oversize calls in another VM"]);
   expect(qualifyReadout([{ id: "q", engine: "quickjs", engineFailure: null, engineCounters: {} }], false).findings).toEqual(["no JSC process snapshots"]);
   expect(qualifyReadout([null], false).findings).toContain("a snapshot is malformed");
+});
+
+test("readout preserves unknown prior collection and absent first-failure sizes", () => {
+  const noFailure = { 25: 0n, 28: unknown, 29: 0n, 33: 0n, 36: unknown, 37: 0n };
+  const control = recorded(1001n, { failures: 0n, allocations: 1n }, { ...noFailure,
+    1: allWords & ~(1n << 20n), 20: unknown });
+  const subject = recorded(25297737n, { failures: 1n, allocations: 0n }, { ...noFailure,
+    2: 2n, 3: 8n, 12: 1n, 33: 1n, 36: 25297737n, 37: 2n });
+  const value = snapshot(record({ control, subject }), typedArrayFailure);
+  const result = qualifyReadout([value], true);
+  expect(result.pass).toBe(true);
+  expect(result.processes[0]?.wrappedLibcNull).toBe(true);
+  expect(result.processes[0]?.control?.["heap.sizeAfterLastCollection"]).toBeNull();
+  expect(result.processes[0]?.control?.["coreBefore.firstFailureSize"]).toBeNull();
+  for (const field of ["coreBefore.failures", "coreBefore.firstFailureCategory"] as const) {
+    const invalid = { ...value, engineCounters: { ...value.engineCounters, [`allocationBoundary.control.${field}`]: 1 } };
+    expect(qualifyReadout([invalid], true).pass).toBe(false);
+  }
+  const missing = { ...value, engineCounters: { ...value.engineCounters,
+    "allocationBoundary.control.availability": Number(BigInt(control[1]!) & ~(1n << 28n)) } };
+  expect(qualifyReadout([missing], true).pass).toBe(false);
 });
 
 test("a JSC typed-array failure must match the latched subject; the core delta only marks a wrapped libc null", () => {
