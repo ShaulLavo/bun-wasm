@@ -1,4 +1,5 @@
 import type { Transport } from "./transport";
+import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import type { Framework } from "./catalog";
 interface Playground {
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
@@ -24,8 +25,9 @@ function readyState(): { ready: boolean; status: string; engine: string | null; 
   return { observedEngine, ready: typeof playground !== "undefined", status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
 }
 export async function ready(transport: Transport, engine: string, timeoutMs: number): Promise<unknown> {
+  if (!isEngine(engine)) throw new Error(`Engine is not registered: ${engine}`);
   const state = await until(() => transport.evaluate<ReturnType<typeof readyState>>(expression(readyState, undefined)), value => value.ready || /failed|missing/i.test(value.status), timeoutMs);
-  const label = engine === "browser" ? "Browser (native)" : engine === "quickjs" ? "QuickJS" : "JavaScriptCore";
+  const label = ENGINES[engine].name;
   if (!state.status.includes(label)) throw new Error(`Wrong running engine status: ${state.status}`);
   if (!state.ready || !/ready/.test(state.status) || state.engine !== engine || state.observedEngine !== engine) throw new Error(`Playground not ready for ${engine}: ${JSON.stringify(state)}`);
   return state;
