@@ -1,7 +1,7 @@
 (function (internal: BunWasm.WasmInternal) {
   'use strict';
   type MemoryState = { resource: number; generation: bigint | undefined; token?: number } & (
-    { kind: 'unshared'; buffer: ArrayBuffer } | { kind: 'shared'; buffer: SharedArrayBuffer; prefixes?: Map<number, WeakRef<SharedArrayBuffer>> }
+    { kind: 'unshared'; buffer: ArrayBuffer } | { kind: 'shared'; buffer: SharedArrayBuffer; plain?: true }
   );
   type Callback = { callback: (...args: unknown[]) => unknown; results: BunWasm.WasmType[] };
   type Callable = (...args: unknown[]) => unknown;
@@ -27,6 +27,8 @@
   });
   const memoryBuffers = new WeakSet<ArrayBuffer | SharedArrayBuffer>();
   internal.isWasmMemoryBuffer = value => (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) && memoryBuffers.has(value);
+  // Tables and Globals are capabilities of one member. They have no clone representation.
+  internal.isWasmCapability = value => tableStates.has(value as Table) || globalStates.has(value as Global);
   class CompileError extends Error { constructor(message: string) { super(message); this.name = 'CompileError'; } }
   class LinkError extends Error { constructor(message: string) { super(message); this.name = 'LinkError'; } }
   class RuntimeError extends Error { constructor(message: string) { super(message); this.name = 'RuntimeError'; } }
@@ -152,7 +154,11 @@
   }
   class Global {
     constructor() { throw new LinkError('Standalone WebAssembly globals are not supported'); }
-    get value() { const state = globalState(this); return decode(native.global(state.id, state.name)); }
+    get value() {
+      const state = globalState(this);
+      if (state.type === 'v128') throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
+      return decode(native.global(state.id, state.name));
+    }
     set value(value: unknown) {
       const state = globalState(this);
       if (!state.mutable) throw new TypeError('Immutable WebAssembly global');
@@ -301,7 +307,8 @@
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
       const provisional: number[] = [];
-      const bindings = instanceBindings(info, imports, provisional);
+      const importedGlobals: (Global | undefined)[] = [];
+      const bindings = instanceBindings(info, imports, provisional, importedGlobals);
       let id: number;
       try { id = info.backend === 'nested' ? nestedExecute(token => native.instantiate(info.id, bindings, token)) : native.instantiate(info.id, bindings); }
       catch (error) {
@@ -311,7 +318,9 @@
       }
       finally { if (info.backend !== 'nested') sync(refreshMemory); }
       const exports: Exports = Object.create(null);
-      for (const item of info.exports) installExport(id, exports, item);
+      const globals = new Map<number, Global>();
+      importedGlobals.forEach((global, index) => { if (global) globals.set(index, global); });
+      for (const item of info.exports) installExport(id, exports, item, globals);
       if (info.backend !== 'nested') sync(refreshMemory);
       Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
     }
@@ -329,11 +338,11 @@
       if (nestedCallbacks.delete(id)) freeNestedCallbacks.push(id);
     }
   }
-  function instanceBindings(info: BunWasm.WasmModule, imports: Imports, provisional: number[]) {
-    try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend)); }
+  function instanceBindings(info: BunWasm.WasmModule, imports: Imports, provisional: number[], importedGlobals: (Global | undefined)[]) {
+    try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend, importedGlobals)); }
     catch (error) { releaseCallbacks(info, provisional); throw error; }
   }
-  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
+  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined, importedGlobals: (Global | undefined)[]): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
     if (item.kind === 'function' && typeof value === 'function') {
       const existing = functionStates.get(value);
       if (existing) return { kind: 'function', id: existing.id };
@@ -344,7 +353,12 @@
     }
     if (item.kind === 'memory' && value instanceof Memory) return memoryState(value).resource;
     if (item.kind === 'table' && value instanceof Table) return tableState(value).id;
-    if (item.kind === 'global' && backend === 'nested') return globalImport(item, value);
+    if (item.kind === 'global' && backend === 'nested') {
+      const imported = globalImport(item, value);
+      // Global indices number imports first, so a re-export finds its supplied object here.
+      importedGlobals.push(value instanceof Global ? value : undefined);
+      return imported;
+    }
     throw new LinkError(`Missing or unsupported WebAssembly import ${item.module}.${item.name}`);
   }
   function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown) {
@@ -357,12 +371,15 @@
     if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
     return coerce(value, item.type);
   }
-  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport) {
+  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport, globals: Map<number, Global>) {
     const name = item.name;
     if (item.kind === 'function') { exports[name] = callable(native.functionIdentity(id, name)); return; }
     if (item.kind === 'global') {
+      const known = item.index === undefined ? undefined : globals.get(item.index);
+      if (known) { exports[name] = known; return; }
       const global: Global = Object.create(Global.prototype);
       globalStates.set(global, { id, name, type: item.type, mutable: item.mutable });
+      if (item.index !== undefined) globals.set(item.index, global);
       exports[name] = global;
       return;
     }
@@ -390,6 +407,7 @@
   // Workers of one group exchange references to objects its shm service owns. Every member
   // leases the same region and shares the same compiled code; nothing is copied.
   const sharedLength = typeof SharedArrayBuffer === 'function' ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')!.get! : undefined;
+  const sharedGrowable = typeof SharedArrayBuffer === 'function' ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'growable')?.get : undefined;
   const localMemories = new Map<number, number>();
   const localModules = new Map<number, BunWasm.WasmModule>();
   const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
@@ -426,20 +444,26 @@
     modules.set(module, info);
     return module;
   }
-  function memoryPrefix(state: MemoryState, byteLength: number) {
+  // Each serialized buffer gets its own wrapper over the leased bytes; only the lease is shared.
+  function deliveredBuffer(state: MemoryState, byteLength: number) {
     if (state.kind !== 'shared') throw cloneError('Expected a shared WebAssembly.Memory');
     refreshMemory(state);
-    if (sharedLength!.call(state.buffer) === byteLength) return state.buffer;
-    state.prefixes ??= new Map();
-    const known = state.prefixes.get(byteLength)?.deref();
-    if (known) return known;
     let view: SharedArrayBuffer;
     try { view = internal.native.wasmSharedMemoryBuffer(state.resource, byteLength); }
     catch (error) { throw cloneError(error); }
-    state.prefixes.set(byteLength, new WeakRef(view));
     memoryBufferStates.set(view, state);
     memoryBuffers.add(view);
     return view;
+  }
+  // An ordinary buffer's lease belongs to its wrapper and ends when the engine finalizes it,
+  // so its state lives only as long as that wrapper and stays out of localMemories.
+  function plainBufferState(buffer: SharedArrayBuffer): MemoryState | undefined {
+    if (sharedGrowable?.call(buffer)) throw cloneError('Growable SharedArrayBuffer cannot be sent to a worker on this host');
+    const resource = internal.native.sharedBufferResource?.(buffer);
+    if (resource === undefined) return undefined;
+    const state: MemoryState = { kind: 'shared', resource, buffer, generation: native.memorySpan(resource).generation, plain: true };
+    memoryBufferStates.set(buffer, state);
+    return state;
   }
   function settlePublication(pending: PendingPublication, committed: boolean) {
     pending.committed ||= committed;
@@ -474,7 +498,7 @@
       try { token = native.publishSharedMemory(state.resource); }
       catch (error) { throw cloneError(error); }
       state.token = token;
-      localMemories.set(token, state.resource);
+      if (!state.plain) localMemories.set(token, state.resource);
       return staging(token, () => { state.token = undefined; localMemories.delete(token); });
     }
     function publishedModule(info: BunWasm.WasmModule) {
@@ -489,8 +513,8 @@
       return staging(token, () => { moduleTokens.delete(info); localModules.delete(token); });
     }
     function reference(buffer: SharedArrayBuffer): BunWasm.SharedReference {
-      const state = memoryBufferStates.get(buffer);
-      if (!state) throw cloneError('Only WebAssembly shared memory buffers can be sent to a worker on this host');
+      const state = memoryBufferStates.get(buffer) ?? plainBufferState(buffer);
+      if (!state) throw cloneError('Only region-backed SharedArrayBuffers can be sent to a worker on this host');
       return { id: `buf/${publishedMemory(state)}`, byteLength: sharedLength!.call(buffer) };
     }
     function referenceWasm(value: WebAssembly.Module | WebAssembly.Memory): BunWasm.SharedReference {
@@ -502,7 +526,7 @@
   }
   internal.groupSharedObjects = {
     begin: beginPublication,
-    read: reference => memoryPrefix(attachedMemory(directoryToken(reference.id, 'buf')), reference.byteLength),
+    read: reference => deliveredBuffer(attachedMemory(directoryToken(reference.id, 'buf')), reference.byteLength),
     readWasm(reference) {
       if (reference.id.startsWith('mod/')) return attachedModule(directoryToken(reference.id, 'mod'));
       return memoryObject(attachedMemory(directoryToken(reference.id, 'mem')).resource);

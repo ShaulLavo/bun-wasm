@@ -77,15 +77,7 @@ mod host {
         }
 
         fn release(&self, memory: u32) {
-            #[link(wasm_import_module = "runtime_nested")]
-            unsafe extern "C" {
-                fn request(pointer: *const u8, length: u32, out: *mut [u32; 2]) -> i32;
-            }
-            let input = format!(r#"{{"Release":{{"memory":{memory}}}}}"#);
-            let mut out = [0; 2];
-            if unsafe { request(input.as_ptr(), input.len() as u32, &mut out) } == 0 {
-                crate::split::bun_core_free(out[0], out[1], 8);
-            }
+            let _ = nested::release_memory(memory);
         }
     }
 

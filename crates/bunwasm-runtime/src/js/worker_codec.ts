@@ -116,6 +116,7 @@
         }
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
+        if (internal.isWasmCapability?.(object)) throw cloneError("WebAssembly tables and globals cannot be cloned");
         if (isSharedBuffer(object)) return sharedNode(object);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object, implicit);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object, implicit);
@@ -136,7 +137,7 @@
         }
         if (Array.isArray(object)) return ["array", object.length, entries(object, implicit)];
         if (object instanceof Number || object instanceof String || object instanceof Boolean || tag(object) === "BigInt") return ["boxed", visit(object.valueOf(), implicit)];
-        if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory"].includes(tag(object))) throw cloneError();
+        if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory", "WebAssembly.Table", "WebAssembly.Global"].includes(tag(object))) throw cloneError();
         return ["object", entries(object, implicit)];
       }
       function visit(value: unknown, implicit = false, bufferView = false): number {

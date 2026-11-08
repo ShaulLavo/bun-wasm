@@ -177,8 +177,9 @@ pub trait Engine: Sized + 'static {
         )))
     }
 
-    /// The storage address of a real SharedArrayBuffer, or None for any other value.
-    fn shared_array_buffer_data(&self, _value: &Self::Value) -> Option<*mut u8> {
+    /// The region resource behind a SharedArrayBuffer this member allocated, or None for any
+    /// other value. The engine reads the address from its own object; JS never supplies one.
+    fn shared_buffer_resource(&self, _value: &Self::Value) -> Option<u32> {
         None
     }
 

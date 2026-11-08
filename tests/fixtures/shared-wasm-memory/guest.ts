@@ -6,6 +6,7 @@ await import('./duplicate-imports.ts');
 await import('./engine-roots.ts');
 await import('./cross-worker-control.ts');
 await import('./worker-refusals.ts');
+await import('./binding-controls.ts');
 await import('./index.ts');
 await import('./mixed-backend.ts');
 await import('./metadata-budget.ts');

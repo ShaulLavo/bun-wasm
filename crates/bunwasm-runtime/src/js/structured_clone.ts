@@ -8,6 +8,7 @@ type StructuredCloneInternal = BunWasm.Internal & {
   clonePorts?: (value: unknown, options: { transfer: unknown[] }) => unknown;
   isMessagePort?: (value: unknown) => boolean;
   isWasmMemoryBuffer?: (value: unknown) => boolean;
+  isWasmCapability?: (value: unknown) => boolean;
   native: BunWasm.Native & { transferArrayBuffers(buffers: unknown[]): void };
 };
 (function (internal: StructuredCloneInternal) {
@@ -92,6 +93,7 @@ type StructuredCloneInternal = BunWasm.Internal & {
 
   function isUncloneable(value: object): boolean {
     if (typeof internal.isProxy === "function" && internal.isProxy(value)) return true;
+    if (internal.isWasmCapability?.(value)) return true;
     if (value instanceof Promise || brand(WeakMap.prototype.has, value, [{}]) || brand(WeakSet.prototype.has, value, [{}])) {
       return true;
     }

@@ -558,13 +558,17 @@ impl Engine for QuickJs {
     }
 
     #[cfg(bun_wasm_shared_group)]
-    fn shared_array_buffer_data(&self, v: &V) -> Option<*mut u8> {
+    fn shared_buffer_resource(&self, v: &V) -> Option<u32> {
         unsafe extern "C" {
             fn JS_bunwasm_SharedBufferData(value: qjs::JSValue) -> *mut u8;
+            fn bun_shared_buffer_resource(address: u32) -> u32;
         }
-        // SAFETY: the helper checks the SharedArrayBuffer class and throws nothing.
-        let data = unsafe { JS_bunwasm_SharedBufferData(v.as_raw()) };
-        (!data.is_null()).then_some(data)
+        // SAFETY: the helper checks the SharedArrayBuffer class and throws nothing, and the
+        // core only looks the address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(JS_bunwasm_SharedBufferData(v.as_raw()) as usize as u32)
+        };
+        (resource != 0).then_some(resource)
     }
 
     fn detach_wasm_memory_buffer(&self, v: &V) -> bool {

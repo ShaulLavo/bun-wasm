@@ -87,9 +87,10 @@ Members of a group share WebAssembly objects by reference. `postMessage` and `wo
 a shared `WebAssembly.Memory` or a shared-backend `WebAssembly.Module` in the group's directory,
 and the receiver leases the same region and compiled code. Memory buffers keep their length when
 sent, so an old prefix stays a prefix. A publication holds its region until the last member
-stops, so a sender's exit cannot free bytes another member can still receive. Anything else is a
-`DataCloneError` when it is posted, including a plain `new SharedArrayBuffer()`, whose storage is
-the sender's own heap on this host. See [the native record](bun-patches/shared-nested-native.md).
+stops, so a sender's exit cannot free bytes another member can still receive. An ordinary
+`new SharedArrayBuffer()` takes its own region on a group guest and is sent the same way, as a
+fresh wrapper over the same bytes. Anything else is a `DataCloneError` when it is posted, including
+a growable buffer, a table and a global. See [the native record](bun-patches/shared-nested-native.md).
 
 ## Processes on the Browser host
 

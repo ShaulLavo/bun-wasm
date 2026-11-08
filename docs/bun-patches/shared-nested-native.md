@@ -99,11 +99,38 @@ a shared-group build. `runtime_nested.request` gains `PublishMemory`, `AttachMem
 - A published module is the host's compiled `wasmtime::Module` and the core's opaque
   description of its JS-visible shape. Receivers instantiate it in their own Store
   with their own callbacks, without recompiling.
-- A receiver reuses one local handle per token. A posted buffer is served at its
-  posted length, so old prefix views stay prefixes.
+- A receiver reuses one local handle per token. Each serialized buffer gets a fresh,
+  non-owning wrapper at its posted length, so old prefix views stay prefixes and two
+  deliveries are two objects over one set of bytes. Repeated references in one message
+  stay one object through the codec's own graph map.
+- An ordinary `SharedArrayBuffer` publishes the region its allocation took. Its sender's
+  lease follows the JS wrapper rather than the per-token cache, and a member stop or GC
+  never frees bytes a publication still holds.
 
-Refused with `DataCloneError` at post time: plain `SharedArrayBuffer` (member-heap
-storage dies with its sender), unshared Memory, and modules on the Wasmi backend.
+Refused with `DataCloneError` at post time: growable `SharedArrayBuffer`, unshared Memory,
+modules on the Wasmi backend, and every WebAssembly Table and Global, which are one
+member's capabilities with no clone representation. `structuredClone` refuses Tables and
+Globals too.
+
+## Exported tables and globals (original adapter)
+
+`wasm/nested_description.rs` reads each export's type from the original module.
+Nested modules may export `funcref` tables and numeric globals. An exported reference
+global or non-`funcref` table is a CompileError. `runtime_nested.request` gains
+`TableExport`, `TableLength`, `TableGet`, `TableSet`, `TableGrow`, `GlobalGet` and
+`GlobalSet`, and the reply `Null`.
+
+Table identity is keyed in the core by instance and export index, so aliases are one
+`WebAssembly.Table`. Entries pass through the host's function identity, so
+`table.get(i) === exports.fn`. A table index out of range or a refused grow is a
+RangeError. `table.set` and `table.grow` accept only functions of this backend; anything
+else is a TypeError. No JS root crosses this boundary. Table and function handles are
+session-owned and bounded by the same 4,096-resource limit.
+
+Global aliases are one object within an instance. A validated immutable `WebAssembly.Global`
+import is kept by its import index, so re-exporting it returns the supplied object, also
+across instances and duplicate import slots. A raw numeric import gets a new wrapper per
+instance. A `v128` global refuses JS access with a TypeError before any request.
 
 Wasmtime retains instantiation allocations until its Store ends, including an
 instance whose start traps. The existing native Store limit remains 40 instances.

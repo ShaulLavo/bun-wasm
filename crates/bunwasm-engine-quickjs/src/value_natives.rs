@@ -57,8 +57,15 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         "wasmNestedExecute",
         Rc::new(|e: &E, args: &[E::Value]| e.nested_execute(&arg(e, args, 0), &arg(e, args, 1))),
     ));
-    #[cfg(bun_wasm_shared_group)]
-    list.push(("sharedBufferResource", Rc::new(shared_buffer_resource)));
+    list.push((
+        "sharedBufferResource",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(match e.shared_buffer_resource(&arg(e, args, 0)) {
+                Some(resource) => e.value_from(Val::Num(f64::from(resource))),
+                None => e.undefined(),
+            })
+        }),
+    ));
     let c = core.clone();
     list.push((
         "compileCjs",
@@ -291,23 +298,6 @@ fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
         // WebAssembly polyfill detaches this buffer before user code runs.
         Ok(unsafe { e.wasm_memory_buffer(data, length) })
     })
-}
-
-/// The region resource behind an allocated SharedArrayBuffer. The address comes from the real
-/// engine object; JavaScript never supplies one.
-#[cfg(bun_wasm_shared_group)]
-fn shared_buffer_resource<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
-    unsafe extern "C" {
-        fn bun_shared_buffer_resource(address: u32) -> u32;
-    }
-    let Some(data) = e.shared_array_buffer_data(&arg(e, args, 0)) else {
-        return Ok(e.undefined());
-    };
-    // SAFETY: the core only looks the address up in its own ledger.
-    match unsafe { bun_shared_buffer_resource(data as usize as u32) } {
-        0 => Ok(e.undefined()),
-        resource => Ok(e.value_from(Val::Num(f64::from(resource)))),
-    }
 }
 
 /// The requested prefix of a shared memory's current length, or all of it when not requested.
