@@ -21,3 +21,24 @@ lifecycle cells at unchanged 90000 ms bounds.
 Evidence and cleanup belong to
 `/work/reports/goals/astro-angular/angular/`. The parent owns independent review,
 CI and merge. No goals-matrix, executor, package or Firefox changes are in scope.
+
+## Remaining conditional-resolution gap
+
+Independent review found a pre-existing gap outside wrapped static imports.
+A required ES module using `import {tag} from 'dual'` or `export {tag} from 'dual'`
+selects the package's `require` condition. A namespace import selects `import`.
+This reproduces in store and records modes, each with hooks and native contexts.
+Expected output for the named import and re-export is `import-tag`; actual output
+is `require-tag`. The unwrapped printer branch already behaves this way at the
+assigned base, so this is not caused by the new scoped wrapper.
+
+The retained reproducer is
+`/work/reports/goals/astro-angular/angular/review-548/condition-forms.ts`.
+Stage a browser guest as `<scratch>/bun-browser.wasm`, then run
+`bun /work/reports/goals/astro-angular/angular/review-548/condition-forms.ts "$PWD" <scratch>`
+from a source-qualified worktree after `source env.sh`. The script materializes
+its conditional package and removes that fixture. Its four outputs distinguish
+named, namespace, named re-export and side-effect import forms. Investigate the
+internal printer's unwrapped static import and re-export paths without changing
+explicit CommonJS require conditions. Keep the current PR claim limited to
+wrapped static imports. This follow-up is not a proven Angular goal blocker.
