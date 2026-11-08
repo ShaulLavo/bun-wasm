@@ -12,7 +12,7 @@ const declared = (core: Uint8Array, payload: Uint8Array) => appendCustomSection(
 test("generic bind and exact engine section agree before instantiation", () => {
   expect(programKind(new WebAssembly.Module(single))).toBe("single");
   expect(() => programKind(new WebAssembly.Module(rawCore()))).toThrow("exactly one");
-  const kinds = ["quickjs", "jsc"] as const;
+  const kinds = ["quickjs", "jsc", "spidermonkey"] as const;
   for (const kind of kinds) {
     const { core, side } = quickjsPair(kind);
     expect(programKind(new WebAssembly.Module(core))).toBe(kind);
@@ -25,7 +25,7 @@ test("generic bind and exact engine section agree before instantiation", () => {
 });
 
 test("missing, duplicate, malformed and contradictory declarations reject", () => {
-  for (const payload of [new Uint8Array(), Uint8Array.from([0xc0, 0xaf]), ...["quickjs\0", " jsc", "jsc\n", "hermes", "hermes\0", "Hermes", "spidermonkey", "other"].map(value => new TextEncoder().encode(value))]) {
+  for (const payload of [new Uint8Array(), Uint8Array.from([0xc0, 0xaf]), ...["quickjs\0", " jsc", "jsc\n", "hermes", "hermes\0", "Hermes", "spidermonkey\0", "SpiderMonkey", "other"].map(value => new TextEncoder().encode(value))]) {
     expect(() => programKind(new WebAssembly.Module(declared(rawCore(), payload)))).toThrow("Invalid bun-wasm-engine");
   }
   const { core } = quickjsPair();

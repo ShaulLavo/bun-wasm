@@ -5,6 +5,7 @@ import { createRuntime, type Runtime } from "waffle";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
 import { HostedPreviews } from "../hosted-previews";
@@ -139,6 +140,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private async boot(): Promise<void> {
+    installCompileObserver();
+    const measurementEnv = measurementEnvironment(this.params);
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({ filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" } });
     const browserPrograms = new BrowserPrograms(runtime, {
@@ -225,7 +228,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
     const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
-      env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...measurementEnv, HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),

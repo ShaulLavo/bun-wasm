@@ -1,8 +1,9 @@
-import type { Engine } from "../src/engine-kind.ts";
+import { labelsForHost, loadArmRegistry, parseArmRegistry, verifyMeasurementInput, type ArmRegistry } from "./engine-arm-registry.ts";
+import { censusArms, censusChild, verifyCensusProvenance, type ChromiumSample } from "./app-matrix/engine-arms.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { productApps } from "./app-matrix/product.ts";
 import { completeObservations } from "./app-matrix/product-browser.ts";
@@ -10,38 +11,40 @@ import { networkGuardStage } from "./app-matrix/product-campaign.ts";
 import { record } from "./guest-core-receipt.ts";
 import { distribution, engineOrder } from "./bench-engines.ts";
 
-const engines: readonly Exclude<Engine, "browser">[] = ["quickjs", "jsc"];
-const root = resolve(import.meta.dirname, "..");
 const hash = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
 type ExpectedApp = { id: string; stages: string[] };
 type Host = "native" | "playground";
 type StageRow = { app: string; engine: string; host: string; stage: string; status: "pass" | "fail" | "blocked"; durationMs: number | null };
-type MatrixReport = { provenance: Record<string, unknown>; rows: StageRow[] };
+type MatrixReport = { provenance: Record<string, unknown>; launcherSha256: string | null; rows: StageRow[] };
 type Outcome = StageRow["status"] | "not-run" | "measurement-error";
 
 export function registerCensus(ids: readonly string[], host: Host, rounds: number) {
-  assert.ok(rounds === 1 || rounds === 6, "use one experimental census or six balanced rounds");
+  const selectedEngines = labelsForHost(host === "native" ? "native" : "chromium");
+  const balancedRounds = host === "native" ? 4 : 10;
+  assert.ok(rounds === 1 || rounds % balancedRounds === 0, `use one experimental census or complete ${balancedRounds}-round blocks`);
   assert.ok(ids.length && new Set(ids).size === ids.length, "choose unique app IDs");
   assert.ok(ids.every(id => productApps.some(app => app.id === id)), "unknown product app");
   const selected = productApps.filter(app => ids.includes(app.id));
   const apps = selected.map(app => ({ id: app.id, stages: ["install"].concat(app.commands.flatMap(command => [command.name].concat(
     completeObservations(command.check, [], { status: "not-run" }).map(probe => `${command.name}:${probe.stage}`),
   ))) }));
-  const order = Array.from({ length: rounds }, (_, round) => engineOrder(engines.map(name => ({ name, path: "" })), round).map(engine => engine.name));
-  return { schemaVersion: 1, kind: "experimental-app-census", registeredAt: new Date().toISOString(), host, rounds, engines, apps,
+  const order = Array.from({ length: rounds }, (_, round) => engineOrder(selectedEngines.map(name => ({ name, path: "" })), round).map(engine => engine.name));
+  return { schemaVersion: 1, kind: "experimental-app-census", registeredAt: new Date().toISOString(), host, rounds, engines: selectedEngines, apps,
     fixturesSha256: hash(JSON.stringify(selected)), order,
     denominator: "all registered cells; blocked and not-run stay in denominator; native reference excluded", sourceCatalog: selected };
 }
 
 export function parseMatrixReport(value: unknown): MatrixReport {
   assert.ok(record(value) && record(value.provenance) && Array.isArray(value.results), "invalid matrix report");
+  const launcherSha256 = value.provenance.launcher_sha256;
+  assert.ok(launcherSha256 === undefined || launcherSha256 === null || typeof launcherSha256 === "string" && /^[a-f0-9]{64}$/.test(launcherSha256), "invalid launcher hash");
   const rows = value.results.map((row: unknown): StageRow => {
     assert.ok(record(row) && typeof row.app === "string" && typeof row.engine === "string" && typeof row.host === "string" && typeof row.stage === "string", "invalid matrix cell");
     assert.ok(row.status === "pass" || row.status === "fail" || row.status === "blocked", "invalid matrix status");
     assert.ok(row.durationMs === undefined || row.durationMs === null || (typeof row.durationMs === "number" && Number.isFinite(row.durationMs) && row.durationMs >= 0), "invalid stage duration");
     return { app: row.app, engine: row.engine, host: row.host, stage: row.stage, status: row.status, durationMs: typeof row.durationMs === "number" ? row.durationMs : null };
   });
-  return { provenance: value.provenance, rows };
+  return { provenance: value.provenance, launcherSha256: typeof launcherSha256 === "string" ? launcherSha256 : null, rows };
 }
 
 function outcome(rows: readonly StageRow[], app: string, stage: string): { status: Outcome; durationMs: number | null } {
@@ -65,8 +68,8 @@ function appOutcome(outcomes: readonly Outcome[]): Outcome {
   return "pass";
 }
 
-export function reduceCensus(reports: readonly MatrixReport[], apps: readonly ExpectedApp[], host: Host) {
-  return engines.map(engine => {
+export function reduceCensus(reports: readonly MatrixReport[], apps: readonly ExpectedApp[], host: Host, selectedEngines: readonly string[] = labelsForHost(host === "native" ? "native" : "chromium")) {
+  return selectedEngines.map(engine => {
     const rows = reports.flatMap(report => report.rows).filter(row => row.engine === engine && row.host === host);
     const cells = apps.flatMap(app => app.stages.map(stage => ({ app: app.id, stage, ...outcome(rows, app.id, stage) })));
     return { engine, host, stages: counts(cells.map(cell => cell.status)),
@@ -75,10 +78,10 @@ export function reduceCensus(reports: readonly MatrixReport[], apps: readonly Ex
   });
 }
 
-function parsePlan(value: unknown): { host: Host; rounds: 1 | 6; fixturesSha256: string; apps: ExpectedApp[] } {
-  assert.ok(record(value) && value.schemaVersion === 1 && value.kind === "experimental-app-census" && Array.isArray(value.apps), "invalid registered plan");
+function parsePlan(value: unknown): { host: Host; rounds: number; fixturesSha256: string; apps: ExpectedApp[] } {
+  assert.ok(record(value) && (value.schemaVersion === 1 || value.schemaVersion === 2) && value.kind === "experimental-app-census" && Array.isArray(value.apps), "invalid registered plan");
   assert.ok(value.host === "native" || value.host === "playground", "invalid host");
-  assert.ok(value.rounds === 1 || value.rounds === 6, "invalid rounds");
+  assert.equal(value.rounds, 1, "reduce one round at a time");
   assert.ok(typeof value.fixturesSha256 === "string" && /^[a-f0-9]{64}$/.test(value.fixturesSha256), "invalid fixture digest");
   const apps = value.apps.map((app: unknown): ExpectedApp => {
     assert.ok(record(app) && typeof app.id === "string" && Array.isArray(app.stages) && app.stages.length && app.stages.every((stage: unknown) => typeof stage === "string"), "invalid expected cells");
@@ -91,7 +94,7 @@ function parsePlan(value: unknown): { host: Host; rounds: 1 | 6; fixturesSha256:
 
 async function main() {
   const { values } = parseArgs({ options: {
-    register: { type: "boolean" }, apps: { type: "string" }, host: { type: "string", default: "playground" }, rounds: { type: "string", default: "1" },
+    registry: { type: "string" }, register: { type: "boolean" }, apps: { type: "string" }, host: { type: "string", default: "playground" }, rounds: { type: "string", default: "1" },
     plan: { type: "string" }, report: { type: "string", multiple: true }, output: { type: "string" }, help: { type: "boolean" },
   } });
   if (values.help) {
@@ -103,14 +106,21 @@ async function main() {
   await mkdir(dirname(output), { recursive: true });
   if (values.register) {
     assert.ok(values.host === "native" || values.host === "playground", "invalid host");
-    const plan = registerCensus(values.apps?.split(",") ?? [], values.host, Number(values.rounds));
-    const commands = plan.order.map((order, round) => ["bash", join(root, "scripts/app-matrix.sh"), "--product", `--apps=${plan.apps.map(app => app.id).join(",")}`, `--engines=${order.join(",")}`, `--hosts=${plan.host}`, "--cache=/work/cache/bun-wasm-app-matrix", `--output=${join(dirname(output), `round-${round}`)}`]);
-    await writeFile(output, JSON.stringify({ ...plan, commands }, null, 2) + "\n", { flag: "wx" });
+    assert.ok(values.registry, "current census registration requires --registry");
+    assert.equal(Number(values.rounds), 1, "register one census round");
+    const registry = await loadArmRegistry(resolve(values.registry));
+    const plan = registerArmCensus(registry, values.apps?.split(",") ?? [], values.host);
+    // The app runner consumes one admitted request with --census-plan and --arm.
+    await writeFile(output, JSON.stringify(plan, null, 2) + "\n", { flag: "wx" });
     return;
   }
   assert.ok(values.plan, "--plan is required");
   const planBytes = await readFile(values.plan, "utf8");
-  const plan = parsePlan(JSON.parse(planBytes));
+  const planValue: unknown = JSON.parse(planBytes);
+  assert.ok(record(planValue) && planValue.schemaVersion === 2, "current reduction requires an arm-aware plan");
+  const registry = parseArmRegistry(planValue.armRegistry);
+  await verifyMeasurementInput(registry);
+  const plan = parsePlan(planValue);
   const inputs = await Promise.all((values.report ?? []).map(async path => {
     const bytes = await readFile(path, "utf8");
     const report = parseMatrixReport(JSON.parse(bytes));
@@ -118,9 +128,64 @@ async function main() {
     return { path: resolve(path), sha256: hash(bytes), report };
   }));
   const result = { scope: "experimental-app-census", defaultDecision: "owner-required", plan: { path: resolve(values.plan), sha256: hash(planBytes) },
-    inputs, round: reduceCensus(inputs.map(input => input.report), plan.apps, plan.host),
+    inputs, sizes: registrySizes(registry, plan.host === "native" ? "native" : "chromium"), round: reduceArmCensus(inputs.map(input => input.report), plan.apps, plan.host, registry),
     notes: ["Reduce one round at a time; duplicate cells are rejected", "Missing duration is null; only successful stage times are included", "Producer verifier and browser identity/noise review remain required; input provenance retained verbatim", "Guest memory stays in original reports/hook samples without summing overlapping counters"] };
   await writeFile(output, JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
 }
 
 if (import.meta.main) main().catch(error => { console.error(error); process.exitCode = 1; });
+
+export function registerArmCensus(registry: ArmRegistry, ids: readonly string[], host: Host) {
+  const template = registerCensus(ids, host, 1);
+  const measurementHost = host === "native" ? "native" : "chromium";
+  const arms = censusArms(registry, measurementHost);
+  return { ...template, schemaVersion: 2, armRegistry: registry, engines: arms.map(arm => arm.label),
+    order: [arms.map(arm => arm.label)], children: arms.map(arm => censusChild(arm, measurementHost, {})),
+    unavailableArms: host === "native" ? ["browser:unavailable-native"] : [], stageTimeoutMs: 90_000, replay: "offline-required", rounds: 1 };
+}
+
+export function reduceArmCensus(reports: readonly MatrixReport[], apps: readonly ExpectedApp[], host: Host, registry: ArmRegistry) {
+  const arms = censusArms(registry, host === "native" ? "native" : "chromium");
+  for (const report of reports) {
+    const arm = arms.find(arm => arm.label === report.provenance.armLabel);
+    assert.ok(arm, "report arm is not registered on this host");
+    verifyCensusProvenance(report.provenance, registry, arm);
+    assert.equal(report.launcherSha256, registry.launcher.sha256, "census report launcher differs");
+    assert.ok(report.rows.every(row => row.engine === arm.label && row.host === host && apps.some(app => app.id === row.app && (app.stages.includes(row.stage) || row.stage === networkGuardStage))), "unexpected census cell");
+  }
+  return reduceCensus(reports, apps, host, arms.map(arm => arm.label));
+}
+
+export function registrySizes(registry: ArmRegistry, host: "native" | "chromium") {
+  return censusArms(registry, host).map(arm => ({
+    engine: arm.label, engineKind: arm.engineKind, tier: arm.tier,
+    source: { head: arm.sourceCommit, tree: arm.sourceTree },
+    qualification: registry.evidence === "synthetic" ? "synthetic-setup-only" : "admission-still-required",
+    profile: arm.program.kind === "single" ? "browser-single" : "split",
+    core: arm.program.core, gzip: arm.servedGzip.core,
+    side: arm.program.kind === "single" ? null : arm.program.side,
+    sideGzip: arm.servedGzip.kind === "single" ? null : arm.servedGzip.side,
+    rawBytes: arm.program.core.bytes + (arm.program.kind === "single" ? 0 : arm.program.side.bytes),
+    gzipBytes: arm.servedGzip.core.bytes + (arm.servedGzip.kind === "single" ? 0 : arm.servedGzip.side.bytes),
+    commonCoreDeltaBytes: null, guestHeap: null, backingStores: null, swc: null, concurrentHeadroom: null,
+  }));
+}
+
+export function reduceChromiumSamples(samples: readonly ChromiumSample[], registry: ArmRegistry, workloads: readonly string[]) {
+  const labels = registry.chromiumArms.map(arm => arm.label);
+  const cells = new Set<string>();
+  for (const sample of samples) {
+    assert.ok(labels.includes(sample.engine) && workloads.includes(sample.workload), "unregistered Chromium sample");
+    assert.ok(Number.isSafeInteger(sample.round) && sample.round >= 0 && sample.round < registry.chromiumRounds, "unregistered Chromium round");
+    const key = `${sample.engine}/${sample.workload}/${sample.round}`;
+    assert.ok(!cells.has(key), "duplicate Chromium sample");
+    cells.add(key);
+  }
+  return labels.flatMap(engine => workloads.map(workload => {
+    const rows = samples.filter(sample => sample.engine === engine && sample.workload === workload);
+    const passed = rows.filter(row => row.status === "pass");
+    return { engine, workload, ...counts(rows.map<Outcome>(row => row.status).concat(Array<Outcome>(registry.chromiumRounds - rows.length).fill("not-run"))),
+      wallMs: distribution(passed.flatMap(row => row.wallMs === null ? [] : [row.wallMs])),
+      compileMs: distribution(passed.flatMap(row => row.compileMs === null ? [] : [row.compileMs])) };
+  }));
+}

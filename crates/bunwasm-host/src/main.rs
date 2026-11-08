@@ -4,6 +4,7 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod compile_observation;
 mod fs_watch;
 mod guest;
 mod linked;
@@ -36,7 +37,7 @@ Runs bun.wasm (from --wasm, $BUN_WASM, or the build tree's dist/bun.wasm)
 with networking. Launcher options must come before the bun arguments:
 
   --wasm PATH         bun.wasm to run
-  --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
+  --engine NAME=PATH  register quickjs, jsc or spidermonkey at /opt/bun/NAME/bin (repeatable)
   --shell PATH        register bash-web's shell guest at /bin/sh and /bin/bash
   --env-utility PATH  register bash-web's env utility at /bin/env and /usr/bin/env
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
@@ -100,10 +101,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
             "--engine" => {
                 let spec = value("--engine")?;
                 let Some((name, path)) = spec.split_once('=') else {
-                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                    bail!("--engine expects quickjs=PATH, jsc=PATH or spidermonkey=PATH")
                 };
-                if !matches!(name, "quickjs" | "jsc") || path.is_empty() {
-                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                if !matches!(name, "quickjs" | "jsc" | "spidermonkey") || path.is_empty() {
+                    bail!("--engine expects quickjs=PATH, jsc=PATH or spidermonkey=PATH")
                 }
                 if options.engines.iter().any(|(engine, _)| engine == name) {
                     bail!("--engine {name} was already supplied")
@@ -224,9 +225,11 @@ fn guest_pwd(cwd: &Path, dirs: &[(PathBuf, String)]) -> Option<String> {
 
 fn run(options: Options) -> Result<i32> {
     let wasm = wasm_path(&options);
+    let observation = compile_observation::from_env()?;
     let engine = engine()?;
     let mut linked = linked::Programs::default();
     let module = linked.load(&engine, &wasm)?;
+    compile_observation::unavailable(observation)?;
 
     let cwd = std::env::current_dir().context("reading the current directory")?;
     let dirs = if options.dirs.is_empty() {
@@ -245,7 +248,7 @@ fn run(options: Options) -> Result<i32> {
         env.push(("PWD".into(), pwd));
     }
     env.extend(options.env);
-    env.retain(|(name, _)| name != "BUNWASM_EXEC_PATH");
+    env.retain(|(name, _)| name != "BUNWASM_EXEC_PATH" && !compile_observation::host_only(name));
     env.push(("BUNWASM_EXEC_PATH".into(), "/bin/bun".into()));
     let mut runtime = process::Runtime::new(engine.clone(), module, dirs)?;
     Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
@@ -503,6 +506,9 @@ fn main() -> ExitCode {
 }
 
 #[cfg(test)]
+mod startup_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use process::{Cancellation, FinalOutcome};
@@ -750,6 +756,7 @@ mod tests {
                 "--engine",
                 "quickjs=qjs.wasm",
                 "--engine=jsc=jsc.wasm",
+                "--engine=spidermonkey=sm.wasm",
                 "--",
                 "run",
                 "app.ts",
@@ -763,7 +770,8 @@ mod tests {
             options.engines,
             vec![
                 ("quickjs".into(), "qjs.wasm".into()),
-                ("jsc".into(), "jsc.wasm".into())
+                ("jsc".into(), "jsc.wasm".into()),
+                ("spidermonkey".into(), "sm.wasm".into())
             ]
         );
         assert_eq!(options.args, ["run", "app.ts"]);
@@ -773,7 +781,6 @@ mod tests {
             vec!["--engine", "jsc="],
             vec!["--engine", "browser=b.wasm"],
             vec!["--engine", "hermes=h.wasm"],
-            vec!["--engine", "spidermonkey=sm.wasm"],
             vec!["--engine=jsc=a", "--engine=jsc=b"],
         ] {
             assert!(parse_args(args.into_iter().map(str::to_string)).is_err());

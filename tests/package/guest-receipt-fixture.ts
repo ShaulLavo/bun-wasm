@@ -1,5 +1,5 @@
 import { quickjsPair } from "./quickjs-plan-fixture";
-import { programKindForBuild, programProfile, type PairedEngine } from "../../src/engine-kind";
+import { isSupportedPairedEngine, programKindForBuild, programProfile, type SupportedPairedEngine } from "../../src/engine-kind";
 import { captureProgramInputs } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -24,6 +24,7 @@ export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint
   const kind = programKindForBuild(build);
   const core = artifactIdentity(bytes);
   if (kind === "single") return { ...inputs, program: { kind, core } };
+  if (!isSupportedPairedEngine(kind)) throw new Error(`Unsupported normal receipt fixture engine: ${kind}`);
   const identity = artifactIdentity(side ?? quickjsPair(kind).side);
   const content = { fixture: "Synthetic input identity, no production build" };
   const engineInputs = { schema: 1, scope: kind, source: sourceManifest.source, content, contentSha256: hash(JSON.stringify(content)) } as const;
@@ -165,7 +166,7 @@ export function receiptCli(fixture: CliFixture, ...args: string[]) {
   return Bun.spawnSync([process.execPath, fixture.cli].concat(args), { cwd: fixture.root, env: fixture.env });
 }
 
-export async function stageProgramFixture(options: SourceOptions, artifact: string, kind: PairedEngine) {
+export async function stageProgramFixture(options: SourceOptions, artifact: string, kind: SupportedPairedEngine) {
   const { core, side } = quickjsPair(kind);
   await writeFile(artifact, core);
   const sidePath = join(dirname(artifact), programProfile(kind).side);

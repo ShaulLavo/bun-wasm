@@ -92,8 +92,9 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
-    const adapters: readonly Engine[] = pairedEngines;
-    for (const name of adapters.concat(["browser"])) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
+    const defaults: readonly Engine[] = pairedEngines;
+    const adapters = defaults.concat(["browser"], engine === "spidermonkey" ? [engine] : []);
+    for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
       module: async () => {

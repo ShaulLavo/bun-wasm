@@ -1,21 +1,28 @@
 export const pairedEngines = ["quickjs", "jsc"] as const;
-export type PairedEngine = typeof pairedEngines[number];
+export type SupportedPairedEngine = typeof pairedEngines[number];
+/** Explicit host loading includes experiments, independently of publication defaults. */
+export const pairedEngineKinds = ["quickjs", "jsc", "spidermonkey"] as const;
+export type PairedEngine = typeof pairedEngineKinds[number];
 export type Engine = PairedEngine | "browser";
 export type ProgramKind = "single" | PairedEngine;
 export type ProgramFiles<T> =
   | { readonly kind: "single"; readonly core: T }
-  | { readonly kind: "quickjs"; readonly core: T; readonly side: T }
-  | { readonly kind: "jsc"; readonly core: T; readonly side: T };
+  | { [K in PairedEngine]: { readonly kind: K; readonly core: T; readonly side: T } }[PairedEngine];
 export type PairedProgramFiles<T> = Exclude<ProgramFiles<T>, { kind: "single" }>;
 
 export const ENGINE_SECTION = "bun-wasm-engine";
 const profiles = {
   quickjs: { core: "bun.wasm", side: "quickjs.wasm", initializeMemory: ["quickjs_initialize_memory", "quickjs_apply_data_relocs"], initialize: ["quickjs_call_ctors", "quickjs_register"], run: "quickjs_run" },
+  spidermonkey: { core: "bun-spidermonkey.wasm", side: "spidermonkey-engine.wasm", initializeMemory: ["spidermonkey_initialize_memory", "spidermonkey_apply_data_relocs"], initialize: ["spidermonkey_call_ctors", "spidermonkey_register"], run: "spidermonkey_run" },
   jsc: { core: "bun-jsc.wasm", side: "jsc-engine.wasm", initializeMemory: ["jsc_initialize_memory", "jsc_apply_data_relocs"], initialize: ["jsc_call_ctors", "jsc_register"], run: "jsc_run" },
 } as const;
 
-export function isPairedEngine(value: unknown): value is PairedEngine {
+export function isSupportedPairedEngine(value: unknown): value is SupportedPairedEngine {
   return pairedEngines.some(engine => engine === value);
+}
+
+export function isPairedEngine(value: unknown): value is PairedEngine {
+  return pairedEngineKinds.some(engine => engine === value);
 }
 
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
@@ -148,9 +155,9 @@ export function programKind(module: WebAssembly.Module): ProgramKind {
   if (!sections.length && !binding) return "single";
   if (sections.length !== 1 || binding?.kind !== "function") throw new TypeError("Paired core requires exactly one bun-wasm-engine section and bind function");
   const bytes = new Uint8Array(sections[0]!);
-  const kind = pairedEngines.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
+  const kind = pairedEngineKinds.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
   if (kind) return kind;
-  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs or jsc");
+  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc or spidermonkey");
 }
 
 export function verifyProgramSide(kind: PairedEngine, module: WebAssembly.Module): void {
@@ -160,7 +167,7 @@ export function verifyProgramSide(kind: PairedEngine, module: WebAssembly.Module
   const memory: readonly string[] = profile.initializeMemory;
   const required = memory.concat(profile.initialize);
   if (required.concat([profile.run]).some(name => !names.has(name))) throw new TypeError(`Invalid ${kind} companion initializer/RUN profile`);
-  for (const other of pairedEngines.filter(engine => engine !== kind).map(programProfile)) {
+  for (const other of pairedEngineKinds.filter(engine => engine !== kind).map(programProfile)) {
     const memory: readonly string[] = other.initializeMemory;
     const forbidden = memory.concat(other.initialize);
     if (forbidden.concat([other.run]).some(name => names.has(name))) throw new TypeError("Contradictory engine companion profile");

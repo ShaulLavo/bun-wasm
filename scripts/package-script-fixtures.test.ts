@@ -66,7 +66,7 @@ test("each package fixture retains one blocking native owner and needs no extra 
   expect(checkCommand("native", paths).slice(0, 3)).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build"]);
   const groups = nativeGroups(selectChecks("native", checks), 4);
   expect(groups.flat().filter(path => paths.includes(path)).toSorted()).toEqual(paths.toSorted());
-  expect(readFileSync(join(root, "scripts/test.sh"), "utf8").match(/timeout 60 /g)).toHaveLength(2);
+  expect(readFileSync(join(root, "scripts/test.sh"), "utf8").match(/timeout --kill-after=5s 60 /g)).toHaveLength(2);
 });
 
 test("the split retains every original output, argv, environment, hook, silence and status assertion", () => {

@@ -169,7 +169,9 @@ impl Runtime {
         let (_, paths) = executables::ENGINE_PATHS
             .iter()
             .find(|(engine, _)| *engine == name)
-            .ok_or_else(|| anyhow::anyhow!("unknown engine {name:?}; expected quickjs or jsc"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown engine {name:?}; expected quickjs, jsc or spidermonkey")
+            })?;
         self.executables.register(paths, module)?;
         Ok(())
     }
@@ -691,13 +693,7 @@ impl Processes {
                             Err(std::io::Error::other("child guest panicked").into())
                         })
                         .unwrap_or_else(|error| {
-                            eprintln!("bun-wasm child: {error:#}");
-                            let errno = error
-                                .chain()
-                                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-                                .map(startup_io_errno)
-                                .unwrap_or(45); // ENOEXEC: invalid module/entry point.
-                            cancellation.select(FinalOutcome::StartFailed(errno))
+                            startup_failure(&error, &cancellation, || std::io::stderr().lock())
                         })
                     }
                 };
@@ -979,6 +975,25 @@ impl Processes {
             self.notify.wait_past(seen, left);
         }
     }
+}
+
+/// Classify a child error after its Store and descriptors have physically stopped.
+pub(crate) fn startup_failure<W: std::io::Write>(
+    error: &anyhow::Error,
+    cancellation: &Cancellation,
+    diagnostics: impl FnOnce() -> W,
+) -> FinalOutcome {
+    let errno = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .map(startup_io_errno)
+        .unwrap_or(45); // ENOEXEC: invalid module/entry point.
+    let outcome = cancellation.select(FinalOutcome::StartFailed(errno));
+    if matches!(outcome, FinalOutcome::StartFailed(_)) {
+        let mut diagnostics = diagnostics();
+        let _ = writeln!(diagnostics, "bun-wasm child: {error:#}");
+    }
+    outcome
 }
 
 /// Map host I/O failures into the seven portable startup errors in runtime_proc.

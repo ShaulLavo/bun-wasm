@@ -123,7 +123,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       const allocatorFailure = allocator ? failure(allocator[4], allocator[5], allocatorCategories) : null;
       const frozenAllocatorFailure = readFrozenAllocatorFailure(memory, core.exports);
       failed ||= Boolean(allocatorFailure || frozenAllocatorFailure || data?.failure);
-      if (refresh && !terminal && !failed) {
+      if (refresh && !terminal && !failed && data !== null) {
         const getter = side?.exports[`${engine}_memory_telemetry_refresh`];
         if (typeof getter === "function") {
           failed = true;

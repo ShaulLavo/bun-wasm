@@ -1,13 +1,20 @@
 import { expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { ENGINES, isEngine, loadWasm } from "../src/engine-loader";
 
 const valid = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const substituted = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]);
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
-test("only supported engines appear in the shipped loader registry", () => {
-  expect(Object.keys(ENGINES).sort()).toEqual(["browser", "jsc", "quickjs"]);
-  for (const name of ["hermes", "spidermonkey", "unknown"]) expect(isEngine(name)).toBe(false);
+test("the loader admits explicit SpiderMonkey while the ready menu stays Browser, QuickJS and JSC", () => {
+  expect(Object.keys(ENGINES).sort()).toEqual(["browser", "jsc", "quickjs", "spidermonkey"]);
+  expect(isEngine("spidermonkey")).toBe(true);
+  for (const name of ["hermes", "unknown"]) expect(isEngine(name)).toBe(false);
+  const source = readFileSync(new URL("../src/playground/app.tsx", import.meta.url), "utf8");
+  const options = source.match(/^const ENGINE_OPTIONS = (.+)$/m)?.[1];
+  if (!options) throw new Error("Missing ready engine menu options");
+  expect(Array.from(options.matchAll(/\["([^"]+)"/g), match => match[1])).toEqual(["browser", "quickjs", "jsc"]);
+  expect(source).toContain('playground.engine === "spidermonkey" ? <option value="spidermonkey" selected>');
 });
 
 for (const source of ["download", "cache"] as const) {

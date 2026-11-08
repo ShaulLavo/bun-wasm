@@ -3,6 +3,11 @@
 # source closure, then apply the local patch when one exists.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+if [[ -f "$SPIDERMONKEY_OBJDIR/config.status" && ! -f "$SPIDERMONKEY_RECEIPT_DIR/native-profile.json" ]]; then
+  echo "spidermonkey: old native generation; use a fresh lane" >&2
+  exit 1
+fi
+
 if [[ ! -d "$SPIDERMONKEY_DIR/.git" ]]; then
   git init -q "$SPIDERMONKEY_DIR"
   git -C "$SPIDERMONKEY_DIR" remote add origin https://github.com/mozilla-firefox/firefox.git
@@ -58,4 +63,6 @@ else
   echo "spidermonkey: no local patch yet"
 fi
 
+node "$SPIDERMONKEY_SRC/check-message-generation.ts" "$SPIDERMONKEY_DIR"
+node "$SPIDERMONKEY_SRC/native-profile.ts" "$SPIDERMONKEY_BUILD_DIR"
 git -C "$SPIDERMONKEY_DIR" rev-parse HEAD

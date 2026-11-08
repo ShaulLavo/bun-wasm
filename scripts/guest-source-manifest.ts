@@ -1,4 +1,4 @@
-import { programKindForBuild, type PairedEngine } from "../src/engine-kind.ts";
+import { programKindForBuild, type SupportedPairedEngine } from "../src/engine-kind.ts";
 import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -137,7 +137,7 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
     || await Bun.file(join(options.sdk, "VERSION")).text() !== receipt.sdkVersion) throw new Error("Patched sysroot receipt does not match installed builder, patch, SDK or libc bytes");
 }
 
-export type ProgramInputScope = "core" | PairedEngine;
+export type ProgramInputScope = "core" | SupportedPairedEngine;
 
 export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest", includeBuildStd = false): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;

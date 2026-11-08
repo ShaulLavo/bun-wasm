@@ -20,6 +20,8 @@
 (function (internal) {
   "use strict";
   const { native } = internal;
+  const savedErrorFrames = native.engine === "spidermonkey"
+    ? globalThis[Symbol.for("bunwasm.internal.spidermonkey.errorFrames")] : undefined;
 
   const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
   const objectToString = Object.prototype.toString;
@@ -1388,7 +1390,8 @@
     if (typeof stack !== "string") return [];
     const frames = [];
     for (const raw of stack.split("\n")) {
-      const frame = parseFrameLine(raw.trim());
+      const line = raw.trim();
+      const frame = parseFrameLine(line);
       if (frame) frames.push(frame);
     }
     return frames;
@@ -1405,22 +1408,50 @@
     return start < column - 1 ? start + 1 : column;
   }
 
-  // JavaScriptCore frames: `name@file:line:col`, `module code@…`,
+  // SpiderMonkey points a constructor call at `new`, unlike Bun's callee.
+  function constructorColumn(file, lineNo, column) {
+    if (typeof internal.getSourceLine !== "function") return column;
+    const text = internal.getSourceLine(file, lineNo);
+    if (typeof text !== "string") return column;
+    const prefix = /^new[ \t]+(?=[$A-Z_a-z])/.exec(text.slice(column - 1));
+    return prefix ? column + prefix[0].length : column;
+  }
+
+  // JavaScriptCore and SpiderMonkey frames: `name@file:line:col`, `module code@…`,
   // `forEach@[native code]`. Positions are in evaluated code; map them back.
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
-    if (!m || m[2].startsWith("bun-wasm:")) return null;
-    const generated = native.engine === "host" && native.preparedSourceName(m[2]) !== undefined;
-    const url = typeof internal.displayName === "function" ? internal.displayName(m[2]) : m[2];
-    let [file, lineNo, column] = [url, Number(m[3]), Number(m[4])];
-    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(generated ? m[2] : file, lineNo, column) : undefined;
+    return m ? nativeFrame(m[1], m[2], Number(m[3]), Number(m[4])) : null;
+  }
+
+  function nativeFrame(name, source, line, col) {
+    if (source.startsWith("bun-wasm:")) return null;
+    const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
+    const url = typeof internal.displayName === "function" ? internal.displayName(source) : source;
+    let [file, lineNo, column] = [url, line, col];
+    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(generated ? source : file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
-    if (!generated) column = calleeColumn(file, lineNo, column);
-    const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code" || m[1] === "__bunwasm_cjs__";
-    return { name: topLevel ? "" : m[1] || "<anonymous>", file, line: lineNo, column };
+    const spiderMonkey = native.engine === "spidermonkey";
+    if (!generated) column = spiderMonkey ? constructorColumn(file, lineNo, column) : calleeColumn(file, lineNo, column);
+    const topLevel = (spiderMonkey && !name) || name === "global code" || name === "module code" || name === "eval code" || name === "__bunwasm_cjs__";
+    return { name: topLevel ? "" : name || "<anonymous>", file, line: lineNo, column };
+  }
+
+  function parseErrorStack(error) {
+    const stack = safeGet(error, "stack");
+    if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
+    let frames;
+    try { frames = savedErrorFrames(error, stack); }
+    catch { return parseStack(stack); }
+    if (!Array.isArray(frames)) return parseStack(stack);
+    return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column)).filter(frame => frame !== null);
   }
 
   function parseFrameLine(line) {
+    if (native.engine === "spidermonkey" && line.includes("@")) {
+      const frame = parseJscFrameLine(line);
+      if (frame) return frame;
+    }
     if (!line.startsWith("at ")) return line.includes("@") ? parseJscFrameLine(line) : null;
     const body = line.slice(3);
     const withName = /^(.*?) \((.*)\)$/.exec(body);
@@ -1548,7 +1579,7 @@
   }
 
   function printErrorBody(f, err, prevHadErrors) {
-    const frames = parseStack(safeGet(err, "stack"));
+    const frames = parseErrorStack(err);
     const top = frames[0];
     const name = stringProp(err, "name");
     const message = stringProp(err, "message");

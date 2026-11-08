@@ -12,10 +12,11 @@ const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.ur
 
 test("normal publication has Browser, QuickJS and JSC, with both Browser profiles and tools", () => {
   expect(pairedEngines).toEqual(["quickjs", "jsc"]);
+  expect(isPairedEngine("spidermonkey")).toBe(true);
   expect(publicationEngines).toEqual(["quickjs", "jsc", "browser"]);
   expect(Object.keys(publicationGuestPaths)).toEqual(["browser", "source-cache-browser", "tools"]);
   expect(Object.keys(guestBuilds)).toEqual(["browser", "source-cache-browser", "quickjs", "quickjs-minimal", "jsc", "tools"]);
-  for (const kind of ["hermes", "spidermonkey", "unknown"]) expect(isPairedEngine(kind)).toBe(false);
+  for (const kind of ["hermes", "unknown"]) expect(isPairedEngine(kind)).toBe(false);
 });
 
 test("complete final custody requires all remaining guests, original receipts and matrix evidence", () => {

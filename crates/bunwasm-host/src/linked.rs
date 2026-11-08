@@ -42,8 +42,8 @@ struct Program {
 enum ProgramKind {
     QuickJs,
     Jsc,
-    #[cfg(test)]
-    SpiderMonkeyProbe,
+    /// Explicit experimental SpiderMonkey loading. It is not a publication default.
+    SpiderMonkey,
 }
 
 impl ProgramKind {
@@ -51,8 +51,7 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs.wasm",
             Self::Jsc => "jsc-engine.wasm",
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => "spidermonkey-engine.wasm",
+            Self::SpiderMonkey => "spidermonkey-engine.wasm",
         }
     }
 
@@ -70,8 +69,7 @@ impl ProgramKind {
                 "jsc_call_ctors",
                 "jsc_register",
             ],
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => &[
+            Self::SpiderMonkey => &[
                 "spidermonkey_initialize_memory",
                 "spidermonkey_apply_data_relocs",
                 "spidermonkey_call_ctors",
@@ -84,20 +82,14 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs_run",
             Self::Jsc => "jsc_run",
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => "spidermonkey_run",
+            Self::SpiderMonkey => "spidermonkey_run",
         }
     }
 
     fn other_profiles(self) -> impl Iterator<Item = ProgramKind> {
-        [
-            Self::QuickJs,
-            Self::Jsc,
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe,
-        ]
-        .into_iter()
-        .filter(move |kind| *kind != self)
+        [Self::QuickJs, Self::Jsc, Self::SpiderMonkey]
+            .into_iter()
+            .filter(move |kind| *kind != self)
     }
 }
 
@@ -127,7 +119,7 @@ impl Programs {
             side == profile,
             "paired {kind:?} engine profile {side:?} does not match core profile {profile:?}"
         );
-        // Only the QuickJS pair is qualified for shared groups; JSC inputs have no atomics.
+        // Only the QuickJS pair is qualified for shared groups; JSC and SpiderMonkey inputs have no atomics.
         ensure!(
             profile == group::Profile::Split || kind == ProgramKind::QuickJs,
             "a {kind:?} pair is not qualified for the shared-group profile"
@@ -276,8 +268,9 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
         let kind = match section.data() {
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
+            b"spidermonkey" => ProgramKind::SpiderMonkey,
             #[cfg(test)]
-            b"spidermonkey-g2" => ProgramKind::SpiderMonkeyProbe,
+            b"spidermonkey-g2" => ProgramKind::SpiderMonkey,
             _ => bail!("invalid bun-wasm-engine payload"),
         };
         tag = Some(kind);
@@ -644,6 +637,15 @@ mod tests {
     }
 
     #[test]
+    fn retained_g2_probe_uses_only_the_test_loader() {
+        let bytes = wasm_custom(b"bun-wasm-engine", b"spidermonkey-g2");
+        assert_eq!(
+            parse_program_kind(&bytes, true).unwrap(),
+            Some(ProgramKind::SpiderMonkey)
+        );
+    }
+
+    #[test]
     fn engine_tag_requires_bind_export() {
         let bytes = wasm_custom(b"bun-wasm-engine", b"jsc");
         assert!(parse_program_kind(&bytes, false).is_err());
@@ -774,10 +776,20 @@ mod tests {
     fn profiles_have_fixed_companion_and_entry_names() {
         assert_eq!(ProgramKind::QuickJs.companion(), "quickjs.wasm");
         assert_eq!(ProgramKind::Jsc.companion(), "jsc-engine.wasm");
+        assert_eq!(
+            ProgramKind::SpiderMonkey.companion(),
+            "spidermonkey-engine.wasm"
+        );
         assert_eq!(ProgramKind::Jsc.run(), "jsc_run");
         assert!(ProgramKind::Jsc.initializers().contains(&"jsc_register"));
+        assert_eq!(ProgramKind::SpiderMonkey.run(), "spidermonkey_run");
+        assert!(
+            ProgramKind::SpiderMonkey
+                .initializers()
+                .contains(&"spidermonkey_register")
+        );
         let others: Vec<_> = ProgramKind::QuickJs.other_profiles().collect();
-        assert_eq!(others, [ProgramKind::Jsc, ProgramKind::SpiderMonkeyProbe]);
+        assert_eq!(others, [ProgramKind::Jsc, ProgramKind::SpiderMonkey]);
     }
 
     #[test]

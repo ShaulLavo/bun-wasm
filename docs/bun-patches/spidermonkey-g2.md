@@ -22,3 +22,8 @@ The 38 additions to `scripts/quickjs-core-exports.txt` are the measured libc
 import delta. The VM-only bootstrap exports those names from the existing
 consumer sysroot and exercises the unchanged linked-program loader. No full Bun
 runtime core, production engine kind or Engine trait implementation is claimed.
+
+The opt-in engine integration keeps this ignored test and its test-only tag.
+The smoke recipe now uses the experimental side initializer converter, because
+the normal initializer CLI intentionally accepts only supported engines.
+This does not admit the G2 tag to a production launcher or producer.

@@ -48,6 +48,12 @@ frame in a `finally`.
 Spawn failure cleanup always ends the IPC channel, even when a pending stdin callback or abort-listener
 removal throws. Terminal close ends the channel before destroying the sink, then releases the spawn frame.
 The throwing callback keeps its original error object.
+The ordinary `self-spawn` fixture now exchanges a JSON message with its forked
+child before checking stdout and exit status. After close, `send()` must return
+false and report `ERR_IPC_CHANNEL_CLOSED` through its callback. The capability
+check explicitly passes a handle and expects synchronous
+`ERR_NOT_SUPPORTED_IN_WASM`. JSON messages themselves are no longer an unsupported
+capability. No production IPC behavior changes.
 
 ## Classification
 

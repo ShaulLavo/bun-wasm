@@ -45,6 +45,7 @@ function Header(handle: Handle<Props>) {
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
           {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === playground.engine}>{label}</option>)}
+          {playground.engine === "spidermonkey" ? <option value="spidermonkey" selected>SpiderMonkey (experimental)</option> : null}
         </select>
         <RunButton playground={playground} />
       </header>

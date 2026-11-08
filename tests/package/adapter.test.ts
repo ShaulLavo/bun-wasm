@@ -247,7 +247,7 @@ for (const conflict of [false, true]) {
   });
 }
 
-for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+for (const engine of ["quickjs", "jsc", "browser", "spidermonkey"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
   const f = fixture();
   const selected = engine === "browser" ? module : await prepareProgram({ kind: engine, ...quickjsPair(engine) });
   const installed = await installBunAdapters(f.runtime, { engine, module: selected });
@@ -261,7 +261,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${eng
   } finally { installed.dispose(); }
 });
 
-for (const engine of ["hermes", "spidermonkey", "unknown"]) test(`removed or unknown ${engine} engine is rejected before registration`, async () => {
+for (const engine of ["hermes", "unknown"]) test(`removed or unknown ${engine} engine is rejected before registration`, async () => {
   const f = fixture();
   // Runtime input deliberately bypasses TypeScript without claiming a supported Engine.
   const options = { module, workerUrl: "worker.js", notificationWorkerUrl: "notify.js", engine: "browser" as const };
@@ -276,4 +276,26 @@ test("installing the adapters alone installs no shared-object service", async ()
   const install = await installBunAdapters(f.runtime);
   try { expect(runtimeSharedObjectRoute(f.runtime as unknown as Runtime)).toBeUndefined(); }
   finally { install.dispose(); }
+});
+
+
+test("SpiderMonkey installation requires explicit matching guest bytes and registers its adapter only on opt-in", async () => {
+  const f = fixture();
+  await expect(installBunAdapters(f.runtime, { engine: "spidermonkey" })).rejects.toThrow("matching guest");
+  expect(f.adapters.size).toBe(0);
+  const selected = await prepareProgram({ kind: "spidermonkey", ...quickjsPair("spidermonkey") });
+  const installed = await installBunAdapters(f.runtime, { engine: "spidermonkey", module: selected });
+  try {
+    expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:spidermonkey"]);
+    expect(f.files.has("/bin/bun")).toBe(false);
+    const program = f.programs.get("/opt/bun/spidermonkey/bin/bun");
+    if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
+    expect(await program.module()).toBe(selected);
+  } finally { installed.dispose(); }
+  const wrong = await installBunAdapters(f.runtime, { engine: "spidermonkey", module });
+  try {
+    const program = f.programs.get("/opt/bun/spidermonkey/bin/bun");
+    if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
+    await expect(program.module()).rejects.toThrow("Selected spidermonkey core declares single");
+  } finally { wrong.dispose(); }
 });

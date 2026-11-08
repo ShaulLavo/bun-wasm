@@ -1,0 +1,94 @@
+{
+  "profile": {
+    "intlApi": false,
+    "irregexpUnicode": "icu4x-subset",
+    "specialCase": "selected-data-generated"
+  },
+  "unicodeVersion": "18.0.0",
+  "mozillaRevision": "a5df22d986d4b626f771b4f8885241941601c35c",
+  "generator": [
+    {
+      "path": "spidermonkey/generate-special-case.ts",
+      "sha256": "3b19ef26085ee01ce9ca95ee5d56cf7072dfa1b147917718ba0783a6a02772dc"
+    },
+    {
+      "path": "crates/bunwasm-spidermonkey/examples/unicode-special-case.rs",
+      "sha256": "771e7c5ae9117e5b6d8cf6855be3498dd69460e056b32b3a51da3b97831c9402"
+    },
+    {
+      "path": "crates/bunwasm-spidermonkey/src/glue/special_case.rs",
+      "sha256": "c60cb2b9a835465dadfeb01ae4726c9f819c9bab8ffbf7e784c55dcfa0a64cd1"
+    }
+  ],
+  "upstream": [
+    {
+      "path": "spidermonkey/irregexp-icu/templates/gen-regexp-special-case.cc",
+      "sha256": "e5709c3cb71e949becd81f57193cf7b558b823da2eabaea00388f22316f5ce17"
+    },
+    {
+      "path": "spidermonkey/irregexp-icu/templates/special-case.cc",
+      "sha256": "32eb6ebcbc9e9d32f9aa936ae59b39b14121efbc94da01abf68fd789ffdff1cd"
+    },
+    {
+      "path": "spidermonkey/irregexp-icu/templates/irregexp/imported/special-case.h",
+      "sha256": "26c0543b88bd44a4761ff1c79580f7a5f55bc03b04f768e0580fbd815f0a8bca"
+    }
+  ],
+  "lock": {
+    "path": "Cargo.lock",
+    "sha256": "e85f3ca3e49bf4b15e77b2d606129d6aa54cd37ec6f925be75b566dce007214a"
+  },
+  "crates": [
+    {
+      "name": "icu_casemap",
+      "version": "2.4.0",
+      "checksum": "1a6f143e9349267b80ae071a6ec25d4797c45756d8b2671a8b24b7b25b81ab94",
+      "sourceFileCount": 16,
+      "sourceManifestSha256": "3142bf70e4bfa44f3b3e6eea0a0ec385742b550f4cc6f4857a8fe0c1031c89c4"
+    },
+    {
+      "name": "icu_casemap_data",
+      "version": "2.4.0",
+      "checksum": "71a5c321208537711696af55bc2ab5dad939e4f6e0aef92dd6a2555deceedf3a",
+      "sourceFileCount": 5,
+      "sourceManifestSha256": "cc57a487377e07ef40860d7f9fb20c0fa7ae4f94e8f2df205d5bac1cc2f78370"
+    },
+    {
+      "name": "icu_collections",
+      "version": "2.4.0",
+      "checksum": "fe090a42a0d3140fed8c63263ed1fecc02422cb2f4bfe55cd8de2de1b8e105dd",
+      "sourceFileCount": 26,
+      "sourceManifestSha256": "bd532ba7cd267d833f0f1fd511a42f595234c7d89f94f6a2a06dd0e853fc2c0e"
+    },
+    {
+      "name": "icu_locale_core",
+      "version": "2.4.0",
+      "checksum": "25d29b57c17c6528d0dc4c2141cfa2d08200465acb537a3909c8b9b8a4a984c0",
+      "sourceFileCount": 73,
+      "sourceManifestSha256": "6ad88960f376672268ff311b1e7033ac7deaa5f1f5db7a60b57093802e1cb291"
+    },
+    {
+      "name": "icu_properties",
+      "version": "2.4.0",
+      "checksum": "2ea83d991c56158f7cf898bf86436c1dfe7c07ee82fe88951f2695c9f37a379f",
+      "sourceFileCount": 16,
+      "sourceManifestSha256": "655be9d703dae499b1721dd80d910d1efb708927d3ac490fb3f587bf14cb0b41"
+    },
+    {
+      "name": "icu_properties_data",
+      "version": "2.4.0",
+      "checksum": "b98f29af82d02b163fe50161388350e743bb3107cc8e8c2f7314cb505faddfcf",
+      "sourceFileCount": 144,
+      "sourceManifestSha256": "87600a94454087a8c63a152aeccbb61681e6800d7527c810dc800ac85076ba16"
+    }
+  ],
+  "output": {
+    "path": "spidermonkey/irregexp-icu/generated/special-case.cc",
+    "sha256": "9970d4a24cd5986e69caa01da064c9a19e30a40a994d0b04e58ac051fbf40daa"
+  },
+  "ignoreCount": 67,
+  "supplementary": [
+    223,
+    7838
+  ]
+}
