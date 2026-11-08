@@ -25,8 +25,8 @@ export class LoopbackPreviewOrigins {
   private readonly usedOrigins = new Set<string>();
   private readonly closing = new Set<{ owner: object; promise: Promise<void> }>();
   private closed = false;
-  private readonly subnet = crypto.getRandomValues(new Uint8Array(2));
-  private nextAddress = 1;
+  private readonly hostnamePrefix = crypto.randomUUID();
+  private nextHostname = 0;
 
   constructor(private readonly limit = 128) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("Invalid preview origin limit");
@@ -88,8 +88,8 @@ export class LoopbackPreviewOrigins {
       socket.once("close", () => { sockets.delete(socket); this.sockets.delete(socket); });
     });
     server.on("upgrade", (request, socket, head) => { void upgrade(request, socket, head, origin, endpoint, lifetime.signal, acceptsOrigin); });
-    const addressHost = `127.${1 + this.subnet[0]! % 254}.${this.subnet[1]!}.${this.nextAddress++}`;
-    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, addressHost, resolve); });
+    const addressHost = `bw-${++this.nextHostname}-${this.hostnamePrefix}.localhost`;
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const address = server.address();
     if (!address || typeof address === "string") { server.close(); throw new Error("Missing loopback listener"); }
     origin = `http://${addressHost}:${address.port}`;

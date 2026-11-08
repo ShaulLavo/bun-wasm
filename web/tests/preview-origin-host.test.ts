@@ -99,6 +99,7 @@ test("late close cannot remove replacement route; teardown and lifetime allocati
   await old.close();
   expect(closes).toBe(1);
   expect(replacement.origin).not.toBe(old.origin);
+  expect(new URL(replacement.origin).hostname).not.toBe(new URL(old.origin).hostname);
   expect(registry.originForPort(owner, 3137)).toBe(replacement.origin);
   expect(await (await fetch(replacement.origin)).text()).toBe("new:/:");
   await expect(registry.bind({}, 3138, fixture("overflow"))).rejects.toThrow("allocation limit");
