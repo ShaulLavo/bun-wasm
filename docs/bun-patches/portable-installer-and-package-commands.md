@@ -206,3 +206,8 @@ order. Handles survive parent boundaries when their URLs remain in the window;
 obsolete handles close before replacement requests start. The existing delayed
 registry also checks overlap between narrow child lists of successive parents.
 This is an original adapter change with no additional upstream source.
+A nested-alias fixture forces an unpredicted demand while seven requests for the
+next selected parent's children remain open. Those children wait about two
+seconds before consumption under a one-second idle timeout. The check preserves
+the nested alias placement, reaches exactly eight handles, and confirms that
+queue residence does not consume the response reader's idle budget.
