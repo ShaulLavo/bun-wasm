@@ -29,3 +29,19 @@ Policy eligibility is not reachability. The config-policy test keeps all five
 stable variants eligible. The live Pages fixture does not require unused stable
 App Route files to appear in the trace. Its SSR route requires the stable Pages
 runtime, and restricted production execution tests the actual dependency closure.
+
+The measured default campaign bound is 90,000 ms. Next's build alone has a
+110,000 ms bound, about 14% above the slower measured Chrome build of 96,483 ms.
+All other campaign phases and frameworks keep 90,000 ms. Cleanup retains its
+existing 20,000 ms bound and shorter inner cleanup limits. An explicit larger
+diagnostic campaign bound still applies. Serialized deadline evidence records
+both install and build bounds and rejects missing or different build policy.
+This is a measured budget correction alongside narrow trace pruning, not a claim
+that the engines became faster.
+
+The goals terminal reader joins xterm soft-wrapped rows using `isWrapped` and
+preserves real newlines. Its failing-first regression covers the missing-runtime
+diagnostic that a physical row boundary previously split. These runner changes
+and fixture utilities are original host adapters, not upstream patches. Knip lists
+the restricted server as a guest fixture entry; its project-local module loader
+resolves Next from the staged application, not the host tool's dependencies.

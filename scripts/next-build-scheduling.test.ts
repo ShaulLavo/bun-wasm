@@ -8,14 +8,16 @@ const alternate = [
 ].map(name => `next/dist/compiled/next-server/${name}.runtime.prod.js`);
 
 test("the pinned webpack starter traces stable runtimes, not alternate bundlers or React channels", async () => {
-  const { default: config } = await import(new URL("../sandbox/template-next/next.config.ts", import.meta.url).href);
+  const source = readFileSync(join(import.meta.dir, "../sandbox/template-next/next.config.ts"), "utf8");
+  const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
+  const { default: config } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
   expect(config).toEqual({ experimental: { cpus: 1 }, outputFileTracingExcludes: { "next-server": alternate.map(file => `**/${file}`) } });
   const omitted = config.outputFileTracingExcludes?.["next-server"] ?? [];
   const traced = stable.concat(alternate).filter(file => !omitted.some((pattern: string) => new Bun.Glob(pattern).match(`/home/user/node_modules/${file}`)));
   expect(traced).toEqual(stable);
 });
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stableRuntimes, alternateRuntimes, assertRuntimeTrace, tracedFiles, selectedRuntime, stageTrace } from "./next-trace-fixture";

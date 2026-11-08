@@ -9,6 +9,7 @@ export interface Execution {
   url: string;
   timeoutMs: number;
   installTimeoutMs?: number;
+  buildTimeoutMs?: number;
   createTransport(): Promise<Transport>;
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
@@ -80,11 +81,12 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
   await check("render", async () => { await transport.openPreview(previewUrl); return render(transport, framework, framework.text, timeoutMs); });
   await check("click", () => checkClick(transport, framework, timeoutMs));
   await check("hot-reload", () => edit(transport, framework, timeoutMs));
-  await check("build", async () => {
+  const buildTimeoutMs = options.buildTimeoutMs ?? timeoutMs;
+  await phase(results, "build", buildTimeoutMs, async () => {
     await transport.closePreview();
     await stopServer(transport, Math.min(timeoutMs, 15_000));
-    return command(transport, "bun run build", timeoutMs);
-  });
+    return command(transport, "bun run build", buildTimeoutMs);
+  }, options.signal);
   await check("preview", async () => {
     const url = await start(transport, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : "bun run start", timeoutMs);
     await transport.openPreview(url);

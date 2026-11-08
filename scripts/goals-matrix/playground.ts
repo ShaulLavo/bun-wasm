@@ -5,7 +5,7 @@ interface Playground {
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
   previews: { serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
-  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
+  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
 }
 declare const playground: Playground;
 declare global { var __goalsCommand: { token: string; done: boolean; code: number | null; error: string | null } | undefined; }
@@ -35,8 +35,11 @@ export async function ready(transport: Transport, engine: string, timeoutMs: num
 function transcript(): Promise<string> {
   return new Promise(resolve => playground.term.write("", () => {
     const buffer = playground.term.buffer.active;
-    const lines = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "");
-    resolve(lines.join("\n").trimEnd());
+    const lines = Array.from({ length: buffer.length }, (_, index) => {
+      const line = buffer.getLine(index);
+      return (index && !line?.isWrapped ? "\n" : "") + (line?.translateToString(true) ?? "");
+    });
+    resolve(lines.join("").trimEnd());
   }));
 }
 export async function terminal(transport: Transport): Promise<string> {
