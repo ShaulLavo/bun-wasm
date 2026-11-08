@@ -139,7 +139,7 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   for (const name of ["Save the verified sysroot cache", "Build or verify the JSC prebuild", "Save the JSC prebuild cache once per input revision"]) {
     expect(steps(native).filter(item => item.name === name)).toHaveLength(0);
   }
-  expect(source.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(source.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
   expect(step(producer, "name", "Save the JSC prebuild cache once per input revision").if)
     .toBe("${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
   expect(step(producer, "id", "jsc-producer").env).toEqual({ CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}" });

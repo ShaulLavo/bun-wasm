@@ -15,12 +15,16 @@ function attempt(depth: number) {
 }
 // Locate this host's stack boundary, then exercise callbacks in the boundary band.
 // A nested-only overflow is catchable. A core entry overflow must end the member.
-let low = 1000;
-let high = 4_000_000;
-while (!abandoned && high - low > 1) {
-  const middle = (low + high) >> 1;
-  if (attempt(middle)) low = middle;
-  else high = middle;
+function exerciseBoundary() {
+  let low = 1000;
+  let high = 4_000_000;
+  while (!abandoned && high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (attempt(middle)) low = middle;
+    else high = middle;
+  }
+  for (let depth = low + 1; !abandoned && depth < low + 6000; depth++) attempt(depth);
 }
-for (let depth = low + 1; !abandoned && depth < low + 6000; depth++) attempt(depth);
+// Browser tier-up shrinks nested frames after the first probes, which moves the boundary.
+for (let round = 0; round < 6 && !abandoned; round++) exerciseBoundary();
 console.log('continued after core stack trap');

@@ -7,13 +7,21 @@
 set -euo pipefail
 jsc="$(cd "$(dirname "${BASH_SOURCE[0]}")/../jsc" && pwd)"
 source "$jsc/common.sh"
-bun "$REPO/scripts/build-wasi-sysroot.ts"
+if [[ "$JSC_PROFILE" == shared-group ]]; then
+  bun "$REPO/scripts/build-wasi-sysroot.ts" --shared-pic
+  bun "$REPO/scripts/src/program-profile.ts" environment jsc > /dev/null
+else
+  bun "$REPO/scripts/build-wasi-sysroot.ts"
+fi
 "$jsc/fetch-webkit.sh"
+[[ "$JSC_PROFILE" != shared-group ]] || "$jsc/build-libcxx.sh"
 "$jsc/build-icu.sh"
 rm -f "$JSC_INPUTS_STAMP"
 "$jsc/configure.sh"
 "$jsc/build.sh"
-"$jsc/finalize.sh" "$JSC_OBJ/bin/jsc" "$JSC_BUILD_DIR/jsc.wasm"
+if [[ "$JSC_PROFILE" == split ]]; then
+  "$jsc/finalize.sh" "$JSC_OBJ/bin/jsc" "$JSC_BUILD_DIR/jsc.wasm"
+  ls -l "$JSC_BUILD_DIR/jsc.wasm"
+fi
 write_jsc_inputs_stamp
-ls -l "$JSC_BUILD_DIR/jsc.wasm"
 echo "jsc: inputs stamp $JSC_INPUTS_STAMP ($(cat "$JSC_INPUTS_STAMP"))"

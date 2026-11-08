@@ -71,10 +71,10 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
 
 /**
  * A shared-group side imports the group memory and must never export it (Waffle group admission).
- * Only QuickJS is qualified for the shared-group profile; JSC inputs have no atomics.
+ * Only QuickJS and JSC are qualified for the shared-group profile; other engines' inputs have no atomics.
  */
 export function convertEngineInitializers(bytes: Uint8Array, engine: SupportedPairedEngine, profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
-    assert(profile === "split" || engine === "quickjs", `${engine} is not qualified for the shared-group profile`);
+    assert(profile === "split" || engine === "quickjs" || engine === "jsc", `${engine} is not qualified for the shared-group profile`);
     const input = Buffer.from(bytes);
     const before = sections(input);
     const start = before.find((entry) => entry.id === 8);

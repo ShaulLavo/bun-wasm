@@ -109,7 +109,7 @@ function rendered(input: { selector: string; text: string }): { text: string; ma
   return { text, matched: text.trim() === input.text };
 }
 export async function render(transport: Transport, framework: Framework, text: string, timeoutMs: number): Promise<unknown> {
-  return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text })), value => value.matched, timeoutMs);
+  return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text }), { observation: true }), value => value.matched, timeoutMs);
 }
 function click(input: { button: string; clicked: string }): { before: string; clicked: boolean } {
   const before = document.querySelector(input.clicked)?.textContent?.trim() ?? "";
@@ -140,6 +140,6 @@ export async function edit(transport: Transport, framework: Framework, timeoutMs
   await transport.evaluate(expression(saveEdit, { source: framework.source, original: framework.text, edited: updated }));
   await transport.usePreview();
   const result = await render(transport, framework, updated, timeoutMs);
-  const retained = await transport.evaluate<boolean>(`globalThis.__goalsIdentity === ${JSON.stringify(identity)}`);
+  const retained = await transport.evaluate<boolean>(`globalThis.__goalsIdentity === ${JSON.stringify(identity)}`, { observation: true });
   return { updated, before: state, sameDocument: retained, result, manualNavigations: 0 };
 }

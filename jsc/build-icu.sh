@@ -7,7 +7,7 @@ major="${ICU_VERSION%%.*}"
 tgz="$ICU_DIR/icu4c-$ICU_VERSION-sources.tgz"
 host="$ICU_DIR/host-src/source"
 wasm="$ICU_DIR/wasm-src/source"
-bun "$REPO/scripts/build-wasi-sysroot.ts"
+if [[ "$JSC_PROFILE" == shared-group ]]; then bun "$REPO/scripts/build-wasi-sysroot.ts" --shared-pic; else bun "$REPO/scripts/build-wasi-sysroot.ts"; fi
 mkdir -p "$ICU_DIR"
 # A native archive is reusable only for the exact source, compiler and patched
 # sysroot inputs. Never bless an older SDK build merely because its files exist.
@@ -15,7 +15,7 @@ stamp="$ICU_DIR/.bunwasm-inputs"
 host_cc="${CC:-cc}"
 host_cxx="${CXX:-c++}"
 inputs="$({
-  printf 'ICU_VERSION=%s\nICU_SHA256=%s\nSYSROOT=%s\nSDK=%s\n' "$ICU_VERSION" "$ICU_SHA256" "$BUN_WASM_SYSROOT" "$WASI_SDK_PATH"
+  printf 'ICU_VERSION=%s\nICU_SHA256=%s\nSYSROOT=%s\nSDK=%s\nJSC_PROFILE=%s\n' "$ICU_VERSION" "$ICU_SHA256" "$BUN_WASM_SYSROOT" "$WASI_SDK_PATH" "$JSC_PROFILE"
   cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$WASI_SDK_PATH/VERSION"
   sha256sum "$JSC_SRC/build-icu.sh"
   for variable in CC CXX AR RANLIB LD CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH \
@@ -71,7 +71,7 @@ if [[ ! -f "$wasm/lib/libicui18n.a" ]]; then
   (cd "$wasm" && $CAGE env \
       CC="$WASI_SDK_PATH/bin/clang --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT" CXX="$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT" \
       AR="$WASI_SDK_PATH/bin/llvm-ar" RANLIB="$WASI_SDK_PATH/bin/llvm-ranlib" \
-      CFLAGS="-O2 -fPIC $emu" CXXFLAGS="-O2 -fPIC -fno-exceptions $emu" \
+      CFLAGS="-O2 -fPIC $JSC_PROFILE_FLAGS $emu" CXXFLAGS="-O2 -fPIC -fno-exceptions $JSC_PROFILE_FLAGS $emu" \
       CPPFLAGS="-DU_HAVE_MMAP=0 -DU_ENABLE_DYLOAD=0 -DU_HAVE_TZSET=0 -DU_HAVE_TZNAME=0 -DU_HAVE_TIMEZONE=0" \
       ./configure --host=wasm32-unknown-wasi --with-cross-build="$host" --enable-static --disable-shared \
         --disable-tools --disable-tests --disable-samples --disable-extras --disable-layoutex --disable-icuio \
@@ -94,7 +94,7 @@ keep='^(([a-z]+)/)?(root|en|en_US|en_US_POSIX|en_001|res_index|pool|supplemental
 grep -vE "$keep" "$data/all.lst" | grep -E '\.res$|\.cnv$|^translit/|^unames\.icu$|\.spp$|\.cfu$|^cnvalias\.icu$' > "$data/remove.lst"
 "$host/bin/icupkg" -r "$data/remove.lst" "$data/in/icudt${major}l.dat" "$data/out/icudt${major}l.dat"
 (cd "$data/out" && "$host/bin/genccode" -e "icudt$major" "icudt${major}l.dat" >/dev/null)
-$CAGE "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT -fPIC -O1 -I"$wasm/common" -c "$data/out/icudt${major}l_dat.c" -o "$data/out/icudata.o"
+$CAGE "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT -fPIC $JSC_PROFILE_FLAGS -O1 -I"$wasm/common" -c "$data/out/icudt${major}l_dat.c" -o "$data/out/icudata.o"
 
 mkdir -p "$ICU_PREFIX/lib" "$ICU_PREFIX/include/unicode"
 cp "$wasm/lib/libicuuc.a" "$wasm/lib/libicui18n.a" "$ICU_PREFIX/lib/"
