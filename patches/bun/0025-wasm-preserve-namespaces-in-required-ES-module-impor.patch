@@ -1,4 +1,4 @@
-From 03119c111a8dbaf96d1e6c513f62647f8dfe048b Mon Sep 17 00:00:00 2001
+From 518faae20dc319707e2f7b3b741df9e7bdaab172 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 8 Nov 2026 22:43:51 +0200
 Subject: [PATCH 25/25] wasm: preserve namespaces in required ES module imports
@@ -8,7 +8,7 @@ Subject: [PATCH 25/25] wasm: preserve namespaces in required ES module imports
  1 file changed, 33 insertions(+)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index f45ff7037..28a73120f 100644
+index f45ff7037..b0880dd77 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
 @@ -3103,6 +3103,13 @@ pub(crate) mod __gated_printer {
@@ -33,7 +33,7 @@ index f45ff7037..28a73120f 100644
 +            let metadata = super::BUNWASM_REQUIRE_NAMESPACE.with_borrow(Clone::clone);
 +            let Some(metadata) = metadata else { return false };
 +            self.print_space_before_identifier();
-+            self.print(&metadata);
++            self.print(metadata.as_slice());
 +            self.print(b".requireNamespace(");
 +            self.print_import_record_path(record);
 +            self.print(b")");
