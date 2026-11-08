@@ -107,5 +107,17 @@ function loaded() {
   });
 }
 
-const modes: Record<string, () => void> = { identity, nestedWait, jsWait, sender, blocked, loaded };
+function reentrant() {
+  parentPort!.once('message', ({ memory: received, module: compiled }: { memory: WebAssembly.Memory; module: WebAssembly.Module }) => {
+    check(received instanceof WebAssembly.Memory, 'reentrant Memory receipt');
+    check(compiled instanceof WebAssembly.Module, 'reentrant Module receipt');
+    const exports = instantiate(compiled, received);
+    const value = exports.read(0);
+    exports.write(4, value + 1);
+    parentPort!.postMessage({ value });
+  });
+  parentPort!.postMessage({ ready: true });
+}
+
+const modes: Record<string, () => void> = { identity, nestedWait, jsWait, sender, blocked, loaded, reentrant };
 modes[mode]!();

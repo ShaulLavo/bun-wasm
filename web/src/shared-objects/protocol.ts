@@ -37,6 +37,7 @@ export interface SharedPublication {
   reference(buffer: SharedArrayBuffer): SharedReference;
   referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
   publish(): void;
+  commit(): void;
   abort(): void;
 }
 interface SharedRouteSnapshot { readonly id: string; readonly peer: string | null; readonly version: number; readonly sent: number; }

@@ -393,6 +393,8 @@
   const localMemories = new Map<number, number>();
   const localModules = new Map<number, BunWasm.WasmModule>();
   const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
+  type PendingPublication = { token: number; users: number; committed: boolean; forget: () => void };
+  const pendingPublications = new Map<number, PendingPublication>();
   function cloneError(reason: unknown) { return new DOMException(message(reason), 'DataCloneError'); }
   function directoryToken(id: string, kind: string) {
     const [prefix, value] = id.split('/');
@@ -439,32 +441,52 @@
     memoryBuffers.add(view);
     return view;
   }
+  function settlePublication(pending: PendingPublication, committed: boolean) {
+    pending.committed ||= committed;
+    if (--pending.users !== 0) return;
+    pendingPublications.delete(pending.token);
+    if (pending.committed) return;
+    // Cleanup cannot replace the clone error when a member is stopping.
+    try { pending.forget(); native.withdrawShared(pending.token); } catch { /* member stopping */ }
+  }
   function beginPublication(): BunWasm.SharedPublication {
-    const fresh: (() => void)[] = [];
-    function withdrawing(token: number, forget: () => void) {
-      fresh.push(() => { forget(); native.withdrawShared(token); });
+    const used = new Set<PendingPublication>();
+    let settled = false;
+    function using(token: number) {
+      const pending = pendingPublications.get(token);
+      if (pending && !used.has(pending)) { used.add(pending); pending.users++; }
       return token;
+    }
+    function staging(token: number, forget: () => void) {
+      pendingPublications.set(token, { token, users: 0, committed: false, forget });
+      return using(token);
+    }
+    function settle(committed: boolean) {
+      if (settled) return;
+      settled = true;
+      for (const pending of used) settlePublication(pending, committed);
+      used.clear();
     }
     function publishedMemory(state: MemoryState) {
       if (state.kind !== 'shared') throw cloneError('Only shared WebAssembly memories can be sent to a worker');
-      if (state.token !== undefined) return state.token;
+      if (state.token !== undefined) return using(state.token);
       let token: number;
       try { token = native.publishSharedMemory(state.resource); }
       catch (error) { throw cloneError(error); }
       state.token = token;
       localMemories.set(token, state.resource);
-      return withdrawing(token, () => { state.token = undefined; localMemories.delete(token); });
+      return staging(token, () => { state.token = undefined; localMemories.delete(token); });
     }
     function publishedModule(info: BunWasm.WasmModule) {
       if (info.backend !== 'nested') throw cloneError('Only WebAssembly modules with a shared memory can be sent to a worker');
       const known = moduleTokens.get(info);
-      if (known !== undefined) return known;
+      if (known !== undefined) return using(known);
       let token: number;
       try { token = native.publishSharedModule(info.id); }
       catch (error) { throw cloneError(error); }
       moduleTokens.set(info, token);
       localModules.set(token, info);
-      return withdrawing(token, () => { moduleTokens.delete(info); localModules.delete(token); });
+      return staging(token, () => { moduleTokens.delete(info); localModules.delete(token); });
     }
     function reference(buffer: SharedArrayBuffer): BunWasm.SharedReference {
       const state = memoryBufferStates.get(buffer);
@@ -476,13 +498,7 @@
       if (value instanceof Memory) return { id: `mem/${publishedMemory(memoryState(value))}`, byteLength: 0 };
       throw cloneError('Expected a WebAssembly Module or Memory');
     }
-    function abort() {
-      for (const undo of fresh.splice(0)) {
-        // An abort must not mask the clone error that caused it.
-        try { undo(); } catch { /* the member is stopping */ }
-      }
-    }
-    return { reference, referenceWasm, publish() { fresh.length = 0; }, abort };
+    return { reference, referenceWasm, publish() {}, commit() { settle(true); }, abort() { settle(false); } };
   }
   internal.groupSharedObjects = {
     begin: beginPublication,
