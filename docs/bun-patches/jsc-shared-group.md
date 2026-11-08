@@ -28,6 +28,11 @@ atomics. The SDK's archives have no atomics, so `wasm-ld` refuses them under `--
 The build compares its `__config_site` byte for byte against the SDK header that JSC and ICU compile
 with, and stops on a difference.
 
+Cache completion binds the exact pinned patched LLVM tree, SDK configuration, effective tools,
+sysroot headers and libc, profile flags and recipe. Both archive hashes and the ABI header must
+match before reuse; stale or partial outputs fail rather than receive a new stamp. Resumed source
+setup checks and completes each SDK patch, then rejects any other source changes.
+
 ## Original adapters
 
 - `jsc/common.sh`, `jsc/configure.sh`, `jsc/build.sh`, `jsc/finalize.sh`, `jsc/build-icu.sh`,

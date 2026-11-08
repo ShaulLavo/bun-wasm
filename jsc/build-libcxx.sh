@@ -10,8 +10,53 @@ sdk_commit=5a0bf653a1a06e1c18867567c5937006d3394a69
 source_dir="$LIBCXX_DIR/llvm-project"
 objects="$LIBCXX_DIR/build"
 sdk_config_site="$WASI_SDK_PATH/share/wasi-sysroot/include/wasm32-wasip1/noeh/c++/v1/__config_site"
-if [[ -f "$LIBCXX_DIR/lib/libc++.a" && -f "$LIBCXX_DIR/lib/libc++abi.a" ]]; then
-  echo "libcxx: $LIBCXX_DIR already built"
+stamp="$LIBCXX_DIR/.bunwasm-inputs"
+archives="$LIBCXX_DIR/.bunwasm-archives"
+sdk="$WASI_SDK_PATH/bin"
+flags="--target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT $JSC_PROFILE_FLAGS"
+
+libcxx_fail() {
+  echo "error: libcxx $*; choose a fresh JSC_BUILD_DIR" >&2
+  exit 1
+}
+
+libcxx_source_tree() (
+  [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$llvm_commit" ]] || libcxx_fail "source revision changed"
+  local index tree
+  index=$(mktemp "$LIBCXX_DIR/.source-index.XXXXXX")
+  unlink "$index"
+  trap '[[ ! -e "$index" ]] || unlink "$index"' EXIT
+  GIT_INDEX_FILE="$index" git -C "$source_dir" read-tree "$llvm_commit"
+  GIT_INDEX_FILE="$index" git -C "$source_dir" apply --cached "$LIBCXX_DIR/llvm-pr-186054.patch" "$LIBCXX_DIR/llvm-undo-part-of-194317.patch"
+  tree=$(GIT_INDEX_FILE="$index" git -C "$source_dir" write-tree)
+  git -C "$source_dir" diff --quiet "$tree" -- || libcxx_fail "patched source changed"
+  [[ -z "$(git -C "$source_dir" ls-files --others --exclude-standard)" ]] || libcxx_fail "untracked source inputs"
+  printf '%s\n' "$tree"
+)
+
+libcxx_inputs_hash() {
+  local tree tool path
+  tree=$(libcxx_source_tree)
+  {
+    printf 'libcxx=1\nllvm=%s\nsdk=%s\nsource=%s\nprofile=%s\nflags=%s\ncage=%s\n' "$llvm_commit" "$sdk_commit" "$tree" "$JSC_PROFILE" "$flags" "$CAGE"
+    sha256sum "$JSC_SRC/build-libcxx.sh" "$JSC_SRC/common.sh" "$WASI_SDK_PATH/VERSION" "$sdk_config_site" "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a" "$LIBCXX_DIR/llvm-pr-186054.patch" "$LIBCXX_DIR/llvm-undo-part-of-194317.patch"
+    find -L "$BUN_WASM_SYSROOT/include" "$WASI_SDK_PATH/share/cmake" -type f -print0 | sort -z | xargs -0 -r sha256sum
+    for tool in "$sdk/clang" "$sdk/clang++" "$sdk/llvm-ar" "$sdk/llvm-ranlib" cmake ninja; do
+      path=$(command -v "$tool") || return 1
+      sha256sum "$(readlink -f "$path")"
+      "$tool" --version || return 1
+    done
+  } | sha256sum | cut -d' ' -f1
+}
+
+if [[ -e "$stamp" || -e "$archives" || -e "$LIBCXX_DIR/lib/libc++.a" || -e "$LIBCXX_DIR/lib/libc++abi.a" ]]; then
+  [[ -s "$stamp" && -s "$archives" && -f "$LIBCXX_DIR/lib/libc++.a" && -f "$LIBCXX_DIR/lib/libc++abi.a" && -f "$LIBCXX_DIR/include/__config_site" ]] || libcxx_fail "cache completion is missing"
+  inputs=$(libcxx_inputs_hash)
+  [[ "$(cat "$stamp")" == "$inputs" ]] || libcxx_fail "inputs changed"
+  current_archives=$(cd "$LIBCXX_DIR" && sha256sum lib/libc++.a lib/libc++abi.a include/__config_site)
+  [[ "$(cat "$archives")" == "$current_archives" ]] || libcxx_fail "cached output bytes changed"
+  cmp "$sdk_config_site" "$LIBCXX_DIR/include/__config_site" || libcxx_fail "ABI configuration changed"
+  echo "libcxx: $LIBCXX_DIR already built and verified"
   exit 0
 fi
 mkdir -p "$LIBCXX_DIR"
@@ -25,13 +70,17 @@ fi
 if [[ "$(git -C "$source_dir" rev-parse HEAD 2>/dev/null)" != "$llvm_commit" ]]; then
   git -C "$source_dir" fetch -q --depth 1 --filter=blob:none origin "$llvm_commit"
   git -C "$source_dir" checkout -q --detach "$llvm_commit"
-  for patch in llvm-pr-186054 llvm-undo-part-of-194317; do
-    curl -fsSL -o "$LIBCXX_DIR/$patch.patch" "https://raw.githubusercontent.com/WebAssembly/wasi-sdk/$sdk_commit/src/$patch.patch"
-    git -C "$source_dir" apply "$LIBCXX_DIR/$patch.patch"
-  done
 fi
-sdk="$WASI_SDK_PATH/bin"
-flags="--target=wasm32-wasip1 --sysroot=$BUN_WASM_SYSROOT $JSC_PROFILE_FLAGS"
+# A matching HEAD is not a completed patch sequence after interruption.
+for patch in llvm-pr-186054 llvm-undo-part-of-194317; do
+  curl -fsSL -o "$LIBCXX_DIR/$patch.patch" "https://raw.githubusercontent.com/WebAssembly/wasi-sdk/$sdk_commit/src/$patch.patch"
+  if git -C "$source_dir" apply --reverse --check "$LIBCXX_DIR/$patch.patch" 2>/dev/null; then
+    continue
+  fi
+  git -C "$source_dir" apply --check "$LIBCXX_DIR/$patch.patch"
+  git -C "$source_dir" apply "$LIBCXX_DIR/$patch.patch"
+done
+inputs=$(libcxx_inputs_hash)
 $CAGE cmake -G Ninja -S "$source_dir/runtimes" -B "$objects" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_SYSTEM_NAME=WASI \
@@ -79,6 +128,12 @@ $CAGE ninja -C "$objects" -j"$JOBS" cxx_static cxxabi_static > "$LIBCXX_DIR/buil
 built_config_site="$objects/libcxx/include/c++/v1/__config_site"
 [[ -f "$built_config_site" ]] || built_config_site=$(find "$objects" -name __config_site -print -quit)
 cmp "$sdk_config_site" "$built_config_site"
-mkdir -p "$LIBCXX_DIR/lib"
+[[ "$(libcxx_inputs_hash)" == "$inputs" ]] || libcxx_fail "inputs changed during compilation"
+mkdir -p "$LIBCXX_DIR/lib" "$LIBCXX_DIR/include"
 cp "$objects/lib/libc++.a" "$objects/lib/libc++abi.a" "$LIBCXX_DIR/lib/"
+cp "$built_config_site" "$LIBCXX_DIR/include/__config_site"
+(cd "$LIBCXX_DIR" && sha256sum lib/libc++.a lib/libc++abi.a include/__config_site > "$archives.tmp")
+printf '%s\n' "$inputs" > "$stamp.tmp"
+mv "$archives.tmp" "$archives"
+mv "$stamp.tmp" "$stamp"
 echo "libcxx: atomics archives in $LIBCXX_DIR/lib"

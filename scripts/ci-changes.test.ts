@@ -340,3 +340,12 @@ for (const path of [
     expect(output).toEndWith("shared_native=true");
   });
 }
+
+
+test("shared engine bridge and errno adapter inputs retain their JSC and shared gates", () => {
+  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c"]) {
+    expect(needsJsc([path])).toBe(true);
+    expect(needsRust([path])).toBe(true);
+    expect(needsSharedNative([path])).toBe(true);
+  }
+});
