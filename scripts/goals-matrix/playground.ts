@@ -5,7 +5,7 @@ interface Playground {
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
   previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
-  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
+  term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
 }
 declare const playground: Playground;
 type PreviewState = { status: "pending" | "ready" } | { status: "failed"; error: unknown };
@@ -34,11 +34,15 @@ export async function ready(transport: Transport, engine: string, timeoutMs: num
   return state;
 }
 function transcript(): Promise<string> {
-  return new Promise(resolve => playground.term.write("", () => {
+  function logicalLines(): string {
     const buffer = playground.term.buffer.active;
-    const lines = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "");
-    resolve(lines.join("\n").trimEnd());
-  }));
+    const lines = Array.from({ length: buffer.length }, (_, index) => {
+      const line = buffer.getLine(index);
+      return (index && !line?.isWrapped ? "\n" : "") + (line?.translateToString(true) ?? "");
+    });
+    return lines.join("").trimEnd();
+  }
+  return new Promise(resolve => playground.term.write("", () => resolve(logicalLines())));
 }
 export async function terminal(transport: Transport): Promise<string> {
   await transport.useHost();

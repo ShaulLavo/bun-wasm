@@ -1,15 +1,15 @@
 import { test, expect } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { command, start } from "./playground";
+import { command, start, terminal } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { withPlayground } from "./test-fixture";
-function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready")): Transport {
+function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready"), lines: readonly { text: string; isWrapped: boolean }[] = []): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
-  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/", ready: previewReady }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
+  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/", ready: previewReady }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: lines.length, getLine: (index: number) => ({ isWrapped: lines[index]?.isWrapped, translateToString: () => lines[index]?.text ?? "" }) } } } } });
   return { capabilities: { browserName: "unit-test" }, async navigate() {}, async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {}, async close() {},
     async evaluate<T>(expression: string): Promise<T> { return runInContext(expression, context); },
   };
@@ -108,3 +108,12 @@ test("pending preview activation leaves the serialized Safari transport free for
     }
   });
 }, 30_000);
+
+test("terminal diagnostics join soft wraps without merging hard lines", async () => {
+  const transport = page(async () => {}, Promise.resolve("ready"), [
+    { text: "Cannot find module 'next/dist/compiled/next-server/page", isWrapped: false },
+    { text: "s.runtime.prod.js'", isWrapped: true },
+    { text: "code: MODULE_NOT_FOUND", isWrapped: false },
+  ]);
+  expect(await terminal(transport)).toBe("Cannot find module 'next/dist/compiled/next-server/pages.runtime.prod.js'\ncode: MODULE_NOT_FOUND");
+});
