@@ -72,27 +72,68 @@ function listener(port: number): { listening: boolean; running: boolean; url: st
   const listening = playground.previews.serves(port);
   return { listening, running: playground.shell.running, url: listening ? playground.previews.url(port) : null };
 }
-function previewReady(): boolean {
+function previewReady(refresh = false): boolean {
+  if (refresh) globalThis.__goalsPreview = undefined;
   if (!globalThis.__goalsPreview) {
-    globalThis.__goalsPreview = { status: "pending" };
+    const pending: PreviewState = { status: "pending" };
+    globalThis.__goalsPreview = pending;
     void playground.previews.ready.then(state => {
+      if (globalThis.__goalsPreview !== pending) return;
       globalThis.__goalsPreview = state === "ready" ? { status: "ready" } : { status: "failed", error: new Error(`Preview transport is ${state}`) };
-    }, error => { globalThis.__goalsPreview = { status: "failed", error }; });
+    }, error => { if (globalThis.__goalsPreview === pending) globalThis.__goalsPreview = { status: "failed", error }; });
   }
   const state = globalThis.__goalsPreview;
   if (state.status === "failed") throw state.error;
   return state.status === "ready";
 }
-export async function start(transport: Transport, text: string, timeoutMs: number, port = 5173): Promise<string> {
+type PreviewAttempt = { status: "pass" } | { status: "fail"; error: unknown };
+function remaining(deadline: number): number {
+  const value = deadline - Date.now();
+  if (value <= 0) throw new Error("Preview binding did not settle before the phase deadline");
+  return value;
+}
+async function currentPreview(transport: Transport, deadline: number, port: number): Promise<string> {
   await transport.useHost();
-  await transport.evaluate<boolean>(expression(previewReady, undefined));
+  while (true) {
+    const before = await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => value.listening || !value.running, remaining(deadline));
+    if (!before.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
+    await transport.evaluate<boolean>(expression(previewReady, true));
+    let activation: PreviewAttempt = { status: "pass" };
+    try { await until(() => transport.evaluate<boolean>(expression(previewReady, false)), value => value, remaining(deadline)); }
+    catch (error) { activation = { status: "fail", error }; }
+    const after = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port));
+    if (before.url !== after.url && (after.listening || after.running)) continue;
+    if (activation.status === "fail") throw activation.error;
+    if (!after.url) throw new Error("Preview listener stopped during activation");
+    return after.url;
+  }
+}
+export async function start(transport: Transport, text: string, timeoutMs: number, port = 5173): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  await transport.useHost();
+  await transport.evaluate<boolean>(expression(previewReady, true));
   const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port));
   if (before.running || before.listening) throw new Error("Cannot start with an existing foreground or listener");
   const token = await transport.evaluate<string>(expression(launch, text));
-  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
+  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, remaining(deadline));
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
-  await until(() => transport.evaluate<boolean>(expression(previewReady, undefined)), value => value, timeoutMs);
-  return result.url;
+  return currentPreview(transport, deadline, port);
+}
+export async function openPreview(transport: Transport, timeoutMs: number, port = 5173): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const url = await currentPreview(transport, deadline, port);
+    let navigation: PreviewAttempt = { status: "pass" };
+    try { await transport.openPreview(url); }
+    catch (error) { navigation = { status: "fail", error }; }
+    await transport.useHost();
+    const after = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, port));
+    if (url !== after.url && (after.listening || after.running)) continue;
+    if (navigation.status === "fail") throw navigation.error;
+    if (!after.url) throw new Error("Preview listener stopped during navigation");
+    await transport.usePreview();
+    return after.url;
+  }
 }
 function stop(): void {
   if (typeof playground === "undefined") return;
