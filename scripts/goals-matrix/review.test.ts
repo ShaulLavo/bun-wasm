@@ -1,3 +1,4 @@
+import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
 import { mkdtemp, mkdir, writeFile, chmod, rm, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,14 +8,14 @@ import { assetIdentity } from "./assets";
 import { fleet, removeStaging } from "./fleet";
 import { options } from "./run";
 
-function report(): Report { return { schema: 1, run: "regression", createdAt: "now", command: "test", source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() }; }
+function report(): Report { return { schema: 2, run: "regression", createdAt: "now", command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() }; }
 test("external reports reject unknown schemas and statuses, malformed attempts and false phase evidence", () => {
   expect(() => validateReport(JSON.parse(JSON.stringify({ ...report(), schema: 99 })))).toThrow();
   const result = report();
   const external = JSON.parse(JSON.stringify(result));
   external.cells[0].status = "unrecognized";
   expect(() => validateReport(external)).toThrow();
-  const attempt = { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass" as const, startedAt: "now", durationMs: 0, evidence: false })) };
+  const attempt = { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass" as const, startedAt: "now", durationMs: 0, timeoutMs: 180_000, evidence: false })) };
   expect(() => finish({ framework: "next", browser: "chrome", engine: "browser" }, attempt)).toThrow();
 });
 
