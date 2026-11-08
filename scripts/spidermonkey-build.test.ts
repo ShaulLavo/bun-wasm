@@ -146,3 +146,12 @@ test("archive ownership reads GNU and BSD long filenames without altering member
   assert.deepEqual(archiveMembers(extended), [{ name, bytes: payload }]);
   assert.throws(() => archiveMembers(named), /filename index/);
 });
+
+
+test("the retained C2 recipe converts both experimental sides with the experimental initializer", () => {
+  const recipe = readFileSync(new URL("../spidermonkey/relink-unicode-c2.sh", import.meta.url), "utf8");
+  for (const name of ["base", "probe"]) {
+    assert(recipe.includes(`node scripts/spidermonkey-side-core-receipt.ts convert-side "$out/${name}.implicit.wasm" "$out/${name}.wasm"`));
+  }
+  assert(!recipe.includes("engine-explicit-init.ts spidermonkey"));
+});

@@ -103,7 +103,7 @@ link_flags=(--shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry
   --export=spidermonkey_ctor_value --export=__stack_pointer --export=__wasm_call_ctors
   --export=spidermonkey_register --export=spidermonkey_run)
 "$WASI_SDK_PATH/bin/wasm-ld" "${link_flags[@]}" -Map="$out/base.map" -o "$out/base.implicit.wasm" "$out/engine-init.o" "$archive"
-node scripts/src/engine-explicit-init.ts spidermonkey "$out/base.implicit.wasm" "$out/base.wasm"
+node scripts/spidermonkey-side-core-receipt.ts convert-side "$out/base.implicit.wasm" "$out/base.wasm"
 
 probe_exports=(bunsm_icu_probe_property bunsm_icu_probe_sets bunsm_icu_probe_aliases bunsm_icu_probe_all_properties
   bunsm_ucd_simple_fold bunsm_ucd_is_letter bunsm_ucd_property_ranges bunsm_ucd_close_over_scf
@@ -119,6 +119,6 @@ for name in "${probe_exports[@]}" "${adapter_exports[@]}"; do link_flags+=("--ex
 "$WASI_SDK_PATH/bin/wasm-ld" "${link_flags[@]}" -Map="$out/probe.map" -o "$out/probe.implicit.wasm" \
   "$out/engine-init.o" "$out/allocator.o" "$out/icu_subset.o" "$out/probe.o" \
   "$out/ZoneShimFFI.o" "$out/special-case.o" "$archive"
-node scripts/src/engine-explicit-init.ts spidermonkey "$out/probe.implicit.wasm" "$out/probe.wasm"
+node scripts/spidermonkey-side-core-receipt.ts convert-side "$out/probe.implicit.wasm" "$out/probe.wasm"
 printf '%s\n' "${probe_exports[@]}" "${adapter_exports[@]}" > "$out/required-exports.txt"
 node spidermonkey/unicode-c2-receipt.ts "$out" "$SPIDERMONKEY_NATIVE_DIR" "$SPIDERMONKEY_EARLY_REPORT"

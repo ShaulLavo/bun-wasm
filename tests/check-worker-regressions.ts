@@ -19,7 +19,7 @@ const spiderMonkey = engine === "spidermonkey";
 if (spiderMonkey && !requestedArtifact) throw new Error("SpiderMonkey requires explicit --wasm CORE");
 if (spiderMonkey && tier !== "interp" && tier !== "pbl") throw new Error("SpiderMonkey requires --tier interp or pbl");
 if (spiderMonkey && host !== "native") throw new Error("SpiderMonkey worker regressions require the native host");
-const artifact = resolve(requestedArtifact ?? `dist/${engine === "quickjs" ? "bun" : `bun-${engine}`}.wasm`);
+const artifact = resolve(requestedArtifact || `dist/${engine === "quickjs" ? "bun" : `bun-${engine}`}.wasm`);
 const root = resolve(import.meta.dirname, "..");
 const launcher = process.env.BUN_WASM_LAUNCHER || resolve(process.env.CARGO_TARGET_DIR || "/work/tmp/bun-wasm-target", "release/bun-wasm");
 const shell = process.env.BUN_WASM_SHELL;

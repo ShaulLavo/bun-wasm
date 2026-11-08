@@ -93,7 +93,7 @@ fn run(bytes: Vec<u8>, cancel: Arc<Cancellation>) -> (FinalOutcome, String, Opti
     let mut diagnostics = Vec::new();
     let outcome = match &result {
         Ok(outcome) => *outcome,
-        Err(error) => process::startup_failure(error, &cancel, &mut diagnostics),
+        Err(error) => process::startup_failure(error, &cancel, || &mut diagnostics),
     };
     runtime.shutdown();
     (
@@ -174,7 +174,7 @@ fn unrequested_interrupted_io_is_still_a_startup_failure() {
             .context("unrequested startup I/O");
         let mut diagnostic = Vec::new();
         assert_eq!(
-            process::startup_failure(&error, &cancel, &mut diagnostic),
+            process::startup_failure(&error, &cancel, || &mut diagnostic),
             FinalOutcome::StartFailed(29)
         );
         assert!(
@@ -210,7 +210,7 @@ fn startup_failure_selects_before_reporting_and_rejects_late_kill() {
     };
     let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
     assert_eq!(
-        process::startup_failure(&error, &cancel, &mut diagnostic),
+        process::startup_failure(&error, &cancel, || &mut diagnostic),
         FinalOutcome::StartFailed(2)
     );
     assert!(!diagnostic.kill_accepted);
@@ -220,4 +220,29 @@ fn startup_failure_selects_before_reporting_and_rejects_late_kill() {
             .unwrap()
             .starts_with("bun-wasm child: ")
     );
+}
+
+#[test]
+fn startup_failure_selects_before_acquiring_diagnostics() {
+    let cancel = Cancellation::default();
+    let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    let mut diagnostic = Vec::new();
+    let outcome = process::startup_failure(&error, &cancel, || {
+        assert_eq!(cancel.start_status(), 2);
+        assert!(!cancel.kill(9));
+        &mut diagnostic
+    });
+    assert_eq!(outcome, FinalOutcome::StartFailed(2));
+    assert!(!diagnostic.is_empty());
+}
+
+#[test]
+fn selected_signal_never_acquires_diagnostics() {
+    let cancel = Cancellation::default();
+    assert!(cancel.kill(15));
+    let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::Interrupted));
+    let outcome = process::startup_failure(&error, &cancel, || -> Vec<u8> {
+        panic!("signal death must not acquire a diagnostic writer")
+    });
+    assert_eq!(outcome, FinalOutcome::Signal(15));
 }

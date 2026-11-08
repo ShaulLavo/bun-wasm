@@ -135,3 +135,8 @@ fixture also disposes a host before WASI starts.
 | [`web/src/playground/playground.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+Startup diagnostics now acquire their writer lazily, after the immutable typed
+terminal outcome is selected. An already-selected signal does not acquire the
+standard-error lock. Native regressions check diagnostic acquisition itself,
+not only a writer callback after acquisition.

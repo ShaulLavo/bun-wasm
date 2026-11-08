@@ -85,3 +85,8 @@ claim that later source or a release producer has passed. The historical stack
 review requested changes; its three fixes and subsequent runtime evidence do not
 replace that review with a second approval. Full G3 and the direct C++ regression
 executable remain unrun.
+
+Value construction extracts array, object and property-write operations into
+small helpers. Their order, temporary value ownership and rejected-property
+error release remain unchanged. This keeps the conversion code within the
+three-level nesting limit without changing its error behavior.

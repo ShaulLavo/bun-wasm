@@ -693,7 +693,7 @@ impl Processes {
                             Err(std::io::Error::other("child guest panicked").into())
                         })
                         .unwrap_or_else(|error| {
-                            startup_failure(&error, &cancellation, &mut std::io::stderr().lock())
+                            startup_failure(&error, &cancellation, || std::io::stderr().lock())
                         })
                     }
                 };
@@ -978,10 +978,10 @@ impl Processes {
 }
 
 /// Classify a child error after its Store and descriptors have physically stopped.
-pub(crate) fn startup_failure(
+pub(crate) fn startup_failure<W: std::io::Write>(
     error: &anyhow::Error,
     cancellation: &Cancellation,
-    diagnostics: &mut impl std::io::Write,
+    diagnostics: impl FnOnce() -> W,
 ) -> FinalOutcome {
     let errno = error
         .chain()
@@ -990,6 +990,7 @@ pub(crate) fn startup_failure(
         .unwrap_or(45); // ENOEXEC: invalid module/entry point.
     let outcome = cancellation.select(FinalOutcome::StartFailed(errno));
     if matches!(outcome, FinalOutcome::StartFailed(_)) {
+        let mut diagnostics = diagnostics();
         let _ = writeln!(diagnostics, "bun-wasm child: {error:#}");
     }
     outcome

@@ -24,3 +24,9 @@ The tiny pair comes from the existing original parameterized generator
 guest, runtime acceptance artifact, or public107 packet input. The implementation
 extends the reviewed no-Hermes shared-source contract without reopening its
 publication or native admission scope.
+
+The worker-review CLI preserves the normal QuickJS, JSC and Browser artifact
+paths when `--wasm` is omitted. The empty option sentinel cannot resolve to the
+current directory. Experimental SpiderMonkey selection still requires its
+explicit pair and tier. The fixture source control covers omitted and explicit
+paths independently.

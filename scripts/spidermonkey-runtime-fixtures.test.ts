@@ -458,3 +458,17 @@ test("specialized SpiderMonkey harnesses pass explicit core, side layout, launch
     expect(closed.output).toContain("PASS pipe-closed-output spidermonkey/native");
   }
 });
+
+
+test("worker review CLI keeps supported-engine defaults and honors explicit overrides", () => {
+  const script = readFileSync(join(source, "tests/check-worker-regressions.ts"), "utf8");
+  const setup = script.slice(script.indexOf("const args ="), script.indexOf("const root ="));
+  const javascript = new Bun.Transpiler({ loader: "ts" }).transformSync(setup);
+  const invoke = new Function("process", "resolve", `${javascript}; return { engine, host, artifact };`);
+  const cases: readonly (readonly [string, string])[] = [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]];
+  for (const [engine, file] of cases) {
+    expect(invoke({ argv: ["node", "script", "--engine", engine] }, resolve).artifact).toBe(resolve("dist", file));
+    expect(invoke({ argv: ["node", "script", "--engine", engine, "--wasm", "custom path.wasm"] }, resolve).artifact).toBe(resolve("custom path.wasm"));
+  }
+  expect(() => invoke({ argv: ["node", "script", "--engine", "spidermonkey", "--tier", "pbl"] }, resolve)).toThrow("explicit --wasm");
+});

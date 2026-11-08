@@ -175,3 +175,19 @@ test("initializer conversion uses global indices, preserves imports, and encodes
     __indirect_function_table: new WebAssembly.Table({ element: "anyfunc", initial: 1 }), core_checkpoint() {} } });
   expect(instance.exports.__stack_pointer).toBe(stack);
 });
+
+
+test("the experimental initializer CLI accepts the retained C2 converter inputs", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-c2-cli-"));
+  try {
+    for (const name of ["base", "probe"]) {
+      const input = join(root, `${name}.implicit.wasm`);
+      const output = join(root, `${name}.wasm`);
+      writeFileSync(input, implicitSide());
+      execFileSync("node", ["scripts/spidermonkey-side-core-receipt.ts", "convert-side", input, output]);
+      expect(WebAssembly.validate(readFileSync(output))).toBe(true);
+      expect(WebAssembly.Module.exports(new WebAssembly.Module(readFileSync(output))))
+        .toContainEqual({ name: "spidermonkey_initialize_memory", kind: "function" });
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

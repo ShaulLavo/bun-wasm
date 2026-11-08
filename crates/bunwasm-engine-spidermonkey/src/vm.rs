@@ -160,34 +160,42 @@ fn value_from(value: Val) -> SmVal {
         Val::BigUint(value) => SmVal(unsafe { sys::bsm_bigint(value as i64, 1) }),
         Val::Str(value) => string(&value),
         Val::Bytes(value) => SmVal(unsafe { sys::bsm_uint8_array(value.as_ptr(), value.len()) }),
-        Val::Array(values) => {
-            let array = SmVal(unsafe { sys::bsm_new_array(values.len()) });
-            for (index, value) in values.into_iter().enumerate() {
-                let item = value_from(value);
-                unsafe { sys::bsm_array_set(array.raw(), index as u32, item.raw()) };
-            }
-            array
-        }
-        Val::Object(fields) => {
-            let object = SmVal(unsafe { sys::bsm_new_object() });
-            for (key, value) in fields {
-                let value = value_from(value);
-                let mut error = 0;
-                let ok = unsafe {
-                    sys::bsm_set(
-                        object.raw(),
-                        key.as_ptr().cast::<c_char>(),
-                        key.len(),
-                        value.raw(),
-                        &mut error,
-                    )
-                };
-                if !ok && error != 0 {
-                    unsafe { sys::bsm_release(error) }
-                }
-            }
-            object
-        }
+        Val::Array(values) => array_value_from(values),
+        Val::Object(fields) => object_value_from(fields),
+    }
+}
+
+fn array_value_from(values: Vec<Val>) -> SmVal {
+    let array = SmVal(unsafe { sys::bsm_new_array(values.len()) });
+    for (index, value) in values.into_iter().enumerate() {
+        let item = value_from(value);
+        unsafe { sys::bsm_array_set(array.raw(), index as u32, item.raw()) };
+    }
+    array
+}
+
+fn object_value_from(fields: Vec<(String, Val)>) -> SmVal {
+    let object = SmVal(unsafe { sys::bsm_new_object() });
+    for (key, value) in fields {
+        set_object_value(&object, &key, value);
+    }
+    object
+}
+
+fn set_object_value(object: &SmVal, key: &str, value: Val) {
+    let value = value_from(value);
+    let mut error = 0;
+    let ok = unsafe {
+        sys::bsm_set(
+            object.raw(),
+            key.as_ptr().cast::<c_char>(),
+            key.len(),
+            value.raw(),
+            &mut error,
+        )
+    };
+    if !ok && error != 0 {
+        unsafe { sys::bsm_release(error) }
     }
 }
 

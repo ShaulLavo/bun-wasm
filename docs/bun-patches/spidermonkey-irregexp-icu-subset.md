@@ -128,3 +128,8 @@ the pinned test262 `special_casing_conditional.js` and `Final_Sigma_U180E.js`
 inputs through a code-point port of the upstream scan. The patched file
 compiles with the retained N1 compile command, and preprocessing shows the new
 arm active. No native library or VM execution has run this source.
+
+The retained C2 relink recipe converts both baseline and probe sides through
+`spidermonkey-side-core-receipt.ts convert-side`. It no longer calls the
+supported-only initializer CLI. Source checks cover both recipe invocations,
+and a tiny valid side exercises the experimental converter's actual CLI.
