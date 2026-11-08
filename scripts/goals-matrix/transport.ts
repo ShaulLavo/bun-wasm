@@ -11,7 +11,13 @@ export interface Transport {
   close(): Promise<void>;
 }
 export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number): Promise<Transport> {
-  const browser = await (kind === "chrome" ? chromium.launch({ channel: "chrome", headless: true }) : firefox.launch({ headless: true }));
+  const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
+  if (kind === "chrome" && executablePath) {
+    const version = Bun.spawn([executablePath, "--version"], { stdout: "pipe", timeout: 5000 });
+    const name = await new Response(version.stdout).text();
+    if (await version.exited !== 0 || !name.startsWith("Google Chrome ")) throw new Error(`Expected genuine Google Chrome, received ${name}`);
+  }
+  const browser = await (kind === "chrome" ? chromium.launch({ ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs }) : firefox.launch({ headless: true, timeout: timeoutMs }));
   try {
     const context = await browser.newContext({ serviceWorkers: "allow" });
     const host = await context.newPage();
@@ -19,7 +25,7 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     let page = host;
     page.setDefaultTimeout(timeoutMs);
     return {
-      capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? "chrome channel" : firefox.executablePath() },
+      capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() },
       async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
       evaluate: expression => page.evaluate(expression),
       async openPreview(url) {

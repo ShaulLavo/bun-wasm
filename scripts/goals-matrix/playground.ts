@@ -7,7 +7,8 @@ interface Playground {
   term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { translateToString(trim: boolean): string } | undefined } } };
 }
 declare const playground: Playground;
-export function expression<A, R>(operation: (input: A) => R, input: A): string { return `(${operation.toString()})(${JSON.stringify(input)})`; }
+declare global { var __goalsCommand: { token: string; done: boolean; code: number | null; error: string | null } | undefined; }
+function expression<A, R>(operation: (input: A) => R, input: A): string { return `(${operation.toString()})(${JSON.stringify(input)})`; }
 export async function until<T>(operation: () => Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
   while (true) {
@@ -17,12 +18,16 @@ export async function until<T>(operation: () => Promise<T>, accept: (value: T) =
     await Bun.sleep(Math.min(100, end - Date.now()));
   }
 }
-function readyState(): { ready: boolean; status: string; engine: string | null; agent: string } {
-  return { ready: typeof playground !== "undefined", status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
+function readyState(): { ready: boolean; status: string; engine: string | null; agent: string; observedEngine: string | null } {
+  const control = document.querySelector("#engine");
+  const observedEngine = control && "value" in control && typeof control.value === "string" ? control.value : null;
+  return { observedEngine, ready: typeof playground !== "undefined", status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
 }
 export async function ready(transport: Transport, engine: string, timeoutMs: number): Promise<unknown> {
   const state = await until(() => transport.evaluate<ReturnType<typeof readyState>>(expression(readyState, undefined)), value => value.ready || /failed|missing/i.test(value.status), timeoutMs);
-  if (!state.ready || !/ready/.test(state.status) || state.engine !== engine) throw new Error(`Playground not ready for ${engine}: ${JSON.stringify(state)}`);
+  const label = engine === "browser" ? "Browser (native)" : engine === "quickjs" ? "QuickJS" : "JavaScriptCore";
+  if (!state.status.includes(label)) throw new Error(`Wrong running engine status: ${state.status}`);
+  if (!state.ready || !/ready/.test(state.status) || state.engine !== engine || state.observedEngine !== engine) throw new Error(`Playground not ready for ${engine}: ${JSON.stringify(state)}`);
   return state;
 }
 function transcript(): Promise<string> {
@@ -36,14 +41,23 @@ export async function terminal(transport: Transport): Promise<string> {
   await transport.useHost();
   return transport.evaluate<string>(expression(transcript, undefined));
 }
-function launch(text: string): void { void playground.shell.submit(text); }
-function shellState(): { running: boolean; code: number } { return { running: playground.shell.running, code: playground.shell.lastExit }; }
+function launch(text: string): string {
+  const current: NonNullable<typeof globalThis.__goalsCommand> = { token: crypto.randomUUID(), done: false, code: null, error: null };
+  globalThis.__goalsCommand = current;
+  void playground.shell.submit(text).then(() => { current.code = playground.shell.lastExit; current.done = true; }, error => { current.error = String(error); current.done = true; });
+  return current.token;
+}
+function shellState(token: string): { done: boolean; code: number | null; error: string | null } {
+  const current = globalThis.__goalsCommand;
+  if (!current || current.token !== token) throw new Error("Command token differs");
+  return { done: current.done, code: current.code, error: current.error };
+}
 export async function command(transport: Transport, text: string, timeoutMs: number): Promise<unknown> {
   await transport.useHost();
-  await transport.evaluate(expression(launch, text));
-  const result = await until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, undefined)), state => !state.running, timeoutMs);
+  const token = await transport.evaluate<string>(expression(launch, text));
+  const result = await until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
   const output = await terminal(transport);
-  if (result.code !== 0) throw new Error(`${text} exited ${result.code}: ${output.slice(-6000)}`);
+  if (result.code !== 0 || result.error) throw new Error(`${text} exited ${result.code}: ${result.error ?? output.slice(-6000)}`);
   return { ...result, output };
 }
 function listener(): { listening: boolean; running: boolean; url: string | null } {
@@ -53,8 +67,10 @@ function listener(): { listening: boolean; running: boolean; url: string | null 
 }
 export async function start(transport: Transport, text: string, timeoutMs: number): Promise<string> {
   await transport.useHost();
-  await transport.evaluate(expression(launch, text));
-  const result = await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), value => value.listening || !value.running, timeoutMs);
+  const before = await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined));
+  if (before.running || before.listening) throw new Error("Cannot start with an existing foreground or listener");
+  const token = await transport.evaluate<string>(expression(launch, text));
+  const result = await until(async () => ({ ...await transport.evaluate<ReturnType<typeof listener>>(expression(listener, undefined)), command: await transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)) }), value => value.listening || value.command.done, timeoutMs);
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
   return result.url;
 }
@@ -70,7 +86,7 @@ export async function stopServer(transport: Transport, timeoutMs: number): Promi
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";
-  return { text, matched: text.includes(input.text) };
+  return { text, matched: text.trim() === input.text };
 }
 export async function render(transport: Transport, framework: Framework, text: string, timeoutMs: number): Promise<unknown> {
   return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text })), value => value.matched, timeoutMs);
@@ -79,12 +95,13 @@ function click(input: { button: string; clicked: string }): { before: string; cl
   const before = document.querySelector(input.clicked)?.textContent?.trim() ?? "";
   const button = document.querySelector<HTMLButtonElement>(input.button);
   if (!button || button.disabled) return { before, clicked: false };
+  if (!/\b0\b/.test(before)) throw new Error(`Counter must start at zero, received ${before}`);
   button.click();
   return { before, clicked: true };
 }
 export async function checkClick(transport: Transport, framework: Framework, timeoutMs: number): Promise<unknown> {
   const before = await until(() => transport.evaluate<ReturnType<typeof click>>(expression(click, framework)), value => value.clicked, timeoutMs);
-  const after = await until(() => transport.evaluate<string>(`document.querySelector(${JSON.stringify(framework.clicked)})?.textContent?.trim() ?? ''`), value => value !== before.before && /1/.test(value), timeoutMs);
+  const after = await until(() => transport.evaluate<string>(`document.querySelector(${JSON.stringify(framework.clicked)})?.textContent?.trim() ?? ''`), value => value === before.before.replace(/\b0\b/, "1"), timeoutMs);
   return { before: before.before, after };
 }
 async function saveEdit(input: { source: string; original: string; edited: string }): Promise<void> {

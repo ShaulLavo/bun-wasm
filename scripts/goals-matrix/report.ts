@@ -12,7 +12,7 @@ function mark(cell: Cell): string {
 export function markdown(report: Report): string {
   validateReport(report);
   const cells = new Map(report.cells.map(cell => [boxId(cell), cell]));
-  const lines = ["# Framework matrix", "", `Run ${report.run}. Generated ${report.createdAt}.`, "", `Source ${report.source.commit}${report.source.dirty ? " with uncommitted changes" : ""}.`, "", "```sh", report.command, "```", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", ""];
+  const lines = ["# Framework matrix", "", `Run ${report.run}. Generated ${report.createdAt}. ${report.cells.length} boxes.`, "", `Source ${report.source.commit}${report.source.dirty ? " with uncommitted changes" : ""}.`, "", "```sh", report.command, "```", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", ""];
   for (const browser of browsers) {
     lines.push(`## ${browserLabels[browser]}`, "", "| Framework | " + engines.join(" | ") + " |", "| --- | " + engines.map(() => "---").join(" | ") + " |");
     for (const framework of frameworks) lines.push(`| ${framework.label} | ` + engines.map(engine => {

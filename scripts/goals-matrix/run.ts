@@ -1,15 +1,20 @@
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { readFile, mkdir, writeFile, rmdir } from "node:fs/promises";
+import { hostname } from "node:os";
 import { resolve, join } from "node:path";
 import { browsers, engines, boxId, frameworks, type Browser, type Engine } from "./catalog";
 import { initialCells, validateReport, type Report, type Cell } from "./model";
 import { saveReport } from "./report";
 import { prerequisites } from "./discovery";
-import { execute } from "./execute";
+import { execute, bounded } from "./execute";
 import { createPlaywrightTransport, type Transport } from "./transport";
+import { createSafariTransport } from "./safari-transport";
+import { assetIdentity } from "./assets";
+import { withNativeDriver } from "./native";
+import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 
 export interface Options {
   root: string; output: string; timeoutMs: number; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
-  resume: boolean; retryFailures: boolean; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
+  resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
 }
 function selected<T extends string>(value: string, all: readonly T[]): T[] {
   const names = value.split(",");
@@ -21,7 +26,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source"];
+    const allowed = ["root", "output", "timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -34,19 +39,22 @@ export function options(args: readonly string[]): Options {
     browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
     frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
-    deviceUDID: values.get("device-udid"), assetSource,
+    deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"),
   };
 }
 async function nativeTransport(box: Cell, config: Options): Promise<Transport> {
-  const modulePath = "./safari-transport.ts";
-  const { createSafariTransport } = await import(modulePath);
-  return createSafariTransport({ browser: box.browser, endpoint: box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs });
+  if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
+  const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
+  if (!endpoint) throw new Error("Missing native WebDriver endpoint");
+  return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs });
 }
 async function initialReport(config: Options): Promise<Report> {
-  const commit = (await new Response(Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
-  const dirty = Boolean((await new Response(Bun.spawn(["git", "status", "--porcelain"], { stdout: "pipe" }).stdout).text()).trim());
+  const staged: Report["source"] | undefined = config.sourceFile ? JSON.parse(await readFile(config.sourceFile, "utf8")) : undefined;
+  const commit = staged?.commit ?? (await new Response(Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" }).stdout).text()).trim();
+  const dirty = staged?.dirty ?? Boolean((await new Response(Bun.spawn(["git", "status", "--porcelain"], { stdout: "pipe" }).stdout).text()).trim());
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 1, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds } }, cells: initialCells() };
+  const report: Report = { schema: 1, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, files: await assetIdentity(config.root) } }, cells: initialCells() };
+  if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: Report = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
   validateReport(previous);
@@ -59,7 +67,7 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-async function runCell(cell: Cell, config: Options, base: string): Promise<Cell> {
+async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal): Promise<Cell> {
   const missing = prerequisites(cell, config);
   if (missing) return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: cell.attempts, status: "not runnable yet", ...missing };
   const framework = frameworks.find(framework => framework.id === cell.framework);
@@ -67,32 +75,63 @@ async function runCell(cell: Cell, config: Options, base: string): Promise<Cell>
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", cell.engine);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
-  return execute({ box: cell, framework, url: url.href, timeoutMs: config.timeoutMs,
+  return execute({ box: cell, framework, url: url.href, timeoutMs: config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
 }
 export async function run(config: Options): Promise<Report> {
+  await mkdir(config.output, { recursive: true });
+  const lock = join(config.output, ".goals-matrix-lock");
+  await mkdir(lock);
+  try { return await runLocked(config); }
+  finally { await rmdir(lock); }
+}
+function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): void {
+  for (const cell of report.cells) {
+    const blocker = nativePlatformBlocker(cell);
+    if (blocker) blockers.set(cell.browser, blocker);
+  }
+}
+async function runLocked(config: Options): Promise<Report> {
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);
   const server = Bun.spawn(["bun", "web/serve.ts"], { env: { ...process.env, ROOT: config.root, HOST: "127.0.0.1", PORT: "0" }, stdout: "pipe", stderr: "inherit" });
+  const resource = { kind: "asset-server" as const, host: hostname(), pid: server.pid, stopped: false };
+  report.resources = (report.resources ?? []).concat([resource]);
   let base = "";
+  const controller = new AbortController();
+  const interrupt = () => controller.abort();
+  process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
   try {
     const reader = server.stdout.getReader();
-    const first = await reader.read(); reader.releaseLock();
+    const first = await bounded(() => reader.read(), 10_000); reader.releaseLock();
     base = /at (http:\/\/\S+)/.exec(new TextDecoder().decode(first.value))?.[1] ?? "";
     if (!base) throw new Error("Playground asset server did not publish a URL");
+    const blockers = new Map<Browser, PlatformBlocker>();
+    if (!config.retryFailures) seedBlockers(report, blockers);
     for (const [index, cell] of report.cells.entries()) {
       if (!selectedCell(cell, config)) continue;
-      report.cells[index] = await runCell(cell, config, base);
+      if (controller.signal.aborted) break;
+      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, controller.signal);
+      report.cells[index] = result;
+      const blocker = nativePlatformBlocker(result);
+      if (blocker) blockers.set(cell.browser, blocker);
       await saveReport(config.output, report);
       console.log(boxId(cell), report.cells[index]?.status);
     }
-  } finally { server.kill("SIGTERM"); await server.exited; }
+  } finally {
+    process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
+    server.kill("SIGTERM"); await server.exited;
+    resource.stopped = true;
+    await saveReport(config.output, report);
+  }
   return report;
 }
 if (import.meta.main) {
-  const report = await run(options(process.argv.slice(2)));
+  const config = options(process.argv.slice(2));
+  const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint;
+  const report = automaticNative ? await withNativeDriver(endpoint => run({ ...config, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), join(config.output, "native-cleanup.json")) : await run(config);
   process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
 }
