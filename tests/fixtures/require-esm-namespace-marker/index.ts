@@ -7,6 +7,8 @@ assert.equal(importDefault(namespace).default(), "default called");
 assert.equal(require("./default.mts"), namespace);
 assert.equal(require.cache[require.resolve("./default.mts")].exports, namespace);
 assert.equal("__esModule" in namespace, true);
+assert.equal(Object.prototype.propertyIsEnumerable.call(Object.getPrototypeOf(namespace), "__esModule"), false);
+assert.deepEqual(Object.keys(namespace), ["count", "default", "increment"]);
 assert.equal(Object.prototype.propertyIsEnumerable.call(namespace, "__esModule"), false);
 assert.equal(Object.prototype.toString.call(namespace), "[object Module]");
 console.log("default marker, call, and cached identity");
@@ -35,6 +37,8 @@ assert.equal(own.default(), "own default");
 const undefinedMarker = require("./undefined-marker.mts");
 assert.equal(undefinedMarker.__esModule, undefined);
 assert.equal(Object.prototype.hasOwnProperty.call(undefinedMarker, "__esModule"), true);
+undefinedMarker.mark();
+assert.equal(undefinedMarker.__esModule, false);
 console.log("explicit markers stay live and unchanged");
 
 const common = require("./common.cts");

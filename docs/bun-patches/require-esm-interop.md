@@ -28,3 +28,20 @@ Both loader modes check default functions, named live exports, explicit required
 namespace identity and real CommonJS default imports. Public builds before and
 after the internal conversion must emit identical ordinary interop code. The
 existing metadata regression remains separate and unchanged.
+
+## Required split-engine namespaces
+
+The original `src/js/require_esm_namespace.ts` adapter adds the inherited,
+non-enumerable `__esModule` marker that native Bun exposes on required ES
+namespaces. The split-engine `native.requireEsm` handoff uses a cached view with
+live export getters. It never copies export values or mutates the engine's
+namespace. Namespaces that already export `__esModule` return unchanged, including
+false and undefined exports. CommonJS values and the browser's internal bundler
+conversion do not use this adapter. The upstream reference remains Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`; no upstream source is copied.
+
+`tests/fixtures/require-esm-namespace-marker/` exercises the actual QuickJS and
+JavaScriptCore guests through the native fixture gate. It also checks the browser
+guest as a control. The fixture covers default-function calls, cached identity,
+live exports shared with dynamic import, named-only modules, explicit markers,
+and unchanged CommonJS exports.

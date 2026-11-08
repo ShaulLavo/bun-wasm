@@ -603,7 +603,7 @@
         callModuleWrapper(mod, wrapper, path);
         return;
       }
-      mod.exports = native.requireEsm(path);
+      mod.exports = internal.require("require_esm_namespace")(native.requireEsm(path));
       return;
     }
     const wrapper = native.compileCjs(path);
