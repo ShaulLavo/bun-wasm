@@ -14,6 +14,7 @@ else
   bun "$REPO/scripts/build-wasi-sysroot.ts"
 fi
 "$jsc/fetch-webkit.sh"
+[[ "$JSC_PROFILE" != shared-group ]] || "$jsc/build-libcxx.sh"
 "$jsc/build-icu.sh"
 rm -f "$JSC_INPUTS_STAMP"
 "$jsc/configure.sh"

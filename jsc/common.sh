@@ -24,6 +24,7 @@ esac
 WEBKIT_DIR="$JSC_BUILD_DIR/webkit"
 ICU_DIR="$JSC_BUILD_DIR/icu"
 ICU_PREFIX="$ICU_DIR/prefix"
+LIBCXX_DIR="$JSC_BUILD_DIR/libcxx"
 JSC_OBJ="$JSC_BUILD_DIR/build/jsc"
 SHIM_DIR="$JSC_BUILD_DIR/shim"
 JSC_CONFIG_DIR="$JSC_BUILD_DIR/inputs"
@@ -46,7 +47,11 @@ mkdir -p "$JSC_BUILD_DIR"
 JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
 JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
 # The jsc shell is a standalone split program; a group side has no shell.
-[[ "$JSC_PROFILE" != split ]] || JSC_ARTIFACTS+=("$JSC_BUILD_DIR/jsc.wasm")
+if [[ "$JSC_PROFILE" == split ]]; then
+  JSC_ARTIFACTS+=("$JSC_BUILD_DIR/jsc.wasm")
+else
+  JSC_ARTIFACTS+=("$LIBCXX_DIR/lib/libc++.a" "$LIBCXX_DIR/lib/libc++abi.a")
+fi
 
 jsc_source_hashes() (
   cd "$JSC_SRC" || return 1
