@@ -220,10 +220,7 @@ pub(crate) fn publish_module(
     })
 }
 
-pub(crate) fn attach_module(
-    member: &MemberLease,
-    token: u32,
-) -> Result<(Module, Arc<str>), Errno> {
+pub(crate) fn attach_module(member: &MemberLease, token: u32) -> Result<(Module, Arc<str>), Errno> {
     let state = member.group.lock();
     GroupInner::receives(&state, member.member)?;
     match state.directory.entries.get(&token) {
