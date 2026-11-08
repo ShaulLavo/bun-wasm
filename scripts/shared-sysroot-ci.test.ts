@@ -174,6 +174,8 @@ test("shared native checks consume one matching launcher and one produced group 
   expect(shared).toContain("name: native-profile-launcher");
   expect(shared).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
   expect(shared).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
+  expect(shared).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
+  expect(shared.indexOf('"$GUEST_CARGO" fetch --locked')).toBeLessThan(shared.indexOf("      - name: Produce the shared native profile once"));
   expect(shared.match(/bun scripts\/build-native-profile.ts shared-group/g)).toHaveLength(1);
   expect(shared).toContain("bun scripts/test-checks.ts native --profile shared-group");
   expect(shared).toContain('export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"');

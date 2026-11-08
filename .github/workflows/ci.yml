@@ -1521,6 +1521,10 @@ jobs:
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
           cargo fetch --locked
+          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+          eval "$guest_environment"
+          sysroot=$("$RUSTC" --print sysroot)
+          "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
       - name: Produce the shared native profile once
         if: needs.quality.outputs.shared-native == 'true'
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
