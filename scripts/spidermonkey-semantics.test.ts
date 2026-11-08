@@ -199,3 +199,10 @@ test("error formatting reads saved-frame metadata through an immutable internal 
   expect(install).toContain("JSPROP_READONLY | JSPROP_PERMANENT");
   expect(shim).toContain("saved-frame reader installation failed");
 });
+
+test("the engine realm enables standard shared memory before creating its global", () => {
+  const initialize = definition(shim, "extern \"C\" void bsm_init(const bsm_config* config)");
+  const enable = "options.creationOptions().setSharedMemoryAndAtomicsEnabled(true)";
+  expect(initialize).toContain(enable);
+  expect(initialize.indexOf(enable)).toBeLessThan(initialize.indexOf("JS_NewGlobalObject"));
+});

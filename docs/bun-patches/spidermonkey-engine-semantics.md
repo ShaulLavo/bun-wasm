@@ -12,7 +12,7 @@ The adapter targets `mozilla-firefox/firefox` revision
 `a5df22d986d4b626f771b4f8885241941601c35c`. Its API inputs are
 `js/public/Modules.h`, `Promise.h`, `WeakMap.h`, `Stack.h`,
 `CompilationAndEvaluation.h`, `ArrayBuffer.h`, and
-`experimental/TypedData.h`. Relevant implementation contracts were checked in
+`experimental/TypedData.h`, and `RealmOptions.h`. Relevant implementation contracts were checked in
 `js/src/vm/Modules.cpp`, `CompilationAndEvaluation.cpp`, `JSFunction.h`,
 `ArrayBufferObject.cpp`, and `frontend/TokenStream.cpp`. No upstream file changes.
 
@@ -63,6 +63,13 @@ The adapter targets `mozilla-firefox/firefox` revision
   awaiting-caller reconstruction. Interruption consumes the
   latched engine outcome instead of polling the host again. Primitive inputs to
   native promise reactions return an error rather than dereferencing null.
+
+- Realm creation enables SpiderMonkey's standard shared memory and Atomics APIs
+  before creating the global. The JSAPI default disables both. Framework WASI
+  bindings inspect and allocate SharedArrayBuffer within one guest, even without
+  cross-process sharing. This does not enable guest-to-guest shared-memory
+  transfer, add native threads, or change the program's Wasm memory profile.
+  The existing `shared-array-buffer` fixture keeps its DataCloneError assertion.
 
 ## Evidence boundary
 
