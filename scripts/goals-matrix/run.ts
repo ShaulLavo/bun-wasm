@@ -152,7 +152,7 @@ if (import.meta.main) {
   const config = options(process.argv.slice(2));
   const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint;
   const report = automaticNative
-    ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), join(config.output, "native-cleanup.json")).catch(async error => {
+    ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json") }).catch(async error => {
       if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
       return unavailableReport(config, error);
     })
