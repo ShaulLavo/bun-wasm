@@ -13,4 +13,5 @@ test("Qwik's client optimizer preserves the starter's render call", async () => 
   });
   expect(result.diagnostics).toEqual([]);
   expect(result.modules[0]?.code).toContain("render(document,");
+  expect(result.modules[0]?.code).toContain("@builder.io/qwik/qwikloader.js");
 });
