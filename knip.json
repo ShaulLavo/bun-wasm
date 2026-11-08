@@ -20,6 +20,7 @@
         "scripts/verify-engine-memory-browser.ts",
         "scripts/app-matrix/vinext-probe.ts",
         "scripts/fixtures/vinext-probe-control.ts",
+        "scripts/fixtures/next-trace-server.ts",
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/next-acceptance.ts",
         "scripts/app-matrix/next-acceptance-reference.ts",

@@ -1,4 +1,4 @@
-const port = process.argv[2];
+const port = process.env.PORT ?? process.argv[2];
 if (!port) throw new Error('Expected a port');
 process.env.NODE_ENV = 'production';
 process.env.HOST = '127.0.0.1';

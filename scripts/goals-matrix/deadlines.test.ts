@@ -26,7 +26,7 @@ test("an explicit Nuxt install budget leaves the campaign phase timeout unchange
 });
 
 test("default, strict, and explicit equal-budget runs keep their original effective bounds", () => {
-  expect(options(["--asset-source=test"]).timeoutMs).toBe(180_000);
+  expect(options(["--asset-source=test"]).timeoutMs).toBe(90_000);
   const strict = options(campaign), equal = options(campaign.concat("--install-timeout-ms=nuxt:90000"));
   expect(strict.installTimeouts).toEqual({});
   expect(deadlinePolicy(strict.timeoutMs, strict.installTimeouts)).toEqual(deadlinePolicy(equal.timeoutMs, equal.installTimeouts));

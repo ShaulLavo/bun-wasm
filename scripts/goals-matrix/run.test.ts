@@ -3,7 +3,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, mkdir, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { options, run } from "./run";
+import { options, run, playgroundURL } from "./run";
+import { frameworks } from "./catalog";
 import { saveReport } from "./report";
 
 test("the actual CLI inventory discovers all missing prerequisites and reaps its real asset server", async () => {
@@ -33,4 +34,15 @@ test("a rejected incomplete report never replaces the previous saved report", as
     await expect(saveReport(scratch, { schema: 2, run: "test", createdAt: "now", command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: [] })).rejects.toThrow("208");
     expect(await Bun.file(join(scratch, "TABLE.json")).text()).toBe("previous result");
   } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+
+test("React Router acceptance opens origin-root previews so server and browser routers see the same path", () => {
+  const framework = frameworks.find(item => item.id === "react-router");
+  if (!framework) throw new Error("Missing React Router template");
+  const url = new URL(playgroundURL("http://127.0.0.1:4173/", framework, "browser"));
+  expect(url.searchParams.has("root-previews")).toBe(true);
+  expect(url.searchParams.get("template")).toBe(framework.template);
+  expect(url.searchParams.get("engine")).toBe("browser");
+  expect(url.searchParams.get("mode")).toBe("memory");
 });
