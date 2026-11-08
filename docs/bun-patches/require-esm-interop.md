@@ -41,7 +41,7 @@ conversion do not use this adapter. The upstream reference remains Bun
 `9510e74152073d850a18758ca41114d8f214ffa6`; no upstream source is copied.
 
 `tests/fixtures/require-esm-namespace-marker/` exercises the actual QuickJS and
-JavaScriptCore guests through the native fixture gate. It also checks the browser
-guest as a control. The fixture covers default-function calls, cached identity,
+JavaScriptCore guests through the native fixture gate. The existing browser interop and metadata
+controls remain unchanged. The fixture covers default-function calls, cached identity,
 live exports shared with dynamic import, named-only modules, explicit markers,
 and unchanged CommonJS exports.

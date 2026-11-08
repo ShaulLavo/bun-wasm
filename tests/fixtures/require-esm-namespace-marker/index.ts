@@ -10,6 +10,7 @@ assert.equal("__esModule" in namespace, true);
 assert.equal(Object.prototype.propertyIsEnumerable.call(Object.getPrototypeOf(namespace), "__esModule"), false);
 assert.deepEqual(Object.keys(namespace), ["count", "default", "increment"]);
 assert.equal(Object.prototype.propertyIsEnumerable.call(namespace, "__esModule"), false);
+assert.equal(Object.hasOwn(namespace, "__esModule"), false);
 assert.equal(Object.prototype.toString.call(namespace), "[object Module]");
 console.log("default marker, call, and cached identity");
 
@@ -25,7 +26,7 @@ console.log("live exports across require and import");
 const named = require("./named.mts");
 assert.equal(named.named, 7);
 assert.equal(named.__esModule, true);
-assert.equal(Object.prototype.hasOwnProperty.call(named, "__esModule"), false);
+assert.equal(Object.hasOwn(named, "__esModule"), false);
 console.log("named-only namespace marker");
 
 const own = require("./marker.mts");
