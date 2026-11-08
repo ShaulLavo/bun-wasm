@@ -4,6 +4,7 @@ shared-wasm-memory wait cancellation: pass
 shared-wasm-memory Global validation: pass
 shared-wasm-memory SIMD boundary: pass
 shared-wasm-memory link recovery: pass
+shared-wasm-memory duplicate imports: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Store budget: pass

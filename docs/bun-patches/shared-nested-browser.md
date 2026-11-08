@@ -49,9 +49,14 @@ Differences from the native host:
 
 `scripts/shared-wasm-memory-browser.test.ts` runs the shared fixture in a real group guest in
 Chromium, owned by `checks/browser-guest-shared-wasm-memory.json`. The Shared PIC job consumes
-its one group build. That gate selects on the nested host, the executor and launcher and this
-consumer. Other web files keep to their ordinary web gates, so they do not compile native code.
+its one group build. The gate tracks the nested host, executor, launcher, runner, worker,
+broker, telemetry, trampoline and consumer bundle/dependency inputs. Unrelated page changes
+keep their ordinary web gates. The shared producer and native-launcher prerequisite stay blocking.
 
 The published package includes `web/src/nested/` alongside its worker sources,
 so packed consumers can resolve the same host and wire types. The existing
 packed-consumer gate checks all three files and the real TypeScript/Vite closure.
+
+Native instantiation reads each validated import occurrence in order, including duplicate
+names with matching function types. The host supplies those captured bindings through
+ordered namespace getters rather than overwriting an earlier callback.

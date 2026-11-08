@@ -425,7 +425,7 @@ export class NestedHost {
       if (item.kind !== "function") return;
       const key = JSON.stringify([item.module, item.name]);
       const previous = types.get(key);
-      // The JS API reads one value per module and name, so one wrapper must serve every import.
+      // Different signatures for one import name remain outside this admitted subset.
       if (previous && JSON.stringify(previous) !== JSON.stringify(item.type)) throw new Error("incompatible duplicate nested function import");
       types.set(key, item.type);
     });
@@ -455,9 +455,20 @@ export class NestedHost {
     const imports: Record<string, Record<string, unknown>> = Object.create(null);
     const regionNames = info.imports.filter(item => item.module === "bunwasm_region").map(item => item.name);
     imports.bunwasm_region = this.regionImports(region, regionNames);
+    const pending = new Map<string, unknown[]>();
     imported.forEach((item, index) => {
       const namespace = imports[item.module] ??= Object.create(null);
-      namespace[item.name] = this.importValue(item, bindings[index]!);
+      const key = JSON.stringify([item.module, item.name]);
+      const value = this.importValue(item, bindings[index]!);
+      const previous = pending.get(key);
+      if (previous) {
+        previous.push(value);
+        return;
+      }
+      const values = [value];
+      pending.set(key, values);
+      let next = 0;
+      Object.defineProperty(namespace, item.name, { enumerable: true, get: () => values[next++] });
     });
     return imports as WebAssembly.Imports;
   }
