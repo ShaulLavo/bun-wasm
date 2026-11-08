@@ -13,10 +13,12 @@ function report(): Report {
   return { schema: 2, run: "test-only", createdAt: new Date().toISOString(), command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() };
 }
 describe("honest goals matrix", () => {
-  test("keeps every one of the 260 boxes, including unavailable engines and Safari", () => {
-    expect(inventory()).toHaveLength(260);
-    expect(new Set(inventory().map(item => JSON.stringify(item))).size).toBe(260);
-    for (const browser of browsers) expect(inventory().filter(item => item.browser === browser)).toHaveLength(65);
+  test("keeps every one of the 208 boxes, including unavailable engines and Safari", () => {
+    expect(engines).not.toContain("hermes");
+    expect(() => options(["--asset-source=test", "--engines=hermes"])).toThrow("Unknown selection");
+    expect(inventory()).toHaveLength(208);
+    expect(new Set(inventory().map(item => JSON.stringify(item))).size).toBe(208);
+    for (const browser of browsers) expect(inventory().filter(item => item.browser === browser)).toHaveLength(52);
     for (const engine of engines) expect(inventory().filter(item => item.engine === engine)).toHaveLength(52);
   });
   test("requires actual evidence from every phase and cleanup before passing", () => {
@@ -40,7 +42,7 @@ describe("honest goals matrix", () => {
     result.cells[0] = { ...box, status: "pass", attempts: [] };
     expect(() => validateReport(result)).toThrow();
     result.cells = initialCells().slice(1);
-    expect(() => validateReport(result)).toThrow("260");
+    expect(() => validateReport(result)).toThrow("208");
     result.cells = initialCells();
     result.cells[1] = result.cells[0]!;
     expect(() => validateReport(result)).toThrow("duplicate");
