@@ -82,12 +82,12 @@ test("only the built-in Actions bot routes Boat jobs to hosted runners", () => {
     return typeof runner === "string" && runner.includes("boat");
   });
   expect(routed.map(([id]) => id).toSorted()).toEqual(Object.keys(original).toSorted());
-  for (const [id, value] of routed) {
-    const job = record(value);
-    expect(job["runs-on"], id).toBe(`\${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || '${original[id]}' }}`);
+  for (const [id, originalRunner] of Object.entries(original)) {
+    const job = record(jobs[id]);
+    expect(job["runs-on"], id).toBe(`\${{ github.actor == 'github-actions[bot]' && 'ubuntu-latest' || '${originalRunner}' }}`);
     expect(selectedRunner(job, "github-actions[bot]"), id).toBe("ubuntu-latest");
     for (const actor of ["ShaulLavo", "contributor", "dependabot[bot]", "github-actions[bot]-other", ""]) {
-      expect(selectedRunner(job, actor), `${id}/${actor}`).toBe(original[id]);
+      expect(selectedRunner(job, actor), `${id}/${actor}`).toBe(originalRunner);
     }
   }
 });
