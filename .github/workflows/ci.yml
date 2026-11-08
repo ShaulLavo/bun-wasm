@@ -1540,6 +1540,14 @@ jobs:
           export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           export BUN_WASM_TRACE=1
           bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          bun install --cwd web --frozen-lockfile --ignore-scripts
+          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
