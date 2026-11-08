@@ -1,15 +1,15 @@
 import { test, expect } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { command, start } from "./playground";
+import { command, start, terminal } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { withPlayground } from "./test-fixture";
-function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready")): Transport {
+function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready"), lines: readonly { text: string; isWrapped: boolean }[] = [], listeningPort = 5173): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
-  const context = createContext({ crypto, playground: { shell, previews: { serves: () => listening, url: () => "http://preview/", ready: previewReady }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: 0 } } } } });
+  const context = createContext({ crypto, playground: { shell, previews: { serves: (port: number) => port === listeningPort && listening, url: () => "http://preview/", ready: previewReady }, term: { write: (_text: string, callback: () => void) => callback(), buffer: { active: { length: lines.length, getLine: (index: number) => ({ isWrapped: lines[index]?.isWrapped, translateToString: () => lines[index]?.text ?? "" }) } } } } });
   return { capabilities: { browserName: "unit-test" }, async navigate() {}, async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {}, async close() {},
     async evaluate<T>(expression: string): Promise<T> { return runInContext(expression, context); },
   };
@@ -41,11 +41,11 @@ test("startup timeout closes a transport whose factory resolves after the deadli
   expect(result.status).toBe("fail"); expect(closed).toBe(1); expect(navigated).toBe(false);
 });
 
-test("a server start waits for its preview worker to activate before returning its URL", async () => {
+test("a free-port server start waits for its preview worker to activate before returning its URL", async () => {
   const activation = Promise.withResolvers<string>();
-  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation.promise);
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation.promise, [], 41373);
   let returned = false;
-  const started = start(transport, "starts before preview activation", 1000).then(url => { returned = true; return url; });
+  const started = start(transport, "starts before preview activation", 1000, 41373).then(url => { returned = true; return url; });
   try {
     await Bun.sleep(25);
     expect(returned).toBe(false);
@@ -108,3 +108,18 @@ test("pending preview activation leaves the serialized Safari transport free for
     }
   });
 }, 30_000);
+
+test("terminal diagnostics join soft wraps without merging hard lines", async () => {
+  const transport = page(async () => {}, Promise.resolve("ready"), [
+    { text: "Cannot find module 'next/dist/compiled/next-server/page", isWrapped: false },
+    { text: "s.runtime.prod.js'", isWrapped: true },
+    { text: "code: MODULE_NOT_FOUND", isWrapped: false },
+  ]);
+  expect(await terminal(transport)).toBe("Cannot find module 'next/dist/compiled/next-server/pages.runtime.prod.js'\ncode: MODULE_NOT_FOUND");
+});
+
+
+test("server readiness observes the task's configured free guest port", async () => {
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, undefined, [], 41373);
+  expect(await start(transport, "bun run dev --port 41373", 100, 41373)).toBe("http://preview/");
+});

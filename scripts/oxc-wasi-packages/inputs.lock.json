@@ -1,0 +1,121 @@
+{
+  "source": {
+    "repository": "https://github.com/oxc-project/oxc",
+    "tag": "crates_v0.94.0",
+    "commit": "f88f5f4593b56f77460beed2178ac7b207d5364c",
+    "files": {
+      "package.json": "bc8ba9df551518929685e859fb523f787c2569183286407a7b3df059f504ae1b",
+      "pnpm-workspace.yaml": "fac0f69ba24e722cb9512964cc7fe9839d0d6c163e8ef74e3f1fb987f9a15e71",
+      "pnpm-lock.yaml": "fc55184cbfaf90a98e817f4143d647adab4d8f4f218d4065f71127e1e43f8281",
+      ".github/workflows/reusable_release_napi.yml": "cc9e4b6f2b906999fc4494cb12030e2a15ff2fcc3f57a832725049eb68c4d3aa",
+      "napi/parser/package.json": "1a3395c662c59bedafa00c2e221cfb274baf66b3915c0a69f1547b58c66d5009",
+      "napi/transform/package.json": "aa93178025ff5b5e9a47aea347344d5ccb66a41c977e8a16827b2bcb9fe3290f",
+      "napi/minify/package.json": "17b24b33b09d31d3ecbdef7a21693a599ffeca2db781d2079550eda75a087eb8",
+      "napi/parser/src-js/wasm.js": "e04588f9b5a9745956ee9b54c487acc5c0c840cfe7f591b59b83b2fb5705bab0",
+      "napi/parser/src-js/wrap.js": "d1646206749a9502d7a54b8b80278313cfb3f6e45050bba0257ab91f8656616d",
+      "napi/parser/scripts/build-browser-bundle.js": "11abb7fc87097fd6db4decea3fc07a1f8e33521cd307d68c54b63cb171becfc0"
+    }
+  },
+  "generator": {
+    "name": "@napi-rs/cli",
+    "version": "3.2.0",
+    "commit": "105dcede1c23989f103026e57469cb3c0d1991eb",
+    "dist": {
+      "tarball": "https://registry.npmjs.org/@napi-rs/cli/-/cli-3.2.0.tgz",
+      "integrity": "sha512-heyXt/9OBPv/WrTFW2+PxIMzH6MCeqP9ZsvOg0LN6pLngBnszcxFsdhCAh5I6sddzQsvru53zj59GUzvmpWk8Q=="
+    },
+    "files": {
+      "src/api/build.ts": "2e3f68d226cbb02a664d5badd57cc8283734e5e504f1db704b2485a994308505",
+      "src/api/artifacts.ts": "0e92f51ff8352363eabd6774a99ed7b763fd9d9cfb40cd5d3eead32d36301bce",
+      "src/api/templates/load-wasi-template.ts": "0f8e387c54e935928a9d043eeb72718ed873a3dfd7d6c2ca478081548a9a9aa3",
+      "src/api/templates/wasi-worker-template.ts": "1740f582c97bc963460e4b0fe27e1254112d0a75f48839ec820ebd349a8e4eee",
+      "dist/index.js": "9c129e8ee02ecebf3154dc5e8b7c84c045347d9843fb17e6a6db336e5ac4a883"
+    }
+  },
+  "addons": [
+    {
+      "addon": "parser",
+      "name": "@oxc-parser/binding-wasm32-wasi",
+      "version": "0.94.0",
+      "dist": {
+        "tarball": "https://registry.npmjs.org/@oxc-parser/binding-wasm32-wasi/-/binding-wasm32-wasi-0.94.0.tgz",
+        "integrity": "sha512-VoCtQZIsRZN8mszbdizh+5MwzbgbMxsPgT2hOzzILQLNY2o2OXG3xSiFNFakVhbWc9qSTaZ/MRDsqR+IM3fLFw=="
+      },
+      "wasmSha256": "524ab47f068fac666372e1466f650d434036f427b5f9004b6faf4c8583a1587c",
+      "minimumPages": 980,
+      "exports": [
+        "Severity",
+        "ParseResult",
+        "ExportExportNameKind",
+        "ExportImportNameKind",
+        "ExportLocalNameKind",
+        "ImportNameKind",
+        "parseAsync",
+        "parseSync",
+        "rawTransferSupported"
+      ],
+      "files": {
+        "parser.wasi.cjs": "ad3db1eb96b2b8d5e2cd66a4c292361c76b7619dfef8bf91138acd1796404a5f",
+        "browser-bundle.js": "8b8bc683ef2ed9622ea4b8fe8d9af21425b4143c303c370fa8e7fbf52962e77c",
+        "parser.wasi-browser.js": "3548d621af879d5ca2caf991a1b75de9cd10855d3459ff3b5b521da7d167e03c",
+        "package.json": "b2eb7131c4971f3cc0914cc46e8534605f64cd28c2c312cc46a8c82548d71f8d",
+        "README.md": "29758cc5971a38ab7b0d37f5fb14dc3d601ff7d0d14a86cea1512bc11ec3ee91",
+        "wasi-worker-browser.mjs": "6d23efa1dd0c54c8941089e718e9a85494fb5d847cac092758547d34580c765b",
+        "wasi-worker.mjs": "4c6ba7435bce4ae8bcfd02e10fc6ae09a97b71ec5269fe828eb521b07ab67c0c",
+        "parser.wasm32-wasi.wasm": "524ab47f068fac666372e1466f650d434036f427b5f9004b6faf4c8583a1587c"
+      }
+    },
+    {
+      "addon": "transform",
+      "name": "@oxc-transform/binding-wasm32-wasi",
+      "version": "0.94.0",
+      "dist": {
+        "tarball": "https://registry.npmjs.org/@oxc-transform/binding-wasm32-wasi/-/binding-wasm32-wasi-0.94.0.tgz",
+        "integrity": "sha512-rn3c2wGT3ha6j0VLykYOkXU5YyQYIeGXRsDPP7xyiZHVTVssoM0X1BuheFlgxmC1POXMT+dAAcVOFG5MdW1bnQ=="
+      },
+      "wasmSha256": "d47a282563172705ed12004d2be59b952186f28e2494f97c4e002064b7b4d60f",
+      "minimumPages": 981,
+      "exports": [
+        "Severity",
+        "HelperMode",
+        "isolatedDeclaration",
+        "moduleRunnerTransform",
+        "transform",
+        "transformAsync"
+      ],
+      "files": {
+        "transform.wasi.cjs": "43c898b7b5ccef7581aec0112b2b3dc37ec6f31bc489208fdc6dcc9d23997f30",
+        "transform.wasi-browser.js": "596a4a2b52bec5016656df1483594eaa1e7b8b3d25db60d995fb37de30131101",
+        "package.json": "33a93ada71d105d3de495e3852eb7bd2528f59e00616bfe03326c9f9bd480c96",
+        "README.md": "817cc42454c2d346ec35afcae6e38aad4c73a799ddd008aa635e8a4913349277",
+        "wasi-worker-browser.mjs": "6d23efa1dd0c54c8941089e718e9a85494fb5d847cac092758547d34580c765b",
+        "wasi-worker.mjs": "4c6ba7435bce4ae8bcfd02e10fc6ae09a97b71ec5269fe828eb521b07ab67c0c",
+        "transform.wasm32-wasi.wasm": "d47a282563172705ed12004d2be59b952186f28e2494f97c4e002064b7b4d60f"
+      }
+    },
+    {
+      "addon": "minify",
+      "name": "@oxc-minify/binding-wasm32-wasi",
+      "version": "0.94.0",
+      "dist": {
+        "tarball": "https://registry.npmjs.org/@oxc-minify/binding-wasm32-wasi/-/binding-wasm32-wasi-0.94.0.tgz",
+        "integrity": "sha512-0bOaEuh7QX8MfqyrRjNPOWhcsYl0IGoHX1nPtFIFGm0f/AJsJ+3wbyI9WvkAOXZmRgI9DMKGbDJdU6J59JxA7w=="
+      },
+      "wasmSha256": "e21979305f89d13739a47364e54a32682265f6a75bf1685f27e760a6f9b23779",
+      "minimumPages": 981,
+      "exports": [
+        "minify",
+        "Severity"
+      ],
+      "files": {
+        "minify.wasi.cjs": "5065d23453b3d9e8996a7f56cc4aa48feee33263d2aeab4d9c3d64d6b2396ceb",
+        "minify.wasi-browser.js": "46b4e89c9a3203e1fd2b4495b40ee041985650197fcac5c41fb6c62418b1f5e8",
+        "package.json": "408867d32dce225d36f0da9edc5200a7f16ef84fb9dadc209f97206b2d9c7edb",
+        "README.md": "1b57622e55e1faffe6331454b4548f0b67b9ed974405cf6ab89f78ab33631fdf",
+        "wasi-worker-browser.mjs": "6d23efa1dd0c54c8941089e718e9a85494fb5d847cac092758547d34580c765b",
+        "wasi-worker.mjs": "4c6ba7435bce4ae8bcfd02e10fc6ae09a97b71ec5269fe828eb521b07ab67c0c",
+        "minify.wasm32-wasi.wasm": "e21979305f89d13739a47364e54a32682265f6a75bf1685f27e760a6f9b23779"
+      }
+    }
+  ]
+}

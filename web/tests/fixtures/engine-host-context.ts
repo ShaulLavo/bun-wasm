@@ -1,3 +1,4 @@
+import { installNativeWasmLifetime } from "../../src/native-wasm-lifetime.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
@@ -5,9 +6,10 @@ import { readFileSync } from "node:fs";
 // its own module text without imports, and bootstrap.js's runInContext.
 
 export function engineHostSource(): string {
-  return readFileSync(new URL("../../src/engine-host.js", import.meta.url), "utf8")
+  const host = readFileSync(new URL("../../src/engine-host.js", import.meta.url), "utf8")
     .replace(/^import .*;\n/gm, "")
     .replace("export function startEngineHost", "function startEngineHost");
+  return installNativeWasmLifetime.toString().concat("\n", host);
 }
 
 export function runInContextSource(): string {

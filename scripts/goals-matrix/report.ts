@@ -22,8 +22,8 @@ export function markdown(report: Report): string {
   validateReport(report);
   const cells = new Map(report.cells.map(cell => [boxId(cell), cell]));
   const lines = ["# Framework matrix", "", `Run ${report.run}. Generated ${report.createdAt}. ${report.cells.length} boxes.`, "", `Source ${report.source.commit}${report.source.dirty ? " with uncommitted changes" : ""}.`, "", "```sh", report.command, "```", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", ""];
-  lines.push("## Deadlines", "", `Campaign phases: ${report.deadlines.timeoutMs} ms. Cleanup: ${report.deadlines.cleanupTimeoutMs} ms, with existing shorter inner bounds.`, "", "| Framework install | Timeout in ms |", "| --- | ---: |");
-  for (const framework of frameworks) lines.push(`| ${framework.label} | ${report.deadlines.installTimeouts[framework.id]} |`);
+  lines.push("## Deadlines", "", `Campaign phases: ${report.deadlines.timeoutMs} ms. Cleanup: ${report.deadlines.cleanupTimeoutMs} ms, with existing shorter inner bounds.`, "", "| Framework | Install in ms | Build in ms |", "| --- | ---: | ---: |");
+  for (const framework of frameworks) lines.push(`| ${framework.label} | ${report.deadlines.installTimeouts[framework.id]} | ${report.deadlines.buildTimeouts[framework.id]} |`);
   lines.push("");
   for (const browser of browsers) {
     lines.push(`## ${browserLabels[browser]}`, "", "| Framework | " + engines.join(" | ") + " |", "| --- | " + engines.map(() => "---").join(" | ") + " |");
