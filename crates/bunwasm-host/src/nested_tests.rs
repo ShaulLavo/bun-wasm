@@ -72,6 +72,40 @@ impl Drop for Control {
 }
 
 #[test]
+fn reply_and_snapshot_report_the_selected_reservation_and_the_declared_limit() {
+    let mut control = Control::new();
+    control
+        .run(|mut caller| {
+            let request = Request::Reserve {
+                initial: 1,
+                maximum: 65536,
+            };
+            let Reply::Handle(memory) = execute(&mut caller, request)? else {
+                bail!("reserve reply");
+            };
+            let Reply::Memory {
+                pages,
+                maximum,
+                committed,
+                ..
+            } = execute(&mut caller, Request::Span { memory })?
+            else {
+                bail!("span reply");
+            };
+            let reserved = 32767 * 65536_u64;
+            assert_eq!((pages, maximum, committed), (1, 65536, reserved));
+            let snapshot = caller.data().nested.snapshot();
+            assert_eq!(
+                snapshot["reserved_committed_bytes"],
+                serde_json::json!(reserved)
+            );
+            assert_eq!(snapshot["visible_bytes"], serde_json::json!(65536));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn released_slots_reuse_storage_without_reviving_stale_identities() {
     let mut resources = Resources::default();
     let stale = resources.insert(17).unwrap();

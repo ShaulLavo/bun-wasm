@@ -19,4 +19,6 @@ table-global guest: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Instance exports: pass
+shared-wasm-memory reservation: pass
+shared-wasm-memory reservation capacity: pass
 shared-wasm-memory Store budget: pass

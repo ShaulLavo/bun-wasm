@@ -45,10 +45,17 @@ impl NestedMemory {
         if initial > maximum || maximum > MAX_GROUP_PAGES {
             return Err(Errno::Inval);
         }
-        // Fixed-region allocation commits the entire reservation, including one page
-        // for a zero-capacity memory's distinct backing identity. The budget charges it.
-        let bytes = maximum.max(1).checked_mul(PAGE_BYTES).ok_or(Errno::NoMem)?;
-        let backing = member.group.create(member.member, bytes, PAGE_BYTES)?;
+        if initial > MAX_RESERVATION_PAGES {
+            return Err(Errno::NoMem);
+        }
+        // A reservation is a stable contiguous range chosen from what the group has now. The
+        // declared maximum is a limit, not a promise of storage. A zero-page memory still owns
+        // one charged page, so its identity is a distinct address.
+        let required = initial.max(1);
+        let desired = maximum.clamp(1, MAX_RESERVATION_PAGES);
+        let backing = member
+            .group
+            .create_reservation(member.member, required, desired)?;
         Ok(Self(Arc::new(LogicalMemory {
             group: member.group(),
             member: member.member,
@@ -120,6 +127,15 @@ impl NestedMemory {
         u64::from(self.pages()) * u64::from(PAGE_BYTES)
     }
 
+    /// The admitted contiguous storage, charged in full whatever is visible.
+    pub(crate) fn reserved_bytes(&self) -> u64 {
+        u64::from(self.0.region.backing.len)
+    }
+
+    fn reserved_pages(&self) -> u32 {
+        self.0.region.backing.len / PAGE_BYTES
+    }
+
     pub(crate) fn grow(&self, delta: u32) -> Result<u32, Errno> {
         let _growth = self
             .0
@@ -129,7 +145,8 @@ impl NestedMemory {
             .unwrap_or_else(|poison| poison.into_inner());
         let old = self.pages();
         let next = old.checked_add(delta).ok_or(Errno::NoMem)?;
-        if next > self.maximum() {
+        // Both bounds: a zero-maximum memory's identity page must never become visible.
+        if next > self.maximum() || next > self.reserved_pages() {
             return Err(Errno::NoMem);
         }
         let chunk = Chunk {
@@ -384,6 +401,9 @@ mod tests {
         root.physical_stopped();
     }
 }
+
+#[cfg(test)]
+mod reservation_tests;
 
 #[cfg(test)]
 mod lease_tests {

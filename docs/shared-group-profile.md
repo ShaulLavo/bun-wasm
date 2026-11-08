@@ -92,6 +92,15 @@ stops, so a sender's exit cannot free bytes another member can still receive. An
 fresh wrapper over the same bytes. Anything else is a `DataCloneError` when it is posted, including
 a growable buffer, a table and a global. See [the native record](bun-patches/shared-nested-native.md).
 
+A shared Memory's storage is one stable contiguous range chosen when it is created. The native host
+reserves the declared maximum when it fits. Otherwise it needs the initial bytes to fit, and adds
+optional growth room that yields to what the group and backing budget have left. The selection is
+atomic, holes are never added together, and a reservation never moves or shrinks, so admission is
+first-come: growth below the declared maximum, and a later worker's memory, can be refused because
+of what was admitted earlier. The declared maximum stays the limit used for import matching. The
+Browser host does not do this yet: it still commits the declared maximum and refuses a 65536-page
+one at any size.
+
 ## Processes on the Browser host
 
 The page admits a group core as the first member of a new group, and a spawned group core
