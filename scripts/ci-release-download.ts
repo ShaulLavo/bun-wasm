@@ -88,7 +88,7 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
   if (!releasePattern.test(url)) return (selected.fetch ?? fetch)(url, { signal: selected.signal });
   const path = selected.cache ? join(selected.cache, releaseCacheKey(url)) : undefined;
   if (path && await Bun.file(path).exists()) {
-    console.log(`GitHub release cache hit: ${url}`);
+    console.error(`GitHub release cache hit: ${url}`);
     return new Response(Bun.file(path));
   }
   const response = await authenticatedRelease(url, selected);
@@ -99,7 +99,7 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
     await Bun.write(join(stage, "asset"), response);
     await rename(join(stage, "asset"), path);
   } finally { await rm(stage, { recursive: true, force: true }); }
-  console.log(`GitHub release ${selected.token ? "authenticated API" : "public"} download: ${url}`);
+  console.error(`GitHub release ${selected.token ? "authenticated API" : "public"} download: ${url}`);
   return new Response(Bun.file(path));
 }
 

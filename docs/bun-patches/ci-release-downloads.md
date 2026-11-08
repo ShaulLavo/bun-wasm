@@ -33,3 +33,8 @@ inside the checkout, so the cached archive path is portable between Ubuntu and
 boat home-directory layouts. Its key hashes every frozen lockfile, including
 exact URLs and integrities. Boat consumers restore this supported cache rather than relying
 on a first unauthenticated release download from their address.
+
+Download and cache diagnostics go to stderr so callers may keep stdout as a
+single machine-readable fingerprint or GitHub step output. Hermetic receipt CLI
+fixtures copy the downloader alongside its Waffle-input caller, preserving the
+real module dependency closure rather than replacing imports with stubs.
