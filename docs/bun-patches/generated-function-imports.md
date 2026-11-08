@@ -2,7 +2,7 @@
 
 `crates/bunwasm-runtime/src/js/function.ts` is an original adapter for the public
 Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructors.
-It uses the caller-origin helper and Bun parser keyword positions to route
+All engines use the same function-literal helper for prepared imports, including the host engine inside a `with` scope. It uses the caller-origin helper and Bun parser keyword positions to route
 generated dynamic imports through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
 copied. Native constructors still parse the arguments and construct the function. On QuickJS
 and the host engine, native parsing validates the original function before Bun's

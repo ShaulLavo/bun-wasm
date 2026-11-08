@@ -108,9 +108,7 @@
     const mapping = sharedMapping ?? { position: { line: 1, column: 1 }, columns: [] };
     let result = "";
     let previous = 0;
-    const replacement = native.engine === "host"
-      ? `__bunwasm_dynamicImport(${JSON.stringify(name || internal.mainPath)})`
-      : `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(name || internal.mainPath)})`;
+    const replacement = `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(name || internal.mainPath)})`;
     for (let index = 0; index < edits.length; index += 3) {
       const at = edits[index];
       const unchanged = source.slice(previous, at);
