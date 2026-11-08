@@ -74,3 +74,30 @@ test("non-release downloads and local non-CI use do not receive the job token", 
   expect(await (await releaseDownload(url, { fetch: download, token: "" })).text()).toBe("source");
   expect(authorization).toBeNull();
 });
+
+test("CI callers use the downloader and consume a completed cache rather than racing setup", async () => {
+  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  for (const name of ["package", "web", "process-bundles"]) expect(workflow).toContain(`  ${name}:\n    needs: quality`);
+  expect(workflow).toContain("Publish the completed dependency cache before consumer jobs");
+  expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
+  expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
+  const native = await Bun.file(new URL("./waffle-release-inputs.ts", import.meta.url)).text();
+  expect(native.match(/download: Download = releaseDownload/g)).toHaveLength(2);
+  const sccache = await Bun.file(new URL("../.github/actions/rust-build-cache/action.yml", import.meta.url)).text();
+  expect(sccache).toContain('scripts/ci-release-download.ts" "$url"');
+  expect(sccache).toContain("sha256sum --check");
+  expect(sccache).not.toContain("mozilla-actions/sccache-action@");
+});
+
+test("connection failures stay bounded and redirect loops cannot run indefinitely", async () => {
+  let calls = 0;
+  await expect(releaseDownload(url, { token: "fixture-token", fetch: async () => {
+    calls++; throw new Error("fixture connection closed");
+  }, sleep: async () => {} })).rejects.toThrow("request failed");
+  expect(calls).toBe(3);
+  calls = 0;
+  await expect(releaseDownload(url, { token: "fixture-token", fetch: async input => {
+    calls++; return new Response(null, { status: 302, headers: { location: input } });
+  } })).rejects.toThrow("redirect");
+  expect(calls).toBe(4);
+});
