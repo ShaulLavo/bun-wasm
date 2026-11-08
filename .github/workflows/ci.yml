@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -36,6 +40,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
@@ -57,16 +62,23 @@ jobs:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
         run: bun scripts/feature-versions.ts "$BASE" "$HEAD"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: bun-dependencies
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Install locked JavaScript tools and application dependencies
         run: |
           bun install --frozen-lockfile --ignore-scripts
           (cd web && bun install --frozen-lockfile)
           (cd sandbox && bun install --frozen-lockfile)
           (cd site && bun install --frozen-lockfile)
+      - name: Publish the completed dependency cache before consumer jobs
+        if: steps.bun-dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-bun-cache
+          key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
       - name: Blocking quality gates
         env:
           JSCPD_BASE_REF: ${{ steps.refs.outputs.base }}
@@ -113,6 +125,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - name: Install native build tools
         run: |
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
@@ -167,9 +180,8 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
           trap 'rm -f "$archive"' EXIT
-          curl --fail --location --silent --show-error \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            -o "$archive"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
@@ -194,8 +206,8 @@ jobs:
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Identify sysroot build inputs
         id: sysroot-inputs
@@ -369,6 +381,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
@@ -450,9 +463,8 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
           trap 'rm -f "$archive"' EXIT
-          curl --fail --location --silent --show-error \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            -o "$archive"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
@@ -491,9 +503,8 @@ jobs:
           input="$archive"
           if [[ ! -f "$input" ]]; then
             input="$stage/archive.tar.gz"
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz \
-              -o "$input"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz "$input"
           fi
           echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $input" | sha256sum --check
           if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
@@ -518,9 +529,8 @@ jobs:
           input="$archive"
           if [[ ! -f "$input" ]]; then
             input="$stage/archive.tar.xz"
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz \
-              -o "$input"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz "$input"
           fi
           echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $input" | sha256sum --check
           if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
@@ -541,8 +551,8 @@ jobs:
         run: bash scripts/test-transpiler-example.sh --check-tools
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - uses: actions/cache/restore@v4
         id: sources-cache
@@ -811,6 +821,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: ./.github/actions/rust-build-cache
       - uses: actions/setup-node@v4
         with:
@@ -888,9 +899,8 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
           trap 'rm -f "$archive"' EXIT
-          curl --fail --location --silent --show-error \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            -o "$archive"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
@@ -929,9 +939,8 @@ jobs:
           input="$archive"
           if [[ ! -f "$input" ]]; then
             input="$stage/archive.tar.gz"
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz \
-              -o "$input"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz "$input"
           fi
           echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $input" | sha256sum --check
           if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
@@ -956,9 +965,8 @@ jobs:
           input="$archive"
           if [[ ! -f "$input" ]]; then
             input="$stage/archive.tar.xz"
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz \
-              -o "$input"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz "$input"
           fi
           echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $input" | sha256sum --check
           if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
@@ -979,8 +987,8 @@ jobs:
         run: bash scripts/test-transpiler-example.sh --check-tools
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Configure private JSC build paths
         run: |
@@ -1293,6 +1301,7 @@ jobs:
 
 
   package:
+    needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Browser adapter package
     runs-on: boat
@@ -1305,13 +1314,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run test
@@ -1364,13 +1374,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile --ignore-scripts
       - name: Install sysroot build tools
         run: |
@@ -1390,8 +1401,8 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
           trap 'rm -f -- "$archive"' EXIT
-          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz -o "$archive"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
@@ -1413,8 +1424,8 @@ jobs:
           stage=$(mktemp -d "$WASM_TOOLS/.wasm-tools-XXXXXX")
           trap 'rm -rf -- "$stage"' EXIT
           if [[ ! -f "$archive" ]]; then
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz -o "$archive"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz "$archive"
           fi
           echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $archive" | sha256sum --check
           tar -xzf "$archive" --strip-components=1 -C "$stage"
@@ -1440,8 +1451,8 @@ jobs:
           stage=$(mktemp -d "$WASM_TOOLS/.wasmtime-XXXXXX")
           trap 'rm -rf -- "$stage"' EXIT
           if [[ ! -f "$archive" ]]; then
-            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
-              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz -o "$archive"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz "$archive"
           fi
           echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $archive" | sha256sum --check
           tar -xJf "$archive" --strip-components=1 -C "$stage"
@@ -1554,6 +1565,7 @@ jobs:
         run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
 
   web:
+    needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: boat
@@ -1567,13 +1579,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Web host unit, CLI shim, type and bundle gates
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
@@ -1627,6 +1640,7 @@ jobs:
         run: bash ../scripts/test-web-host.sh --browser
 
   process-bundles:
+    needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Shared process browser bundles
     runs-on: ubuntu-latest
@@ -1636,10 +1650,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --cwd web --frozen-lockfile --linker=isolated
       - name: Build each process fixture once for all browsers
         run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
@@ -1669,10 +1684,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - uses: actions/download-artifact@v4
         with:
           name: process-bundles
@@ -1770,3 +1786,47 @@ jobs:
         run: |
           bun install --cwd .. --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest
+
+  update-status:
+    name: Report automated update statuses
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-sysroot, web, process-bundles, browser-process]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
+      - name: Report each required result on the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD: ${{ github.sha }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          while IFS='|' read -r context job selection; do
+            result=$(jq -er --arg job "$job" '.[$job].result' <<< "$RESULTS")
+            state=failure
+            if [[ "$result" == success ]]; then state=success; fi
+            # A classifier-disabled job is an intentional skip, just as in PR CI.
+            if [[ "$result" == skipped && -n "$selection" ]] &&
+              jq -e --arg selection "$selection" '.quality.result == "success" and .quality.outputs[$selection] == "false"' <<< "$RESULTS" >/dev/null; then
+              state=success
+            fi
+            gh api --method POST "repos/$GH_REPO/statuses/$HEAD" \
+              -f context="$context" -f state="$state" -f target_url="$RUN_URL" \
+              -f description="Dispatched CI: $result"
+          done <<'STATUSES'
+          Code quality|quality|
+          JSC C/C++ prebuild|jsc-prebuild|rust
+          Native quality checkpoint|native-quality|rust
+          Rust workspace tests (QuickJS host)|rust|rust
+          Browser adapter package|package|
+          Shared PIC sysroot proof|shared-sysroot|shared
+          Web host|web|
+          Shared process browser bundles|process-bundles|
+          Processes (chromium)|browser-process|
+          Processes (firefox)|browser-process|
+          Processes (webkit)|browser-process|
+          STATUSES
