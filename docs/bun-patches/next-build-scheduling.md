@@ -18,8 +18,9 @@ configuration. `next/dist/build/collect-build-traces.js` applies the named
 
 `scripts/next-trace-fixture.ts` checks those installed pinned selectors, reads the
 generated trace manifests, requires the selected stable Pages runtime and rejects alternate runtime
-leaks, and copies only trace-selected dependencies into an isolated project. It
-moves the original dependency directory out of package resolution. The server
+leaks, and copies only trace-selected dependencies into an isolated project.
+Staging requires an absent or empty destination and rejects leftover files without
+deleting them, so a failed copy cannot contaminate a later restricted run. It moves the original dependency directory out of package resolution. The server
 fixture exercises production SSR from that restricted project. Omitting a
 required stable runtime is the negative control. Configuration and inventory
 regressions have a feature-owned blocking quality manifest. Timing and live

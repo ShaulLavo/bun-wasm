@@ -19,7 +19,7 @@ test("the pinned webpack starter traces stable runtimes, not alternate bundlers 
   expect(traced).toEqual(stable);
 });
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stableRuntimes, alternateRuntimes, assertRuntimeTrace, tracedFiles, selectedRuntime, stageTrace } from "./next-trace-fixture";
@@ -51,23 +51,59 @@ test("runtime selection observes the package's production, bundler, and React-ch
   expect(selectedRuntime(source, { NODE_ENV: "production", __NEXT_EXPERIMENTAL_REACT: "1" })).toBe("experimental");
 });
 
-test("staging copies only traced dependencies, not an available full package", () => {
+function writeTraceFixture(path: string, value: string): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, value);
+}
+
+function traceProject(): string {
   const project = mkdtempSync(join(tmpdir(), "bun-wasm-next-selection-"));
+  for (const name of ["next", "react", "react-dom"]) writeTraceFixture(join(project, "node_modules", name, "package.json"), JSON.stringify({ version: name === "next" ? "15.5.6" : "19.1.1" }));
+  for (const path of stableRuntimes) writeTraceFixture(join(project, path), "required");
+  for (const path of alternateRuntimes) writeTraceFixture(join(project, path), "not selected");
+  for (const kind of ["app-page", "app-route", "pages", "pages-api"]) writeTraceFixture(join(project, `node_modules/next/dist/server/route-modules/${kind}/module.compiled.js`), `module.exports = require("next/dist/compiled/next-server/${kind}.runtime.prod.js");`);
+  writeTraceFixture(join(project, "node_modules/next/dist/lib/needs-experimental-react.js"), "exports.needsExperimentalReact = config => Boolean(config.experimental?.ppr);");
+  writeTraceFixture(join(project, "node_modules/next/dist/bin/next"), "must not copy");
+  writeTraceFixture(join(project, "package.json"), "{}");
+  writeTraceFixture(join(project, ".next/required-server-files.json"), JSON.stringify({ config: { experimental: { cpus: 1 } } }));
+  writeTraceFixture(join(project, ".next/next-server.js.nft.json"), JSON.stringify({ files: stableRuntimes.map(path => `../${path}`) }));
+  return project;
+}
+
+test("staging copies only traced dependencies, not an available full package", () => {
+  const project = traceProject();
   const destination = join(project, "restricted");
-  const write = (path: string, value: string) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, value); };
   try {
-    for (const name of ["next", "react", "react-dom"]) write(join(project, "node_modules", name, "package.json"), JSON.stringify({ version: name === "next" ? "15.5.6" : "19.1.1" }));
-    for (const path of stableRuntimes) write(join(project, path), "required");
-    for (const path of alternateRuntimes) write(join(project, path), "not selected");
-    for (const kind of ["app-page", "app-route", "pages", "pages-api"]) write(join(project, `node_modules/next/dist/server/route-modules/${kind}/module.compiled.js`), `module.exports = require("next/dist/compiled/next-server/${kind}.runtime.prod.js");`);
-    write(join(project, "node_modules/next/dist/lib/needs-experimental-react.js"), "exports.needsExperimentalReact = config => Boolean(config.experimental?.ppr);");
-    write(join(project, "node_modules/next/dist/bin/next"), "must not copy");
-    write(join(project, "package.json"), "{}");
-    write(join(project, ".next/required-server-files.json"), JSON.stringify({ config: { experimental: { cpus: 1 } } }));
-    write(join(project, ".next/next-server.js.nft.json"), JSON.stringify({ files: stableRuntimes.map(path => `../${path}`) }));
     expect(stageTrace(project, destination).dependencies).toBe(stableRuntimes.length);
     expect(tracedFiles(destination)).toEqual(new Set(stableRuntimes));
     for (const path of stableRuntimes) expect(Bun.file(join(destination, path)).size).toBe(8);
     for (const path of alternateRuntimes) expect(Bun.file(join(destination, path)).size).toBe(0);
+  } finally { rmSync(project, { recursive: true, force: true }); }
+});
+
+test("staging rejects leftover dependencies after a failed copy without deleting them", () => {
+  const project = traceProject();
+  const destination = join(project, "restricted");
+  const helper = "node_modules/next/dist/required-helper.js";
+  const manifest = join(project, ".next/next-server.js.nft.json");
+  try {
+    writeTraceFixture(join(project, helper), "stale helper");
+    writeTraceFixture(manifest, JSON.stringify({ files: stableRuntimes.concat([helper, "node_modules/missing-required.js"]).map(path => `../${path}`) }));
+    expect(() => stageTrace(project, destination)).toThrow("ENOENT");
+    expect(readFileSync(join(destination, helper), "utf8")).toBe("stale helper");
+    rmSync(join(project, helper));
+    writeTraceFixture(manifest, JSON.stringify({ files: stableRuntimes.map(path => `../${path}`) }));
+    expect(() => stageTrace(project, destination)).toThrow("fresh empty destination");
+    expect(readFileSync(join(destination, helper), "utf8")).toBe("stale helper");
+    expect(existsSync(join(destination, "package.json"))).toBe(false);
+  } finally { rmSync(project, { recursive: true, force: true }); }
+});
+
+test("staging accepts an existing empty destination", () => {
+  const project = traceProject();
+  const destination = join(project, "restricted");
+  try {
+    mkdirSync(destination);
+    expect(stageTrace(project, destination).dependencies).toBe(stableRuntimes.length);
   } finally { rmSync(project, { recursive: true, force: true }); }
 });

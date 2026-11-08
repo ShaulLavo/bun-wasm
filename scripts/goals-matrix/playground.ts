@@ -34,14 +34,15 @@ export async function ready(transport: Transport, engine: string, timeoutMs: num
   return state;
 }
 function transcript(): Promise<string> {
-  return new Promise(resolve => playground.term.write("", () => {
+  function logicalLines(): string {
     const buffer = playground.term.buffer.active;
     const lines = Array.from({ length: buffer.length }, (_, index) => {
       const line = buffer.getLine(index);
       return (index && !line?.isWrapped ? "\n" : "") + (line?.translateToString(true) ?? "");
     });
-    resolve(lines.join("").trimEnd());
-  }));
+    return lines.join("").trimEnd();
+  }
+  return new Promise(resolve => playground.term.write("", () => resolve(logicalLines())));
 }
 export async function terminal(transport: Transport): Promise<string> {
   await transport.useHost();

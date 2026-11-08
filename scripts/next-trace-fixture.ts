@@ -74,6 +74,8 @@ function copyFile(source: string, destination: string): void {
 }
 
 export function stageTrace(project: string, destination: string): { selected: number; dependencies: number; dependencyBytes: number; excludedVariantBytes: number; selection: Record<string, string> } {
+  mkdirSync(destination, { recursive: true });
+  if (readdirSync(destination).length !== 0) throw new Error(`Trace staging requires a fresh empty destination: ${destination}`);
   const selection = assertPinnedSelection(project);
   const selected = tracedFiles(project);
   assertRuntimeTrace(selected);
