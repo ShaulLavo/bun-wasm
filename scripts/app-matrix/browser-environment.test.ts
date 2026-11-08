@@ -286,3 +286,13 @@ test("browser routing retains the complete loopback range for dedicated preview 
   expect(foreign.continued).toBe(false);
   expect(foreign.aborted).toBe(true);
 });
+
+
+test("allocated localhost preview hosts stay local without admitting suffix lookalikes", async () => {
+  expect((await replayControl("http://bw-1-abcd.localhost:12345/local")).continued).toBe(true);
+  for (const url of ["http://bw-1-abcd.localhost.evil.invalid:12345/local", "http://bw-1-abcd.localhost@evil.invalid/local"]) {
+    const control = await replayControl(url);
+    expect(control.aborted).toBe(true);
+    expect(control.continued).toBe(false);
+  }
+});

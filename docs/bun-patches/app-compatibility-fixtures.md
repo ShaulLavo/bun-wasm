@@ -20,6 +20,12 @@ client has mounted. No framework implementation, watcher or runtime API changes.
 The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
 
 
+The browser network guard in `registry-request.ts` recognizes the root adapter's
+single-label `bw-<counter>-<UUID>.localhost` hosts as local loopback requests.
+It continues those requests without replay or URL rewriting. Suffix lookalikes
+and credential URLs to external hosts remain blocked. Framework fixtures,
+dependency tarballs and registry replay rules remain unchanged.
+
 ## Classification
 
 | Patch or source | Class | Change |

@@ -83,14 +83,10 @@ test("native promise reactions validate primitives and bypass public promise hoo
   expect(reaction).not.toContain("JS_GetProperty");
 });
 
-test("the real CommonJS wrapper keeps its exact body and other negative shapes reject", () => {
-  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
-  try {
-    const modules = readFileSync("crates/bunwasm-runtime/src/modules.rs", "utf8");
-    expect(modules).toContain("(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {{\\n\\n{code}\\n}})");
-    const input = join(root, "lines.cpp");
-    const output = join(root, "lines");
-    writeFileSync(input, String.raw`#include <cassert>
+function compileCommonjsControl(root: string): string {
+  const input = join(root, "lines.cpp");
+  const output = join(root, "lines");
+  writeFileSync(input, String.raw`#include <cassert>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -120,25 +116,14 @@ int main() {
   assert(body.empty());
 }
 `);
-    const build = Bun.spawnSync(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", input, "-o", output]);
-    expect(build.stderr.toString()).toBe("");
-    expect(build.exitCode).toBe(0);
-    const run = Bun.spawnSync([output]);
-    expect(run.stderr.toString()).toBe("");
-    expect(run.exitCode).toBe(0);
-    const evaluate = definition(shim, 'extern "C" bool bsm_eval_script(');
-    expect(evaluate).toContain("if (line < 0) return compile_commonjs");
-    expect(evaluate).toContain("options.setFileAndLine(filename, static_cast<uint32_t>(line))");
-    expect(definition(shim, "bool compile_commonjs(")).toContain("options.setFileAndLine(filename, 0)");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+  const build = Bun.spawnSync(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", input, "-o", output]);
+  expect(build.stderr.toString()).toBe("");
+  expect(build.exitCode).toBe(0);
+  return output;
+}
 
-test("deferred native destruction permits destructor reentry into the registry", () => {
-  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
-  try {
-    const source = `use std::{cell::RefCell, collections::HashMap, rc::Rc};
+function compileFinalizerControl(root: string): string {
+  const source = `use std::{cell::RefCell, collections::HashMap, rc::Rc};
 thread_local! {
     static NATIVES: RefCell<HashMap<u32, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
     static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
@@ -158,18 +143,56 @@ fn main() {
     drop_dead_natives();
 }
 `;
-    const input = join(root, "finalizer.rs");
-    const output = join(root, "finalizer");
-    writeFileSync(input, source);
-    const build = Bun.spawnSync(["rustup", "run", "stable", "rustc", "--edition=2024", input, "-o", output]);
-    expect(build.stderr.toString()).toBe("");
-    expect(build.exitCode).toBe(0);
-    const run = Bun.spawnSync([output]);
-    expect(run.stderr.toString()).toBe("");
-    expect(run.exitCode).toBe(0);
+  const input = join(root, "finalizer.rs");
+  const output = join(root, "finalizer");
+  writeFileSync(input, source);
+  const build = Bun.spawnSync(["rustup", "run", "stable", "rustc", "--edition=2024", input, "-o", output]);
+  expect(build.stderr.toString()).toBe("");
+  expect(build.exitCode).toBe(0);
+  return output;
+}
+
+// Compiler startup belongs to module setup, not either five-second runtime test.
+function compileControls() {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
+  try {
+    return {
+      commonjs: readFileSync(compileCommonjsControl(root)),
+      finalizer: readFileSync(compileFinalizerControl(root)),
+    };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+const controls = compileControls();
+
+function runControl(executable: Uint8Array) {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
+  try {
+    const output = join(root, "control");
+    writeFileSync(output, executable, { mode: 0o755 });
+    return Bun.spawnSync([output]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("the real CommonJS wrapper keeps its exact body and other negative shapes reject", () => {
+  const modules = readFileSync("crates/bunwasm-runtime/src/modules.rs", "utf8");
+  expect(modules).toContain("(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {{\\n\\n{code}\\n}})");
+  const run = runControl(controls.commonjs);
+  expect(run.stderr.toString()).toBe("");
+  expect(run.exitCode).toBe(0);
+  const evaluate = definition(shim, 'extern "C" bool bsm_eval_script(');
+  expect(evaluate).toContain("if (line < 0) return compile_commonjs");
+  expect(evaluate).toContain("options.setFileAndLine(filename, static_cast<uint32_t>(line))");
+  expect(definition(shim, "bool compile_commonjs(")).toContain("options.setFileAndLine(filename, 0)");
+});
+
+test("deferred native destruction permits destructor reentry into the registry", () => {
+  const run = runControl(controls.finalizer);
+  expect(run.stderr.toString()).toBe("");
+  expect(run.exitCode).toBe(0);
 });
 
 test("module evaluation forwards settlement without adopting its internal promise", () => {
