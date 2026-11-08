@@ -6,6 +6,7 @@ import type { ProcessExit } from "waffle/proc";
 import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
 import type { ProcessService, RuntimeSupervisor, MemoryDeclaration, SharedControlGrant } from "waffle";
+import type { RootMemoryGroupMember } from "waffle/runtime";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
@@ -35,6 +36,7 @@ export class SubprocessBroker {
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
   private releaseRootLease?: () => void;
+  private rootGroup?: RootMemoryGroupMember;
   constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
     installBunAdapters(runtime, workerUrl, options.loadTools, options.network, options.preview1);
   }
@@ -73,7 +75,7 @@ export class SubprocessBroker {
   }
 
   /** Roots this run's process tree at a worker the page started with `transport`. */
-  async adoptRuntimeRoot(transport: WorkerProcessTransport, memory: readonly MemoryDeclaration[], cancelled?: () => boolean): Promise<SharedControlGrant | undefined> {
+  async adoptRuntimeRoot(transport: WorkerProcessTransport, memory: readonly MemoryDeclaration[] | "group", cancelled?: () => boolean): Promise<SharedControlGrant | undefined> {
     if (this.disposed) throw new Error("Process broker is disposed");
     const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
@@ -93,9 +95,19 @@ export class SubprocessBroker {
   rootControlAllocated(buffer: SharedArrayBuffer): void {
     if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
   }
+  /** Admits the adopted root as the first member of a new memory group. */
+  async admitRootGroup(): Promise<RootMemoryGroupMember> {
+    if (!this.root) throw new Error("Memory group admission needs an adopted root");
+    const service = await this.processService();
+    this.rootGroup = service.admitRootMemoryGroup(this.root.pid);
+    return this.rootGroup;
+  }
   rootStopped(): void {
     if (!this.root || this.runtime.disposed) return;
-    this.service?.rootStopped(this.root.pid);
+    // A group root's lease reclaims its memory and also settles the root ticket.
+    if (this.rootGroup) this.rootGroup.stopped();
+    else this.service?.rootStopped(this.root.pid);
+    this.rootGroup = undefined;
     this.releaseRoot();
   }
   private releaseRoot(): void {

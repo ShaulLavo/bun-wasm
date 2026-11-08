@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedPaths, needsJsc, needsRust, needsSharedSysroot } from "./ci-changes";
+import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -28,8 +28,10 @@ test.each(["web/src/bun-executor.ts", "web/tests/browser-quickjs-stack.ts", "scr
 
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
-test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("browser bundling alone skips native gates: $paths", ({ paths }) => {
-  expect(needsRust(paths)).toBe(false);
+test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumer bundling selects its launcher; page builds stay web-only: $paths", ({ paths }) => {
+  const sharedConsumer = paths.includes("scripts/browser-build.ts");
+  expect(needsRust(paths)).toBe(sharedConsumer);
+  expect(needsSharedNative(paths)).toBe(sharedConsumer);
   expect(needsJsc(paths)).toBe(false);
   expect(needsSharedSysroot(paths)).toBe(false);
 });
@@ -67,7 +69,7 @@ test("native handoff roots alone select producer and consumer engine gates", () 
   expect(needsJsc(paths)).toBe(true);
 });
 
-test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
+test.each(["src/index.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
 
@@ -315,3 +317,30 @@ test("TLS live inputs select native prerequisites while lightweight-only utility
   for (const path of ["scripts/tls-probe.ts", "scripts/tls-probe-cargo.ts", "scripts/tls-probe-handoff.ts", "tests/native/tls-probe.cpp", "checks/native-probe-tls.json"]) expect(needsRust([path])).toBe(true);
   expect(needsRust(["scripts/tls-probe.test.ts"])).toBe(false);
 });
+
+function sharedBrowserSelection(path: string, event: string): string {
+  if (!fixture) throw new Error("Fixture not initialized");
+  git(["checkout", "-q", "--detach", base]);
+  mkdirSync(join(fixture, "checks"), { recursive: true });
+  writeFileSync(join(fixture, "checks/native-shared-browser.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/shared-browser", profile: "shared-group" }));
+  git(["add", "."]);
+  git(["commit", "-qm", "existing shared profile"]);
+  const start = git(["rev-parse", "HEAD"]);
+  mkdirSync(join(fixture, path, ".."), { recursive: true });
+  writeFileSync(join(fixture, path), "changed shared Browser input\n");
+  git(["add", "."]);
+  git(["commit", "-qm", `change ${path}`]);
+  return selectionOutput(start, git(["rev-parse", "HEAD"]), event);
+}
+
+for (const path of [
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts",
+  "web/src/memory-telemetry.ts", "web/src/net/trampoline.ts", "src/assets.ts",
+  "scripts/browser-build.ts", "web/package.json", "web/bun.lock",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the real shared consumer and launcher for %s`, event => {
+    const output = sharedBrowserSelection(path, event);
+    expect(output).toStartWith("rust=true\n");
+    expect(output).toEndWith("shared_native=true");
+  });
+}

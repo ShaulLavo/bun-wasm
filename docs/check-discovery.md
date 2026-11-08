@@ -22,8 +22,10 @@ Native paths name a directory under
 `tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
 keeps the ordinary split producer and selection. The shared PIC job consumes the
 Rust job's launcher and one matching group core/QuickJS pair through
-`bun scripts/test-checks.ts native --profile shared-group`. Missing artifacts or
-capability fail this blocking gate. Other paths
+`bun scripts/test-checks.ts native --profile shared-group`. A `browser-guest` manifest may
+select the same profile; the same job runs it in Chromium against that group build through
+`bun scripts/test-checks.ts browser-guest --profile shared-group`, and the Processes legs keep
+the split selection. Missing artifacts or capability fail this blocking gate. Other paths
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.
