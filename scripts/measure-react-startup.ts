@@ -118,12 +118,12 @@ async function main(): Promise<void> {
       await save();
       console.error(`React rendered ${sample.renderMs.toFixed(1)} ms; interactive ${sample.interactiveMs.toFixed(1)} ms`);
     } catch (error) {
-      errors.push(JSON.stringify(await page.evaluate(() => ({
+      errors.push(JSON.stringify({ frames: await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.locator("body").innerText({ timeout: 1000 }).catch(String) }))), page: await page.evaluate(() => ({
         status: document.querySelector("#status")?.textContent,
-        terminal: document.querySelector(".xterm-screen")?.textContent,
-        frames: Array.from(document.querySelectorAll("iframe"), frame => ({ url: frame.src, text: frame.contentDocument?.body?.textContent })),
+        terminal: document.querySelector(".xterm-rows")?.textContent,
+        frames: Array.from(document.querySelectorAll("iframe"), frame => ({ url: frame.src })),
         phases: performance.getEntriesByType("measure").map(entry => ({ name: entry.name, duration: entry.duration })),
-      })).catch(() => "diagnostics unavailable")));
+      })).catch(() => "diagnostics unavailable") }));
       throw error;
     }
   }
