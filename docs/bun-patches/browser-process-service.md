@@ -161,4 +161,5 @@ The published runtime source reference is `ShaulLavo/waffle`,
 `packages/waffle/proc/{observation,worker-client}.ts` and
 `packages/waffle/browser/{worker,process-broker}.ts` at
 `341bf1452d98e280a5c718af2775a839ff4042fa`, runtime 0.0.114 with host interface 2.
-The matching program families and shell source remain required before this consumer lands.
+The matching public program family is 0.0.16. A reviewed, merged shell source with the
+same interface remains required before this consumer lands.

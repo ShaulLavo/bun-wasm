@@ -1,6 +1,6 @@
 # Bun process observation through native return
 
-Status: Approved. Runtime and relay 0.0.114 are pinned and locally checked. Matching interface-2 programs and reviewed, merged Bash source remain required before landing.
+Status: Approved. Runtime and relay 0.0.114 plus programs 0.0.16 are pinned and locally checked at interface 2. Reviewed, merged Bash source and green normal CI remain required before landing.
 
 ## Contract
 
@@ -27,7 +27,7 @@ The feature-owned `checks/web-runner-process-observation.json` runs the real CPU
 
 ## Landing dependency
 
-Root, Web, and sandbox now select published runtime 0.0.114. Root and Web select its paired relay. Root metadata and native release inputs use host interface 2 and source 341bf1452d98e280a5c718af2775a839ff4042fa. Frozen installs pass without preparing or rebuilding those packages. The coordinator owns normal CI and merge after programs 0.0.16 and the reviewed, merged interface-2 Bash source complete the tuple. No development archive URL or package version bump belongs in this PR.
+Root, Web, and sandbox now select published runtime 0.0.114. Root and Web select its paired relay. Root metadata and native release inputs use host interface 2 and source 341bf1452d98e280a5c718af2775a839ff4042fa. Frozen installs pass without preparing or rebuilding those packages. Programs 0.0.16 is now public and selected through the updater. The coordinator owns normal CI and merge after the reviewed, merged interface-2 Bash source completes consumer adoption. No development archive URL or package version bump belongs in this PR.
 
 
 ## Local gate results
@@ -51,3 +51,9 @@ After reconciling main at 95cc826e1, the normal JavaScript quality command passe
 PR 562 owns the entire Waffle 0.0.114 migration. The release record now includes the paired relay URL, version, source, hash, byte count, and exact host interface. Producer selection checks the Web pin against that record, and release admission verifies relay bytes rather than only its version and filename. The updater compares all native source inputs with the released archive and rejects runtime, relay, or program interface drift before any record write. Negative controls failed before these fixes and pass afterward. Existing historical program provenance remains unchanged until the published 0.0.16 handoff replaces it.
 
 The normal selector reports `rust=true`, `jsc=true`, `shared=true`, and `shared_native=true` for this migration. The existing Shared PIC job produces and consumes both QuickJS and JSC group profiles, including their real Chromium checks. Their passing hosted results remain required, not replaced by the source-only selector proof. Engines will rebase on this integration after merge; no launcher discriminator hunk or caller-controlled environment flag is added here.
+
+## Public program tuple adopted
+
+The updater successfully regenerated the real released closure using manifest c502306e1c5e2931ae14b2a7f0a9975a05cb5345032f7ae4540e7a53be8357ce and base 52dc39f922c07bc173c520f8442edadf619061a6d9e6c28055459f15eddb44e9. Program source 3050f69d810fe7c851e487135517698b5dfd93e5 remains original; clean rebind and acceptance tool 3bf98e950ea0e53bc9a2a35d503b08d5a1117e00 is recorded separately. Runtime and relay stay on source 341bf1452d98e280a5c718af2775a839ff4042fa. All generated fields match the release owner's public tuple.
+
+Normal and frozen installs pass in all three consumer scopes. The focused group passes 242 tests, including the actual CPU observation controls. Types and lint pass. Full Web now has 1,814 passes, one skip, and only the retained Bash interface-1 failure. The base-family mismatch is gone. No Bash candidate is adopted before its review and merge, and the complete Web gate remains blocking.
