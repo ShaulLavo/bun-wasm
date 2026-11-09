@@ -279,8 +279,11 @@ fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
         let shared = e.to_val(&e.get(&span, "shared")?) == Val::Bool(true);
         let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
         if shared {
-            // SAFETY: group-backed resource storage stays stable and session-leased.
-            return unsafe { e.shared_wasm_memory_buffer(data, length) };
+            let visible = visible_length(&e.to_val(&arg(e, args, 1)), length)
+                .map_err(|err| e.error_value(&err))?;
+            // SAFETY: group-backed resource storage stays stable and session-leased, and a
+            // shared length never shrinks, so a prefix of it stays inside the region.
+            return unsafe { e.shared_wasm_memory_buffer(data, visible) };
         }
         let previous = arg(e, args, 1);
         if !e.is_undefined(&previous) && !e.detach_wasm_memory_buffer(&previous) {
@@ -293,6 +296,17 @@ fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
         // WebAssembly polyfill detaches this buffer before user code runs.
         Ok(unsafe { e.wasm_memory_buffer(data, length) })
     })
+}
+
+/// The requested prefix of a shared memory's current length, or all of it when not requested.
+fn visible_length(requested: &Val, length: usize) -> Result<usize, NativeError> {
+    match requested {
+        Val::Undefined => Ok(length),
+        Val::Num(value) if *value >= 0.0 && value.fract() == 0.0 && *value <= length as f64 => {
+            Ok(*value as usize)
+        }
+        _ => Err(NativeError::error("invalid shared memory view length")),
+    }
 }
 
 fn checked_span(span: &Val) -> Result<(*mut u8, usize), NativeError> {

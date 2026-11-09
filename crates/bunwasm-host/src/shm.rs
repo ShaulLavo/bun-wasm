@@ -342,6 +342,7 @@ pub struct GroupSnapshot {
     pub committed_bytes: u64,
     pub free_bytes: u64,
     pub bypassed: bool,
+    pub published: usize,
 }
 
 #[derive(Clone)]
@@ -369,6 +370,7 @@ struct GroupState {
     next_watch: u32,
     next_waiter: u64,
     watch_sequence: u64,
+    directory: nested::Directory,
     ended: bool,
 }
 
@@ -398,6 +400,8 @@ struct Region {
     chunk: Chunk,
     holders: HashMap<MemberId, u32>,
     pins: usize,
+    /// Directory entries naming this region. They hold it until withdrawn or the group ends.
+    published: u32,
 }
 
 struct Pin {
@@ -477,6 +481,7 @@ impl MemoryGroup {
             next_watch: 1,
             next_waiter: 1,
             watch_sequence: 1,
+            directory: nested::Directory::default(),
             ended: false,
         };
         Ok(Self {
@@ -565,6 +570,7 @@ impl MemoryGroup {
                 .map(|chunk| u64::from(chunk.pages) * u64::from(PAGE_BYTES))
                 .sum(),
             bypassed: self.inner.backing.bypassed(),
+            published: state.directory.len(),
         }
     }
 
@@ -700,9 +706,14 @@ impl GroupInner {
             give_chunk(&mut state.free, chunk);
         }
         state.members[id.index] = None;
-        if state.members.iter().all(Option::is_none) {
-            state.ended = true;
+        if !state.members.iter().all(Option::is_none) {
+            return;
         }
+        state.ended = true;
+        // The last member's stop retires every publication; compiled code unmaps off the lock.
+        let retired = nested::retire_directory(&mut state);
+        drop(state);
+        drop(retired);
     }
 
     fn grow(&self, member: MemberId, pages: u32) -> Result<u32, Errno> {
@@ -745,6 +756,7 @@ impl GroupInner {
                 chunk,
                 holders,
                 pins: 0,
+                published: 0,
             },
         );
         Self::current_member_mut(&mut state, member)?
@@ -910,7 +922,7 @@ impl GroupInner {
         let Some(region) = state.regions.get(&handle) else {
             return;
         };
-        if !region.holders.is_empty() || region.pins != 0 {
+        if !region.holders.is_empty() || region.pins != 0 || region.published != 0 {
             return;
         }
         let region = state.regions.remove(&handle).expect("region checked above");

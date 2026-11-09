@@ -120,6 +120,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
     async instantiated({ instance, wasi, fs, checkActive, notifications }) {
+      // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
+      if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
       if (slots === "off") return;
       // The network poll is where the guest loop sleeps; Waffle's notification set lets it also

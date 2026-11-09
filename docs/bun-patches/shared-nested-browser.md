@@ -60,3 +60,8 @@ packed-consumer gate checks all three files and the real TypeScript/Vite closure
 Native instantiation reads each validated import occurrence in order, including duplicate
 names with matching function types. The host supplies those captured bindings through
 ordered namespace getters rather than overwriting an earlier callback.
+
+The Browser group fixture attempts shared-backend Memory and Module publication
+through both workerData and a MessageChannel. Each must fail with DataCloneError
+and the Browser host's explicit same-region-transport diagnostic, rather than
+passing through an unrelated Wasmi or unsupported-worker refusal.

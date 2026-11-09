@@ -3,7 +3,7 @@ use super::nested_frame as frame;
 use super::nested_invocation::Invocation;
 use super::{error, resource_id};
 use crate::data::{NativeError, NativeResult, Record, Val};
-use bunwasm_nested::MemoryPlan;
+use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap};
 use wasmparser::{ExternalKind, Parser, Payload, TypeRef, ValType};
 #[path = "nested_wire.rs"]
@@ -61,8 +61,9 @@ fn exchange(input: &Request) -> Result<Reply, NativeError> {
         fn request(pointer: *const u8, length: u32, out: *mut [u32; 2]) -> i32;
     }
     let bytes = serde_json::to_vec(input).map_err(error)?;
+    let length = wire::request_length(bytes.len()).ok_or_else(|| error("nested request limit"))?;
     let mut out = [0; 2];
-    let status = unsafe { request(bytes.as_ptr(), bytes.len() as u32, &mut out) };
+    let status = unsafe { request(bytes.as_ptr(), length, &mut out) };
     if status != 0 {
         return Err(error("nested host transport failed"));
     }
@@ -96,13 +97,13 @@ fn count(input: Request) -> NativeResult {
     Ok(Val::Num(f64::from(value)))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Import {
     module: String,
     name: String,
     kind: ImportKind,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 enum ImportKind {
     Function {
         params: Vec<String>,
@@ -111,11 +112,23 @@ enum ImportKind {
     Memory,
     Global(String),
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+struct Export {
+    name: String,
+    kind: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Limits {
+    initial_pages: u32,
+    maximum_pages: Option<u32>,
+}
+/// A compiled module's JS-visible shape. The directory carries it opaquely between members
+/// of one group, which already share every byte, so it needs no second validation.
+#[derive(Clone, Serialize, Deserialize)]
 struct Description {
-    memory: MemoryPlan,
+    memory: Limits,
     imports: Vec<Import>,
-    exports: Vec<Val>,
+    exports: Vec<Export>,
 }
 
 pub(super) fn shared(bytes: &[u8]) -> bool {
@@ -131,7 +144,7 @@ pub(super) fn validate(bytes: &[u8]) -> bool {
     };
     output
         .memory
-        .is_some_and(|memory| memory.shared && describe(bytes, memory).is_ok())
+        .is_some_and(|memory| memory.shared && describe(bytes, &memory).is_ok())
 }
 fn type_name(ty: ValType) -> Result<String, NativeError> {
     Ok(match ty {
@@ -170,7 +183,11 @@ fn import_description(import: &Import) -> Val {
             .into(),
     }
 }
-fn describe(bytes: &[u8], memory: MemoryPlan) -> Result<Description, NativeError> {
+fn describe(bytes: &[u8], memory: &bunwasm_nested::MemoryPlan) -> Result<Description, NativeError> {
+    let memory = Limits {
+        initial_pages: memory.initial_pages,
+        maximum_pages: memory.maximum_pages,
+    };
     let mut imports = Vec::new();
     let mut exports = Vec::new();
     let mut types = Vec::new();
@@ -209,7 +226,7 @@ fn describe_imports(
 }
 fn describe_exports(
     section: wasmparser::ExportSectionReader<'_>,
-    exports: &mut Vec<Val>,
+    exports: &mut Vec<Export>,
 ) -> Result<(), NativeError> {
     for item in section {
         exports.push(describe_export(item.map_err(error)?)?);
@@ -252,7 +269,7 @@ fn describe_import(
         kind,
     })
 }
-fn describe_export(item: wasmparser::Export<'_>) -> Result<Val, NativeError> {
+fn describe_export(item: wasmparser::Export<'_>) -> Result<Export, NativeError> {
     let kind = match item.kind {
         ExternalKind::Func => "function",
         ExternalKind::Memory => "memory",
@@ -262,10 +279,29 @@ fn describe_export(item: wasmparser::Export<'_>) -> Result<Val, NativeError> {
             ));
         }
     };
-    Ok(Record::new()
-        .set("name", item.name)
-        .set("kind", kind)
-        .into())
+    Ok(Export {
+        name: item.name.to_owned(),
+        kind: kind.to_owned(),
+    })
+}
+fn module_record(id: u32, description: &Description) -> Val {
+    let imports: Vec<_> = description.imports.iter().map(import_description).collect();
+    let exports: Vec<Val> = description
+        .exports
+        .iter()
+        .map(|export| {
+            Record::new()
+                .set("name", export.name.as_str())
+                .set("kind", export.kind.as_str())
+                .into()
+        })
+        .collect();
+    Record::new()
+        .set("id", id)
+        .set("backend", "nested")
+        .set("imports", imports)
+        .set("exports", exports)
+        .into()
 }
 pub(super) fn compile(bytes: &[u8]) -> NativeResult {
     if MODULES.with(|modules| modules.borrow().len()) >= wire::MAX_RESOURCES {
@@ -278,20 +314,53 @@ pub(super) fn compile(bytes: &[u8]) -> NativeResult {
     if !memory.shared {
         return Err(error("Shared backend cannot import an unshared memory"));
     }
-    let description = describe(bytes, memory)?;
+    let description = describe(bytes, &memory)?;
     let id = handle(Request::Compile {
         pointer: output.bytes.as_ptr() as usize as u32,
         length: output.bytes.len() as u32,
     })?;
-    let imports: Vec<_> = description.imports.iter().map(import_description).collect();
-    let exports = description.exports.clone();
+    let record = module_record(id, &description);
     MODULES.with(|modules| modules.borrow_mut().insert(id, description));
-    Ok(Record::new()
-        .set("id", id)
-        .set("backend", "nested")
-        .set("imports", imports)
-        .set("exports", exports)
-        .into())
+    Ok(record)
+}
+pub(super) fn publish_memory(memory: u32) -> NativeResult {
+    if !owns(memory) {
+        return Err(error("Expected a shared WebAssembly.Memory"));
+    }
+    count(Request::PublishMemory { memory })
+}
+pub(super) fn attach_memory(token: u32) -> NativeResult {
+    Ok(Val::Num(f64::from(handle(Request::AttachMemory {
+        token,
+    })?)))
+}
+pub(super) fn publish_module(module: u32) -> NativeResult {
+    let description = MODULES
+        .with(|modules| modules.borrow().get(&module).cloned())
+        .ok_or_else(|| error("Invalid nested module"))?;
+    count(Request::PublishModule {
+        module,
+        description: serde_json::to_string(&description).map_err(error)?,
+    })
+}
+pub(super) fn attach_module(token: u32) -> NativeResult {
+    if MODULES.with(|modules| modules.borrow().len()) >= wire::MAX_RESOURCES {
+        return Err(error("Nested module resource limit"));
+    }
+    let Reply::AttachedModule { id, description } = request(Request::AttachModule { token })?
+    else {
+        return Err(error("invalid nested module reply"));
+    };
+    if !owns(id) {
+        return Err(error("untyped nested handle"));
+    }
+    let description: Description = serde_json::from_str(&description).map_err(error)?;
+    let record = module_record(id, &description);
+    MODULES.with(|modules| modules.borrow_mut().insert(id, description));
+    Ok(record)
+}
+pub(super) fn withdraw(token: u32) -> NativeResult {
+    count(Request::Withdraw { token })
 }
 pub(super) fn create_memory(initial: u32, maximum: u32) -> NativeResult {
     Ok(Val::Num(f64::from(handle(Request::Reserve {

@@ -1,4 +1,5 @@
 import type { MemorySnapshot } from "./memory-telemetry.ts";
+import { createNativeSharedBuffer } from "./shared-objects/native.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -6,7 +7,7 @@ const payloadOffset = 32;
 const byteLength = 8192;
 type Reader = { sample(refresh?: boolean): MemorySnapshot; finish(): MemorySnapshot };
 
-export function createMemoryChannel(): SharedArrayBuffer { return new SharedArrayBuffer(byteLength); }
+export function createMemoryChannel(): SharedArrayBuffer { return createNativeSharedBuffer(byteLength); }
 export function requestMemoryChannel(buffer: SharedArrayBuffer, refresh: boolean): number {
   const words = new Int32Array(buffer, 0, 8);
   Atomics.store(words, 1, Number(refresh));

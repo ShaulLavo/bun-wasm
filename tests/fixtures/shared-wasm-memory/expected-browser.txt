@@ -9,3 +9,4 @@ shared-wasm-memory engine roots: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Browser budget: pass
+shared-wasm-memory Browser worker refusals: pass
