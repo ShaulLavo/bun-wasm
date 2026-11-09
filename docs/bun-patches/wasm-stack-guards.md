@@ -55,3 +55,30 @@ fixed recovery marker instead of spawning a child test process.
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## JSC native recursion accounting
+
+The WASI additions to the same pinned WebKit's `JSArray.cpp`, `ProxyObject.cpp`,
+`JSONObject.cpp`, `parser/Parser.cpp` and `WTF/wtf/StackBounds.h` are a **Port**.
+`WASM_RESERVE_STACK` is an original accounting adapter. Its escaping constant
+`alloca` keeps a reservation alive until the native function returns, including
+exception returns. It changes neither the upstream recursion algorithm nor the
+C-loop's JavaScript frame capacity.
+
+The two fast flattening functions and default Proxy property reads reserve
+512 shadow bytes per native frame. Fast JSON serialization reserves 1024 bytes. The assignment and
+statement parsers reserve 2048 bytes. Fast JSON's static-buffer path also checks
+the VM's soft limit. Its upstream stack estimate assumes native frames and cannot
+by itself protect Wasm's separate host stack. Non-WASI builds add no reservation.
+
+The browser adapter gives V8 800 KiB for JSC getter reentry only after these native
+paths have their own accounting. QuickJS's V8 default and the Firefox, WebKit and
+unknown-host policies remain unchanged. The `stack-getter-headroom` fixture keeps
+128 nested getters and the previously caught native paths together, then checks
+that getters still work after the exceptions. Native fixture discovery owns it.
+The original `scripts/jsc-embedding.ts` host adapter reads that feature manifest
+and also runs the same fixture on its matched JSC pair with a 1 MiB Node Worker
+stack and the 800 KiB guest budget, requiring RangeError on all five paths.
+Other engines may finish an operation iteratively, but must still continue. This is a blocking runtime control, not a source
+pattern test. Real Chrome warm and fresh-context controls remain a separate
+qualification step.

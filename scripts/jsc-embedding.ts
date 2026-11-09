@@ -4,6 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
+import { parseCheck } from "./test-checks";
 
 const root = resolve(import.meta.dir, "..");
 const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/jsc-embedding/growable-memory"];
@@ -43,22 +44,31 @@ export function handshakeCommands(artifact: string): string[][] {
   return [["node", "--no-warnings", join(root, "tests/test-stdout-busy-loop.ts"), "--engine", "jsc", "--wasm", artifact]];
 }
 
+export function stackFixture() {
+  const manifest = "native-stack-getter-headroom.json";
+  const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+  if (check.owner !== "native") throw new Error("JSC stack fixture needs its native check owner");
+  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
+}
+
 function testFixtures(artifact: string): void {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-embedding-"));
   try {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
+    const stack = stackFixture();
+    runFixture(artifact, stack.path, scratch, stack.hostOptions);
     for (const command of handshakeCommands(artifact)) runHandshake(command, scratch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
 
-function runFixture(artifact: string, fixture: string, scratch: string): void {
+function runFixture(artifact: string, fixture: string, scratch: string, hostOptions: readonly string[] = []): void {
   const source = join(root, fixture);
   const work = join(scratch, fixture);
   cpSync(source, work, { recursive: true });
-  const run = spawnSync("node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--wasm", artifact,
-    "--engine", `jsc=${artifact}`, "--dir", `${work}::/`, "--env", "PATH=/opt/bun/jsc/bin:/bin:/usr/bin", "--env", "PWD=/", "--env", "HOME=/", "--env", "BUNWASM_TEST=1", "--", "run", "/index.ts"],
+  const run = spawnSync("node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--wasm", artifact].concat(hostOptions, [
+    "--engine", `jsc=${artifact}`, "--dir", `${work}::/`, "--env", "PATH=/opt/bun/jsc/bin:/bin:/usr/bin", "--env", "PWD=/", "--env", "HOME=/", "--env", "BUNWASM_TEST=1", "--", "run", "/index.ts"]),
   { cwd: work, encoding: "utf8", timeout: 60_000, env: { ...process.env, BUN_WASM_SCRATCH_ROOT: scratch, TMPDIR: scratch, AGENT: "0", CLAUDECODE: "" } });
   process.stdout.write(run.stdout ?? "");
   process.stderr.write(run.stderr ?? "");
