@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inventory } from "./catalog";
@@ -28,7 +29,7 @@ function report(run = "first", minute = 1, failure?: Parameters<typeof attempt>[
   return { schema: 2, run, createdAt: "2026-11-08T10:00:00.000Z", command: "original command", source: { commit: run, dirty: false, assets: { hostSource: "product", engineBuilds: { browser: "digest" }, files: [{ path: "original", sha256: "original digest" }] } }, deadlines: deadlinePolicy(180_000),
     cells: initialCells().map(cell => cell.framework === box.framework && cell.browser === box.browser && cell.engine === box.engine ? finish(box, attempt(minute, failure)) : cell) };
 }
-function input(result: unknown, path = "/reports/first/TABLE.json") { return { path, contents: JSON.stringify(result) }; }
+function input(result: unknown, path = "/reports/first/TABLE.json") { return { path, contents: Buffer.from(JSON.stringify(result)) }; }
 
 test("read-only projection preserves separate runner, product and policy identities without weakening combine", () => {
   const first = report(), second = report("second", 2, "install");
@@ -156,5 +157,36 @@ test("CLI writes only a new view directory and refuses input overwrite", async (
     await writeFile(join(root, "resume/TABLE.json"), stored);
     await expect(initialReport(options([`--root=${root}/site`, `--output=${root}/resume`, "--resume", "--asset-source=fixture"]))).rejects.toThrow("schema");
     expect(await readFile(join(root, "resume/TABLE.json"), "utf8")).toBe(stored);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("CLI rejects malformed UTF-8 without changing input or creating output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-view-utf8-"));
+  try {
+    const path = join(root, "TABLE.json"), output = join(root, "view");
+    const bytes = Buffer.from(JSON.stringify(report("bad-BYTE")));
+    const index = bytes.indexOf("BYTE");
+    expect(index).toBeGreaterThan(-1);
+    bytes[index] = 0xff;
+    await writeFile(path, bytes);
+    await expect(writeView([`--output=${output}`, path])).rejects.toThrow();
+    await expect(access(output)).rejects.toThrow();
+    expect(await readFile(path)).toEqual(bytes);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("CLI binds a valid Unicode archive to its original UTF-8 bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-view-bytes-"));
+  try {
+    const path = join(root, "TABLE.json"), output = join(root, "view");
+    const original = report("café");
+    const bytes = Buffer.from(JSON.stringify(original));
+    await writeFile(path, bytes);
+    await writeView([`--output=${output}`, path]);
+    const saved = JSON.parse(await readFile(join(output, "VIEW.json"), "utf8"));
+    expect(saved.inputs[0].sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(saved.inputs[0].report).toEqual(original);
+    expect(await readFile(path)).toEqual(bytes);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

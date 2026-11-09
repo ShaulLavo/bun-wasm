@@ -6,6 +6,7 @@ import { inventory, boxId, type Box } from "./catalog";
 import { validateArchive, recordedTime, type ArchivedReport } from "./archive";
 import { finish, type Attempt, type PhaseResult, type Phase } from "./model";
 
+type Input = { path: string; contents: Uint8Array };
 type Observation = { input: number; cell: number };
 type AttemptRef = Observation & { attempt: number };
 type Outcome = { status: "unattempted" } | { status: "pass" } | { status: "fail"; phase: Phase; error: string };
@@ -22,8 +23,9 @@ interface Projection {
   inputs: { path: string; sha256: string; report: ArchivedReport }[];
   cells: ViewCell[];
 }
-function readInput(input: { path: string; contents: string }): Projection["inputs"][number] {
-  const report: unknown = JSON.parse(input.contents);
+function readInput(input: Input): Projection["inputs"][number] {
+  const contents = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(input.contents);
+  const report: unknown = JSON.parse(contents);
   validateArchive(report);
   return { path: resolve(input.path), sha256: createHash("sha256").update(input.contents).digest("hex"), report };
 }
@@ -61,7 +63,7 @@ function projectCell(box: Box, inputs: Projection["inputs"]): ViewCell {
   const actual = getAttempt(inputs, latest);
   return { ...box, observations, attempts, latest, overall: attemptedOutcome(box, actual), install: actual.phases.find(phase => phase.phase === "install") ?? null };
 }
-export function project(raw: readonly { path: string; contents: string }[], boxes: readonly Box[] = inventory()): Projection {
+export function project(raw: readonly Input[], boxes: readonly Box[] = inventory()): Projection {
   if (!raw.length) throw new Error("Provide at least one schema 2 report path");
   const inputs = raw.map(readInput);
   uniqueInputs(inputs);
@@ -137,7 +139,7 @@ function selection(args: readonly string[]): { output: string; paths: string[]; 
 }
 export async function writeView(args: readonly string[]): Promise<void> {
   const config = selection(args), raw = [];
-  for (const path of config.paths) raw.push({ path: await realpath(path), contents: await readFile(path, "utf8") });
+  for (const path of config.paths) raw.push({ path: await realpath(path), contents: await readFile(path) });
   const view = project(raw, config.boxes), markdown = viewMarkdown(view);
   await mkdir(config.output);
   await writeFile(join(config.output, "VIEW.json"), JSON.stringify(view, null, 2) + "\n", { flag: "wx" });
