@@ -98,7 +98,7 @@ internal printer's unwrapped static import and re-export paths without changing
 explicit CommonJS require conditions. Keep the current PR claim limited to
 wrapped static imports. This follow-up is not a proven Angular goal blocker.
 
-## Namespace review blockers
+## Rejected wrapper review blockers
 
 Independent review at `f401db6429f25f185ada4b11847cd62d72d01381` reproduces
 two regressions on the actual QuickJS and JSC guests. A require-only getter
@@ -106,7 +106,7 @@ view is not identical to the dynamic-import namespace or a namespace re-export.
 Its non-null prototype also fails the current namespace-recognition predicate.
 The pre-change split namespace and native Bun pass both controls.
 
-PR 552 remains blocked. Preserve the actual canonical namespace and its live
+That wrapper revision remained blocked. Preserve the actual canonical namespace and its live
 exports across require, dynamic import, and namespace re-export, rather than
 relaxing the identity or recognition tests. Native Bun exposes its marker on
 a namespace prototype and still recognizes the namespace by its engine brand.
@@ -140,3 +140,25 @@ Source tracing, design comparison, commands and actual guest logs belong to
 `/work/reports/goals/astro-angular/native-namespace/`. The parent owns independent
 review, integration, CI and merge. Later Angular stack and shared-buffer failures
 remain separately owned, not reasons to retry full installations here.
+
+### Native implementation results
+
+Both rebuilt native guests pass the expanded namespace fixture and
+`cjs-interop`, `default-import-reexport`, `esm-create-require`, and
+`module-prototype-require`. The existing JSC Node-host test passes too.
+The rebuilt browser guest passes those four adjacent controls and the unchanged
+interop, metadata and public-output checks in both module modes. Native Bun 1.4.4
+passes the expanded fixture after the import-first marker timing is accounted for.
+
+Local runtime preflight passes 1,498 tests across 103 files. Source-control tests,
+check discovery, lint, runtime/package/web/sandbox/script type projects, unused
+checks, duplicate checks and the feature-version guard also pass. The first
+preflight exposed missing hoisted Node type definitions; reinstalling the existing
+frozen dependencies with `--linker hoisted` repairs that setup. A run under an
+overlong TMPDIR hit the existing browser-root guard and was stopped. The final
+preflight uses the normal short `/work/tmp` and passes. No product assertion,
+deadline or fallback was relaxed.
+
+The new implementation still needs the parent's fresh independent review and
+normal CI. PR 552 stays draft. No new Angular Chrome install was run because the
+independently owned later stack and shared-buffer blockers are still open.
