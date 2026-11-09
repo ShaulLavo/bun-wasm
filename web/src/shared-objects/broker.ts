@@ -460,9 +460,9 @@ export function createSharedObjectBroker() {
       const onError = () => closeClient(client);
       client.detach = () => { port.removeEventListener("message", onMessage); port.removeEventListener("messageerror", onError); };
       port.addEventListener("message", onMessage); port.addEventListener("messageerror", onError); port.start();
-      // Failing to build or deliver the grant closes the client; the worker's `ready` then rejects.
-      try { send(client, { kind: "pool", grant: bufferPool() }); }
-      catch { closeClient(client); }
+      // Startup must fail through the launcher even when this port cannot deliver a closing packet.
+      try { port.postMessage({ kind: "pool", grant: bufferPool() }); }
+      catch (error) { closeClient(client); throw error; }
     }
     return { id, attach, close: () => closeClient(client) };
   }

@@ -17,6 +17,8 @@ What it does, and the limit of what it does:
 - Before guest entry, every Browser-engine member receives the same table of native fixed
   `SharedArrayBuffer`s at exact lengths (every multiple of 4 up to 64 bytes, then powers of two up
   to 65,536 bytes) and 32 channel lanes.
+- Failure to construct or deliver the startup grant releases the broker lease and fails the launch.
+  Startup does not depend on sending an error through the same broken port.
 - The guest realm's constructor (a `Proxy` of the native one, installed in `EngineHost.start`
   immediately before the guest bootstrap) hands out one of those buffers when the requested fixed
   length has stock. Its argument coercion and error order follow the specification. Host and Waffle

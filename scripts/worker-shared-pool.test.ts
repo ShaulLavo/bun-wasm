@@ -3,6 +3,7 @@
 // event loop, so a message it cannot decode must fail by name instead of looking absent.
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Worker, MessagePort as NativeMessagePort } from "node:worker_threads";
 import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
 import { createSharedLaneBuffer, openSharedLane, sharedLaneBytes } from "../web/src/shared-objects/lane";
@@ -17,9 +18,10 @@ test("first-party host code allocates only through the captured native construct
   const glob = new Bun.Glob("**/*.{ts,tsx,js}");
   const allowed = ["shared-objects/native.ts", "shared-objects/realm.ts"];
   const bare: string[] = [];
-  for (const path of glob.scanSync({ cwd: "web/src" })) {
+  const sourceRoot = join(import.meta.dir, "../web/src");
+  for (const path of glob.scanSync({ cwd: sourceRoot })) {
     if (allowed.includes(path)) continue;
-    const text = readFileSync(`web/src/${path}`, "utf8");
+    const text = readFileSync(join(sourceRoot, path), "utf8");
     if (/\bnew SharedArrayBuffer\b|globalThis\.SharedArrayBuffer/.test(text)) bare.push(path);
   }
   expect(bare).toEqual([]);
@@ -208,10 +210,36 @@ test("close, messageerror and broker failure reject readiness instead of leaving
 
   const broker = createSharedObjectBroker();
   const lease = broker.register();
-  lease.attach({ postMessage(packet) { if (packet.kind === "pool") throw new Error("send failed"); }, start() {}, close() {}, addEventListener() {}, removeEventListener() {} });
+  expect(() => lease.attach({ postMessage(packet) { if (packet.kind === "pool") throw new Error("send failed"); }, start() {}, close() {}, addEventListener() {}, removeEventListener() {} })).toThrow("send failed");
   expect(broker.inspect().clients).toBe(0);
   broker.dispose();
   expect(broker.inspectPool()).toEqual({ created: false, classes: [], lanes: 0 });
+});
+
+test.each([false, true])("grant delivery failure propagates when the close packet also fails: %s", async allPackets => {
+  const broker = createSharedObjectBroker(), lease = broker.register();
+  const channel = new MessageChannel(), service = createSharedObjects(lease.id, channel.port1);
+  const attempted: string[] = [];
+  const port: SharedPort = {
+    postMessage(packet) {
+      attempted.push(packet.kind);
+      if (allPackets || packet.kind === "pool") throw new Error("grant transport failed");
+      channel.port2.postMessage(packet);
+    },
+    start: () => channel.port2.start(), close: () => channel.port2.close(),
+    addEventListener: (type, listener) => channel.port2.addEventListener(type, listener),
+    removeEventListener: (type, listener) => channel.port2.removeEventListener(type, listener),
+  };
+  try {
+    expect(() => lease.attach(port)).toThrow("grant transport failed");
+    expect(attempted).toEqual(["pool", "closed"]);
+    expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    if (!allPackets) expect(await settled(service.ready)).toBe("rejected: DataCloneError");
+  } finally {
+    service.close(); lease.close(); channel.port1.close(); channel.port2.close(); broker.dispose();
+  }
+  expect(await settled(service.ready)).toBe("rejected: DataCloneError");
+  expect(service.inspect().closed).toBe(true);
 });
 
 test("an invalid wire frame or failed attachment is not the retryable capability error", async () => {

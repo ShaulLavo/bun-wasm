@@ -573,10 +573,12 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
     expect(messages.some(message => message.type === "error")).toBe(false);
   } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
 }));
-async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
+async function runSharedSetup(mode: "normal" | "send-failure" | "grant-failure" | "grant-and-close-failure" | "revoked-after-export" | "engine-failure") {
   const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
   const messages: WorkerMessage[] = [];
   let exported = false, bound: SharedObjectService | undefined;
+  let restorePort = () => {};
+  const grantPackets: string[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     fetch: globalThis.fetch.bind(globalThis),
@@ -585,6 +587,15 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       exported = true;
       if (mode === "send-failure") throw new Error("native publication failed");
       expect(transfer).toEqual([message.port]);
+      if (mode === "grant-failure" || mode === "grant-and-close-failure") {
+        const post = message.port.postMessage.bind(message.port);
+        const sending = spyOn(message.port, "postMessage").mockImplementation(packet => {
+          grantPackets.push(packet.kind);
+          if (packet.kind === "pool" || mode === "grant-and-close-failure") throw new Error("grant transport failed");
+          post(packet);
+        });
+        restorePort = () => sending.mockRestore();
+      }
       route.attach(message.port);
     },
   };
@@ -610,11 +621,11 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       } });
     } }, host);
     await new Promise(resolve => setTimeout(resolve, 5));
-    return { messages, exported, bound, retained: broker.inspect(), afterCleanup: broker.inspect };
+    return { messages, exported, bound, grantPackets, retained: broker.inspect(), afterCleanup: broker.inspect };
   } finally {
     executor.beforeFinish?.(); route.close(); broker.dispose();
     connection.client.port.close(); connection.server.port.close();
-    startEngineHost.mockReset();
+    restorePort(); startEngineHost.mockReset();
   }
 }
 
@@ -626,6 +637,18 @@ test("real bootstrap exports a Bun-owned native setup port and closes engine ser
   expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(exits(result.messages)[0]?.type).toBe("exit");
 }));
+
+for (const mode of ["grant-failure", "grant-and-close-failure"] as const) {
+  test(`real bootstrap ${mode} fails before guest entry and tears down the pending service`, controlled(async () => {
+    const result = await runSharedSetup(mode);
+    expect(result.exported).toBe(true);
+    expect(result.grantPackets).toEqual(["pool", "closed"]);
+    expect(result.bound).toBeUndefined();
+    expect(exits(result.messages)[0]?.type).toBe("error");
+    expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  }));
+}
 
 for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as const) {
   test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, controlled(async () => {
