@@ -791,7 +791,7 @@ const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecu
 const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
 const stackHosts = [
   { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "192" },
-  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: undefined },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800" },
   { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
   { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
   { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
