@@ -293,6 +293,17 @@ fn the_backing_budget_limits_the_tail_but_not_reusable_holes() {
     member.physical_stopped();
 }
 
+fn spawn_exhausting_member<'scope>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    member: &'scope MemberLease,
+    start: &'scope Barrier,
+) -> thread::ScopedJoinHandle<'scope, Vec<NestedMemory>> {
+    scope.spawn(move || {
+        start.wait();
+        std::iter::from_fn(|| NestedMemory::new(member, 1, 1).ok()).collect()
+    })
+}
+
 #[test]
 fn two_groups_on_one_budget_never_charge_past_its_limit() {
     let budget = budget_of(64);
@@ -303,13 +314,9 @@ fn two_groups_on_one_budget_never_charge_past_its_limit() {
     let members = [launch(&groups[0], 1), launch(&groups[1], 2)];
     let start = Barrier::new(2);
     let admitted: usize = thread::scope(|scope| {
-        let workers = members.each_ref().map(|member| {
-            let start = &start;
-            scope.spawn(move || {
-                start.wait();
-                std::iter::from_fn(|| NestedMemory::new(member, 1, 1).ok()).collect::<Vec<_>>()
-            })
-        });
+        let workers = members
+            .each_ref()
+            .map(|member| spawn_exhausting_member(scope, member, &start));
         let held = workers.map(|worker| worker.join().unwrap());
         let count = held.iter().map(Vec::len).sum();
         drop(held);
@@ -366,6 +373,19 @@ fn a_fallback_reservation_leaves_room_for_later_members() {
     parent.physical_stopped();
 }
 
+fn spawn_growing_member<'scope>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    member: &'scope MemberLease,
+    start: &'scope Barrier,
+) -> thread::ScopedJoinHandle<'scope, NestedMemory> {
+    scope.spawn(move || {
+        start.wait();
+        let memory = NestedMemory::new(member, 2, 20).unwrap();
+        assert_eq!(memory.grow(3), Ok(2));
+        memory
+    })
+}
+
 #[test]
 fn competing_members_get_disjoint_zeroed_ranges() {
     let group = group_with(4096, GroupBackingBudget::default());
@@ -374,15 +394,7 @@ fn competing_members_get_disjoint_zeroed_ranges() {
     let mut held: Vec<NestedMemory> = thread::scope(|scope| {
         let workers: Vec<_> = members
             .iter()
-            .map(|member| {
-                let start = &start;
-                scope.spawn(move || {
-                    start.wait();
-                    let memory = NestedMemory::new(member, 2, 20).unwrap();
-                    assert_eq!(memory.grow(3), Ok(2));
-                    memory
-                })
-            })
+            .map(|member| spawn_growing_member(scope, member, &start))
             .collect();
         workers
             .into_iter()
