@@ -8,9 +8,23 @@ JSC_MAX_MEMORY_FILE="$REPO/crates/bunwasm-cli/max-memory.txt"
 # shellcheck source=/dev/null
 source "$REPO/env.sh"
 JSC_BUILD_DIR="${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}"
+# JSC_PROFILE=shared-group: real wasm atomics for a memory-group side (docs/shared-group-profile.md).
+JSC_PROFILE="${JSC_PROFILE:-split}"
+case "$JSC_PROFILE" in
+  split) JSC_PROFILE_FLAGS="" ;;
+  shared-group)
+    JSC_PROFILE_FLAGS="-matomics -mbulk-memory -mmutable-globals -DBUN_WASM_SHARED_GROUP=1"
+    if [[ "${BUN_WASM_SYSROOT:-}" != "${BUN_WASM_SHARED_SYSROOT:-unset}" ]]; then
+      echo "error: JSC_PROFILE=shared-group needs BUN_WASM_SYSROOT and BUN_WASM_SHARED_SYSROOT set to the same shared-pic sysroot" >&2
+      exit 1
+    fi
+    ;;
+  *) echo "error: unsupported JSC_PROFILE $JSC_PROFILE" >&2; exit 1 ;;
+esac
 WEBKIT_DIR="$JSC_BUILD_DIR/webkit"
 ICU_DIR="$JSC_BUILD_DIR/icu"
 ICU_PREFIX="$ICU_DIR/prefix"
+LIBCXX_DIR="$JSC_BUILD_DIR/libcxx"
 JSC_OBJ="$JSC_BUILD_DIR/build/jsc"
 SHIM_DIR="$JSC_BUILD_DIR/shim"
 JSC_CONFIG_DIR="$JSC_BUILD_DIR/inputs"
@@ -31,7 +45,13 @@ PATH_NO_BINARYEN="$(echo "$PATH" | tr ':' '\n' | grep -v binaryen | paste -sd:)"
 mkdir -p "$JSC_BUILD_DIR"
 
 JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
-JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_BUILD_DIR/jsc.wasm" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
+JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
+# The jsc shell is a standalone split program; a group side has no shell.
+if [[ "$JSC_PROFILE" == split ]]; then
+  JSC_ARTIFACTS+=("$JSC_BUILD_DIR/jsc.wasm")
+else
+  JSC_ARTIFACTS+=("$LIBCXX_DIR/lib/libc++.a" "$LIBCXX_DIR/lib/libc++abi.a")
+fi
 
 jsc_source_hashes() (
   cd "$JSC_SRC" || return 1
@@ -49,6 +69,7 @@ jsc_inputs_hash() {
   local -a command
   {
     printf 'format=3\n'
+    printf 'JSC_PROFILE=%s\n' "$JSC_PROFILE"
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
@@ -162,7 +183,8 @@ build_shim() {
   copy_jsc_config_inputs
   local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
+    # shellcheck disable=SC2086
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC $JSC_PROFILE_FLAGS -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

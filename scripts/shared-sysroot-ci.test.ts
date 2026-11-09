@@ -8,10 +8,11 @@ import { needsSharedSysroot } from "./ci-changes";
 import { discoverChecks } from "./test-checks";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [quality, rust]");
+  expect(shared).toContain("needs: [quality, rust, shared-prebuild]");
   expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
   expect(shared).toContain("node-version: '26'");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
@@ -23,8 +24,8 @@ test("the shared libc proof stays blocking beside the explicit native profile co
   expect(shared).toContain("v1.262.0/wasm-tools");
   expect(shared).toContain("v49.0.3/wasmtime");
   expect(shared).toContain("key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}");
-  expect(shared).toContain("key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}");
-  expect(shared).toContain('path: ${{ env.BUN_WASM_SHARED_SYSROOT }}');
+  expect(producer).toContain("key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}");
+  expect(producer).toContain('path: ${{ env.BUN_WASM_SHARED_SYSROOT }}');
   expect(shared).not.toContain("bun-wasm-sysroot-patched");
 });
 
@@ -116,8 +117,8 @@ test("real member map checks work without ripgrep and reject either missing libc
 
 type SharedSaveContext = { event: string; ref: string; hit: string; success: boolean; cancelled: boolean };
 
-function sharedCacheSaves(): { name: string; condition: string }[] {
-  const job: unknown = Bun.YAML.parse(shared);
+function sharedCacheSaves(source: string): { name: string; condition: string }[] {
+  const job: unknown = Bun.YAML.parse(source);
   assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
   return job.steps.flatMap((step: unknown) => {
     assert(step && typeof step === "object");
@@ -141,12 +142,14 @@ function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean
 }
 
 test("all shared saves require a successful uncancelled main push and an actual miss", () => {
-  const saves = sharedCacheSaves();
+  const saves = sharedCacheSaves(producer).concat(sharedCacheSaves(shared));
   expect(saves.map(step => step.name)).toEqual([
+    "Save completed shared-sdk setup",
+    "Save shared profile cache",
+    "Save the shared JSC prebuild",
     "Save completed shared-sdk setup",
     "Save completed shared-wasm-tools setup",
     "Save completed shared-wasmtime setup",
-    "Save shared profile cache",
     "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
@@ -176,7 +179,8 @@ test("shared native checks consume one matching launcher and one produced group 
   expect(shared).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
   expect(shared).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
   expect(shared.indexOf('"$GUEST_CARGO" fetch --locked')).toBeLessThan(shared.indexOf("      - name: Produce the shared native profile once"));
-  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group/g)).toHaveLength(1);
+  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native"$/gm)).toHaveLength(1);
+  expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native" jsc$/gm)).toHaveLength(1);
   expect(shared).toContain("bun scripts/test-checks.ts native --profile shared-group");
   expect(shared).toContain('export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"');
   expect(shared).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');

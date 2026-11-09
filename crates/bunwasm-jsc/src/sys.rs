@@ -383,6 +383,12 @@ unsafe extern "C" {
     pub fn bunjsc_detach_buffer(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_wasm_memory_buffer(ctx: JSContextRef, data: *mut u8, length: usize)
     -> JSValueRef;
+    pub fn bunjsc_shared_wasm_memory_buffer(
+        ctx: JSContextRef,
+        data: *mut u8,
+        length: usize,
+    ) -> JSValueRef;
+    pub static mut bunjsc_stack_origin: *mut c_char;
     pub fn bunjsc_detach_wasm_memory_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_buffer_bytes(ctx: JSContextRef, value: JSValueRef, length: *mut usize)
     -> *mut u8;

@@ -50,7 +50,7 @@ export const SHARED_GROUP_OPTIMIZER = ["-O2", "-g", "--strip-dwarf", "--enable-b
   "--enable-mutable-globals", "--enable-threads"] as const;
 
 /** Compiler environment for every guest object of a shared-group program. */
-export function sharedGroupEnvironment(sysroot: string, kind: "core" | "quickjs"): Record<string, string> {
+export function sharedGroupEnvironment(sysroot: string, kind: "core" | "quickjs" | "jsc"): Record<string, string> {
   const environment: Record<string, string> = {
     BUN_WASM_PROGRAM_PROFILE: "shared-group",
     CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: `--cap-lints=warn -C relocation-model=pic -C target-feature=+atomics,+bulk-memory,+mutable-globals -C panic=abort -C link-self-contained=no -L native=${sysroot}/lib/wasm32-wasip1`,
@@ -163,7 +163,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   const sysroot = process.env.BUN_WASM_SYSROOT;
-  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT | max-memory");
+  if (command !== "environment" || (kind !== "core" && kind !== "quickjs" && kind !== "jsc") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs|jsc | link-proof MAP OUTPUT | max-memory");
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("shared-group builds set BUN_WASM_SHARED_SYSROOT and BUN_WASM_SYSROOT to the same J2 sysroot");
   verifySharedSysroot(sysroot);
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

@@ -109,6 +109,16 @@ struct Names<'source> {
     decoded: Cow<'source, str>,
 }
 
+/// A wrapper parameter that cannot capture the module's own names, including escaped names.
+pub fn commonjs_metadata_name(source: &str) -> String {
+    Names {
+        taken: HashSet::new(),
+        source,
+        decoded: decode_escapes(source),
+    }
+    .fresh("$Bun_import_meta")
+}
+
 impl<'source> Names<'source> {
     fn new(ast: &js_ast::Ast<'_>, source: &'source str) -> Self {
         let taken = ast
@@ -690,6 +700,16 @@ pub fn assemble(module: &Module, as_module: bool) -> Assembled {
 #[cfg(test)]
 mod tests {
     use crate::{Loader, PARSER_TEST_SERIAL as SERIAL, register};
+
+    #[test]
+    fn commonjs_metadata_parameter_avoids_literal_and_escaped_source_names() {
+        assert_eq!(
+            super::commonjs_metadata_name("export const n = 1"),
+            "$Bun_import_meta"
+        );
+        let source = r"const $Bun_import_meta = 1, $Bun_import_meta$1 = 2; const text = '$Bun_import_meta$2';";
+        assert_eq!(super::commonjs_metadata_name(source), "$Bun_import_meta$3");
+    }
 
     fn register_one(source: &str, path: &str) -> String {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
