@@ -94,6 +94,143 @@ fn released_slots_reuse_storage_without_reviving_stale_identities() {
     assert_eq!(resources.slots.len(), 2);
 }
 
+fn table_module(engine: &Engine) -> Module {
+    use wasm_encoder::{
+        CodeSection, ConstExpr, ElementSection, Elements, ExportKind, ExportSection, Function,
+        FunctionSection, GlobalSection, GlobalType, RefType as WasmRefType, TableSection,
+        TableType, TypeSection, ValType as WasmValType,
+    };
+    let mut wasm = wasm_encoder::Module::new();
+    let mut types = TypeSection::new();
+    types.ty().function([], [WasmValType::I32]);
+    wasm.section(&types);
+    let mut functions = FunctionSection::new();
+    functions.function(0);
+    wasm.section(&functions);
+    let mut tables = TableSection::new();
+    tables.table(TableType {
+        element_type: WasmRefType::FUNCREF,
+        minimum: 2,
+        maximum: Some(3),
+        table64: false,
+        shared: false,
+    });
+    wasm.section(&tables);
+    let mut globals = GlobalSection::new();
+    for mutable in [false, true] {
+        let ty = GlobalType {
+            val_type: WasmValType::I32,
+            mutable,
+            shared: false,
+        };
+        globals.global(ty, &ConstExpr::i32_const(5));
+    }
+    wasm.section(&globals);
+    let mut exports = ExportSection::new();
+    exports.export("t", ExportKind::Table, 0);
+    exports.export("fixed", ExportKind::Global, 0);
+    exports.export("open", ExportKind::Global, 1);
+    wasm.section(&exports);
+    let mut elements = ElementSection::new();
+    let entries = [0u32];
+    elements.active(
+        None,
+        &ConstExpr::i32_const(0),
+        Elements::Functions(entries.as_slice().into()),
+    );
+    wasm.section(&elements);
+    let mut code = CodeSection::new();
+    let mut body = Function::new([]);
+    body.instructions().i32_const(1).end();
+    code.function(&body);
+    wasm.section(&code);
+    Module::new(engine, wasm.finish()).unwrap()
+}
+
+fn range_category(error: anyhow::Error) -> String {
+    match error_reply(error, "RuntimeError") {
+        Reply::Error { category, .. } => category,
+        _ => panic!("expected an error reply"),
+    }
+}
+
+#[test]
+fn tables_and_globals_answer_typed_requests_and_report_range_errors() {
+    let mut control = Control::new();
+    let module = table_module(control.store.engine());
+    control
+        .run(move |mut caller| {
+            let region = NestedMemory::new(caller.data().shm.as_ref().unwrap(), 1, 1).unwrap();
+            let instance = Instance::new(&mut caller, &module, &[])?;
+            let guest = Guest {
+                instance,
+                _memory: region,
+            };
+            let id = insert(&mut caller.data_mut().nested.instances, guest)?;
+            let name = "t".to_owned();
+            let Reply::Handle(table) =
+                execute(&mut caller, Request::TableExport { instance: id, name })?
+            else {
+                panic!("expected a table handle");
+            };
+            let length = execute(&mut caller, Request::TableLength { table })?;
+            assert!(matches!(length, Reply::Count(2)));
+            let get = |index| Request::TableGet { table, index };
+            let Reply::Function { id: entry, .. } = execute(&mut caller, get(0))? else {
+                panic!("expected a table function");
+            };
+            assert!(matches!(execute(&mut caller, get(1))?, Reply::Null));
+            let outside = execute(&mut caller, get(2)).err().unwrap();
+            assert_eq!(range_category(outside), "RangeError");
+
+            let set = |index, function| Request::TableSet {
+                table,
+                index,
+                function,
+            };
+            execute(&mut caller, set(1, Some(entry)))?;
+            let Reply::Function { id: same, .. } = execute(&mut caller, get(1))? else {
+                panic!("expected the stored function");
+            };
+            assert_eq!(same, entry);
+            let outside = execute(&mut caller, set(2, None)).err().unwrap();
+            assert_eq!(range_category(outside), "RangeError");
+            assert!(execute(&mut caller, set(0, Some(7))).is_err());
+
+            let grow = |delta| Request::TableGrow {
+                table,
+                delta,
+                function: None,
+            };
+            assert!(matches!(execute(&mut caller, grow(1))?, Reply::Count(2)));
+            let outside = execute(&mut caller, grow(1)).err().unwrap();
+            assert_eq!(range_category(outside), "RangeError");
+
+            let name = "open".to_owned();
+            let value = Number::I32(9);
+            let write = Request::GlobalSet {
+                instance: id,
+                name: name.clone(),
+                value,
+            };
+            execute(&mut caller, write)?;
+            let read = Request::GlobalGet { instance: id, name };
+            let Reply::Values(values) = execute(&mut caller, read)? else {
+                panic!("expected a global value");
+            };
+            assert!(matches!(values.as_slice(), [Number::I32(9)]));
+            let name = "fixed".to_owned();
+            let refused = Request::GlobalSet {
+                instance: id,
+                name,
+                value,
+            };
+            assert!(execute(&mut caller, refused).is_err());
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn imported_module(engine: &Engine) -> Module {
     let mut wasm = wasm_encoder::Module::new();
     let mut types = wasm_encoder::TypeSection::new();

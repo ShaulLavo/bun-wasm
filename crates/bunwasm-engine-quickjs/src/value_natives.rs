@@ -57,6 +57,15 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         "wasmNestedExecute",
         Rc::new(|e: &E, args: &[E::Value]| e.nested_execute(&arg(e, args, 0), &arg(e, args, 1))),
     ));
+    list.push((
+        "sharedBufferResource",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(match e.shared_buffer_resource(&arg(e, args, 0)) {
+                Some(resource) => e.value_from(Val::Num(f64::from(resource))),
+                None => e.undefined(),
+            })
+        }),
+    ));
     let c = core.clone();
     list.push((
         "compileCjs",

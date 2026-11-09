@@ -44,6 +44,9 @@ Differences from the native host:
 - The JS API reads one value per import module and name. Two imports with the same name and
   different function types are refused with a `LinkError`.
 - f32 and f64 values cross JS numbers at this boundary, so NaN payload bits are not guaranteed.
+- Nested modules that export a table or global are refused at compile, before any start code
+  runs. An ordinary SharedArrayBuffer takes a region through the same `Reserve` path as a
+  Memory, and posting one is refused like any other shared object.
 - A group core spawned as a child starts its own group. Same-region worker attachment is later
   work. Single-agent tests are not cross-worker acceptance.
 

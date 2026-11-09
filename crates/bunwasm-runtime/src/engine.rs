@@ -181,6 +181,12 @@ pub trait Engine: Sized + 'static {
         )))
     }
 
+    /// The region resource behind a SharedArrayBuffer this member allocated, or None for any
+    /// other value. The engine reads the address from its own object; JS never supplies one.
+    fn shared_buffer_resource(&self, _value: &Self::Value) -> Option<u32> {
+        None
+    }
+
     /// Detach a buffer from [`Engine::wasm_memory_buffer`], and every view of it.
     /// Already detached ones are accepted; false for any other value.
     fn detach_wasm_memory_buffer(&self, v: &Self::Value) -> bool;

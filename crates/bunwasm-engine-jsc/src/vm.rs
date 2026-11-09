@@ -769,6 +769,21 @@ impl Engine for Jsc {
         }))
     }
 
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_buffer_resource(&self, v: &JsVal) -> Option<u32> {
+        unsafe extern "C" {
+            fn bun_shared_buffer_resource(address: u32) -> u32;
+        }
+        // SAFETY: the helper checks the buffer class under the VM lock, and the core only
+        // looks the address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(
+                bunjsc_shared_array_buffer_data(ctx(), v.raw()) as usize as u32
+            )
+        };
+        (resource != 0).then_some(resource)
+    }
+
     fn detach_wasm_memory_buffer(&self, v: &JsVal) -> bool {
         // SAFETY: the helper checks the value is a wasm memory buffer under the VM lock.
         unsafe { bunjsc_detach_wasm_memory_buffer(ctx(), v.raw()) }

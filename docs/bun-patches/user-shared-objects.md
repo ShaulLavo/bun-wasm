@@ -139,3 +139,10 @@ Publication now has an explicit commit phase after delivery. Once committed, a
 later abort cannot retract a receipt the peer can already observe. The existing
 broker transaction still stages delivery before transfer finalization and commits
 only when both succeed. Native group publication uses the same codec contract.
+
+Hydration caches each validated ordinary shared-buffer node for reconstruction,
+so one delivery does not ask its provider for a second wrapper. A Wasm Memory's
+explicit matching buffer node still aliases that Memory's canonical buffer.
+Queued-port graphs retain their existing availability preflight and later
+independent decode. The native and Browser wire declarations include the Null
+unit reply even while the Browser host refuses table/global operations.

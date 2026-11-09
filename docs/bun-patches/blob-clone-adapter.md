@@ -36,3 +36,9 @@ natural exit or close. The parent integration run owns its three-engine guest re
 | `worker_codec.ts` Blob branches and `worker_protocol.d.ts` blob tuple | Host feature | Original Blob graph encoding, validation and reconstruction. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+Tables and Globals are refused from the runtime's private capability maps before
+special clone paths inspect tags or prototypes. An own Error tag or Error
+prototype cannot turn an actual capability into a serializable Error. The source
+control injects the private-brand hook, and the shared-group fixture exercises
+the real Table/Global maps directly and in nested graphs.

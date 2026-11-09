@@ -139,6 +139,7 @@ declare namespace BunWasm {
     base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
+    isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;
   }
   /** `subscriptions` lists what the idle event loop may sleep on (procPoll format); see net.js ioWait. */
@@ -199,6 +200,7 @@ declare namespace BunWasm {
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;
     isWasmMemoryBuffer?: (value: unknown) => boolean;
+    isWasmCapability?: (value: unknown) => boolean;
   }
 }
 interface ArrayBuffer {
