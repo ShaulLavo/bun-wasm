@@ -2,47 +2,45 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/require_esm_namespace.ts", import.meta.url), "utf8");
-const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`);
-const factory: () => (value: object) => object = runInNewContext(compiled);
+const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+const start = source.indexOf("  function isModuleNamespace(value) {");
+const end = source.indexOf("  Object.assign(internal,", start);
+expect(start).toBeGreaterThan(0);
+expect(end).toBeGreaterThan(start);
+const predicateSource = `${source.slice(start, end)}; isModuleNamespace`;
 
-test("required ES namespace view keeps live getters, its tag, and cached identity", () => {
-  const wrap = factory();
-  let value = 1;
-  const original = Object.create(null);
-  Object.defineProperty(original, "value", { get: () => value, enumerable: true });
-  Object.defineProperty(original, Symbol.toStringTag, { value: "Module" });
-  Object.preventExtensions(original);
-  const namespace = wrap(original);
-  expect(Reflect.get(namespace, "__esModule")).toBe(true);
-  expect("__esModule" in namespace).toBe(true);
-  expect(Object.hasOwn(namespace, "__esModule")).toBe(false);
-  expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(namespace), "__esModule")?.enumerable).toBe(false);
-  expect(Object.keys(namespace)).toEqual(["value"]);
-  expect(Object.prototype.toString.call(namespace)).toBe("[object Module]");
-  value++;
-  expect(Reflect.get(namespace, "value")).toBe(2);
-  expect(wrap(original)).toBe(namespace);
-  expect(Reflect.get(original, "__esModule")).toBeUndefined();
-  expect(Object.isExtensible(namespace)).toBe(false);
-  expect(Reflect.set(namespace, "value", 3)).toBe(false);
+type Native = { isModuleNamespaceObject?: (value: unknown) => boolean | undefined };
+function predicate(native: Native): (value: unknown) => boolean {
+  return runInNewContext(predicateSource, { native });
+}
+
+function tagged(prototype: object | null): object {
+  const value: object = Object.create(prototype);
+  Object.defineProperty(value, Symbol.toStringTag, { value: "Module" });
+  return value;
+}
+
+test("bootstrap trusts native namespace branding instead of public tags and prototypes", () => {
+  const namespace = tagged({ __esModule: true });
+  const isNamespace = predicate({ isModuleNamespaceObject: value => value === namespace });
+  expect(isNamespace(namespace)).toBe(true);
+  expect(isNamespace(tagged(null))).toBe(false);
+  expect(isNamespace(tagged(Object.getPrototypeOf(namespace)))).toBe(false);
+  const throwing = new Proxy({}, { getPrototypeOf() { throw new Error("must not inspect"); } });
+  expect(isNamespace(throwing)).toBe(false);
+  expect(isNamespace(new Proxy(namespace, {}))).toBe(false);
 });
 
-test("namespace view does not read exports until requested", () => {
-  const original = Object.create(null);
-  const failure = new ReferenceError("uninitialized export");
-  Object.defineProperty(original, "value", { get() { throw failure; }, enumerable: true });
-  const namespace = factory()(original);
-  expect(Object.keys(namespace)).toEqual(["value"]);
-  expect(() => Reflect.get(namespace, "value")).toThrow(failure);
-});
-
-test("explicit false and undefined module markers keep the original live namespace", () => {
-  const wrap = factory();
-  for (const initial of [false, undefined]) {
-    const original = { __esModule: initial };
-    expect(wrap(original)).toBe(original);
-    original.__esModule = true;
-    expect(Reflect.get(wrap(original), "__esModule")).toBe(true);
+test("unsupported native brands preserve the Browser, SpiderMonkey and Hermes recognition path", () => {
+  for (const native of [{}, { isModuleNamespaceObject: () => undefined }]) {
+    const isNamespace = predicate(native);
+    expect(isNamespace(tagged(null))).toBe(true);
+    expect(isNamespace(tagged({ __esModule: true }))).toBe(false);
+    for (const value of [null, undefined, 0, "Module", {}, () => {}]) expect(isNamespace(value)).toBe(false);
   }
+});
+
+test("require caches the canonical engine namespace without a surrogate adapter", () => {
+  expect(source).toContain("mod.exports = native.requireEsm(path);");
+  expect(source).not.toContain('internal.require("require_esm_namespace")');
 });

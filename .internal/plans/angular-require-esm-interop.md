@@ -27,8 +27,8 @@ CI and merge. No goals-matrix, executor, package or Firefox changes are in scope
 PR 552 develops on exact PR 548 head
 `9cdb73b4abe198df309a3cbd783111bafa52f2ac`. The QuickJS and JSC
 `native.requireEsm` namespaces lack native Bun's inherited, non-enumerable
-`__esModule` marker. The fix belongs only at that namespace handoff. A cached
-live-getter view leaves explicit marker exports and CommonJS values unchanged.
+`__esModule` marker. The original fix used a cached live-getter view at the namespace handoff.
+The review below rejected that view because it changed identity and branding.
 The feature-owned native fixture covers QuickJS; the existing blocking JSC
 web-guest group runs the same fixture on the actual split JSC guest.
 
@@ -117,3 +117,26 @@ Exact reproduction is in
 `/work/reports/goals/astro-angular/split-marker/review-552/namespace-probe.sh`,
 with outputs in `identity-reexport.log`. The actual native fixture now asserts
 identity and namespace recognition, retaining all earlier marker checks.
+
+## Native canonical namespace correction
+
+Status: Approved. PR 552 replaces the rejected wrapper with engine-created
+namespace prototypes. No per-require view or identity map remains. QuickJS keeps
+`JS_CLASS_MODULE_NS`; JSC keeps `JSModuleNamespaceObject` and changes its initial
+structure prototype in the embedding helper. Both inherit the non-enumerable
+marker while own exports stay live. Bootstrap uses the native VM brand when
+supported and retains the old predicate only for an unsupported capability.
+
+The retained actual QuickJS and JSC guests both fail the strong committed
+fixture at `/index.ts:21` before the correction. The original marker, default,
+CommonJS, live-export, identity and reexport checks remain. Added controls cover
+static-first and dynamic-first loading, empty namespaces, fabricated Module-tag
+objects, borrowed prototypes, and proxies that must not execute user traps.
+
+Native Bun 1.4.4's import-first namespace gains the marker only when required.
+The approved native creation design exposes it earlier, but keeps the same
+canonical object. Tests compare native Bun's marker after require, not before.
+Source tracing, design comparison, commands and actual guest logs belong to
+`/work/reports/goals/astro-angular/native-namespace/`. The parent owns independent
+review, integration, CI and merge. Later Angular stack and shared-buffer failures
+remain separately owned, not reasons to retry full installations here.

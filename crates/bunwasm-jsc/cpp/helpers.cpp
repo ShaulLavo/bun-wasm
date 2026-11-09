@@ -33,6 +33,7 @@
 #include "JSGenericTypedArrayViewInlines.h"
 #include "JSTypedArrays.h"
 #include "JSModuleLoader.h"
+#include "JSModuleNamespaceObject.h"
 #include "JSPromise.h"
 #include "JSSourceCode.h"
 #include "MicrotaskQueue.h"
@@ -266,6 +267,10 @@ JSGlobalContextRef bunjsc_create_context()
         return t;
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
+    JSObject* namespacePrototype = constructEmptyObject(vm.get(), globalObject->nullPrototypeObjectStructure());
+    namespacePrototype->putDirect(vm.get(), Identifier::fromString(vm.get(), "__esModule"_s), jsBoolean(true),
+        PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
+    globalObject->moduleNamespaceObjectStructure()->setPrototypeWithoutTransition(vm.get(), namespacePrototype);
     return JSGlobalContextRetain(toGlobalRef(globalObject));
 }
 
@@ -472,6 +477,13 @@ JSValueRef bunjsc_proxy_target(JSContextRef ctx, JSValueRef value)
     if (!proxy)
         return nullptr;
     return toRef(global, proxy->target());
+}
+
+bool bunjsc_is_module_namespace(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    return dynamicDowncast<JSModuleNamespaceObject>(toJS(global, value));
 }
 
 bool bunjsc_is_error(JSContextRef ctx, JSValueRef value)
