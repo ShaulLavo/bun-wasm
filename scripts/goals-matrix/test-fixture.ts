@@ -36,7 +36,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     dispatch(change: { changes: { insert: string } }) { message = change.changes.insert; },
   };
   const counter = { get textContent() { return `count ${count}`; }, disabled: false, click() { count++; } };
-  const context = createContext({ crypto, URL, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
+  const context = createContext({ crypto, URL, TextDecoder, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
     document: { querySelector(selector: string) {
       if (selector === "#status") return { textContent: "Browser (native) ready" };
       if (selector === "#engine") return { value: "browser" };
