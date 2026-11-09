@@ -189,7 +189,13 @@
           };
           const routes = sharedObjects?.routes;
           if (routes?.enabled) routes.transaction(stage, finish);
-          else { stage(); finish(); }
+          else {
+            stage();
+            // Without a broker transaction, delivery already made this receipt observable.
+            if (deliver) publication?.commit();
+            finish();
+          }
+          publication?.commit();
           phase = "committed";
         } catch (error) { abort(); throw error; }
       }

@@ -1,7 +1,7 @@
 import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
 import { createSharedMailbox } from "./mailbox.ts";
-import { messageData, sharedAttachmentValue, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse, sharedRouteCommand } from "./protocol.ts";
-import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference, SharedRouteCommand, SharedWasmValue } from "./protocol.ts";
+import { messageData, sharedAttachmentValue, sharedBufferLength, sharedError, sharedObjectLimit, sharedPoolClasses, sharedPoolLaneCursor, sharedResponse, sharedRouteCommand } from "./protocol.ts";
+import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPoolGrant, SharedPort, SharedPublication, SharedReference, SharedRouteCommand, SharedWasmValue } from "./protocol.ts";
 
 const nativeClone = globalThis.structuredClone.bind(globalThis);
 
@@ -9,8 +9,15 @@ export interface SharedObjectService extends SharedObjects {
   close(reason?: DOMException): void;
   inspect(): { buffers: number; pending: number; staged: number; closed: boolean };
   inspectRoutes(): { outbound: number; terminals: number; enabled: boolean };
+  /** Settles once: on the validated pool grant, or with the failure that closed the service first. */
+  readonly ready: Promise<void>;
+  /** A pre-attached native buffer of exactly this length, or null: no stock, no grant, or closed. */
+  claimBuffer(byteLength: number): SharedArrayBuffer | null;
+  poolStats(): { claims: number; refused: number };
 }
 interface Waiter { readonly ids: Set<string>; readonly ready: () => void; }
+const poolClassIndex = new Map(sharedPoolClasses.map(({ bytes }, index) => [bytes, index]));
+const poolIdPattern = /^pool\/(?:c(\d{1,4})-(\d{1,4})|l(\d{1,4}))$/;
 export function createSharedObjects(owner: string, port: SharedPort): SharedObjectService {
   if (!/^[\w-]{1,128}$/.test(owner)) throw sharedError("Invalid shared-object owner");
   const buffers = new Map<string, SharedAttachment>();
@@ -20,6 +27,12 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   const publications = new Set<SharedPublication>();
   const reservedIdentities = new WeakSet<SharedArrayBuffer | SharedWasmValue>();
   let reserved = 0;
+  let pool: SharedPoolGrant | null = null;
+  let poolCursors: Int32Array | null = null;
+  let poolClaims = 0, poolRefused = 0;
+  const poolIds = new WeakMap<SharedArrayBuffer, string>();
+  const { promise: ready, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<void>();
+  ready.catch(() => {});
   let closed: DOMException | null = null;
   let nextId = 0;
   const mailbox = createSharedMailbox();
@@ -115,9 +128,40 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     active();
     const failure = failures.get(reference.id);
     if (failure) throw failure;
-    const attachment = buffers.get(reference.id);
+    const attachment = buffers.get(reference.id) ?? poolAttachment(reference.id);
     if (attachment && attachment.byteLength !== reference.byteLength) throw sharedError("Shared backing length mismatch");
     return attachment;
+  }
+  function poolAttachment(id: string): SharedAttachment | undefined {
+    if (!pool) return undefined;
+    const match = poolIdPattern.exec(id);
+    if (!match) return undefined;
+    const buffer = match[3] !== undefined ? pool.lanes[Number(match[3])] : pool.stock[Number(match[1])]?.[Number(match[2])];
+    return buffer && { id, byteLength: sharedBufferLength(buffer), buffer };
+  }
+  function acceptPool(grant: SharedPoolGrant) {
+    if (pool) { close(sharedError("Duplicate shared-object pool")); return; }
+    pool = grant; poolCursors = new Int32Array(grant.control);
+    grant.stock.forEach((buffers, classIndex) => buffers.forEach((buffer, slot) => poolIds.set(buffer, `pool/c${classIndex}-${slot}`)));
+    grant.lanes.forEach((buffer, index) => poolIds.set(buffer, `pool/l${index}`));
+    resolveReady();
+  }
+  /** Lifetime quota: a saturating cursor, never past capacity, and never reused. */
+  function claimSlot<T>(cursor: number, buffers: readonly T[]): T | null {
+    if (closed || !poolCursors) return null;
+    for (;;) {
+      const slot = Atomics.load(poolCursors, cursor);
+      if (slot >= buffers.length) { poolRefused++; return null; }
+      if (Atomics.compareExchange(poolCursors, cursor, slot, slot + 1) === slot) { poolClaims++; return buffers[slot] ?? null; }
+    }
+  }
+  function claimBuffer(byteLength: number): SharedArrayBuffer | null {
+    const classIndex = poolClassIndex.get(byteLength);
+    const buffers = classIndex === undefined ? undefined : pool?.stock[classIndex];
+    return buffers && classIndex !== undefined ? claimSlot(classIndex, buffers) : null;
+  }
+  function createLane(): SharedArrayBuffer {
+    return (pool && claimSlot(sharedPoolLaneCursor, pool.lanes)) ?? createSharedLaneBuffer();
   }
   function read(reference: SharedReference) {
     const attachment = present(reference);
@@ -148,6 +192,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       retiredTargets.add(response.id); return;
     }
     if (response.kind === "closed") { close(sharedError(response.message)); return; }
+    if (response.kind === "pool") { acceptPool(response.grant); return; }
     if (response.kind === "unavailable") {
       for (const reference of response.references) {
         if (pending.get(reference.id)?.request !== response.request) continue;
@@ -175,6 +220,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   function close(reason = sharedError("Shared-object service is closed")) {
     if (closed) return;
     closed = reason;
+    rejectReady(reason);
     terminals.clear(); retryCredit = null;
     retiredTargets.clear();
     for (const publication of Array.from(publications)) publication.abort();
@@ -194,7 +240,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     if (publications.size >= sharedObjectLimit) throw sharedError("Shared publication limit exceeded");
     const staged = new Map<SharedArrayBuffer | SharedWasmValue, SharedAttachment>();
     const transaction = crypto.randomUUID();
-    let phase: "prepared" | "published" | "aborted" = "prepared";
+    let phase: "prepared" | "published" | "committed" | "aborted" = "prepared";
     function reference(buffer: SharedArrayBuffer): SharedReference {
       return stage(buffer, { buffer, byteLength: sharedBufferLength(buffer) });
     }
@@ -208,6 +254,8 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     )): SharedReference {
       active();
       if (phase !== "prepared") throw sharedError("Shared publication is not prepared");
+      const poolId = "buffer" in backing ? poolIds.get(backing.buffer) : undefined;
+      if (poolId !== undefined) return { id: poolId, byteLength: backing.byteLength };
       const known = identities.get(value) ?? staged.get(value);
       if (known) return known;
       if (reservedIdentities.has(value)) throw sharedError("Shared backing already has a pending publication");
@@ -230,8 +278,14 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       reserved -= staged.size;
       for (const buffer of staged.keys()) reservedIdentities.delete(buffer);
     }
+    function commit() {
+      if (phase === "committed") return;
+      if (phase !== "published") throw sharedError("Shared publication is not published");
+      phase = "committed";
+      staged.clear();
+    }
     function abort() {
-      if (phase === "aborted") return;
+      if (phase === "aborted" || phase === "committed") return;
       const published = phase === "published";
       if (!published) unreserve();
       phase = "aborted";
@@ -241,7 +295,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       }
       staged.clear(); publications.delete(publication);
     }
-    const publication = { reference, referenceWasm, publish, abort };
+    const publication = { reference, referenceWasm, publish, commit, abort };
     publications.add(publication);
     return publication;
   }
@@ -284,8 +338,8 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
-  const lanes = { create: createSharedLaneBuffer, open(buffer: SharedArrayBuffer, side: 0 | 1) { active(); return openSharedLane(buffer, side); } };
-  return { mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
+  const lanes = { create: createLane, open(buffer: SharedArrayBuffer, side: 0 | 1) { active(); return openSharedLane(buffer, side); } };
+  return { ready, claimBuffer, poolStats: () => ({ claims: poolClaims, refused: poolRefused }), mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
     inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
 }

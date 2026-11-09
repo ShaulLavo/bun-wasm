@@ -54,6 +54,6 @@ update_release_pins ShaulLavo/waffle programs-v
 
 bash .github/scripts/update-waffle-records.sh
 
-bun install --lockfile-only --ignore-scripts
-bun install --cwd web --lockfile-only --ignore-scripts
-bun install --cwd sandbox --lockfile-only --ignore-scripts
+bun scripts/ci-update-lock.ts .
+bun scripts/ci-update-lock.ts web
+bun scripts/ci-update-lock.ts sandbox

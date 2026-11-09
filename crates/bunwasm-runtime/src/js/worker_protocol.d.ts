@@ -52,6 +52,7 @@ declare namespace BunWasm {
     reference(buffer: SharedArrayBuffer): SharedReference;
     referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
     publish(): void;
+    commit(): void;
     abort(): void;
   }
   interface SharedObjects {

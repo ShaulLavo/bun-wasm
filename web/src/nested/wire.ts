@@ -29,7 +29,12 @@ export type Request =
   | { Compile: { pointer: number; length: number } }
   | { Instantiate: { module: number; memory: number; bindings: Binding[]; invocation: number } }
   | { Function: { instance: number; name: string } }
-  | { Call: { function: number; arguments: WasmNumber[]; invocation: number } };
+  | { Call: { function: number; arguments: WasmNumber[]; invocation: number } }
+  | { PublishMemory: { memory: number } }
+  | { AttachMemory: { token: number } }
+  | { PublishModule: { module: number; description: string } }
+  | { AttachModule: { token: number } }
+  | { Withdraw: { token: number } };
 
 export type Reply =
   | { Handle: number }

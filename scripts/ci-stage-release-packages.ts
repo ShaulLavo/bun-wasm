@@ -21,13 +21,28 @@ export function lockedReleasePackages(lockfile: string): { name: string; url: st
   });
 }
 
-export async function stageReleasePackages(source: string, fixture: string, download: typeof releaseDownload = releaseDownload): Promise<void> {
-  const manifest = JSON.parse(await readFile(join(source, "package.json"), "utf8"));
-  const locked = lockedReleasePackages(await readFile(join(source, "bun.lock"), "utf8"));
-  const archives = join(fixture, "release-archives");
+export function rebindReleaseLocations(value: unknown, locations: ReadonlyMap<string, string>): unknown {
+  if (typeof value === "string") return translateString(value, locations);
+  if (Array.isArray(value)) return value.map(entry => rebindReleaseLocations(entry, locations));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, rebindReleaseLocations(entry, locations)]));
+}
+
+function translateString(value: string, locations: ReadonlyMap<string, string>): string {
+  for (const [original, local] of locations) {
+    if (value === original) return local;
+    if (value.endsWith(`@${original}`)) return value.slice(0, -original.length) + local;
+  }
+  return value;
+}
+
+export async function stageReleasePackages(source: string, fixture: string, download: typeof releaseDownload = releaseDownload, archives = join(fixture, "release-archives")): Promise<Map<string, string>> {
+  const manifest: unknown = JSON.parse(await readFile(join(source, "package.json"), "utf8"));
+  const lockfile = await readFile(join(source, "bun.lock"), "utf8");
+  const lock: unknown = Bun.JSONC.parse(lockfile);
+  const locations = new Map<string, string>();
   await mkdir(archives, { recursive: true });
-  const overrides: Record<string, string> = {};
-  for (const pin of locked) {
+  for (const pin of lockedReleasePackages(lockfile)) {
     const response = await download(pin.url);
     if (!response.ok) throw new Error(`Release package download failed: ${response.status}`);
     const bytes = await response.bytes();
@@ -35,18 +50,15 @@ export async function stageReleasePackages(source: string, fixture: string, down
       throw new Error(`Locked release integrity mismatch: ${pin.name}`);
     const archive = join(archives, `${releaseCacheKey(pin.url)}.tgz`);
     await writeFile(archive, bytes);
-    overrides[pin.name] = archive;
+    locations.set(pin.url, archive);
   }
-  await writeFile(join(fixture, "package.json"), JSON.stringify({ ...manifest, overrides: { ...manifest.overrides, ...overrides } }));
+  await writeFile(join(fixture, "package.json"), JSON.stringify(rebindReleaseLocations(manifest, locations)));
+  await writeFile(join(fixture, "bun.lock"), JSON.stringify(rebindReleaseLocations(lock, locations)));
+  return locations;
 }
 
-export function verifyStagedResolutions(original: string, staged: string): void {
-  const before = lockPackages(original);
-  const after = lockPackages(staged);
-  const replaced = new Set(lockedReleasePackages(original).map(pin => pin.name));
-  for (const [name, entry] of Object.entries(before)) {
-    if (replaced.has(name)) continue;
-    if (JSON.stringify(after[name]) !== JSON.stringify(entry))
-      throw new Error(`Fixture staging changed a non-release resolution: ${name}`);
-  }
+export function verifyStagedResolutions(original: string, staged: string, locations: ReadonlyMap<string, string> = new Map()): void {
+  const restored = rebindReleaseLocations(Bun.JSONC.parse(staged), new Map(Array.from(locations, ([url, path]) => [path, url])));
+  if (JSON.stringify(Bun.JSONC.parse(original)) !== JSON.stringify(restored))
+    throw new Error("Fixture staging changed a non-release resolution or locked metadata");
 }

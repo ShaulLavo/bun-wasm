@@ -51,7 +51,7 @@ if [[ -f "$ICU_PREFIX/lib/libicudata.a" && -f "$ICU_PREFIX/lib/libicuuc.a" && -f
 fi
 
 if [[ ! -f "$tgz" ]]; then
-  curl -fsSL -o "$tgz" "https://github.com/unicode-org/icu/releases/download/release-$ICU_VERSION/icu4c-$ICU_VERSION-sources.tgz"
+  bun "$REPO/scripts/ci-release-download.ts" "https://github.com/unicode-org/icu/releases/download/release-$ICU_VERSION/icu4c-$ICU_VERSION-sources.tgz" "$tgz"
 fi
 echo "$ICU_SHA256  $tgz" | sha256sum -c --quiet
 

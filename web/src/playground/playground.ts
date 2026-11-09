@@ -247,7 +247,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       }).catch(console.error);
     });
 
-    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews } });
+    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects } });
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);

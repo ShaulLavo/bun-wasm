@@ -573,10 +573,12 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
     expect(messages.some(message => message.type === "error")).toBe(false);
   } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
 }));
-async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
+async function runSharedSetup(mode: "normal" | "send-failure" | "grant-failure" | "grant-and-close-failure" | "revoked-after-export" | "engine-failure") {
   const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
   const messages: WorkerMessage[] = [];
   let exported = false, bound: SharedObjectService | undefined;
+  let restorePort = () => {};
+  const grantPackets: string[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     fetch: globalThis.fetch.bind(globalThis),
@@ -585,6 +587,15 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       exported = true;
       if (mode === "send-failure") throw new Error("native publication failed");
       expect(transfer).toEqual([message.port]);
+      if (mode === "grant-failure" || mode === "grant-and-close-failure") {
+        const post = message.port.postMessage.bind(message.port);
+        const sending = spyOn(message.port, "postMessage").mockImplementation(packet => {
+          grantPackets.push(packet.kind);
+          if (packet.kind === "pool" || mode === "grant-and-close-failure") throw new Error("grant transport failed");
+          post(packet);
+        });
+        restorePort = () => sending.mockRestore();
+      }
       route.attach(message.port);
     },
   };
@@ -610,11 +621,11 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       } });
     } }, host);
     await new Promise(resolve => setTimeout(resolve, 5));
-    return { messages, exported, bound, retained: broker.inspect(), afterCleanup: broker.inspect };
+    return { messages, exported, bound, grantPackets, retained: broker.inspect(), afterCleanup: broker.inspect };
   } finally {
     executor.beforeFinish?.(); route.close(); broker.dispose();
     connection.client.port.close(); connection.server.port.close();
-    startEngineHost.mockReset();
+    restorePort(); startEngineHost.mockReset();
   }
 }
 
@@ -626,6 +637,18 @@ test("real bootstrap exports a Bun-owned native setup port and closes engine ser
   expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(exits(result.messages)[0]?.type).toBe("exit");
 }));
+
+for (const mode of ["grant-failure", "grant-and-close-failure"] as const) {
+  test(`real bootstrap ${mode} fails before guest entry and tears down the pending service`, controlled(async () => {
+    const result = await runSharedSetup(mode);
+    expect(result.exported).toBe(true);
+    expect(result.grantPackets).toEqual(["pool", "closed"]);
+    expect(result.bound).toBeUndefined();
+    expect(exits(result.messages)[0]?.type).toBe("error");
+    expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  }));
+}
 
 for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as const) {
   test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, controlled(async () => {
@@ -763,6 +786,48 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
     expect(env(request("jsc", unarmed))).toEqual(unarmed);
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
+
+const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
+const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
+const stackHosts = [
+  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "192" },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: undefined },
+  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+];
+
+function stackEnvironment(host: typeof stackHosts[number], engine: RunRequest["engine"], env: Record<string, string> = {}) {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: host.stack }));
+  const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env,
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  try {
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: host.agent } });
+    return createBunExecutor(request).env?.(request);
+  } finally {
+    capture.mockRestore();
+    if (navigator) Object.defineProperty(globalThis, "navigator", navigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+    connection.client.port.close(); connection.server.port.close();
+  }
+}
+
+for (const host of stackHosts) {
+  test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => {
+    expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
+    expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
+    expect(stackEnvironment(host, "browser")).toEqual({});
+    expect(stackEnvironment(host, "spidermonkey")).toEqual({});
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
+    expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+  }));
+}
 
 let control: Awaited<ReturnType<typeof workerControlFixture>>;
 
