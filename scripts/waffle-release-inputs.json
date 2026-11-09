@@ -29,5 +29,13 @@
     },
     "schema": "waffle-program-release/2",
     "toolCommit": "acd64c19a6381c27edd602316e66d81df78abf25"
+  },
+  "relay": {
+    "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.114/waffle-relay-0.0.114.tgz",
+    "sha256": "50568e9490f1adcae6574ce1d2db31aec2af47fd392ea412413d6e48387d597d",
+    "bytes": 110374,
+    "version": "0.0.114",
+    "sourceCommit": "341bf1452d98e280a5c718af2775a839ff4042fa",
+    "hostInterface": 2
   }
 }

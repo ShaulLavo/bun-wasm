@@ -88,13 +88,14 @@ function archiveName(url: string, label: string): string {
 }
 /**
  * The runtime and relay archives this source selects: runtime from its Waffle
- * release record, relay from the Web package pin. Delivery paths follow the
- * pinned file names, so a different release is a different member.
+ * release record, with the Web relay pin checked against that same record.
+ * Delivery paths follow pinned file names, so a different release is a different member.
  */
 export function selectedReleaseArchives(): { readonly runtime: SelectedArchive; readonly relay: SelectedArchive } {
-  const relayUrl = webPackage.dependencies["waffle-relay"];
+  const relayUrl = waffleRelease.relay.url;
+  if (webPackage.dependencies["waffle-relay"] !== relayUrl) throw new Error("Web relay pin differs from its checked release inputs");
   const relayVersion = /\/waffle-v([0-9][^/]*)\/waffle-relay-\1\.tgz$/.exec(relayUrl)?.[1];
-  if (!relayVersion) throw new Error(`Web relay pin is not a Waffle relay release: ${relayUrl}`);
+  if (relayVersion !== waffleRelease.relay.version) throw new Error(`Relay release tuple does not match its URL: ${relayUrl}`);
   return {
     runtime: { version: waffleRelease.version, url: waffleRelease.url, path: `runtime/${archiveName(waffleRelease.url, "Runtime")}` },
     relay: { version: relayVersion, url: relayUrl, path: `relay/${archiveName(relayUrl, "Relay")}` },

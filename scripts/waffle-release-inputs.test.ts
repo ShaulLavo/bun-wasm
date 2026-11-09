@@ -137,6 +137,11 @@ test("public adoption keeps the exact build pin separate from wildcard placement
   expect(metadata.peerDependencies.waffle).toBe("*");
   expect(metadata.devDependencies.waffle).toBe(release.url);
   expect(metadata.peerDependencies["waffle-base"]).toBe(release.programs.base.url);
+  expect(metadata.peerDependencies["waffle-relay"]).toBe(release.relay.url);
+  expect(release.relay.hostInterface).toBe(release.hostInterface);
+  expect(release.relay.sourceCommit).toMatch(/^[a-f0-9]{40}$/);
+  expect(release.relay.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(release.relay.bytes).toBeGreaterThan(0);
   expect(release.hostInterface).toBe(metadata.waffleHostInterface);
   expect(release.programs.schema).toBe("waffle-program-release/2");
   expect(release.programs.toolCommit).toMatch(/^[a-f0-9]{40}$/);
@@ -144,5 +149,6 @@ test("public adoption keeps the exact build pin separate from wildcard placement
     const consumer = await Bun.file(join(root, scope, "package.json")).json();
     expect(consumer.dependencies.waffle).toBe(release.url);
     expect(consumer.dependencies["waffle-base"]).toBe(release.programs.base.url);
+    if (scope === "web") expect(consumer.dependencies["waffle-relay"]).toBe(release.relay.url);
   }
 });

@@ -75,14 +75,18 @@ function field(value: unknown, key: string): unknown {
 }
 
 /** Runtime, relay and programs must be the archives the selected source pins, with original program provenance. */
-function admitReleases(manifest: InputManifest, source: string): void {
+export function admitReleases(manifest: InputManifest, source: string): void {
   const pin = sourceJson(source, "scripts/waffle-release-inputs.json");
   const runtime = requireFile(manifest.runtime.archive, "runtime archive");
   requireFile(manifest.runtime.authentication, "runtime authentication record");
   if (runtime.sha256 !== pin.sha256 || runtime.bytes !== pin.bytes || manifest.tuple.runtime !== pin.version) fail("runtime archive differs from the source's Waffle release pin");
   const selected = selectedReleaseArchives();
   if (manifest.tuple.relay !== selected.relay.version || !manifest.relay.archive.path.endsWith(`/${selected.relay.path.split("/").at(-1)}`)) fail(`relay archive is not the source's pinned relay ${selected.relay.version}`);
-  requireFile(manifest.relay.archive, "relay archive");
+  const relay = requireFile(manifest.relay.archive, "relay archive");
+  const relayPin = field(pin, "relay");
+  if (relay.sha256 !== field(relayPin, "sha256") || relay.bytes !== field(relayPin, "bytes")
+    || manifest.tuple.relay !== field(relayPin, "version") || manifest.tuple.hostInterface !== field(relayPin, "hostInterface"))
+    fail("relay archive differs from the source's relay release pin");
   const programs = field(pin, "programs");
   const programPin = field(programs, "manifest");
   const programManifest = requireFile(manifest.programs.manifest, "program manifest");

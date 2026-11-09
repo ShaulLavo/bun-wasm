@@ -8,8 +8,9 @@ import { writeInstalledWaffleFixture } from "./fixtures/waffle-host-interface";
 import { assertInstalledWaffle, waffleCommits } from "../tests/shell-product/waffle-stage";
 import { bundleConsumer, installConsumer } from "../web/tests/shell-consumer-install";
 
-const invalid = [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1", true, [], {}];
+const invalid = [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "1", String(release.hostInterface), true, [], {}];
 const required = parseHostInterface(release.hostInterface, "fixture inputs");
+const incompatible = [1, release.hostInterface + 1].filter(value => value !== release.hostInterface);
 const historical = "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01";
 
 async function withInstallation(run: (root: string, fixture: Awaited<ReturnType<typeof writeInstalledWaffleFixture>>) => Promise<void>, selected = release.url) {
@@ -51,8 +52,8 @@ test("wildcard placement retains one physical runtime, one lock entry, and uncha
   });
 });
 
-const packages = ["waffle", "bun-wasm", "bash-web", "waffle-base", "waffle-coreutils", "@waffle/python"];
-const cases = packages.flatMap(name => invalid.concat([release.hostInterface + 1]).map(value => ({ name, value })));
+const packages = ["waffle", "bun-wasm", "bash-web", "waffle-base", "waffle-coreutils", "@waffle/python", "waffle-relay"];
+const cases = packages.flatMap(name => invalid.concat(incompatible).map(value => ({ name, value })));
 for (const { name, value } of cases) {
   test(`${name} rejects host metadata ${JSON.stringify(value)} before any bundling`, async () => {
     await withInstallation(async root => {
@@ -123,7 +124,7 @@ test("a matching interface cannot substitute a different Git lock edge", async (
   }, historical);
 });
 
-for (const value of invalid.concat([release.hostInterface + 1])) {
+for (const value of invalid.concat(incompatible)) {
   test(`Bun rejects host metadata ${JSON.stringify(value)} before packing or installing`, async () => {
     await withInstallation(async root => {
       const bun = join(root, "node_modules/bun-wasm");
