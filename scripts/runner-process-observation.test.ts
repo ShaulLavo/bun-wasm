@@ -15,7 +15,7 @@ for (const mode of ["terminal-selected", "terminal-terminated", "nested-selected
   expect(result.stdout).toContain(`PASS held Bun entry import ${mode}`);
 });
 
-for (const mode of ["held", "void", "fulfilled", "throw", "reject", "reject-falsy"]) test(`real CPU root acquired after disposal keeps its native obligation: ${mode}`, () => {
+for (const mode of ["held", "void", "fulfilled", "throw", "reject", "reject-falsy", "reentrant"]) test(`real CPU root acquired after disposal keeps its native obligation: ${mode}`, () => {
   const result = spawnSync(process.execPath, [new URL("../web/tests/fixtures/late-root-observation-probe.ts", import.meta.url).pathname, mode], { encoding: "utf8", timeout: 5000 });
   expect({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }).toMatchObject({ status: 0 });
   expect(result.stdout).toContain(`PASS late CPU root observation ${mode}`);

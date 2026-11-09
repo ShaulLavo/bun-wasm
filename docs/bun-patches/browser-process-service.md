@@ -146,7 +146,8 @@ not only a writer callback after acquisition.
 The original adapters in `web/src/{runner,subprocess-broker,worker}.ts` and
 `web/scripts/node-spawn.ts` use Waffle's
 canonical `proc/observation` transfer and native-return capture. The runner retains
-that association before asynchronous Worker acquisition and never reads a recycled
+that association before asynchronous Worker acquisition. It stores the acquisition
+promise before runtime callbacks can reenter disposal and never reads a recycled
 producer to decide a late observer's result. Native return does not certify physical
 reader closure or replace filesystem, terminal, notification or memory-group cleanup.
 The Worker entry retains observation across its terminal and nested-host imports and

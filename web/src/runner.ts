@@ -428,7 +428,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
-    workerAcquisition = subprocess.takeWorker(workerUrl);
+    workerAcquisition = Promise.resolve().then(subprocess.takeWorker.bind(subprocess, workerUrl));
     const taken = await workerAcquisition;
     if (finished || workerStopped || options.runtime.disposed) return stopWorker();
     worker = taken;

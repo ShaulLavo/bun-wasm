@@ -16,7 +16,7 @@ Fresh origin/main e69f2afb3286abd832773fbc6d64f2f8e7b6cbe5 was verified before p
 
 - Keep a captured observer beside the canonical producer used only for result arbitration.
 - Publish native return independently of resource retirement.
-- Join asynchronous Worker acquisition during stop instead of certifying an absent Worker and dropping a later one.
+- Publish the acquisition promise before entering borrowed runtime callbacks. Join that promise during stop, including reentrant disposal, instead of dropping a later Worker.
 - Preserve the broker's root lease release during page disposal and its captured memory-group cleanup.
 - After held terminal or nested imports, skip Bun executor construction for a selected or terminated process. Generic bootstrap owns reporting and cleanup.
 - Keep browser child launchers unchanged because Waffle already owns their accepted preparation and native stop.
@@ -32,6 +32,10 @@ No development archive URL or version bump belongs in this PR. The parent owns t
 
 ## Local gate results
 
-The real CPU observation manifest passes 23 controls. Focused root-stop and Shell ownership checks pass 92 tests together. Package checks pass 335 tests, and check discovery passes 118 tests. Package, script, Web and sandbox types, lint, unused-source checks and duplicate checks pass.
+The real CPU observation manifest passes 24 controls. Focused root-stop and Shell ownership checks pass 93 tests together. Package checks pass 335 tests, and check discovery passes 118 tests. Package, script, Web and sandbox types, lint, unused-source checks and duplicate checks pass.
 
 The complete Web unit suite passes 1,806 tests and skips one. Its only failure is the unchanged base-family host-interface check, because main's base package still declares interface 1 and this development runtime declares interface 2. Quality probes pass 2,615 tests and skip one. Their only failure checks the supported installed release version, which is still 0.0.113 in the retained release inputs rather than development 0.0.114. These two gates must be rerun with the parent's supported replacements. They are not waived or relabeled green.
+
+## Independent review correction
+
+The reviewer reproduced disposal reentering through `runtime.processes()` before acquisition was stored. The run completed, but native termination never ran. The runner now schedules acquisition after storing its promise. The CI-discovered reentrant control arms a real CPU observer before acquisition, holds its return, and checks exactly one native stop, no guest start, and a late `terminated` result. It failed before the fix with a zero stop count and passes afterward. Types, lint, discovery, and the 93 focused tests pass.

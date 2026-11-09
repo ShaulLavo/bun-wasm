@@ -56,13 +56,21 @@ try {
   const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem: runtime.filesystem.createIdentity() };
   const observer = captureProcessObserver(transport);
+  const eager = mode === "reentrant" ? service.takeWorker("https://example.test/worker.js") : undefined;
+  if (eager) {
+    assert.ok(eager instanceof ControlledWorker);
+    eager.inspect(transport);
+    await ready.promise;
+    assert.equal(observer.read().kind, "pending", "the CPU observer arms before reentrant acquisition");
+  }
   const borrowing: ProcessRuntime = Object.create(runtime);
   Object.defineProperty(borrowing, "processes", { value: async () => {
-    const taken = service.takeWorker("https://example.test/worker.js");
+    const taken = eager ?? service.takeWorker("https://example.test/worker.js");
     assert.ok(taken instanceof ControlledWorker);
-    taken.inspect(transport);
+    if (!eager) taken.inspect(transport);
     const view: ProcessService = Object.create(service);
     Object.defineProperty(view, "takeWorker", { value: () => taken });
+    if (mode === "reentrant") disposal ??= runtime.dispose();
     acquired.resolve();
     await acquisition.promise;
     return view;
@@ -72,14 +80,16 @@ try {
   await acquired.promise;
   await ready.promise;
   let disposed = false;
-  const result = (disposal = runtime.dispose()).then(() => { disposed = true; return { kind: "disposed" as const }; }, error => ({ kind: "failed" as const, error }));
+  const result = (disposal ??= runtime.dispose()).then(() => { disposed = true; return { kind: "disposed" as const }; }, error => ({ kind: "failed" as const, error }));
   assert.deepEqual(await run.done, { code: 137 });
   assert.equal(calls, 0, "a pending acquisition cannot be stopped or certified yet");
   assert.equal(disposed, false, "disposal retains asynchronous acquisition");
   acquisition.resolve();
-  await stopping.promise;
+  await Promise.race([stopping.promise, result.then(() => {
+    assert.equal(calls, 1, "disposal cannot finish without stopping its acquired Worker");
+  })]);
   const failed = mode === "throw" || mode === "reject" || mode === "reject-falsy";
-  if (mode === "held" || failed) assert.equal(observer.read().kind, "selected");
+  if (mode === "held" || mode === "reentrant" || failed) assert.equal(observer.read().kind, "selected");
   native.resolve();
   const settled = await result;
   assert.equal(settled.kind, failed ? "failed" : "disposed");
