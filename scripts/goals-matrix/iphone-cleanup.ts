@@ -20,5 +20,7 @@ export async function closeIphoneTab(command: NativeCommand, title: string, dead
     const close = index !== undefined ? /^(@e\d+(?:~s\d+)?) \[button\] "Close"/.exec(lines[index + 1] ?? "")?.[1] : undefined;
     if (!close) throw new Error("Cannot identify the task's Safari tab for cleanup");
     await run(["press", close]);
+    const after = await run(["snapshot", "-i"]);
+    if (after.includes(`[button] ${JSON.stringify(title)}`)) throw new Error("Task Safari tab is still present after native close");
   } finally { clearTimeout(timer); lifetime.abort(); }
 }

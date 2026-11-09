@@ -109,6 +109,8 @@ async function captureFailure(transport: Transport, options: Execution, results:
 
 async function cleanup(transport: Transport | undefined, options: Execution): Promise<unknown> {
   if (!transport) return { transportCreated: false };
+  const ownedCleanup = transport.cleanup?.bind(transport);
+  if (ownedCleanup) return bounded(() => ownedCleanup(10_000), 10_000);
   const errors: unknown[] = [];
   try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport)); }, 8_000); }
   catch (error) { errors.push(error); }

@@ -1,9 +1,11 @@
 import { chromium, firefox, type Page } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
 type EvaluationOptions = { observation: true };
+export interface CleanupEvidence { browserClosed: true; foregroundStopped: true; previewClosed: true }
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
   nativeClick?(button: string, clicked: string, timeoutMs: number): Promise<unknown>;
+  cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
   navigate(url: string): Promise<void>;
   evaluate<T>(expression: string, options?: EvaluationOptions): Promise<T>;
   openPreview(url: string): Promise<void>;

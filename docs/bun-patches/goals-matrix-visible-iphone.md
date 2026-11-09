@@ -37,3 +37,11 @@ their existing matrix deadlines.
 Native cleanup shares one deadline and abort signal across all actions, reaps any
 active command before proceeding, and cannot start later input after expiry.
 Failed iPhone cleanup stops the campaign before another cell starts.
+
+Native cleanup closes the unique owned Safari tab without evaluating through the
+application observer. A phase timeout can leave an observation pending, so asking
+that same observer to remove the preview or stop the shell cannot establish
+cleanup. Closing the owner tab ends its dedicated guest workers and embedded
+preview. A fresh native accessibility snapshot must confirm the task title is
+absent before cleanup passes. Other transports keep their existing scripted
+cleanup. The native close still shares the original ten-second inner allowance.

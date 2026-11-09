@@ -9,6 +9,8 @@ import { ownedCommand } from "./lifetime";
 import { mkdtemp, writeFile, readFile, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execute } from "./execute";
+import { object } from "./evidence";
 
 test("visible iPhone options reject SafariDriver-shaped or non-loopback controls", () => {
   validateIphoneControl("http://127.0.0.1:1234/__goals_iphone/" + "a".repeat(64), "/bound/agent-device");
@@ -92,3 +94,60 @@ test("transport close is cached and reaps its timed-out native command before an
     expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(2);
   } finally { await transport.close(true, 150).catch(() => {}); await server.stop(true); await rm(root, { recursive: true, force: true }); }
 });
+
+test("native cleanup rejects a successful input receipt when the owned tab is still visible", async () => {
+  const snapshot = '@e1 [button] "owned tab"\n@e2 [button] "Close"';
+  const commands: string[][] = [];
+  await expect(closeIphoneTab(async args => {
+    commands.push(args);
+    return args[0] === "snapshot" ? snapshot : "Tapped";
+  }, "owned tab", Date.now() + 1000)).rejects.toThrow("still present");
+  expect(commands.filter(args => args[0] === "snapshot")).toHaveLength(2);
+});
+
+test("an outstanding install observation cannot block confirmed native tab cleanup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-pending-cleanup-"));
+  const agent = join(root, "agent-device");
+  const closed = join(root, "closed");
+  const log = join(root, "commands.jsonl");
+  const snapshot = '@e1 [button] "Goals own-tab"\n@e2 [button] "Close"\n@e3 [button] "owner tab"';
+  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='press'&&args[1]==='@e2')await writeFile(${JSON.stringify(closed)},'closed');\nif(args[0]==='snapshot')console.log(existsSync(${JSON.stringify(closed)})?'@e3 [button] "owner tab"':${JSON.stringify(snapshot)});\n`);
+  await chmod(agent, 0o755);
+  try { await pendingCleanupControl(agent, log, closed); }
+  finally { await rm(root, { recursive: true, force: true }); }
+});
+
+async function pendingCleanupControl(agent: string, log: string, closed: string): Promise<void> {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async fixture => {
+    const release = Promise.withResolvers<void>();
+    const state = { pending: false, scriptedCleanup: 0, released: release.promise, evaluate: fixture.evaluate };
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => pendingObserver(request, state) });
+    const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "d".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000 });
+    try {
+      const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
+        url: "http://fixture/?engine=browser", timeoutMs: 1000, installTimeoutMs: 80,
+        createTransport: async () => transport, saveLog: async () => {},
+      });
+      expect(result).toMatchObject({ status: "fail", phase: "install" });
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", evidence: { browserClosed: true, foregroundStopped: true, previewClosed: true } });
+      expect(state.pending).toBe(true);
+      expect(state.scriptedCleanup).toBe(0);
+      expect(await readFile(closed, "utf8")).toBe("closed");
+      const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      expect(commands.at(-1)).toEqual(["snapshot", "-i"]);
+    } finally { release.resolve(); await transport.close(true).catch(() => {}); await server.stop(true); }
+  });
+}
+
+async function pendingObserver(request: Request, state: { pending: boolean; scriptedCleanup: number; released: Promise<void>; evaluate(source: string): Promise<unknown> }): Promise<Response> {
+  const path = new URL(request.url).pathname;
+  if (path.endsWith("/configure")) return Response.json("http://127.0.0.1:1234/");
+  if (path.endsWith("/state")) return Response.json({ nonce: "own-tab", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
+  const row = object(await request.json());
+  if (typeof row.source !== "string") throw new Error("Missing test expression");
+  if (row.source.includes("presentIphonePreview")) state.scriptedCleanup++;
+  if (state.pending) return Response.json({ error: "iPhone observer command already pending" }, { status: 400 });
+  if (row.source.includes("function shellState")) { state.pending = true; await state.released; }
+  return Response.json(await state.evaluate(row.source));
+}
