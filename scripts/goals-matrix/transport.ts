@@ -3,13 +3,14 @@ import type { Browser as BrowserKind } from "./catalog";
 type EvaluationOptions = { observation: true };
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
+  nativeClick?(button: string, clicked: string, timeoutMs: number): Promise<unknown>;
   navigate(url: string): Promise<void>;
   evaluate<T>(expression: string, options?: EvaluationOptions): Promise<T>;
   openPreview(url: string): Promise<void>;
   useHost(): Promise<void>;
   usePreview(): Promise<void>;
   closePreview(): Promise<void>;
-  close(): Promise<void>;
+  close(interruptPending?: boolean, timeoutMs?: number): Promise<void>;
 }
 export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, options?: EvaluationOptions): Promise<T> {
   if (!options?.observation) return page.evaluate(expression);

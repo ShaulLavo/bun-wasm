@@ -1,5 +1,5 @@
 import { sharedLaneBytes } from "./lane.ts";
-import { nativeSharedFixed, nativeSharedLength } from "./native.ts";
+import { nativeSharedFixed, nativeSharedLength, nativeSharedGrowable } from "./native.ts";
 
 export interface SharedReference { readonly id: string; readonly byteLength: number; }
 export type SharedWasmValue = WebAssembly.Module | WebAssembly.Memory;
@@ -26,11 +26,15 @@ export const sharedPoolClasses: readonly { readonly bytes: number; readonly coun
 export const sharedPoolLanes = 32;
 /** One saturating cursor per class, then one for the lanes. */
 export const sharedPoolLaneCursor = sharedPoolClasses.length;
-export const sharedPoolControlWords = sharedPoolClasses.length + 1;
+export { poolControlWords as sharedPoolControlWords } from "./lane-overflow.ts";
+import { poolControlWords as sharedPoolControlWords, overflowLimit, overflowBudget, overflowPage, poolChargedWord, poolDisposedWord, poolSlotStart } from "./lane-overflow.ts";
+import type { OverflowGrant, SlotPair } from "./lane-overflow.ts";
+export interface LaneBacking { readonly buffer: SharedArrayBuffer; readonly poolIndex: number | null; }
 export interface SharedPoolGrant {
   readonly control: SharedArrayBuffer;
   readonly stock: readonly (readonly SharedArrayBuffer[])[];
   readonly lanes: readonly SharedArrayBuffer[];
+  readonly overflow: OverflowGrant | null;
 }
 export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
@@ -84,8 +88,8 @@ interface SharedRoutes {
   credit(): void;
 }
 interface SharedLanes {
-  create(): SharedArrayBuffer;
-  open(buffer: SharedArrayBuffer, side: 0 | 1): import("./lane.ts").SharedLane;
+  create(): LaneBacking;
+  open(backing: LaneBacking, side: 0 | 1): import("./lane.ts").SharedLane;
 }
 export interface SharedObjects {
   readonly mailbox?: import("./mailbox.ts").SharedMailbox;
@@ -196,7 +200,28 @@ function poolGrant(value: unknown): SharedPoolGrant {
   });
   const laneCursor = Atomics.load(cursors, sharedPoolLaneCursor);
   if (laneCursor < 0 || laneCursor > sharedPoolLanes || !lanes.every(lane => nativeSharedFixed(lane, sharedLaneBytes))) throw poolError();
-  return { control: input.control as SharedArrayBuffer, stock: stock as SharedArrayBuffer[][], lanes: lanes as SharedArrayBuffer[] };
+  const charged = Atomics.load(cursors, poolChargedWord), disposed = Atomics.load(cursors, poolDisposedWord);
+  if (charged < 0 || charged > overflowBudget || disposed !== 0 && disposed !== 1) throw poolError();
+  const overflow = overflowGrant(input.overflow, cursors);
+  return { control: input.control as SharedArrayBuffer, stock: stock as SharedArrayBuffer[][], lanes: lanes as SharedArrayBuffer[], overflow };
+}
+function overflowGrant(value: unknown, control: Int32Array): OverflowGrant | null {
+  if (value === null) return null;
+  const input = object(value);
+  if (!Array.isArray(input.slots) || input.slots.length !== sharedPoolLanes) throw poolError();
+  const seen = new Set<SharedArrayBuffer>();
+  function slot(buffer: unknown, index: number) {
+    if (!nativeSharedGrowable(buffer, overflowLimit) || nativeSharedLength(buffer) % overflowPage || seen.has(buffer)) throw poolError();
+    seen.add(buffer);
+    const word = poolSlotStart + index * 3, state = Atomics.load(control, word), length = Atomics.load(control, word + 2);
+    if (state < 0 || state > 7 || length < 0 || length > overflowLimit) throw poolError();
+    return buffer;
+  }
+  const slots = input.slots.map((pair: unknown, index: number): SlotPair => {
+    if (!Array.isArray(pair) || pair.length !== 2) throw poolError();
+    return [slot(pair[0], index * 2), slot(pair[1], index * 2 + 1)];
+  });
+  return { slots };
 }
 export function sharedResponse(value: unknown): SharedResponse {
   const input = object(value);

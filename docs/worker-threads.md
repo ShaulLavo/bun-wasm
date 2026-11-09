@@ -213,3 +213,24 @@ These counts come from the upstream Bun suite at revision `5e0baa66516f3af00b008
 - Main-thread import: the first 160 files of `test/js/node/test/parallel` pass 61 (QuickJS), 61 (JSC) and 60 (browser), up from 0 before `worker_threads` existed. Reproduce with `scripts/measure-worker-threads.sh <engine> <result.json>`.
 - Global `Worker`: the eleven `web-worker` cause files pass 3/11 on every engine, with 60 (QuickJS), 58 (JSC) and 61 (browser) observed assertions. `worker.test.ts` completes with 31 passes and 11 failures on each engine. Reproduce with `scripts/measure-web-workers.sh <engine> <result.json>`.
 - Open gaps: the four-child budget, cross-guest `SharedArrayBuffer`, environment-proxy cloning, unsupported execution flags and VM APIs, loader-error diagnostics, `BroadcastChannel` close and inspection behavior, and shared object-URL lifetime.
+
+## Large Browser-engine lane messages
+
+Pooled channel lanes keep their 1 MiB inline rings. On a host with native growable
+SharedArrayBuffer support, a larger complete UTF-8 packet can use a private
+pre-attached slot, up to 64 MiB encoded. ArrayBuffer base64, graph metadata and
+JSON escaping count toward that cap. Total committed overflow capacity is limited
+to 128 MiB per runtime. This is not a total JavaScript heap or resident-memory bound.
+
+Only one unread large frame fits each lifetime direction. A second rejects with
+`DataCloneError` before its ArrayBuffers detach or ports move. Small following
+frames still fit the inline ring. Once the receiver copies the complete large
+frame, that direction can reuse its capacity without another charge. Growth stays
+charged until runtime disposal, even after failed sends, closure or sender exit.
+
+Full rings, allocation failure, budget exhaustion, unavailable native GSAB support
+and unpooled lanes also reject large sends synchronously before detachment. Hosts
+without GSAB keep their existing small-message path. Native public backing
+identity, fixed-length stock quotas and fresh-backing attachment limits do not
+change. Private slots are never application-visible shared objects. This bounded
+policy does not promise native burst parity or qualify framework memory usage.

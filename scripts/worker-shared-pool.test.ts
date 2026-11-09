@@ -51,6 +51,7 @@ function validGrant(): SharedPoolGrant {
     control: new SharedArrayBuffer(sharedPoolControlWords * 4),
     stock: sharedPoolClasses.map(({ bytes, count }) => Array.from({ length: count }, () => new SharedArrayBuffer(bytes))),
     lanes: Array.from({ length: sharedPoolLanes }, createSharedLaneBuffer),
+    overflow: null,
   };
 }
 async function settled(ready: Promise<void>) {
@@ -135,9 +136,9 @@ test("channel lanes are a lifetime quota too: a closed lane is never reused", as
   const buffers: SharedArrayBuffer[] = [];
   for (let index = 0; index < sharedPoolLanes; index++) {
     const lane = lanes.create(), publication = member.service.begin();
-    ids.push(publication.reference(lane).id); publication.abort();
-    buffers.push(lane);
-    expect(lane.byteLength).toBe(sharedLaneBytes);
+    ids.push(publication.reference(lane.buffer).id); publication.abort();
+    buffers.push(lane.buffer);
+    expect(lane.buffer.byteLength).toBe(sharedLaneBytes);
     expect(new Set(buffers).size).toBe(index + 1);
   }
   expect(ids.at(0)).toBe("pool/l0");
@@ -145,9 +146,9 @@ test("channel lanes are a lifetime quota too: a closed lane is never reused", as
   // Both endpoints closing does not return the lane: a queued snapshot could still name it.
   for (const buffer of buffers) { openSharedLane(buffer, 0).close(); openSharedLane(buffer, 1).close(); }
   const overflow = lanes.create(), publication = member.service.begin();
-  expect(publication.reference(overflow).id).not.toMatch(/^pool\//);
+  expect(publication.reference(overflow.buffer).id).not.toMatch(/^pool\//);
   publication.abort();
-  expect(buffers).not.toContain(overflow);
+  expect(buffers).not.toContain(overflow.buffer);
   expect(broker.inspectPool().lanes).toBe(sharedPoolLanes);
   member.close(); broker.dispose();
 });

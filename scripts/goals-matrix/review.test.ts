@@ -1,6 +1,6 @@
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
-import { mkdtemp, mkdir, writeFile, chmod, rm, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, chmod, rm, access, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initialCells, validateReport, finish, phases, type Report } from "./model";
@@ -68,8 +68,7 @@ test("SIGTERM during native lock setup reaps the setup child and releases the ow
     await writeFile(join(root, ".agents/skills/machine-fleet/scripts/availability.py"), "import os,time\np=os.environ['HOME']+'/called'\nif os.path.exists(p):\n open(os.environ['HOME']+'/second','w').write(str(os.getpid()))\n time.sleep(30)\nelse: open(p,'w').write('called')\n");
     await writeFile(join(root, "child.ts"), `Object.defineProperty(process,'platform',{value:'darwin'}); const {withNativeDriver}=await import(${JSON.stringify(join(import.meta.dir, "native.ts"))}); await withNativeDriver(async()=>{}, {desktopSafari:true});`);
     child = Bun.spawn([process.execPath, join(root, "child.ts")], { env: { ...process.env, HOME: root }, stdout: "ignore", stderr: "ignore" });
-    await waitForFile(join(root, "second"));
-    setupPid = Number(await Bun.file(join(root, "second")).text());
+    setupPid = await waitForPid(join(root, "second"));
     child.kill("SIGTERM");
     await child.exited;
     await expect(access(join(root, "tmp/.agent-mac-lock"))).rejects.toThrow();
@@ -100,8 +99,7 @@ test("fleet SIGTERM during Mac discovery reaps its child and releases local owne
     await chmod(join(root, "bin/mesh"), 0o755);
     const args = [`--root=${root}/site`, `--output=${root}/report`, "--browsers=safari", "--engines=browser", "--frameworks=nuxt", "--asset-source=test"];
     child = Bun.spawn([process.execPath, join(import.meta.dir, "fleet.ts")].concat(args), { env: { ...process.env, PATH: join(root, "bin") + ":" + process.env.PATH }, stdout: "ignore", stderr: "ignore" });
-    await waitForFile(join(root, "mesh-pid"));
-    meshPid = Number(await Bun.file(join(root, "mesh-pid")).text());
+    meshPid = await waitForPid(join(root, "mesh-pid"));
     child.kill("SIGTERM"); await child.exited;
     await expect(access(join(root, "report/.goals-fleet-lock"))).rejects.toThrow();
     expect(() => process.kill(meshPid, 0)).toThrow();
@@ -111,9 +109,27 @@ test("fleet SIGTERM during Mac discovery reaps its child and releases local owne
   }
 }, 10_000);
 
-async function waitForFile(path: string): Promise<void> {
+test("PID checkpoint waits for written content rather than treating a created empty file as process group zero", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-pid-checkpoint-"));
+  try {
+    const path = join(root, "pid");
+    await writeFile(path, "");
+    const pending = waitForPid(path);
+    await Bun.sleep(30);
+    await writeFile(path, String(process.pid));
+    expect(await pending).toBe(process.pid);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+async function waitForPid(path: string): Promise<number> {
   const end = Date.now() + 4000;
-  while (!await Bun.file(path).exists()) { if (Date.now() > end) throw new Error("Fixture did not reach its checkpoint"); await Bun.sleep(10); }
+  while (true) {
+    const value = await readFile(path, "utf8").catch(error => { if (error.code === "ENOENT") return ""; throw error; });
+    const pid = /^[1-9]\d*$/.test(value) ? Number(value) : 0;
+    if (Number.isSafeInteger(pid) && pid > 1) return pid;
+    if (Date.now() > end) throw new Error("Fixture did not publish its PID checkpoint");
+    await Bun.sleep(10);
+  }
 }
 async function stopFixture(child: ReturnType<typeof Bun.spawn> | undefined, pid: number): Promise<void> {
   if (child?.exitCode === null && child.signalCode === null) child.kill("SIGKILL");

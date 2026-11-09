@@ -42,7 +42,7 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
       open(buffer, side) {
         active();
         const lane = lanes.open(buffer, side);
-        return { ...lane, watch: ready => lane.watch(() => { if (!host.active()) return; ready(); host.wake(); }) };
+        return { ...lane, reserve(text) { active(); return lane.reserve(text); }, drain(consume) { active(); return lane.drain(consume); }, watch: ready => lane.watch(() => { if (!host.active()) return; ready(); host.wake(); }) };
       },
     } : undefined,
     mailbox: mailbox ? {

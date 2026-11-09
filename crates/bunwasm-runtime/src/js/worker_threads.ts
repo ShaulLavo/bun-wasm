@@ -318,7 +318,7 @@
     #openLane(lane: BunWasm.PortLane) {
       const lanes = sharedLanes(), state = this.#value();
       if (!lanes || state.lane) return;
-      const io = lanes.open(lane.buffer, lane.side);
+      const io = lanes.open(lane, lane.side);
       state.lane = { ...lane, io, stop: io.watch(() => internal.realTimers.setImmediate(pump)) };
     }
     /** Stops reading the lane: for good when the port closes, or until a transferred port's next owner reads it. */
@@ -333,12 +333,12 @@
       const other = state.peer === null ? undefined : localPorts.get(state.peer);
       if (state.lane || !lanes || !other) return;
       if (!other.#state || other.#state.lane) return;
-      const buffer = lanes.create();
-      this.#openLane({ buffer, side: 0 }); other.#openLane({ buffer, side: 1 });
+      const backing = lanes.create();
+      this.#openLane({ ...backing, side: 0 }); other.#openLane({ ...backing, side: 1 });
     }
     static #drainLane(port: MessagePort, defer = false) {
       const state = port.#state;
-      if (!state?.lane) return;
+      if (!state?.lane || state.phase !== "open") return;
       let arrived = false;
       state.lane.io.drain(text => {
         const body = record(JSON.parse(text));
@@ -388,7 +388,7 @@
       const state = this.#value();
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed",
-        lane: state.lane ? { buffer: state.lane.buffer, side: state.lane.side } : null };
+        lane: state.lane ? { buffer: state.lane.buffer, side: state.lane.side, poolIndex: state.lane.poolIndex } : null };
     }
     #bind() {
       if (restoringLocally) return;
@@ -461,7 +461,7 @@
     }
     #acceptNext(state: PortState): boolean {
       const graph = state.pending.get(state.received);
-      if (!graph || state.phase !== "open") return false;
+      if (!graph || state.phase === "closed" || state.phase === "closing" && state.lane !== null) return false;
       try {
         this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
         if (this.#attachmentWait) return false;
@@ -576,6 +576,7 @@
       const state = this.#state;
       if (!state || state.phase !== "open") return;
       state.phase = "closing";
+      state.lane?.io.close();
       this.#attachmentWait?.(); this.#attachmentWait = null;
       for (const graph of state.pending.values()) discardPendingTransfers(graph);
       MessagePort.#closeQueuedPorts(state.queue);

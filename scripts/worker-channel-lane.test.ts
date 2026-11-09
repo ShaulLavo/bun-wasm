@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createSharedLaneBuffer, openSharedLane } from "../web/src/shared-objects/lane";
-import type { SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
 import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 
@@ -17,8 +17,10 @@ async function restore(graph: Graph, into: Client): Promise<SourcePort> {
 }
 async function connection(lanes = true) {
   const { broker, client } = setup(lanes), sender = client(), receiver = client();
+  await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
   cleanup.add(() => { channel.port1.close(); target.close(); });
   return { broker, client, sender, receiver, source: channel.port1, target };
 }
@@ -91,11 +93,16 @@ test("a full lane rejects a message before anything detaches", async () => {
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
 });
 
-test("a message larger than the lane is rejected before anything detaches", async () => {
-  const { receiver, source, target } = await connection();
-  const buffer = new ArrayBuffer(8);
-  expect(() => source.postMessage({ text: "x".repeat(1024 * 1024), buffer }, [buffer])).toThrow("byte limit between processes");
+test("a message beyond the encoded overflow cap rejects before anything detaches", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const buffer = new ArrayBuffer(8), carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  expect(() => source.postMessage({ text: "x".repeat(64 * 1024 * 1024), buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("encoded limit");
   expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still attached");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still attached" });
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
   source.postMessage("still open");
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "still open" });
 });
@@ -257,4 +264,18 @@ test("lane frames stay invisible until commit and wrap around the ring", () => {
   right.close();
   expect(left.peerClosed()).toBe(true);
   expect(() => left.reserve("late")).toThrow("peer is closed");
+});
+
+for (const local of [true, false]) test(`lane-less close keeps same-turn synchronous receive without events, local=${local}`, async () => {
+  const runtime = local ? sourcePorts() : setup(false).client().runtime;
+  cleanup.add(() => runtime.__fixtureShutdown());
+  const { port1, port2 } = new runtime.MessageChannel(), received: unknown[] = [];
+  port1.on("message", value => received.push(value));
+  port1.close(); port2.postMessage("same turn");
+  expect(runtime.receiveMessageOnPort(port1)).toEqual({ message: "same turn" });
+  await tick(); await tick();
+  expect(received).toEqual([]);
+  port2.postMessage("after disentangle");
+  expect(runtime.receiveMessageOnPort(port1)).toBeUndefined();
+  port2.close();
 });

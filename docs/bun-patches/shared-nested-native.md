@@ -62,7 +62,10 @@ backend tag and separate typed registries.
 
 Each nested memory reserves a stable existing group region. The whole reservation
 is committed and charged, including one real page for a distinct zero-page memory.
-Declared maximum and visible length remain separate. Growth zeros the newly
+The native host selects the reservation under the group lock and the budget lock
+together: the declared maximum when it fits, otherwise the initial bytes plus
+optional room that yields to the contiguous holes, tail and budget left. Declared
+maximum, reservation and visible length remain separate. Growth zeros the newly
 visible pages atomically before publishing length and never reallocates storage.
 Current and old SAB prefix objects stay live. Regions, modules, instances and
 callback roots are retained for the member session; resource admission is bounded.

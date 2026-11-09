@@ -24,6 +24,10 @@ const DEFAULT_MEMBERS: usize = 16;
 const DEFAULT_REGIONS: usize = 4096;
 const DEFAULT_PINS: usize = 4096;
 const DEFAULT_WATCHES: usize = 1024;
+/// The largest reservation whose byte length stays a signed 32-bit size.
+const MAX_RESERVATION_PAGES: u32 = 32767;
+/// Growth room to prefer when the declared maximum cannot fit. It never causes a refusal.
+const PREFERRED_FALLBACK_HEADROOM_PAGES: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -230,15 +234,6 @@ impl GroupBackingBudget {
         backing.bypassed.store(true, Ordering::SeqCst);
     }
 
-    fn charge(&self, backing: &Backing, pages: u32) -> bool {
-        let mut state = self.lock();
-        let backings = Self::reconcile_all_locked(&mut state);
-        let outcome = self.charge_locked(&mut state, backing, pages);
-        drop(state);
-        drop(backings);
-        outcome
-    }
-
     fn charge_locked(&self, state: &mut BudgetState, backing: &Backing, pages: u32) -> bool {
         if backing.bypassed() {
             return false;
@@ -254,6 +249,32 @@ impl GroupBackingBudget {
         state.peak_bytes = state.peak_bytes.max(committed);
         backing.charged_pages.fetch_add(pages, Ordering::SeqCst);
         true
+    }
+
+    /// Runs `select` with the pages still chargeable to `backing` and charges its plan in the
+    /// same critical section, so the room it saw is the room it gets.
+    fn charge_selected(
+        &self,
+        backing: &Backing,
+        select: impl FnOnce(u32) -> Result<ReservationPlan, Errno>,
+    ) -> Result<ReservationPlan, Errno> {
+        let mut state = self.lock();
+        let backings = Self::reconcile_all_locked(&mut state);
+        let spare = self.limit_bytes.saturating_sub(state.committed_bytes) / u64::from(PAGE_BYTES);
+        let budget_pages = if backing.bypassed() {
+            0
+        } else {
+            u32::try_from(spare).unwrap_or(u32::MAX)
+        };
+        let outcome = select(budget_pages).and_then(|plan| {
+            if plan.growth != 0 && !self.charge_locked(&mut state, backing, plan.growth) {
+                return Err(Errno::NoMem);
+            }
+            Ok(plan)
+        });
+        drop(state);
+        drop(backings);
+        outcome
     }
 
     fn rollback(&self, backing: &Backing, pages: u32) {
@@ -354,6 +375,8 @@ struct GroupInner {
     backing: Arc<Backing>,
     policy: GroupPolicy,
     state: Mutex<GroupState>,
+    #[cfg(test)]
+    fail_next_tail_growth: AtomicBool,
 }
 
 struct GroupState {
@@ -489,6 +512,8 @@ impl MemoryGroup {
                 backing,
                 policy,
                 state: Mutex::new(state),
+                #[cfg(test)]
+                fail_next_tail_growth: AtomicBool::new(false),
             }),
         })
     }
@@ -734,18 +759,40 @@ impl GroupInner {
         if len == 0 || len > 0x7fff_ffff || !valid_alignment(align) {
             return Err(Errno::Inval);
         }
+        let pages = len.div_ceil(PAGE_BYTES);
+        self.create_region(member, pages, pages, Some(len))
+    }
+
+    /// Creates a region covering `required` pages, extended toward `desired` as the group's
+    /// contiguous room and backing budget allow.
+    fn create_reservation(
+        &self,
+        member: MemberId,
+        required: u32,
+        desired: u32,
+    ) -> Result<SharedBacking, Errno> {
+        self.create_region(member, required, desired, None)
+    }
+
+    /// `len` keeps an exact byte length; `None` covers the whole selected chunk.
+    fn create_region(
+        &self,
+        member: MemberId,
+        required: u32,
+        desired: u32,
+        len: Option<u32>,
+    ) -> Result<SharedBacking, Errno> {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         if state.regions.len() >= self.policy.regions {
             return Err(Errno::Again);
         }
-        let pages = len.div_ceil(PAGE_BYTES);
-        let chunk = self.take_chunk_locked(&mut state, pages)?;
+        let chunk = self.take_reservation_locked(&mut state, required, desired)?;
         let handle = fresh_region(&mut state);
         let backing = SharedBacking {
             handle,
             addr: chunk.page * PAGE_BYTES,
-            len,
+            len: len.unwrap_or(chunk.pages * PAGE_BYTES),
         };
         let mut holders = HashMap::new();
         holders.insert(member, 1);
@@ -930,30 +977,95 @@ impl GroupInner {
     }
 
     fn take_chunk_locked(&self, state: &mut GroupState, pages: u32) -> Result<Chunk, Errno> {
-        if let Some(chunk) = take_free_chunk(&mut state.free, pages) {
+        self.take_reservation_locked(state, pages, pages)
+    }
+
+    /// Unavailable optional room never refuses bytes that do fit: a failed attempt with optional
+    /// room is retried once at exactly the required size.
+    fn take_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        required: u32,
+        desired: u32,
+    ) -> Result<Chunk, Errno> {
+        match self.try_reservation_locked(state, required, desired) {
+            Err(Errno::NoMem) if desired > required => {
+                self.try_reservation_locked(state, required, required)
+            }
+            outcome => outcome,
+        }
+    }
+
+    fn try_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        required: u32,
+        desired: u32,
+    ) -> Result<Chunk, Errno> {
+        let plan = self
+            .backing
+            .budget
+            .charge_selected(&self.backing, |budget_pages| {
+                select_reservation(
+                    &state.free,
+                    self.backing.actual_pages(),
+                    self.policy.maximum_pages,
+                    budget_pages,
+                    required,
+                    desired,
+                )
+            })?;
+        self.commit_reservation_locked(state, plan)
+    }
+
+    fn commit_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        plan: ReservationPlan,
+    ) -> Result<Chunk, Errno> {
+        if plan.growth == 0 {
+            let chunk = take_free_chunk(&mut state.free, plan.pages).ok_or(Errno::NoMem)?;
             zero_chunk(&self.backing.memory, chunk);
             return Ok(chunk);
         }
-        self.reconcile();
-        let new_pages = self
-            .backing
-            .charged_pages()
-            .checked_add(pages)
-            .ok_or(Errno::NoMem)?;
-        if new_pages > self.policy.maximum_pages {
+        let tail = Chunk {
+            page: self.grow_tail(plan.growth)?,
+            pages: plan.growth,
+        };
+        if plan.tail_hole == 0 {
+            return Ok(tail);
+        }
+        let hole = state
+            .free
+            .last()
+            .copied()
+            .filter(|hole| hole.pages == plan.tail_hole && hole.page + hole.pages == tail.page);
+        let Some(hole) = hole else {
+            // A trusted raw growth moved the tail. The new pages stay charged and reusable.
+            give_chunk(&mut state.free, tail);
+            return Err(Errno::NoMem);
+        };
+        state.free.pop();
+        zero_chunk(&self.backing.memory, hole);
+        Ok(Chunk {
+            page: hole.page,
+            pages: plan.pages,
+        })
+    }
+
+    fn grow_tail(&self, pages: u32) -> Result<u32, Errno> {
+        #[cfg(test)]
+        if self.fail_next_tail_growth.swap(false, Ordering::SeqCst) {
+            self.backing.budget.rollback(&self.backing, pages);
             return Err(Errno::NoMem);
         }
-        if !self.backing.budget.charge(&self.backing, pages) {
-            return Err(Errno::NoMem);
-        }
-        let page = match self.backing.memory.grow(u64::from(pages)) {
-            Ok(page) => page as u32,
+        match self.backing.memory.grow(u64::from(pages)) {
+            Ok(page) => Ok(page as u32),
             Err(_) => {
                 self.backing.budget.rollback(&self.backing, pages);
-                return Err(Errno::NoMem);
+                Err(Errno::NoMem)
             }
-        };
-        Ok(Chunk { page, pages })
+        }
     }
 
     fn watch(&self, member: MemberId, addr: u32, expected: i32) -> Result<WatchId, Errno> {
@@ -1418,6 +1530,59 @@ fn fresh_waiter(state: &mut GroupState) -> WaiterId {
             return id;
         }
     }
+}
+
+/// A selected allocation. Its `growth` pages are already charged to the backing budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReservationPlan {
+    pages: u32,
+    growth: u32,
+    tail_hole: u32,
+}
+
+/// The declared maximum when it fits. Otherwise the required pages plus optional room, which
+/// never takes more than half of what remains so later members keep at least as much.
+fn reservation_pages(required: u32, desired: u32, available: u32) -> u32 {
+    if available >= desired {
+        return desired;
+    }
+    let optional = ((available - required) / 2).min(PREFERRED_FALLBACK_HEADROOM_PAGES);
+    required + optional
+}
+
+/// Chooses from one consistent view of holes, the tail and the budget. Holes are never summed,
+/// because a reservation must be one stable contiguous range.
+fn select_reservation(
+    free: &[Chunk],
+    actual: u32,
+    ceiling: u32,
+    budget_pages: u32,
+    required: u32,
+    desired: u32,
+) -> Result<ReservationPlan, Errno> {
+    let growable = ceiling.saturating_sub(actual).min(budget_pages);
+    let tail_hole = free
+        .last()
+        .filter(|chunk| chunk.page + chunk.pages == actual)
+        .map_or(0, |chunk| chunk.pages);
+    let largest = free.iter().map(|chunk| chunk.pages).max().unwrap_or(0);
+    let available = largest.max(tail_hole + growable);
+    if available < required {
+        return Err(Errno::NoMem);
+    }
+    let pages = reservation_pages(required, desired, available);
+    if largest >= pages {
+        return Ok(ReservationPlan {
+            pages,
+            growth: 0,
+            tail_hole: 0,
+        });
+    }
+    Ok(ReservationPlan {
+        pages,
+        growth: pages - tail_hole,
+        tail_hole,
+    })
 }
 
 fn take_free_chunk(free: &mut Vec<Chunk>, pages: u32) -> Option<Chunk> {
