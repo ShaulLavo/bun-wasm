@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { releaseDownload, saveReleaseResponse } from "./ci-release-download.ts";
@@ -51,6 +51,8 @@ async function setupTools(root: string, bunVersion: string, nodeVersion?: string
   }
   const bin = await installArchive(`https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/bun-linux-x64.zip`, join(root, `bun-${bunVersion}`), "bun", download);
   if (execFileSync(join(bin, "bun"), ["--version"], { encoding: "utf8" }).trim() !== bunVersion) throw new Error("Bun version mismatch");
+  await rm(join(bin, "bunx"), { force: true });
+  await symlink("bun", join(bin, "bunx"));
   paths.push(bin);
   return paths;
 }

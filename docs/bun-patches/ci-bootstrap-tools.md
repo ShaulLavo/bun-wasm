@@ -14,7 +14,8 @@ Node's public versions manifest supplies the same major or exact version selecto
 already used by each workflow. The archive comes from actions/node-versions through
 the authenticated release downloader. Bun remains exactly 1.4.4. Both downloaded
 executables must report the selected version before their directories enter
-`GITHUB_PATH`. The updater keeps its exact Node 26.12.1 selector. Other jobs retain
+`GITHUB_PATH`. Bun also exposes the action's `bunx` alias as a relative symlink
+to the installed `bun`, including repeated setup in one job. The updater keeps its exact Node 26.12.1 selector. Other jobs retain
 Node major 26. Jobs that did not request Node still install only Bun.
 
 This removes the actions' public-release download calls without changing workflow
