@@ -112,7 +112,7 @@ test("the supported Bun cache uses a workspace-relative archive path on both run
   const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
   expect(workflow).toContain("BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache");
   expect(workflow).not.toContain("path: ~/.bun/install/cache");
-  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(10);
+  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(11);
 });
 
 

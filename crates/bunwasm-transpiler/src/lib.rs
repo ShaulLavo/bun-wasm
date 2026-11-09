@@ -9,6 +9,7 @@ pub mod data;
 pub mod prepare;
 mod record_fixup;
 mod register;
+pub use register::commonjs_metadata_name;
 
 use bun_alloc::Arena;
 use bun_ast::Loader as BunLoader;
@@ -486,6 +487,11 @@ fn prepare_file(
 /// Print host `require(esm)` dynamic imports directly in the bundler's pass.
 pub fn with_dynamic_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
     bun_js_printer::with_bunwasm_import_referrer(from, f)
+}
+
+/// Lower static external imports only for the host's synchronous ES-module adapter.
+pub fn with_require_esm_namespace<T>(metadata: &str, f: impl FnOnce() -> T) -> T {
+    bun_js_printer::with_bunwasm_require_namespace(metadata, f)
 }
 
 /// Version of the shapes [`with_await_hooks`] prints.

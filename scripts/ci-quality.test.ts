@@ -51,12 +51,12 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
-    package: "Browser adapter package", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
+    package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
     "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
@@ -1221,10 +1221,10 @@ test("ordered producers keep every blocking native command and save JSC before i
   }
   expect(rust).not.toContain(`name: ${prebuildStepName}`);
   expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(2);
-  const groupPrebuild = nativeWorkflowStep("name", "Build the shared JSC prebuild", "shared-sysroot");
+  const groupPrebuild = nativeWorkflowStep("name", "Build or verify the shared JSC prebuild", "shared-prebuild");
   const groupScript = workflowString(workflowField(groupPrebuild, "run"));
   expect(groupScript.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
-  expect(workflowField(groupPrebuild, "env")).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
+  expect(workflowField(groupPrebuild, "env")).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "", CI_SHARED_JSC_HIT: "${{ steps.shared-jsc-cache.outputs.cache-hit }}" });
   const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
     .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
   const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
