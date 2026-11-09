@@ -54,6 +54,43 @@ function sender() {
   parentPort!.postMessage('posted');
 }
 
+function freshObjects(seed: number) {
+  const buffer = new SharedArrayBuffer(16);
+  new Uint8Array(buffer)[0] = seed;
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
+  new Int32Array(memory.buffer)[0] = seed + 1;
+  return { buffer, memory, module: new WebAssembly.Module(readFileSync(`${import.meta.dir}/cross-worker.wasm`)) };
+}
+
+function postQueue(seed: number) {
+  const { buffer, memory, module } = freshObjects(seed);
+  data.port.postMessage({ n: 0 });
+  data.port.postMessage({ n: 1, memory, again: memory, module });
+  data.port.postMessage({ n: 2, buffer });
+}
+
+function queuedSender() {
+  postQueue(data.seed);
+  parentPort!.postMessage('posted');
+}
+
+function gatedSender() {
+  const gate = new Int32Array(data.gate);
+  open(gate, 0);
+  if (Atomics.wait(gate, 1, 0, 30_000) === 'timed-out') throw new Error('Timed out before the gated send');
+  postQueue(data.seed);
+  open(gate, 2);
+}
+
+type Queued = { n: number; memory?: WebAssembly.Memory; again?: WebAssembly.Memory; module?: WebAssembly.Module };
+
+function checkQueued(message: Queued): boolean {
+  if (!message.memory) return true;
+  if (data.seed) check(new Int32Array(message.memory.buffer)[0] === data.seed + 1, 'queued memory bytes');
+  instantiate(message.module!, message.memory).write(8, 53);
+  return message.memory === message.again;
+}
+
 function drain() {
   const gate = new Int32Array(data.gate);
   const order: number[] = [];
@@ -63,11 +100,9 @@ function drain() {
     if (Date.now() > deadline) throw new Error('Timed out draining the moved port');
     const item = receiveMessageOnPort(data.port);
     if (!item) { Atomics.wait(gate, 3, 0, 5); continue; }
-    const message = item.message as { n: number; memory?: WebAssembly.Memory; again?: WebAssembly.Memory; module?: WebAssembly.Module };
+    const message = item.message as Queued;
     order.push(message.n);
-    if (!message.memory) continue;
-    same &&= message.memory === message.again;
-    instantiate(message.module!, message.memory).write(8, 53);
+    same &&= checkQueued(message);
   }
   const extra = receiveMessageOnPort(data.port) !== undefined;
   parentPort!.postMessage({ order, same, extra });
@@ -90,5 +125,5 @@ function startCallback() {
   parentPort!.postMessage({ started: started - 1, recovered: started === 2 });
 }
 
-const modes: Record<string, () => void> = { blockedReceiver, sender, drain, grower, startCallback };
+const modes: Record<string, () => void> = { blockedReceiver, sender, queuedSender, gatedSender, drain, grower, startCallback };
 modes[data.mode]!();

@@ -1,16 +1,13 @@
 // Facts only the embedding page can confirm. On the Browser host a guest sees a worker's exit
-// before the page has stopped its agent, so "stopped" here means the owner released its member.
-// Off the Browser host there is no page, and a guest's own view is already the stop. A guest's
-// process.pid is a fixed 1, so a member is named by a tag in its argv, which the page reads.
+// before the page has stopped its agent, and the page's owner releases a member when the agent's
+// native terminate returns, which still precedes the agent's end. Each boundary is named for what
+// it proves. Off the Browser host there is no page, and a guest's own view is already the stop.
+// A guest's process.pid is a fixed 1, so a member is named by a tag in its argv, read by the page.
 import { existsSync, readFileSync } from 'node:fs';
 
 const root = process.env.SHARED_WASM_PAGE_CONTROL;
-export const pageControlled = root !== undefined;
 const TAG = '--shared-wasm-member=';
 const DEADLINE_MS = 30_000;
-// Worker.terminate() returns at once, but Blink only forces out a thread blocked in Atomics.wait
-// two seconds later. Until then V8 still lists the waiter, so wait past that delay.
-const UNWIND_MS = 3000;
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 
 function pause(ms: number) { Atomics.wait(sleeper, 0, 0, ms); }
@@ -40,9 +37,27 @@ export function groupOf(name: string): string {
   return published(`${root}/group/${name}`);
 }
 
-/** Blocks until the owner has released the tagged member, the supported physical-stop boundary. */
-export function stoppedPhysically(name: string): void {
-  if (root === undefined) return;
-  published(`${root}/gone/${name}`);
-  pause(UNWIND_MS);
+interface OwnerHolds { readonly groupHolds: number; readonly memberHolds: number; }
+
+/** Blocks until the owner has released the tagged member: the broker's supported stop boundary. */
+export function ownerReleased(name: string): OwnerHolds | undefined {
+  if (root === undefined) return undefined;
+  return JSON.parse(published(`${root}/gone/${name}`));
+}
+
+/** Blocks until the tagged member's agent has ended, seen as the Web Lock it held being released. */
+export function agentClosed(name: string): void {
+  if (root !== undefined) published(`${root}/closed/${name}`);
+}
+
+/** A member tagged `stall-open-*` has taken its holds and is blocked on the owner's reply. */
+export function attachStalled(name: string): OwnerHolds {
+  if (root === undefined) throw new Error('Stalling an attachment needs the embedding page');
+  return JSON.parse(published(`${root}/stalled/${name}`));
+}
+
+/** A member tagged `fail-stop-*` had its native terminate fail, and the owner retains it. */
+export function stopFailed(name: string): void {
+  if (root === undefined) throw new Error('A failed stop needs the embedding page');
+  published(`${root}/retained/${name}`);
 }

@@ -115,7 +115,8 @@
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts",
-        "tests/shared-wasm-memory-browser{,-main}.ts"
+        "tests/shared-wasm-memory-browser{,-main}.ts",
+        "tests/shared-wasm-agent/worker.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx,js}",

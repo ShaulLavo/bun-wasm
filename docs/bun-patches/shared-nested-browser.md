@@ -62,9 +62,10 @@ Differences from the native host:
   group, half of native's. Publications are limited to 4,096, as on native.
 - Withdrawal is narrower than native's: only the incarnation that published may withdraw.
 - `Worker.terminate()` returns before the agent has stopped. A worker blocked in `Atomics.wait`
-  stays a listed waiter until Blink forces it out about two seconds later, so a wake sent in that
-  window can count it. The supported stop boundary is the broker's successful physical stop, and
-  it does not prove the agent's readers have closed.
+  stays a listed waiter until Blink forces it out about two seconds later (measured at 2,007 to
+  2,011 ms), so a wake sent in that window can count it. The supported stop boundary is the
+  broker's successful stop after native terminate returns, and it does not prove the agent's
+  readers have closed. Native's "no waiter remains" check holds only once the agent has ended.
 
 `scripts/shared-wasm-memory-browser.test.ts` runs the shared fixture in a real group guest in
 Chromium, owned by `checks/browser-guest-shared-wasm-memory.json`. The Shared PIC job consumes
@@ -82,9 +83,13 @@ ordered namespace getters rather than overwriting an earlier callback.
 
 The Browser group fixture shares Memory, Module and SharedArrayBuffer objects through
 workerData and MessageChannel, including a receiver blocked with no event-loop turn, a sender
-the page has confirmed stopped before any attachment, moved ports with queued messages, and
-concurrent growth. `page-control.ts` carries the page's owner-side facts to those fixtures,
-because a guest's own `process.pid` is a fixed 1. Membership rows compare the owner's group id for
-each kind of start. After the run the page inspects each retained ended owner and the page budget.
+the owner has released before any attachment, ports moved with decoded and with undecoded queued
+messages, receivers stopped before and during attachment, and concurrent growth. `page-control.ts`
+carries the page's owner-side facts to those fixtures, because a guest's own `process.pid` is a
+fixed 1. `ownerReleased` is the broker's supported stop. `agentClosed` is the agent's real end: the
+page's test build runs each worker with one held Web Lock (`web/tests/shared-wasm-agent/worker.ts`)
+and reports when the browser drops it. Membership rows compare the owner's group id for each kind
+of start. After the run the page inspects each retained ended owner and the page budget. A separate
+page refuses one member's native terminate and asserts its retained debt.
 `web/tests/nested-host-publication.test.ts` runs the real `NestedHost` against Waffle's real owner
 for every refusal and rollback, using publications a guest would never make.

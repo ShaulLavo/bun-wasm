@@ -2,7 +2,7 @@
 // reference, by native Bun. Workers are real worker_threads members of the parent's group.
 import { strict as assert } from 'node:assert';
 import { Worker } from 'node:worker_threads';
-import { memberTag, stoppedPhysically } from './page-control.ts';
+import { agentClosed, memberTag, ownerReleased } from './page-control.ts';
 
 const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
 const module = new WebAssembly.Module(moduleBytes);
@@ -88,8 +88,11 @@ async function terminated(memory: WebAssembly.Memory, view: Int32Array, how: 'ne
   // Terminate releases the waiter without any wake reaching this word.
   assert.equal(await worker.terminate(), 1);
   assert.equal(await exited, 1);
-  stoppedPhysically(tag);
+  // The owner's release follows native terminate's return, when V8 can still list this waiter.
+  ownerReleased(tag);
+  agentClosed(tag);
   assert.equal(Atomics.notify(view, 26, 1), 0, `the terminated ${how} waiter is gone`);
+  assert.equal(Atomics.load(view, 27), 0, `the terminated ${how} waiter never returned from its wait`);
 }
 async function senderExit() {
   const { worker, exited } = spawn('sender', { module });

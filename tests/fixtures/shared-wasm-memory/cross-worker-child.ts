@@ -89,11 +89,13 @@ function sender() {
 }
 
 function blocked() {
-  const exports = instantiate(module!, memory!, () => { Atomics.wait(words(), 26, 0); });
-  ready(24);
+  // The callback reports ready from inside itself, so a stop cannot land before it blocks.
+  const exports = instantiate(module!, memory!, () => { ready(24); Atomics.wait(words(), 26, 0); });
+  if (how !== 'callback') ready(24);
   if (how === 'nested') exports.wait(26 * 4, 0, -1n);
   else if (how === 'callback') exports.callback(1);
   else Atomics.wait(words(), 26, 0);
+  Atomics.store(words(), 27, 1);
   throw new Error('blocked worker must be terminated, not woken');
 }
 

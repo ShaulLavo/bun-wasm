@@ -1,8 +1,8 @@
 // Receipt without an event-loop turn, senders that are already gone, moved ports and growth, on
 // real worker_threads members of one group. Worker control is carried only by shared gate words.
 import { strict as assert } from 'node:assert';
-import { MessageChannel, receiveMessageOnPort, Worker } from 'node:worker_threads';
-import { memberTag, stoppedPhysically } from './page-control.ts';
+import { MessageChannel, receiveMessageOnPort, Worker, type WorkerOptions } from 'node:worker_threads';
+import { attachStalled, memberTag, ownerReleased } from './page-control.ts';
 
 const child = `${import.meta.dir}/worker-transport-child.ts`;
 const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
@@ -10,8 +10,8 @@ const startBytes = await Bun.file(`${import.meta.dir}/start.wasm`).arrayBuffer()
 const module = new WebAssembly.Module(moduleBytes);
 type Exports = { read(address: number): number; pages(): number };
 
-function start(data: object, transferList: readonly (Transferable | import('node:worker_threads').MessagePort)[] = [], tag?: string) {
-  const worker = new Worker(child, { workerData: data, transferList: Array.from(transferList) as never, argv: tag ? [memberTag(tag)] : [] });
+function start(data: object, transferList: NonNullable<WorkerOptions['transferList']> = [], tag?: string) {
+  const worker = new Worker(child, { workerData: data, transferList, argv: tag ? [memberTag(tag)] : [] });
   const exited = new Promise<number>((resolve, reject) => { worker.once('exit', resolve); worker.once('error', reject); });
   const next = <T>() => new Promise<T>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
   return { worker, exited, next };
@@ -59,7 +59,7 @@ async function lateAttach() {
   const sender = start({ mode: 'sender', port: port1, seed: 41 }, [port1], 'late-attach-sender');
   await sender.next();
   assert.equal(await sender.exited, 0);
-  stoppedPhysically('late-attach-sender');
+  ownerReleased('late-attach-sender');
   open(gate, 1);
   await opened(gate, 2);
   assert.equal(await receiver.exited, 0);
@@ -82,6 +82,84 @@ async function portTransfer() {
   assert.deepEqual(await drain.next(), { order: [2, 3], same: true, extra: false });
   assert.equal(await drain.exited, 0);
   assert.equal(new Int32Array(objects.memory.buffer)[2], 53, 'the moved queue reached the same bytes');
+  port1.close();
+}
+
+/** Decodes and queues on this side after a real event-loop turn, then moves the port. */
+async function decodedQueuedTransfer() {
+  const { port1, port2 } = new MessageChannel();
+  const sender = start({ mode: 'queuedSender', port: port1, seed: 91 }, [port1]);
+  // Delivery order: a pump drains port lanes before this control message, so all three are decoded.
+  await sender.next();
+  const deadline = Date.now() + 30_000;
+  let head = receiveMessageOnPort(port2);
+  while (!head) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for the first queued message');
+    await Bun.sleep(1);
+    head = receiveMessageOnPort(port2);
+  }
+  assert.equal(head.message.n, 0);
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const drain = start({ mode: 'drain', port: port2, gate: gate.buffer, expected: 2, seed: 91 }, [port2]);
+  assert.deepEqual(await drain.next(), { order: [1, 2], same: true, extra: false });
+  assert.equal(await sender.exited, 0);
+  assert.equal(await drain.exited, 0);
+}
+
+/** No event-loop turn between the sender's post and the move, so these graphs stay undecoded. */
+async function undecodedQueuedTransfer() {
+  const senderGate = new Int32Array(new SharedArrayBuffer(16));
+  const { port1, port2 } = new MessageChannel();
+  const sender = start({ mode: 'gatedSender', port: port1, gate: senderGate.buffer, seed: 95 }, [port1]);
+  await opened(senderGate, 0);
+  open(senderGate, 1);
+  if (Atomics.wait(senderGate, 2, 0, 30_000) === 'timed-out') throw new Error('Timed out waiting for the gated send');
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const drain = start({ mode: 'drain', port: port2, gate: gate.buffer, expected: 3, seed: 95 }, [port2]);
+  assert.deepEqual(await drain.next(), { order: [0, 1, 2], same: true, extra: false });
+  assert.equal(await sender.exited, 0);
+  assert.equal(await drain.exited, 0);
+}
+
+async function receiverStopBeforeAttach() {
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const { port1, port2 } = new MessageChannel();
+  const tag = 'receiver-stop-before-attach';
+  const doomed = start({ mode: 'blockedReceiver', gate: gate.buffer, port: port2, seed: 61 }, [port2], tag);
+  await opened(gate, 0);
+  const objects = fresh(61);
+  port1.postMessage(objects);
+  assert.equal(await doomed.worker.terminate(), 1);
+  assert.equal(await doomed.exited, 1);
+  ownerReleased(tag);
+  port1.close();
+  // A publication belongs to the group, so the same objects still attach in a later receiver.
+  const nextGate = new Int32Array(new SharedArrayBuffer(16));
+  const next = new MessageChannel();
+  const receiver = start({ mode: 'blockedReceiver', gate: nextGate.buffer, port: next.port2, seed: 61 }, [next.port2]);
+  await opened(nextGate, 0);
+  next.port1.postMessage(objects);
+  open(nextGate, 1);
+  await opened(nextGate, 2);
+  assert.equal(await receiver.exited, 0);
+  assert.equal(new Int32Array(objects.memory.buffer)[1], 64, 'the later receiver wrote through its Module');
+  next.port1.close();
+}
+
+async function receiverStopDuringAttach() {
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const { port1, port2 } = new MessageChannel();
+  const tag = 'stall-open-receiver';
+  const receiver = start({ mode: 'blockedReceiver', gate: gate.buffer, port: port2, seed: 81 }, [port2], tag);
+  await opened(gate, 0);
+  port1.postMessage(fresh(81));
+  open(gate, 1);
+  const stalled = attachStalled(tag);
+  assert.ok(stalled.memberHolds >= 2, 'the owner took the complete hold set before the stop');
+  assert.equal(await receiver.worker.terminate(), 1);
+  assert.equal(await receiver.exited, 1);
+  const released = ownerReleased(tag);
+  assert.equal(released?.groupHolds, stalled.groupHolds - stalled.memberHolds, 'every hold the member took came back');
   port1.close();
 }
 
@@ -110,6 +188,10 @@ async function startCallback() {
 await blockedReceiver();
 await lateAttach();
 await portTransfer();
+await decodedQueuedTransfer();
+await undecodedQueuedTransfer();
+await receiverStopBeforeAttach();
+await receiverStopDuringAttach();
 await concurrentGrowth();
 await startCallback();
 console.log('shared-wasm-memory worker transport: pass');
