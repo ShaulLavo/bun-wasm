@@ -13,7 +13,7 @@ export type SafariTransport = {
   useHost(): Promise<void>;
   usePreview(): Promise<void>;
   closePreview(): Promise<void>;
-  close(): Promise<void>;
+  close(interruptPending?: boolean): Promise<void>;
 };
 
 type Request = (path: string, body?: unknown, method?: string) => Promise<unknown>;
@@ -62,10 +62,10 @@ function verifyCapabilities(capabilities: Readonly<Record<string, unknown>>, opt
   }
 }
 
-function createRequest(endpoint: string, timeoutMs: number): Request {
+function createRequest(endpoint: string, timeoutMs: number, signal?: AbortSignal): Request {
   return async (path, body, method = body === undefined ? "GET" : "POST") => {
     const response = await fetch(endpoint + path, { method, headers: { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+      body: body === undefined ? undefined : JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
     const envelope = object(await response.json());
     if (!("value" in envelope)) throw new Error(`Safari WebDriver ${method} ${path} returned no value`);
     const value = envelope.value;
@@ -89,7 +89,7 @@ Promise.resolve().then(() => (0, eval)(expression)).then(value => {
 }).catch(error => done({ ok: false, message: String(error), stack: error && error.stack ? String(error.stack) : "" }));
 `;
 
-function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"]): SafariTransport {
+function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanupRequest: Request): SafariTransport {
   let preview: string | undefined;
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
@@ -99,7 +99,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 
   function serial<T>(action: () => Promise<T>): Promise<T> {
     if (closing) return Promise.reject(new Error("Safari transport is closed"));
-    const result = tail.then(action);
+    const result = tail.then(() => { lifetime.signal.throwIfAborted(); return action(); });
     // Recover only the queue tail. The caller still receives the original rejection.
     tail = result.then(() => undefined, () => undefined);
     return result;
@@ -144,7 +144,10 @@ function transport(request: Request, sessionPath: string, host: string, capabili
       await select(preview);
     }),
     closePreview: () => serial(closePreview),
-    close() { return closing ??= tail.then(async () => { await request(sessionPath, undefined, "DELETE"); }); },
+    close(interruptPending = false) {
+      if (interruptPending) lifetime.abort(new Error("Safari session cleanup interrupted pending commands"));
+      return closing ??= tail.then(async () => { await cleanupRequest(sessionPath, undefined, "DELETE"); });
+    },
   });
 }
 
@@ -153,7 +156,10 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const endpoint = new URL(options.endpoint);
   if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.search || endpoint.hash) throw new Error("Expected an HTTP SafariDriver endpoint without a query or fragment");
   const requested = requestedCapabilities(options);
-  const request = createRequest(endpoint.href.replace(/\/$/, ""), options.timeoutMs);
+  const lifetime = new AbortController();
+  const address = endpoint.href.replace(/\/$/, "");
+  const request = createRequest(address, options.timeoutMs, lifetime.signal);
+  const cleanupRequest = createRequest(address, Math.min(options.timeoutMs, 10_000));
   const opened = object(await request("/session", { capabilities: { alwaysMatch: requested } }));
   const sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
   try {
@@ -161,6 +167,6 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
     verifyCapabilities(capabilities, options);
     await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
     const host = handle(await request(`${sessionPath}/window`));
-    return transport(request, sessionPath, host, capabilities);
+    return transport(request, sessionPath, host, capabilities, lifetime, cleanupRequest);
   } catch (error) { return cleanupAfterFailure(error, async () => { await request(sessionPath, undefined, "DELETE"); }); }
 }
