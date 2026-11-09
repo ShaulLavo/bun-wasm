@@ -55,6 +55,10 @@ def run(command, mode, n):
 
 
 def capacity(command, mode, high):
+    if mode == 'require':
+        baseline = run(command, mode, 0)
+        if baseline != 'completed':
+            return {'refused_at_zero': baseline}
     if run(command, mode, high) == 'completed':
         return {'completed_at_max': high}
     low = 0

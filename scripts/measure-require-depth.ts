@@ -5,17 +5,20 @@
 // here, while the guest loader in crates/bunwasm-runtime/src/js/bootstrap.js nests differently.
 import Module from "node:module";
 
-type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
-type Internals = { _load: Loader; _resolveFilename: Loader };
+function moduleMethod(name: string) {
+  const method: unknown = Reflect.get(Module, name);
+  if (typeof method !== "function") throw new TypeError(`Node module method ${name} is unavailable`);
+  return method;
+}
 
-const internals = Module as unknown as Internals;
+const resolveFilename = moduleMethod("_resolveFilename");
 const pending = new Set((process.env.REQUIRE_DEPTH_TARGETS ?? "").split(",").filter(Boolean));
 const loading: string[] = [];
-const load = internals._load;
+const load = moduleMethod("_load");
 
 function resolved(request: string, parent: unknown, isMain: boolean): string {
   try {
-    return String(internals._resolveFilename(request, parent, isMain));
+    return String(Reflect.apply(resolveFilename, Module, [request, parent, isMain]));
   } catch {
     return request;
   }
@@ -30,14 +33,16 @@ function report(filename: string): void {
   if (pending.size === 0) process.exit(0);
 }
 
-internals._load = function measured(request, parent, isMain) {
+const measured = function (this: unknown, request: string, parent: unknown, isMain: boolean) {
   const filename = resolved(request, parent, isMain);
-  if (!filename.startsWith("/")) return load.call(this, request, parent, isMain);
+  if (!filename.startsWith("/")) return Reflect.apply(load, this, [request, parent, isMain]);
   report(filename);
   loading.push(filename);
   try {
-    return load.call(this, request, parent, isMain);
+    return Reflect.apply(load, this, [request, parent, isMain]);
   } finally {
     loading.pop();
   }
 };
+
+if (!Reflect.set(Module, "_load", measured)) throw new TypeError("Node module loader is not writable");

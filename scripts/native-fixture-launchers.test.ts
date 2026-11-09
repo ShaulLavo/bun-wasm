@@ -90,6 +90,14 @@ test("stack measurement gives the require mode a private scratch preopen and an 
   expect(JSON.parse(result.stdout)).toMatchObject({ leaf: "node_modules/pkg/index.js", results: { require: { completed_at_max: 1 } } });
 });
 
+test("stack measurement distinguishes a failing package leaf from a passing zero-depth chain", () => {
+  const expected = join(scratch, "refused-at-zero.txt");
+  writeFileSync(expected, "caught require RangeError 0 Maximum call stack size exceeded\ncontinued\n");
+  const result = run("scripts/measure-stack.py", ["--wasm", wasm, "--max", "1", "require"], expected);
+  expect(JSON.parse(result.stdout)).toMatchObject({ results: { require: { refused_at_zero: "caught:RangeError" } } });
+  expect(result.args.slice(-5, -3)).toEqual(["require", "0"]);
+});
+
 function probeRequire(depth: string, leaf?: string) {
   const directory = mkdtempSync(join(scratch, "require-probe-"));
   const result = Bun.spawnSync([process.execPath, join(root, "tests/stack-depth.js"), "require", depth], {
