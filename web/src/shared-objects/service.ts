@@ -194,7 +194,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     if (publications.size >= sharedObjectLimit) throw sharedError("Shared publication limit exceeded");
     const staged = new Map<SharedArrayBuffer | SharedWasmValue, SharedAttachment>();
     const transaction = crypto.randomUUID();
-    let phase: "prepared" | "published" | "aborted" = "prepared";
+    let phase: "prepared" | "published" | "committed" | "aborted" = "prepared";
     function reference(buffer: SharedArrayBuffer): SharedReference {
       return stage(buffer, { buffer, byteLength: sharedBufferLength(buffer) });
     }
@@ -230,8 +230,14 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       reserved -= staged.size;
       for (const buffer of staged.keys()) reservedIdentities.delete(buffer);
     }
+    function commit() {
+      if (phase === "committed") return;
+      if (phase !== "published") throw sharedError("Shared publication is not published");
+      phase = "committed";
+      staged.clear();
+    }
     function abort() {
-      if (phase === "aborted") return;
+      if (phase === "aborted" || phase === "committed") return;
       const published = phase === "published";
       if (!published) unreserve();
       phase = "aborted";
@@ -241,7 +247,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       }
       staged.clear(); publications.delete(publication);
     }
-    const publication = { reference, referenceWasm, publish, abort };
+    const publication = { reference, referenceWasm, publish, commit, abort };
     publications.add(publication);
     return publication;
   }

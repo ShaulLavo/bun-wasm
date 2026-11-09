@@ -477,7 +477,27 @@ impl Runtime {
     }
 }
 
+/// Same-region transport between members of one group. Only the shared-group polyfill calls it.
+#[cfg(bun_wasm_shared_group)]
+fn install_group_transport(table: &mut Table) {
+    table.add("wasm.publishSharedMemory", |a| {
+        nested::publish_memory(a.u32(0)?)
+    });
+    table.add("wasm.attachSharedMemory", |a| {
+        nested::attach_memory(a.u32(0)?)
+    });
+    table.add("wasm.publishSharedModule", |a| {
+        nested::publish_module(a.u32(0)?)
+    });
+    table.add("wasm.attachSharedModule", |a| {
+        nested::attach_module(a.u32(0)?)
+    });
+    table.add("wasm.withdrawShared", |a| nested::withdraw(a.u32(0)?));
+}
+
 pub fn install(table: &mut Table) {
+    #[cfg(bun_wasm_shared_group)]
+    install_group_transport(table);
     table.add("wasm.sharedMemorySupported", |_| {
         Ok(Val::Bool(cfg!(bun_wasm_shared_group)))
     });

@@ -276,3 +276,11 @@ BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the
 
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
 sets the host stack independently of the linked shadow stack.
+
+## Blocking browser check
+
+`checks/browser-guest-quickjs-stack.json` registers the Firefox and Chromium
+capacity and cold-recursion checks. The Chromium Processes leg runs both hosts
+once against the existing Rust producer's verified site, then runs Firefox at
+190 KiB to check the default budget's safety margin. No guest is rebuilt by the
+consumer. Changes to the executor policy, probe, or fixture select that producer.

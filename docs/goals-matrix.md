@@ -104,6 +104,9 @@ entries, and repeated flags are errors. An override applies to that framework's
 install phase across selected browsers and engines. It does not change cache
 behavior or other frameworks, and no Nuxt override is enabled implicitly.
 
+For a read-only summary of independent historical runs, use the
+[framework evidence view](goals-report-view.md). It never creates a resumable campaign.
+
 Reports use schema 2. `TABLE.json` records the effective install deadline for
 every framework, the campaign deadline, and the fixed cleanup deadline in
 `deadlines`. Each phase records its own `timeoutMs`, checked against that policy
