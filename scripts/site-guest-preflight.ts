@@ -41,13 +41,17 @@ export async function verifySiteGuests(repository: string, env: NodeJS.ProcessEn
   const expected = await runtimeInputs(repository);
   for (const guest of guests) {
     const name = guestBuilds[guest.build].artifact;
-    const path = resolve(repository, "sandbox", env[guest.variable] ?? `../dist/${name}`);
-    const receipt: unknown = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
-    verifyGuestBuildReceipt(await readFile(path), receipt);
-    if (receipt.sourceManifest.build !== guest.build) throw new Error(`Site guest engine mismatch: ${path}`);
-    verifyRuntimeInputs(receipt.sourceManifest, expected, path);
-    await verifyGuestCompanions(receipt, dirname(path));
+    const paths = new Set(["sandbox", "web"].map(app => resolve(repository, app, env[guest.variable] ?? `../dist/${name}`)));
+    for (const path of paths) await verifySiteGuest(path, guest.build, expected);
   }
+}
+
+async function verifySiteGuest(path: string, build: typeof guests[number]["build"], expected: Awaited<ReturnType<typeof runtimeInputs>>): Promise<void> {
+  const receipt: unknown = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
+  verifyGuestBuildReceipt(await readFile(path), receipt);
+  if (receipt.sourceManifest.build !== build) throw new Error(`Site guest engine mismatch: ${path}`);
+  verifyRuntimeInputs(receipt.sourceManifest, expected, path);
+  await verifyGuestCompanions(receipt, dirname(path));
 }
 
 if (import.meta.main) await verifySiteGuests(resolve(import.meta.dir, ".."));

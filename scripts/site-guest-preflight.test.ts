@@ -96,6 +96,14 @@ test("artifact overrides use the same app-relative paths as sandbox and playgrou
   await expect(verifySiteGuests(root, { BUN_BROWSER_WASM: "../alternate/browser.wasm" })).resolves.toBeUndefined();
 });
 
+test("publication checks playground assets when a relative override selects different files", async () => {
+  const root = await fixture();
+  await put(root, "sandbox/browser.wasm", wasm);
+  await put(root, "sandbox/browser.wasm.build.json", await readFile(join(root, "dist/bun-browser.wasm.build.json")));
+  await put(root, "web/browser.wasm", wasm);
+  await expect(verifySiteGuests(root, { BUN_BROWSER_WASM: "browser.wasm" })).rejects.toThrow(join(root, "web/browser.wasm.build.json"));
+});
+
 test("publication rejects a guest override for the wrong engine", async () => {
   const root = await fixture();
   await expect(verifySiteGuests(root, { BUN_BROWSER_WASM: "../dist/bun.wasm" })).rejects.toThrow("engine mismatch");
