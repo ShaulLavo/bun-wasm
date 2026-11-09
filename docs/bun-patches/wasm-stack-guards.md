@@ -53,6 +53,7 @@ fixed recovery marker instead of spawning a child test process.
 | [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
 | [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
+| [`jsc/webkit-wasi.patch`, unary and regexp accounting](#jsc-unary-and-regexp-accounting) | Port | Reserve shadow stack in unary bytecode generation and Yarr's recursive passes, and add the parser's stack check to `await` chains. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -82,3 +83,28 @@ stack and the 800 KiB guest budget, requiring RangeError on all five paths.
 Other engines may finish an operation iteratively, but must still continue. This is a blocking runtime control, not a source
 pattern test. Real Chrome warm and fresh-context controls remain a separate
 qualification step.
+
+## JSC unary and regexp accounting
+
+The same pinned WebKit's `bytecompiler/NodesCodegen.cpp`, `yarr/YarrPattern.cpp`,
+`yarr/YarrInterpreter.cpp` and `parser/Parser.cpp` get further WASI additions, class
+**Port**. These recursions already had stack guards, but each level spends almost
+no shadow stack, so the guards never fired before the host stack ran out.
+
+Bytecode generation for `UnaryOpNode`, `UnaryPlusNode`, `TypeOfValueNode`,
+`VoidNode`, `DeleteValueNode` and the negated-condition form of `LogicalNotNode`
+reserves 1024 bytes per level. So do Yarr's recursive compile passes:
+`copyDisjunction`, `copyTerm`, `setupAlternativeOffsets`,
+`setupDisjunctionOffsets`, `recomputeStartsWithBOL`, `factorAlternatives`,
+`termsMayMatchNewline` and `ByteCompiler::emitDisjunction`. The interpreter's
+`matchDisjunction` reserves 2048. The reservations sit in each node's own
+`emitBytecode` and not in the shared `emitNode` dispatcher, which is inlined at many
+call sites and is also the path for long left-deep chains.
+
+`parseAwaitExpression` recursed with no check at all. It now reserves 2048 bytes
+and calls the parser's existing `failIfStackOverflow`, which is the only upstream
+behavior change here: a chain of `await` that would have crashed reports a stack
+overflow instead. No other upstream algorithm or error changes.
+
+The `stack-getter-headroom` fixture owns the regressions and also sweeps interior
+depths, because a pattern shallow enough to compile can still reach a later pass.
