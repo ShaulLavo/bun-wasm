@@ -31423,7 +31423,14 @@ static __exception int get_exported_names(JSContext *ctx,
 /* Unfortunately, the spec gives a different behavior from GetOwnProperty ! */
 static int js_module_ns_has(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
-    return (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL);
+    if (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL)
+        return true;
+    return JS_HasProperty(ctx, ctx->class_proto[JS_CLASS_MODULE_NS], atom);
+}
+
+bool JS_bunwasm_IsModuleNamespace(JSValueConst value)
+{
+    return JS_GetClassID(value) == JS_CLASS_MODULE_NS;
 }
 
 static const JSClassExoticMethods js_module_ns_exotic_methods = {
@@ -59273,6 +59280,14 @@ int JS_AddIntrinsicBaseObjects(JSContext *ctx)
     if (JS_IsException(obj1))
         return -1;
     JS_FreeValue(ctx, obj1);
+
+    /* Bun namespaces inherit the marker without replacing their canonical object. */
+    ctx->class_proto[JS_CLASS_MODULE_NS] = JS_NewObjectProto(ctx, JS_NULL);
+    if (JS_IsException(ctx->class_proto[JS_CLASS_MODULE_NS]))
+        return -1;
+    if (JS_DefinePropertyValueStr(ctx, ctx->class_proto[JS_CLASS_MODULE_NS],
+                                  "__esModule", JS_TRUE, 0) < 0)
+        return -1;
 
     /* Function */
     ft.generic_magic = js_function_constructor;

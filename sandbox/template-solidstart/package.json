@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run node_modules/vinxi/bin/cli.mjs dev --port 5173",
-    "build": "bun run node_modules/vinxi/bin/cli.mjs build --preset node-server",
-    "start": "bun run node_modules/vinxi/bin/cli.mjs start --preset node-server --host 127.0.0.1 --port 5173"
+    "dev": "ESBUILD_WORKER_THREADS=0 bun run node_modules/vinxi/bin/cli.mjs dev",
+    "build": "ESBUILD_WORKER_THREADS=0 bun run node_modules/vinxi/bin/cli.mjs build --preset node-server",
+    "start": "bun run node_modules/vinxi/bin/cli.mjs start --preset node-server --host 127.0.0.1"
   },
   "dependencies": {
     "@solidjs/start": "1.3.2",

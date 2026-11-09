@@ -153,6 +153,10 @@ pub trait Engine: Sized + 'static {
     // --- introspection for console.log / util.types ---
     fn is_promise(&self, v: &Self::Value) -> bool;
     fn is_proxy(&self, v: &Self::Value) -> bool;
+    /// None means this engine has no native namespace brand check.
+    fn is_module_namespace(&self, _v: &Self::Value) -> Option<bool> {
+        None
+    }
     fn is_detachable_buffer(&self, v: &Self::Value) -> bool;
     fn detach_buffer(&self, v: &Self::Value);
     /// A `WebAssembly.Memory` buffer over `length` bytes at `data`, without copying.

@@ -2,7 +2,7 @@ import { cleanupTimeoutMs } from "./deadlines";
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import type { Transport } from "./transport";
-import { checkClick, command, edit, ready, render, start, stopServer, terminal } from "./playground";
+import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 export interface Execution {
   box: Box;
   framework: Framework;
@@ -79,7 +79,7 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
   await phase(results, "install", installTimeoutMs, () => command(transport, "bun install", installTimeoutMs), options.signal);
   let previewUrl = "";
   await check("dev", async () => { previewUrl = await start(transport, framework.rootPreview?.dev.replaceAll("{port}", String(port)) ?? "bun run dev", timeoutMs, port); return { url: previewUrl, port }; });
-  await check("render", async () => { await transport.openPreview(previewUrl); return render(transport, framework, framework.text, timeoutMs); });
+  await check("render", async () => { await openPreview(transport, timeoutMs, port); return render(transport, framework, framework.text, timeoutMs); });
   await check("click", () => checkClick(transport, framework, timeoutMs));
   await check("hot-reload", () => edit(transport, framework, timeoutMs));
   const buildTimeoutMs = options.buildTimeoutMs ?? timeoutMs;
@@ -89,8 +89,8 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
     return command(transport, "bun run build", buildTimeoutMs);
   }, options.signal);
   await check("preview", async () => {
-    const url = await start(transport, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : framework.rootPreview?.start.replaceAll("{port}", String(port)) ?? "bun run start", timeoutMs, port);
-    await transport.openPreview(url);
+    await start(transport, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : framework.rootPreview?.start.replaceAll("{port}", String(port)) ?? "bun run start", timeoutMs, port);
+    await openPreview(transport, timeoutMs, port);
     const rendered = await render(transport, framework, `${framework.text} hot updated`, timeoutMs);
     const clicked = await checkClick(transport, framework, timeoutMs);
     return { rendered, clicked };
