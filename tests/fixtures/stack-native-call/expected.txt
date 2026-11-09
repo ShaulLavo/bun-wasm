@@ -1,3 +1,4 @@
+native callable semantics preserved
 call 55 completed
 apply 55 completed
 native overflow caught

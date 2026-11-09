@@ -7,11 +7,9 @@ import { join, resolve } from "node:path";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { preflight } from "./goals-matrix/preparation";
 
-// Chromium's browser-guest leg installs both hosts and owns this check once.
-// Safari's smaller stack policy is covered by the existing browser-stack probe.
 const selected = process.env.BUN_WASM_TEST_BROWSERS ?? "chromium";
-test.skipIf(selected === "webkit")("QuickJS's Firefox capacity and cold recursion guards on both hosts", async () => {
-  assert.equal(selected, "chromium", "Chromium's browser-guest leg owns the Firefox/Chromium probe");
+test("QuickJS native-call capacity and cold recursion guards", async () => {
+  assert.ok(selected === "chromium" || selected === "webkit");
   const provided = process.env.BUN_WASM_BROWSER_SITE;
   if (process.env.CI && !provided) throw new Error("CI must provide its built guest site");
   const scratch = provided ? undefined : mkdtempSync(join(tmpdir(), "bun-wasm-stack-site-"));
@@ -23,8 +21,10 @@ test.skipIf(selected === "webkit")("QuickJS's Firefox capacity and cold recursio
     await preflight(site, ["quickjs"]);
     const args = ["tests/browser-quickjs-stack.ts"];
     const options = { cwd: resolve(import.meta.dir, "../web"), stdio: "inherit", env: { ...process.env, ROOT: site, QUICKJS_STACK_KIB: undefined } } as const;
-    execFileSync(process.execPath, args.concat(["firefox", "chromium"]), options);
-    execFileSync(process.execPath, args.concat(["firefox"]), { ...options, env: { ...options.env, QUICKJS_STACK_KIB: "190" } });
+    const browsers = selected === "webkit" ? ["webkit"] : ["firefox", "chromium"];
+    execFileSync(process.execPath, args.concat(browsers), options);
+    const margin = selected === "webkit" ? "40" : "190";
+    execFileSync(process.execPath, args.concat([selected === "webkit" ? "webkit" : "firefox"]), { ...options, env: { ...options.env, QUICKJS_STACK_KIB: margin } });
     assert.deepEqual(verifySite(out), before);
   } finally { if (scratch) rmSync(scratch, { recursive: true, force: true }); }
 }, 900_000);
