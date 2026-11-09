@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute } from "./execute";
 import { object } from "./evidence";
+import type { Transport } from "./transport";
 
 test("visible iPhone options reject SafariDriver-shaped or non-loopback controls", () => {
   validateIphoneControl("http://127.0.0.1:1234/__goals_iphone/" + "a".repeat(64), "/bound/agent-device");
@@ -118,63 +119,78 @@ test("an outstanding install observation cannot block confirmed native tab clean
 });
 
 test("successful native-owned cleanup preserves the final terminal log", async () => {
-  const framework = frameworks[0]!;
-  await withPlayground(framework, 0, async transport => {
-    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
-    const logs: string[] = [];
-    let closed = false;
-    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
-      saveLog: async text => { logs.push(text); },
-    });
-    expect(result.status).toBe("pass");
-    expect(closed).toBe(true);
-    expect(logs).toEqual([""]);
-  });
+  const { result, closed, logs } = await nativeLifecycle("normal");
+  expect(result.status).toBe("pass");
+  expect(closed).toBe(true);
+  expect(logs).toEqual([""]);
 });
 
 test("a stalled final terminal read saves the completed transcript and still closes the native page", async () => {
+  const { result, closed, logs } = await nativeLifecycle("stalled-terminal");
+  expect(result.status).toBe("pass");
+  expect(closed).toBe(true);
+  expect(logs).toHaveLength(1);
+  expect(logs[0]).toContain("Final terminal observation unavailable");
+  expect(logs[0]).toContain("saved build transcript");
+});
+
+test("a terminal log write failure cannot skip native resource teardown", async () => {
+  const { result, closed } = await nativeLifecycle("write-failure");
+  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("log write failed") });
+  expect(closed).toBe(true);
+});
+
+test("a failed final observation preserves the already captured failure diagnostic", async () => {
+  const { result, closed, logs } = await nativeLifecycle("failed-install");
+  expect(result).toMatchObject({ status: "fail", phase: "install" });
+  expect(logs).toEqual(["Error: detailed install diagnostic"]);
+  expect(closed).toBe(true);
+});
+
+test("a never-settling failure log write is bounded before native teardown", async () => {
+  const { result, closed } = await nativeLifecycle("stalled-failure-log");
+  expect(result).toMatchObject({ status: "fail", phase: "install" });
+  expect(closed).toBe(true);
+}, 8000);
+
+type NativeScenario = "normal" | "stalled-terminal" | "write-failure" | "failed-install" | "stalled-failure-log";
+async function nativeLifecycle(scenario: NativeScenario) {
   const framework = frameworks[0]!;
-  await withPlayground(framework, 0, async transport => {
+  return withPlayground(framework, 0, async transport => {
     Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
-    const evaluate = transport.evaluate;
-    let reads = 0;
-    transport.evaluate = <T>(source: string) => {
-      if (!source.includes("function transcript")) return evaluate<T>(source);
-      reads++;
-      if (reads === 3) return new Promise<T>(() => {});
-      return evaluate<T>(JSON.stringify("saved build transcript"));
-    };
+    transport.evaluate = lifecycleObservation(transport.evaluate, scenario);
     const logs: string[] = [];
     let closed = false;
     transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
-      saveLog: async text => { logs.push(text); },
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport, saveLog: lifecycleLog(logs, scenario),
     });
-    expect(result.status).toBe("pass");
-    expect(closed).toBe(true);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain("Final terminal observation unavailable");
-    expect(logs[0]).toContain("saved build transcript");
+    return { result, closed, logs };
   });
-});
+}
 
-test("a terminal log write failure cannot skip native resource teardown", async () => {
-  const framework = frameworks[0]!;
-  await withPlayground(framework, 0, async transport => {
-    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
-    let closed = false;
-    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
-      saveLog: async () => { throw new Error("log write failed"); },
-    });
-    expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("log write failed") });
-    expect(closed).toBe(true);
-  });
-});
+function lifecycleObservation(evaluate: Transport["evaluate"], scenario: NativeScenario): Transport["evaluate"] {
+  let reads = 0;
+  const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log";
+  return <T>(source: string) => {
+    if (failedInstall && source.includes("function shellState")) return evaluate<T>(JSON.stringify({ done: true, code: 17, error: null }));
+    if (!source.includes("function transcript")) return evaluate<T>(source);
+    reads++;
+    if (scenario === "stalled-terminal" && reads === 3) return new Promise<T>(() => {});
+    if (scenario === "failed-install" && reads === 2) return Promise.reject(new Error("final observation failed"));
+    if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"));
+    return scenario === "stalled-terminal" ? evaluate<T>(JSON.stringify("saved build transcript")) : evaluate<T>(source);
+  };
+}
+
+function lifecycleLog(logs: string[], scenario: NativeScenario): ExecutionLog {
+  return async text => {
+    if (scenario === "write-failure") throw new Error("log write failed");
+    if (scenario === "stalled-failure-log") return new Promise<void>(() => {});
+    logs.push(text);
+  };
+}
+type ExecutionLog = Parameters<typeof execute>[0]["saveLog"];
 
 async function pendingCleanupControl(agent: string, log: string, closed: string): Promise<void> {
   const framework = frameworks[0]!;
