@@ -1362,6 +1362,80 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
  {
 +    WASM_RESERVE_STACK(2048);
      ASSERT(!hasError());
+@@ -4446,2 +4449,4 @@
+ {
++    WASM_RESERVE_STACK(2048);
++    failIfStackOverflow();
+     ASSERT(match(AWAIT));
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -2920,2 +2920,3 @@ RegisterID* DeleteValueNode::emitBytecode(BytecodeGenerator& generator, Register
+ {
++    WASM_RESERVE_STACK(1024);
+     generator.emitNodeInIgnoreResultPosition(m_expr);
+@@ -2930,2 +2931,3 @@ RegisterID* VoidNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -2965,2 +2967,3 @@ RegisterID* TypeOfValueNode::emitBytecode(BytecodeGenerator& generator, Register
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -3168,2 +3171,3 @@ RegisterID* UnaryOpNode::emitBytecode(BytecodeGenerator& generator, RegisterID*
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -3190,2 +3194,3 @@ RegisterID* UnaryPlusNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+ {
++    WASM_RESERVE_STACK(1024);
+     ASSERT(opcodeID() == op_to_number);
+@@ -3200,2 +3205,3 @@ void LogicalNotNode::emitBytecodeInConditionContext(BytecodeGenerator& generator
+ {
++    WASM_RESERVE_STACK(1024);
+     if (needsDebugHook()) [[unlikely]]
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -1822,2 +1822,3 @@ public:
+     {
++        WASM_RESERVE_STACK(2048);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2782,2 +2783,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.cpp b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+--- a/Source/JavaScriptCore/yarr/YarrPattern.cpp
++++ b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+@@ -1964,2 +1964,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2034,2 +2035,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2185,2 +2187,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2337,2 +2340,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2665,2 +2669,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2942,2 +2947,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -3207,2 +3213,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
 diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
 --- a/Source/JavaScriptCore/runtime/JSONObject.cpp
 +++ b/Source/JavaScriptCore/runtime/JSONObject.cpp

@@ -4,5 +4,20 @@ proxychain survived
 jsonplain survived
 arrow survived
 statement survived
+logical not survived
+negate survived
+bitwise not survived
+unary plus survived
+typeof survived
+void survived
+delete survived
+negated condition survived
+await survived
+noncapturing groups survived
+lookahead survived
+negative lookahead survived
+anchored groups survived
+repeated groups survived
+interior depths survived
 128 getters completed
 continued
