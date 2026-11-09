@@ -2,7 +2,7 @@ import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { handshakeCommands, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { handshakeCommands, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -26,4 +26,11 @@ test("JSC receipts bind the committed source, prebuild and guest bytes", () => {
 test("the JSC artifact check runs the busy-loop stdout handshake on the same guest", () => {
   const [command] = handshakeCommands("/dist/bun-jsc.wasm");
   expect(command!.slice(2)).toEqual([new URL("../tests/test-stdout-busy-loop.ts", import.meta.url).pathname, "--engine", "jsc", "--wasm", "/dist/bun-jsc.wasm"]);
+});
+
+test("JSC stack controls use their discovered fixture with a small real host stack", () => {
+  expect(stackFixture()).toEqual({
+    path: "tests/fixtures/stack-getter-headroom",
+    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
+  });
 });
