@@ -334,6 +334,7 @@ export class NestedHost {
       const { module, memory, bindings, invocation } = request.Instantiate;
       return this.enter(invocation, () => this.instantiate(module, memory, bindings));
     }
+    if (!("Call" in request)) throw new Error("Same-region worker transport is not available on the Browser host");
     const { function: id, arguments: args, invocation } = request.Call;
     return this.enter(invocation, () => this.call(id, args));
   }

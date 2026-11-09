@@ -63,10 +63,32 @@ The host wait functions and group-profile QuickJS Atomics use `runtime_shm`'s on
 wait queue, keyed by the effective group address within the stable region. Leases
 stay alive during synchronous waits. Negative/zero timeout and cancellation retain
 the provider's semantics. Ordinary split/native QuickJS uses its ordinary code.
-Single-agent tests are not cross-worker acceptance. JSC uses this contract through
-[its record](jsc-shared-group.md). Other embedded engines, stock Vite and
-large-memory admission are not delivered here. The Browser host has
-[its own record](shared-nested-browser.md).
+JSC uses this contract through [its record](jsc-shared-group.md). Other embedded
+engines, stock Vite and large-memory admission are not delivered here. The Browser
+host has [its own record](shared-nested-browser.md) and refuses the transport below.
+
+## Same-region workers (original adapter)
+
+A native worker of a group member is already a member of that group. This adapter
+carries Module and Memory identity between members through the codec's existing
+`sharedObjects` contract, installed for the embedded polyfill only when the guest is
+a shared-group build. `runtime_nested.request` gains `PublishMemory`, `AttachMemory`,
+`PublishModule`, `AttachModule` and `Withdraw`.
+
+- `shm` keeps one logical region per memory, shared by every member's lease. Growth
+  and page counts live there; bytes and the futex provider are unchanged.
+- Each member's lease is its own region hold. The group directory, keyed by a token
+  never reused in that group, holds a published region until the publication is
+  withdrawn or the group's last member stops. A sender's stop cannot free a receiver's
+  bytes. Directory contents are bounded by a per-group publication limit.
+- A published module is the host's compiled `wasmtime::Module` and the core's opaque
+  description of its JS-visible shape. Receivers instantiate it in their own Store
+  with their own callbacks, without recompiling.
+- A receiver reuses one local handle per token. A posted buffer is served at its
+  posted length, so old prefix views stay prefixes.
+
+Refused with `DataCloneError` at post time: plain `SharedArrayBuffer` (member-heap
+storage dies with its sender), unshared Memory, and modules on the Wasmi backend.
 
 Wasmtime retains instantiation allocations until its Store ends, including an
 instance whose start traps. The existing native Store limit remains 40 instances.
@@ -91,3 +113,16 @@ separately. These counters are not RSS measurements.
 Cold shared-profile CI imports the ordinary Bun patch series without relying on
 a runner Git identity. Source synchronization supplies only a command-local
 committer; patch authors, patch bytes and verified source trees stay unchanged.
+
+Publication transactions retain their rollback until delivery. Overlapping preparations
+share a per-token pending record; a successful inner delivery marks that record as
+committed, so an outer getter failure cannot withdraw a token already observed by a
+receiver. Only the last abort of an undelivered token removes its directory entry.
+The codec commits publication when direct delivery succeeds, before later transfer
+finalization can fail. Broker routing commits only after its transaction succeeds.
+
+The core checks serialized request size against the same 1 MiB limit as the native
+host before crossing the import boundary, including checked conversion to its
+32-bit wire length. A valid module with an oversized publication description is
+refused with DataCloneError, rather than trapping at the host import. The discovered
+group fixture includes that case and a real reentrant Memory-and-Module delivery.
