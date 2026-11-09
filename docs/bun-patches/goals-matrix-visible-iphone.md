@@ -45,3 +45,9 @@ cleanup. Closing the owner tab ends its dedicated guest workers and embedded
 preview. A fresh native accessibility snapshot must confirm the task title is
 absent before cleanup passes. Other transports keep their existing scripted
 cleanup. The native close still shares the original ten-second inner allowance.
+
+The executor saves a final terminal log before native teardown. Its observation
+is bounded separately, and a stalled observer produces a labelled diagnostic log
+with the last completed command transcript when available. A log failure cannot
+skip resource teardown. Log capture and native close remain within the existing
+twenty-second outer cleanup bound.

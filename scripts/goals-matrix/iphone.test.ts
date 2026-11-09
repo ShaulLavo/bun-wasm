@@ -117,6 +117,62 @@ test("an outstanding install observation cannot block confirmed native tab clean
   finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("successful native-owned cleanup preserves the final terminal log", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    const logs: string[] = [];
+    let closed = false;
+    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
+      saveLog: async text => { logs.push(text); },
+    });
+    expect(result.status).toBe("pass");
+    expect(closed).toBe(true);
+    expect(logs).toEqual([""]);
+  });
+});
+
+test("a stalled final terminal read saves the completed transcript and still closes the native page", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    const evaluate = transport.evaluate;
+    let reads = 0;
+    transport.evaluate = <T>(source: string) => {
+      if (!source.includes("function transcript")) return evaluate<T>(source);
+      reads++;
+      if (reads === 3) return new Promise<T>(() => {});
+      return evaluate<T>(JSON.stringify("saved build transcript"));
+    };
+    const logs: string[] = [];
+    let closed = false;
+    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
+      saveLog: async text => { logs.push(text); },
+    });
+    expect(result.status).toBe("pass");
+    expect(closed).toBe(true);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("Final terminal observation unavailable");
+    expect(logs[0]).toContain("saved build transcript");
+  });
+});
+
+test("a terminal log write failure cannot skip native resource teardown", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    let closed = false;
+    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
+      saveLog: async () => { throw new Error("log write failed"); },
+    });
+    expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("log write failed") });
+    expect(closed).toBe(true);
+  });
+});
+
 async function pendingCleanupControl(agent: string, log: string, closed: string): Promise<void> {
   const framework = frameworks[0]!;
   await withPlayground(framework, 0, async fixture => {
@@ -124,15 +180,18 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
     const state = { pending: false, scriptedCleanup: 0, released: release.promise, evaluate: fixture.evaluate };
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => pendingObserver(request, state) });
     const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "d".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000 });
+    const logs: string[] = [];
     try {
       const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
         url: "http://fixture/?engine=browser", timeoutMs: 1000, installTimeoutMs: 80,
-        createTransport: async () => transport, saveLog: async () => {},
+        createTransport: async () => transport, saveLog: async text => { logs.push(text); },
       });
       expect(result).toMatchObject({ status: "fail", phase: "install" });
       expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", evidence: { browserClosed: true, foregroundStopped: true, previewClosed: true } });
       expect(state.pending).toBe(true);
       expect(state.scriptedCleanup).toBe(0);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain("Final terminal observation unavailable");
       expect(await readFile(closed, "utf8")).toBe("closed");
       const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
       expect(commands.at(-1)).toEqual(["snapshot", "-i"]);
