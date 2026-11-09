@@ -681,6 +681,14 @@
       file: basename(path),
       main: isMain,
       require: makeRequire(path, undefined),
+      requireNamespace(spec) {
+        const resolved = native.resolve(String(spec), path, false);
+        const commonJsNamespace = internal.require("require_namespace");
+        if (isBuiltinId(resolved)) return commonJsNamespace(internal.builtin(resolved));
+        const format = native.moduleFormat(resolved);
+        const exports = loadModule(resolved, format).exports;
+        return format === "esm" ? exports : commonJsNamespace(exports);
+      },
       resolve(spec) {
         const resolved = native.resolve(String(spec), path, false);
         return isBuiltinId(resolved) ? resolved : pathToFileHref(resolved);
