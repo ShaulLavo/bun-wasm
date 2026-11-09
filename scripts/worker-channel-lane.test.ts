@@ -9,6 +9,7 @@ const setup = (lanes = true) => brokerClients(cleanup, { lanes });
 type Client = ReturnType<ReturnType<typeof setup>["client"]>;
 /** Restores a transferred port once its shared backings are attached, as worker startup and receive do. */
 async function restore(graph: Graph, into: Client): Promise<SourcePort> {
+  await into.service.ready;
   await new Promise<void>(resolve => { if (!into.runtime.codec.wait(graph, resolve)) resolve(); });
   const port = into.runtime.codec.decode(graph);
   if (!(port instanceof into.runtime.MessagePort)) throw new Error("Missing restored port");
@@ -33,18 +34,25 @@ test("a complete packet is visible to the peer's owner as soon as postMessage re
   expect(broker.inspectRoutes().pending).toBe(0);
 });
 
+const notAttached = "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED";
+function receiveAfterAttach(runtime: Client["runtime"], port: SourcePort) {
+  try { return runtime.receiveMessageOnPort(port); }
+  catch (error) { if ((error as { code?: string }).code === notAttached) return undefined; throw error; }
+}
+
 // Limitation, not parity: a SharedArrayBuffer published with the packet attaches through the
 // receiver's event loop, so the complete frame is visible at once but decodes only after that.
-test("limitation: a fresh SharedArrayBuffer decodes after it attaches, in order and exactly once", async () => {
+// A receive in that window fails by name, keeping the frame, instead of looking like an empty queue.
+test("limitation: a fresh SharedArrayBuffer fails by name until it attaches, in order and exactly once", async () => {
   const { sender, receiver, source, target } = await connection();
   await tick();
   const shared = new SharedArrayBuffer(8);
   Atomics.store(new Int32Array(shared), 0, 7);
   source.postMessage("before"); source.postMessage({ shared, alias: shared }); source.postMessage("after");
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
-  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  expect(() => receiver.runtime.receiveMessageOnPort(target)).toThrow(expect.objectContaining({ code: notAttached }));
   let received: { message: unknown } | undefined;
-  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiver.runtime.receiveMessageOnPort(target); }
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiveAfterAttach(receiver.runtime, target); }
   const value = received?.message;
   if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
   expect("alias" in value && value.alias).toBe(value.shared);
@@ -134,7 +142,7 @@ test("a refused send to a retired peer releases its staged shared backing for a 
   expect(buffer.byteLength).toBe(8);
   channel.port1.postMessage({ shared, port: reply.port2 }, [reply.port2]);
   let received: { message: unknown } | undefined;
-  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = live.runtime.receiveMessageOnPort(target); }
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiveAfterAttach(live.runtime, target); }
   const value = received?.message;
   if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
   if (!("port" in value) || !(value.port instanceof live.runtime.MessagePort)) throw new Error("Missing transferred port");

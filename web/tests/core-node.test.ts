@@ -19,7 +19,7 @@ test('plain Node imports paired program and asset TypeScript sources without a r
 
 test('module-preparation benchmark links its actual Node host before creating fixtures', () => {
   const result = spawnSync('node', [new URL('../../scripts/bench-module-preparation.mjs', import.meta.url).pathname, '--check'], { encoding: 'utf8' });
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
 });
 
 test('browser memory gate source assets still exist after runtime extraction', async () => {
@@ -46,7 +46,7 @@ test('unbundled headless hosts load with their installed runtime package', async
   try {
     for (const path of ['package.json', 'web/package.json',
       'web/src/native-wasm-lifetime.ts', 'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/module-records.ts', 'web/src/promise-reactions.ts',
-      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.ts', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts', 'web/src/native-readable-iterator.ts']) {
+      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.ts', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/shared-objects/lane.ts', 'web/src/shared-objects/native.ts', 'web/src/shared-objects/realm.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts', 'web/src/native-readable-iterator.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
