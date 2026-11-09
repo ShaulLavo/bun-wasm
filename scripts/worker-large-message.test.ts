@@ -16,14 +16,15 @@ async function restore(graph: Graph, receiver: Client): Promise<SourcePort> {
   return port;
 }
 
-async function connection() {
+async function connection(options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {}) {
   const { client } = brokerClients(cleanup, { lanes: true });
-  const sender = client(), receiver = client();
+  const sender = client(options), receiver = client(options);
   await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   cleanup.add(() => channel.port1.close());
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
-  return { sender, receiver, source: channel.port1, target };
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
+  return { client, sender, receiver, source: channel.port1, target };
 }
 
 test("large text crosses a runtime lane once, between its preceding and following messages", async () => {
@@ -81,3 +82,97 @@ for (const [name, executable] of nativeControls) {
     expect(output).toContain('"synchronousAfterWake":true');
   });
 }
+
+test("busy overflow rejects before detachment, then copies and reuses the same direction", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const carried = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8), text = "λ".repeat(600000);
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  source.postMessage("before"); source.postMessage(text); source.postMessage("after");
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("slot is busy");
+  expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still owned");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
+  source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2]);
+  expect(buffer.byteLength).toBe(0);
+  const delivered = receiver.runtime.receiveMessageOnPort(target)?.message;
+  expect(delivered).toMatchObject({ text });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+});
+
+test("unavailable overflow rejects without staged references, detachment or a sequence hole", async () => {
+  const { sender, receiver, source, target } = await connection({ grant: grant => ({ ...grant, overflow: null }) });
+  const buffer = new ArrayBuffer(8), carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  expect(() => source.postMessage({ text: "x".repeat(1100000), buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("overflow is unavailable");
+  expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still owned");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  source.postMessage("next"); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "next" });
+});
+
+test("a failed native detach aborts large bytes but retains successful capacity growth", async () => {
+  let reject = false;
+  let grant: import("../web/src/shared-objects/protocol").SharedPoolGrant | undefined;
+  const { sender, receiver, source, target } = await connection({ beforeDetach() { if (reject) throw new Error("detach rejected"); }, grant(value) { grant = value; return value; } });
+  const buffer = new ArrayBuffer(8), carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  const text = "x".repeat(1100000);
+  reject = true;
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("ArrayBuffer is not detachable");
+  expect(buffer.byteLength).toBe(8);
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  if (!grant) throw new Error("Missing grant");
+  const control = new Int32Array(grant.control), charge = Atomics.load(control, 27);
+  expect(charge).toBeGreaterThan(1100000);
+  reject = false;
+  carried.port2.postMessage("still owned"); expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  source.postMessage(text); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(Atomics.load(control, 27)).toBe(charge);
+});
+
+test("unread A moves without returning credit, the new owner copies it before B reuses the slot", async () => {
+  const { client, sender, receiver, source, target } = await connection();
+  const next = client(); await next.service.ready;
+  const a = "A".repeat(1100000), b = "B".repeat(1100000);
+  source.postMessage("before"); source.postMessage(a); source.postMessage("after");
+  const moved = await restore(receiver.runtime.codec.encode(target, [target]), next);
+  expect(() => source.postMessage(b)).toThrow("slot is busy");
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: "before" });
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: a });
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: "after" });
+  source.postMessage(b); expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: b });
+  expect(next.runtime.receiveMessageOnPort(moved)).toBeUndefined();
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes(), next.settleRoutes()]);
+  let closes = 0; moved.on("close", () => closes++); source.close();
+  await new Promise<void>(resolve => setTimeout(resolve, 30));
+  next.runtime.pump(); await new Promise<void>(resolve => setImmediate(resolve));
+  expect(closes).toBe(1);
+});
+
+test("route-outbox rejection after growth keeps the charge and aborts bytes before detachment", async () => {
+  let grant: import("../web/src/shared-objects/protocol").SharedPoolGrant | undefined;
+  const { sender, receiver, source, target } = await connection({ grant(value) { grant = value; return value; } });
+  const carried = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  await sender.settleRoutes();
+  for (let index = 0; index < 8; index++) expect(sender.sharedObjects.routes!.send({ kind: "received", receipt: `unused-${index}` })).toBe(true);
+  const text = "x".repeat(1100000);
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("mailbox is full");
+  expect(buffer.byteLength).toBe(8);
+  expect(sender.service.inspect().staged).toBe(0);
+  if (!grant) throw new Error("Missing grant");
+  const control = new Int32Array(grant.control), charge = Atomics.load(control, 27);
+  expect(charge).toBeGreaterThan(text.length);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  carried.port2.postMessage("still owned"); expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  await sender.settleRoutes();
+  source.postMessage(text); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(Atomics.load(control, 27)).toBe(charge);
+});
