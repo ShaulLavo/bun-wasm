@@ -12,7 +12,7 @@
         "@remix-run/component": "1.1.0",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
-        "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#0069e75b050e7a6b2bc49e9f97fb28460b501ba6",
+        "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#1754fe78a9a3fd05725a34200c0e5e98731dcfb9",
         "codemirror": "^6.0.2",
         "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.117/waffle-0.0.117.tgz",
         "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-base-0.0.19.tgz",
@@ -105,7 +105,7 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@waffle/python": ["@waffle/python@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-python-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-nqjCgMnZsAeeAFGVSiWAlaAR3V0DADszQJCeRgdMTPQs4BJPowSVLpq+xfN0vVl66OLTjEUj8FWVIDmfKmn9Zg=="],
+    "@waffle/python": ["@waffle/python@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-python-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-Cj0cwozzqrepv3xKQeTeAwRR3t/I9wEODWX/kKeu0EPCdI1ZWlh0EJG+ZqdOiCJ0YV69joc/judL2B6APIK4iQ=="],
 
     "@xterm/addon-fit": ["@xterm/addon-fit@0.11.0", "", {}, "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g=="],
 
@@ -119,7 +119,7 @@
 
     "base64-js": ["base64-js@1.5.1", "", {}, "sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA=="],
 
-    "bash-web": ["bash-web@github:ShaulLavo/bash-web#0069e75", { "dependencies": { "@waffle/python": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-python-0.0.18.tgz", "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-base-0.0.18.tgz", "waffle-git": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-git-0.0.18.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-ripgrep-0.0.18.tgz" }, "peerDependencies": { "waffle": "*" }, "hasInstallScript": true }, "ShaulLavo-bash-web-0069e75", "sha512-DusXM8DZIy1n6EY9MHLP9JtayjgxItkwew4gsZsrl5J3V1AxFIjHKvn9W9Guw+3aYtd+gNv+mBCSw5GJ7G97sQ=="],
+    "bash-web": ["bash-web@github:ShaulLavo/bash-web#1754fe7", { "dependencies": { "@waffle/python": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-python-0.0.19.tgz", "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-base-0.0.19.tgz", "waffle-git": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-git-0.0.19.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-ripgrep-0.0.19.tgz" }, "peerDependencies": { "waffle": "*" }, "hasInstallScript": true }, "ShaulLavo-bash-web-1754fe7", "sha512-1kYblxnMTNgxRchXnpdwEKCo11BAN86+hJcrAH3t9Q5Nd+owUpR8oMZtcnCfdhTAOk//T4Ac1j7E/rAxgfZ8yA=="],
 
     "buffer": ["buffer@6.0.3", "", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.2.1" } }, "sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA=="],
 
@@ -249,13 +249,13 @@
 
     "waffle-findutils": ["waffle-findutils@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-findutils-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-iTJqZahH0zGBPozG0keTMXhrvvMr2b6XAJHw2R5hyNQhB6v8HBLLm+4HM7B+gUnqebiAV11V1SabU9/mY2Cukg=="],
 
-    "waffle-git": ["waffle-git@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-git-0.0.18.tgz", { "dependencies": { "buffer": "6.0.3", "diff": "8.0.2", "isomorphic-git": "1.44.5" }, "peerDependencies": { "waffle": "*" } }, "sha512-QF/UgmjHSOpo9590vv2AGHAlNFSQjNcQSsKDS1uJ5W1yTJvkx/ybo0GbRId9rwPn+Q0pEE3RI5EGARiqHlsliA=="],
+    "waffle-git": ["waffle-git@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-git-0.0.19.tgz", { "dependencies": { "buffer": "6.0.3", "diff": "8.0.2", "isomorphic-git": "1.44.5" }, "peerDependencies": { "waffle": "*" } }, "sha512-9mh4PsNd4ia6RD4k6yHq/RXHZaU+lruz4kWP3wwpeveRa+uJziWZwlF4XkhWtcC8RMdXTH0L2pHyfLpvPVu0sA=="],
 
     "waffle-grep": ["waffle-grep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-grep-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-D0JCZtRRM9t63sH5aYK5wcIgn4E2EOz+ENU1OkV9lGv+1kgstMVygu2JBjlKUSZjtA3sN/zuSBCkShtnSJscEg=="],
 
     "waffle-relay": ["waffle-relay@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.117/waffle-relay-0.0.117.tgz", { "dependencies": { "ws": "8.22.1" }, "peerDependencies": { "@fails-components/webtransport": "1.6.11", "@fails-components/webtransport-transport-http3-quiche": "1.6.11", "waffle": "*" }, "optionalPeers": ["@fails-components/webtransport", "@fails-components/webtransport-transport-http3-quiche"], "bin": { "waffle-relay": "./dist/cli.js" } }, "sha512-jCvuCmb+ckaVnxCt5IMaQHo7S2/0s1BFsuOwpIT5oKuMEjk0pWYLsYl6LKywVFFt++C3d4LXo0aN8Jy82OPDcw=="],
 
-    "waffle-ripgrep": ["waffle-ripgrep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-ripgrep-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-1/wuwnnrTD6PoGqLO96HVYwfUDnXtfr6huDBq40OAI37IbovmPDfuswz5rtHqGysuVhvWReygXBGOomvJhICtg=="],
+    "waffle-ripgrep": ["waffle-ripgrep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-ripgrep-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-eAzZZ6a/VbYjlEti6KDGuYLrA8A/3/aC4pKvRAzFw2BwjNxiE4iFKSscgncpivKlW2Ab+MwOMSWqlsXGzbMVdQ=="],
 
     "waffle-sed": ["waffle-sed@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-sed-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-OQnvC2fR18h9vej4I7zDyAoNMISX8ZOM4qrB/YIoSDkkJa4B1XViCA+vPQSo/IqMnQcp4enPuBQbOrwispcq+w=="],
 
@@ -266,17 +266,5 @@
     "ws": ["ws@8.22.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
-
-    "bash-web/waffle-base": ["waffle-base@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-base-0.0.18.tgz", { "dependencies": { "waffle-coreutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-coreutils-0.0.18.tgz", "waffle-findutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-findutils-0.0.18.tgz", "waffle-grep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-grep-0.0.18.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-ripgrep-0.0.18.tgz", "waffle-sed": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-sed-0.0.18.tgz" }, "peerDependencies": { "waffle": "*" } }, "sha512-e1cYAS+DlsizCiQnSUTaBfbu+sSku2Dvl9k0l+yKZ8wgAgEMI9deI4xiuyojVebPbZYI3PfU59riZYjozHZm1w=="],
-
-    "waffle-base/waffle-ripgrep": ["waffle-ripgrep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.19/waffle-ripgrep-0.0.19.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-eAzZZ6a/VbYjlEti6KDGuYLrA8A/3/aC4pKvRAzFw2BwjNxiE4iFKSscgncpivKlW2Ab+MwOMSWqlsXGzbMVdQ=="],
-
-    "bash-web/waffle-base/waffle-coreutils": ["waffle-coreutils@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-coreutils-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-OIqERqfzTXqpgV/FRHxmMmSW8vhpepm9mL8y6THBcMhfpuKoK1i1VqobOV2PVh/mIbtO1dHv4A429P3LjOxlLA=="],
-
-    "bash-web/waffle-base/waffle-findutils": ["waffle-findutils@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-findutils-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-9ObRAJbHTKwhiCzskJ/X13kQF09jT3kBxaWhMspJZ4r8xr1oVv9cE8xOJku7cFHaENa2eW5iHte5+KLmMMf6OQ=="],
-
-    "bash-web/waffle-base/waffle-grep": ["waffle-grep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-grep-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-xzzIT1WuEQMk1M45e2xNQL2+DdMaPtKSF9NJkwj/YMxrYV2Khn/rZps2OhTdrefRh3zsrkMNhYDi1fOn2BBFOA=="],
-
-    "bash-web/waffle-base/waffle-sed": ["waffle-sed@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.18/waffle-sed-0.0.18.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-mLF5xdVbS4rwQKBiFj6wtB2tuerZoeLHtpsf3IbdMiJPbv4sjc6BVlzT21A96XJXRVhXnzs/zQq1kn4Ski79EA=="],
   }
 }
