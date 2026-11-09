@@ -63,7 +63,8 @@ The host wait functions and group-profile QuickJS Atomics use `runtime_shm`'s on
 wait queue, keyed by the effective group address within the stable region. Leases
 stay alive during synchronous waits. Negative/zero timeout and cancellation retain
 the provider's semantics. Ordinary split/native QuickJS uses its ordinary code.
-Single-agent tests are not cross-worker acceptance. Another embedded engine, stock Vite and
+Single-agent tests are not cross-worker acceptance. JSC uses this contract through
+[its record](jsc-shared-group.md). Other embedded engines, stock Vite and
 large-memory admission are not delivered here. The Browser host has
 [its own record](shared-nested-browser.md).
 

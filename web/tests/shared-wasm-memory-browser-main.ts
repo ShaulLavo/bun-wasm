@@ -25,13 +25,15 @@ async function run() {
   await runtime.filesystem.mkdirp(FIXTURE);
   for (const name of names) await runtime.filesystem.writeFile(`${FIXTURE}/${name}`, await bytes(`./fixture/${name}`));
   await runtime.filesystem.flush();
-  const module = await prepareProgram({ kind: "quickjs", core: await bytes("./program/bun.wasm"), side: await bytes("./program/quickjs.wasm") });
+  const kind: unknown = await (await fetch("./program/kind.json")).json();
+  if (kind !== "quickjs" && kind !== "jsc") throw new Error("Invalid program kind");
+  const module = await prepareProgram({ kind, core: await bytes("./program/bun.wasm"), side: await bytes("./program/side.wasm") });
   const decoder = new TextDecoder();
   let stdout = "";
   let stderr = "";
   const started = performance.now();
   const job = startRun({
-    runtime, module, engine: "quickjs", moduleScope: false,
+    runtime, module, engine: kind, moduleScope: false,
     args: ["run", `${FIXTURE}/${entry}`],
     env: { PWD: FIXTURE, HOME: "/home/user", PATH: "/bin:/usr/bin" },
   }, {

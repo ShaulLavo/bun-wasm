@@ -22,8 +22,18 @@ QUICKJS_PROFILE=shared-group QUICKJS_BUILD_DIR=<dir> bash scripts/build-engine-q
 Every guest object is built `-fPIC` with atomics, bulk memory and mutable globals, Rust std
 included (`-Zbuild-std`). The only accepted libc is the shared-pic sysroot whose `sbrk` grows
 through `runtime_shm.group_grow`. A split build refuses that sysroot, and a shared-group build
-refuses any other. JSC is not available in this profile until WebKit and ICU are rebuilt with
-atomics.
+refuses any other.
+
+JSC has its own matching producer, in a separate build directory:
+
+```sh
+JSC_PROFILE=shared-group JSC_BUILD_DIR=<dir> bash scripts/build-jsc.sh
+JSC_BUILD_DIR=<dir> bun scripts/build-native-profile.ts shared-group <output> jsc
+```
+
+It rebuilds WebKit, ICU and libc++ with atomics. [Its record](bun-patches/jsc-shared-group.md)
+lists what changes. The SDK's own libc++ archives have no atomics, and `wasm-ld` refuses them
+under `--shared-memory`.
 
 ## Memory ceiling
 
