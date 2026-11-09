@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createSharedLaneBuffer, openSharedLane } from "../web/src/shared-objects/lane";
-import type { SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
 import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 
@@ -264,4 +264,18 @@ test("lane frames stay invisible until commit and wrap around the ring", () => {
   right.close();
   expect(left.peerClosed()).toBe(true);
   expect(() => left.reserve("late")).toThrow("peer is closed");
+});
+
+for (const local of [true, false]) test(`lane-less close keeps same-turn synchronous receive without events, local=${local}`, async () => {
+  const runtime = local ? sourcePorts() : setup(false).client().runtime;
+  cleanup.add(() => runtime.__fixtureShutdown());
+  const { port1, port2 } = new runtime.MessageChannel(), received: unknown[] = [];
+  port1.on("message", value => received.push(value));
+  port1.close(); port2.postMessage("same turn");
+  expect(runtime.receiveMessageOnPort(port1)).toEqual({ message: "same turn" });
+  await tick(); await tick();
+  expect(received).toEqual([]);
+  port2.postMessage("after disentangle");
+  expect(runtime.receiveMessageOnPort(port1)).toBeUndefined();
+  port2.close();
 });

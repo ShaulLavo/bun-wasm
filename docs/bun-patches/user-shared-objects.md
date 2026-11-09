@@ -162,3 +162,8 @@ Runtime installation starts disposal before its first route retirement. It still
 drains committed outbox custody records, and individual service exit leaves live
 remote lanes intact. The specific pool adapter record documents native capture,
 virtual maxima, high-water retention and unchanged public backing limits.
+
+Lane-less same-realm endpoints retain synchronous receive during their scheduled
+close turn without delivering new message events. The shared-lane close barrier
+remains immediate. Focused source controls and the unchanged native close fixtures
+cover both paths.

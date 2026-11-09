@@ -461,7 +461,7 @@
     }
     #acceptNext(state: PortState): boolean {
       const graph = state.pending.get(state.received);
-      if (!graph || state.phase !== "open") return false;
+      if (!graph || state.phase === "closed" || state.phase === "closing" && state.lane !== null) return false;
       try {
         this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
         if (this.#attachmentWait) return false;
