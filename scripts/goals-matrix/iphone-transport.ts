@@ -27,9 +27,9 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   const lifetime = new AbortController();
   const active = new Set<Promise<string>>();
   const capabilities: Record<string, unknown> = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": config.deviceUDID, transport: "visible-safari-xctest", safariDriverSession: false };
-  async function request(action: string, value?: object): Promise<unknown> {
+  async function request(action: string, value?: object, timeoutMs = config.timeoutMs): Promise<unknown> {
     const response = await fetch(config.control + "/" + action, { method: value ? "POST" : "GET", headers: value ? { "content-type": "application/json" } : {},
-      body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(config.timeoutMs)]) });
+      body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeoutMs)]) });
     const answer: unknown = await response.json();
     if (!response.ok) throw new Error(`iPhone observer: ${JSON.stringify(answer)}`);
     return answer;
@@ -48,8 +48,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
   }
-  async function evaluate<T>(source: string): Promise<T> {
-    return await request(role + "/execute", { source, timeoutMs: config.timeoutMs }) as T;
+  async function evaluate<T>(source: string, timeoutMs = config.timeoutMs): Promise<T> {
+    return await request(role + "/execute", { source, timeoutMs }, timeoutMs) as T;
   }
   async function ready(selected: "host" | "preview"): Promise<Record<string, unknown>> {
     return until(async () => object(await request(selected + "/state") ?? {}), row => typeof row.timeOrigin === "number" && row.visible === true, config.timeoutMs);
@@ -79,7 +79,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
       title = "Goals " + state.nonce;
     },
-    evaluate,
+    evaluate: <T>(source: string) => evaluate<T>(source),
     async openPreview(url) {
       await request("preview/configure", { url });
       await present(url);
@@ -90,14 +90,15 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     async closePreview() { await present(null); },
     async nativeClick(button, clicked, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
-      const before = object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`));
+      const remaining = () => { const left = deadline - Date.now(); if (left <= 0) throw new Error("iPhone click deadline expired"); return left; };
+      const before = object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`, remaining()));
       if (typeof before.label !== "string" || typeof before.before !== "string") throw new Error("Missing native click target");
-      const snapshot = await device(["snapshot", "-i"], Math.max(1, deadline - Date.now()));
+      const snapshot = await device(["snapshot", "-i"], remaining());
       const ref = nativeButtonRef(snapshot, before.label);
-      await device(["press", ref], Math.max(1, deadline - Date.now()));
+      await device(["press", ref], remaining());
       const expression = `(() => { const s = globalThis.__goalsIphoneClick, key = globalThis.__goalsIphoneDocument; return { trusted: s?.trusted === true, sameTarget: s?.target === document.querySelector(${JSON.stringify(button)}), timeOrigin: key?.timeOrigin, nonce: key?.nonce, url: location.href, after: document.querySelector(${JSON.stringify(clicked)})?.textContent?.trim() ?? '' }; })()`;
       const expected = before.before.replace(/\b0\b/, "1");
-      const after = await until(() => evaluate<Record<string, unknown>>(expression), value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, Math.max(1, deadline - Date.now()));
+      const after = await until(() => evaluate<Record<string, unknown>>(expression, remaining()), value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, remaining());
       return { before: before.before, after: after.after, trusted: true, nativeRef: ref, inputMethod: "T3 device_open XCTest" };
     },
     close(_interruptPending = false, timeoutMs = 10_000) { return closing ??= close(timeoutMs); },
