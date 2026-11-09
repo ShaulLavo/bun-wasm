@@ -9,6 +9,7 @@ import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./t
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  native-quality:\n")[0]!;
+const sharedPrebuild = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
 const web = workflow.split("\n  web:\n")[1]!.split("\n  process-bundles:\n")[0]!;
@@ -175,7 +176,8 @@ test("the prebuild job saves its completed cache, and the native job imports it 
     expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(importer));
   }
   expect(prebuild.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
-  expect(shared.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(sharedPrebuild.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(shared).not.toContain("bash scripts/build-jsc.sh");
   expect(shared).toContain("JSC_PROFILE: shared-group");
   expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(2);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
