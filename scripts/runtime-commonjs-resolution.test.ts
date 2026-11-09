@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { createContext, runInContext } from "node:vm";
 
 const directory = mkdtempSync(join(tmpdir(), "bun-wasm-cjs-resolution-"));
@@ -95,4 +95,76 @@ test("import metadata keeps private canonical resolution", () => {
   expect(meta.resolve("process")).toBe("node:process");
   expect(meta.resolveSync("process")).toBe("node:process");
   expect(meta.require.resolve("process")).toBe("process");
+});
+
+const compileFactory = new Bun.Transpiler({ loader: "ts" }).transformSync(
+  `globalThis.moduleCompileFactory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/module_compile.ts", import.meta.url), "utf8")};`,
+);
+
+function moduleHookScenario(program: string): unknown {
+  const realm = createContext({ process: { env: {}, pid: 1 }, URL });
+  const files = new Map([["/child.cjs", "module.exports.value = 42;"]]);
+  function wrapper(file: string) {
+    const source = files.get(file);
+    if (source === undefined) throw new Error(`Missing hook input ${file}`);
+    return runInContext(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) { ${source} })`, realm);
+  }
+  const createBootstrap: (native: object) => { prepareText(source: string): string } = runInContext(bootstrapSource, realm);
+  const hooks = createBootstrap({
+    engine: "host",
+    mainPath: () => "/entry.cjs",
+    modulePath: (name: string) => name,
+    moduleFormat: () => "cjs",
+    cwd: () => "/",
+    resolve: (specifier: string) => specifier,
+    compileCjs: wrapper,
+    evalScript: (source: string, file: string) => runInContext(source, realm, { filename: file }),
+    loadPolyfill(name: string) {
+      if (name === "builtins") return runInContext(builtinsSource, realm);
+      if (name === "module_compile") {
+        runInContext(compileFactory, realm);
+        return realm.moduleCompileFactory;
+      }
+      if (name === "path") return () => posix;
+      if (name === "process") return () => realm.process;
+      if (name === "console") return () => console;
+      if (name === "bun") return () => Bun;
+      if (name === "web" || name === "crypto") return () => () => {};
+      return () => ({});
+    },
+  });
+  hooks.prepareText = source => source;
+  realm.runtime = hooks;
+  return runInContext(program, realm);
+}
+
+const intrinsicCalls = [
+  ["uncached require", 'runtime.makeRequire("/entry.cjs")("/child.cjs").value'],
+  ["non-ESM import", 'runtime.importNonEsm("/child.cjs", "cjs")[0].value'],
+  ["Module._compile", '(() => { const mod = new runtime.Module("/compiled.cjs"); mod._compile("module.exports.value = 42", "/compiled.cjs"); return mod.exports.value; })()'],
+];
+for (const [name, expression] of intrinsicCalls) {
+  test(`CommonJS ${name} ignores application apply hooks`, () => {
+    expect(moduleHookScenario(`
+      Function.prototype.apply = function () { throw new Error("application apply hook"); };
+      Reflect.apply = function () { throw new Error("application reflect hook"); };
+      ${expression};
+    `)).toBe(42);
+  });
+}
+
+test("an overridden require accessor is read once after its require function is created", () => {
+  expect(moduleHookScenario(`
+    const mod = new runtime.Module("/accessor.cjs");
+    mod._compile("module.exports = require", "/accessor.cjs");
+    const require = mod.exports;
+    let reads = 0;
+    let receiver;
+    Object.defineProperty(mod, "require", { get() {
+      reads++;
+      return reads === 1 ? function (specifier) { receiver = this; return "intercepted " + specifier; } : undefined;
+    }});
+    const value = require("virtual");
+    ({ value, reads, receiverMatches: receiver === mod });
+  `)).toEqual({ value: "intercepted virtual", reads: 1, receiverMatches: true });
 });

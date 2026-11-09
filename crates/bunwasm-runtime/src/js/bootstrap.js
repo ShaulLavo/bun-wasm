@@ -4,6 +4,8 @@
 (function (native) {
   "use strict";
 
+  const apply = Reflect.apply;
+
   const internal = { native, sharedObjects: native.sharedObjects };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
@@ -543,7 +545,7 @@
     }
     _compile(content, filename) {
       const wrapper = compileModule(content, filename);
-      return wrapper.apply(this.exports, wrapperArguments(this, wrapper, filename));
+      return apply(wrapper, this.exports, wrapperArguments(this, wrapper, filename));
     }
   }
 
@@ -576,7 +578,7 @@
   function evaluateModule(mod, path, kind) {
     try {
       const wrapper = moduleWrapper(mod, path, kind);
-      if (wrapper) wrapper.apply(mod.exports, wrapperArguments(mod, wrapper, path));
+      if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, path));
     } catch (err) {
       delete moduleCache[path];
       throw err;
@@ -635,7 +637,8 @@
   // honors a replaced require method.
   function requireFunction(owner) {
     return function require(spec) {
-      if (owner && owner.require !== moduleRequire) return owner.require(spec);
+      const method = owner && owner.require;
+      if (owner && method !== moduleRequire) return apply(method, owner, [spec]);
       const parent = owner || this;
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
@@ -652,7 +655,7 @@
       moduleCache[resolved] = mod;
       try {
         const wrapper = moduleWrapper(mod, resolved, kind);
-        if (wrapper) wrapper.apply(mod.exports, wrapperArguments(mod, wrapper, resolved));
+        if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, resolved));
       } catch (err) {
         delete moduleCache[resolved];
         throw err;

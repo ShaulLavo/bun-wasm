@@ -27,17 +27,22 @@ Behavior the adapter preserves:
 
 - A replaced `Module.prototype.require`, or a `require` set on one module, is still
   called. A module's own `require` compares its module's method with the original
-  and calls the replacement when they differ.
+  and calls the replacement when they differ. An accessor method is read once,
+  and that exact returned callable receives the module as its receiver.
 - A module enters the cache before its body runs, so cycles see partial exports.
   A body that throws leaves the cache.
 - The wrapper receives `module.exports` as `this` and the same five arguments, or
   six for a transpiled ES module with its `import.meta` object.
 - JSON, HTML, text and required ES module formats take the same routes as before.
 
-The wrapper is still entered through `Function.prototype.apply`. On QuickJS that
-native call is the largest part of what remains: about 510 of 1,217 bytes per
-level. Removing it needs a different wrapper source shape on every engine and is
-not part of this change.
+The wrapper is entered through `Reflect.apply`, captured before application code.
+Module loading does not consult mutable `call` or `apply` properties on a wrapper.
+The initial one-frame measurement used `Function.prototype.apply`; its native
+call accounted for about 510 of 1,217 bytes per level. Those measurements precede
+the captured-intrinsic and single-accessor-read corrections. The discovered
+16-level fixture remains blocking, and current-head capacity must be remeasured
+on its actual produced guest. Removing the native invocation itself needs a
+different wrapper source shape and is outside this change.
 
 ## Classification
 

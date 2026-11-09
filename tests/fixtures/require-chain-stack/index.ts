@@ -1,13 +1,13 @@
 // A chain of CommonJS modules that each require the next has to load inside the 32 KiB
 // QuickJS stack budget a browser off V8 passes (docs/stack-limits.md). The child runs with that
 // budget. Engines that ignore it, and native Bun, load the same chain with room to spare.
-const { spawnSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
+const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
+const fs: typeof import("node:fs") = require("node:fs");
+const path: typeof import("node:path") = require("node:path");
 
 const levels = 16;
 
-function writeChain(name, length, leaf) {
+function writeChain(name: string, length: number, leaf: string): string {
   const directory = path.join(process.cwd(), name);
   fs.mkdirSync(directory, { recursive: true });
   for (let i = 1; i <= length; i++) {
@@ -17,7 +17,7 @@ function writeChain(name, length, leaf) {
   return path.join(directory, "m1.cjs");
 }
 
-function loadChains() {
+function loadChains(): void {
   if (require(writeChain("chain", levels, "module.exports = 1;")) !== levels) throw new Error("chain result changed");
   console.log(levels, "nested requires loaded");
 
