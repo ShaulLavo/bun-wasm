@@ -66,6 +66,50 @@ Native SafariDriver starts through `launchctl asuser` in the Mac GUI login sessi
 An SSH-launched driver without that GUI context can time out waiting for
 RWIApplication even when remote automation is already enabled.
 
+### Run visible iPhone Safari with XCTest input
+
+Use this path when native taps are required. It creates no iPhone SafariDriver
+session. Finish desktop Safari first, then close its driver before taking the Mac
+lock for this run. Claim the simulator with T3 `device_open` and keep the exact
+bound `agent-device` command it returns on the PC.
+
+Build `scripts/goals-matrix/iphone-server.ts` and `iphone-mac.ts` with
+`bun build --target=bun`. Stage both bundles and the unchanged prepared playground
+in a unique Mac task directory. Start the wrapper there with `HOST=127.0.0.1`,
+`PORT=0`, `PREVIEW_ORIGINS=1`, `ROOT` set to the staged playground,
+and `GOALS_IPHONE_TOKEN` set to a random 64-character hexadecimal test token:
+
+```sh
+bun /absolute/iphone-mac.js /absolute/iphone-server.js /absolute/cleanup.json
+```
+
+The wrapper checks availability, takes the normal Mac lock, refuses any running
+SafariDriver, and releases its lock after the owned server exits. The server prints
+its loopback control URL. Forward that port to the PC with an owned SSH port
+forward. Pass the forwarded URL, with the unchanged token path, to the runner:
+
+```sh
+source env.sh
+bun scripts/goals-matrix/run.ts --browsers=iphone-safari \
+  --root=/absolute/prepared-site --asset-source=/absolute/asset-sources.json \
+  --output=/absolute/new-iphone-campaign --timeout-ms=90000 \
+  --device-udid=CLAIMED_SIMULATOR_UDID \
+  --iphone-control-url=http://127.0.0.1:FORWARDED_PORT/__goals_iphone/TOKEN \
+  --iphone-agent-command=/exact/path/returned/by/device_open/agent-device
+```
+
+Run the PC controller through its heavy browser runner. The native transport opens
+the real Safari page, presents the actual framework preview, and records each
+bound command in `logs/*.native.jsonl`. A unique accessibility button reference,
+trusted DOM event, unchanged document, and counter increment must agree. A device
+command failure stops the campaign and leaves its exact error in the report.
+All existing phase deadlines apply, including the 20-second cleanup limit.
+
+Stop the wrapper and owned port forward after the campaign, copy its cleanup
+receipt, and verify the recorded server PID, listeners, and lock are absent on the
+Mac before removing staging. Close only the task's T3 device session without
+shutting down the retained simulator. Preserve original reports and asset inputs.
+
 Fleet browser selections are respected on both hosts. A Chrome-only run does not
 require a simulator or visit the Mac. Unavailable Mac prerequisites are saved as
 not runnable yet, without inventing per-box attempts. Interruption owns setup

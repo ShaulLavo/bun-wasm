@@ -112,7 +112,7 @@ async function cleanup(transport: Transport | undefined, options: Execution): Pr
   const errors: unknown[] = [];
   try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport)); }, 8_000); }
   catch (error) { errors.push(error); }
-  try { await bounded(() => transport.close(), 10_000); }
+  try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return { browserClosed: true, foregroundStopped: true, previewClosed: true };

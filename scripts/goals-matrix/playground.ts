@@ -161,6 +161,7 @@ function click(input: { button: string; clicked: string }): { before: string; cl
   return { before, clicked: true };
 }
 export async function checkClick(transport: Transport, framework: Framework, timeoutMs: number): Promise<unknown> {
+  if (transport.nativeClick) return transport.nativeClick(framework.button, framework.clicked, timeoutMs);
   const before = await until(() => transport.evaluate<ReturnType<typeof click>>(expression(click, framework)), value => value.clicked, timeoutMs);
   const after = await until(() => transport.evaluate<string>(`document.querySelector(${JSON.stringify(framework.clicked)})?.textContent?.trim() ?? ''`), value => value === before.before.replace(/\b0\b/, "1"), timeoutMs);
   return { before: before.before, after };

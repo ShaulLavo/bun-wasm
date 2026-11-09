@@ -327,6 +327,33 @@ test("close waits for queued commands, sends DELETE once, and rejects new operat
   expect(driver.calls.filter(call => call.path === "/session/owned" && call.method === "DELETE")).toHaveLength(1);
 });
 
+test("interrupted cleanup deletes a stalled session before its command timeout and permits the next cell", async () => {
+  let started = false;
+  let release: (() => void) | undefined;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const driver = fixture({ intercept: async call => {
+    if (!call.path.endsWith("/execute/async")) return;
+    started = true;
+    await held;
+    return reply({ ok: true, json: "42" });
+  } });
+  const transport = await driver.connect({ timeoutMs: 90000 });
+  const evaluating = capturedFailure(transport.evaluate("42"));
+  while (!started) await Bun.sleep(1);
+  const queued = capturedFailure(transport.useHost());
+  try {
+    const closing = transport.close(true);
+    await Promise.race([closing, Bun.sleep(1000).then(() => { throw new Error("Session deletion waited behind stalled command"); })]);
+    expect(driver.deleted).toBe(true);
+    expect(String(await evaluating)).toContain("interrupted");
+    expect(String(await queued)).toContain("interrupted");
+    const next = await driver.connect();
+    await next.close();
+    expect(driver.calls.filter(call => call.method === "POST" && call.path === "/session")).toHaveLength(2);
+    expect(driver.calls.filter(call => call.method === "DELETE" && call.path === "/session/owned")).toHaveLength(2);
+  } finally { release?.(); await transport.close(true); }
+});
+
 test("DELETE session failure propagates on every close call without an unsafe retry", async () => {
   const driver = fixture({ intercept: call => call.path === "/session/owned" && call.method === "DELETE" ? failure("delete session failed") : undefined });
   const transport = await driver.connect();

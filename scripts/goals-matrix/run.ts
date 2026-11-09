@@ -15,12 +15,15 @@ import { withSignals } from "./lifetime";
 import { checkReactStartup, reactStartupURL } from "./react-startup";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
+import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
+import { appendFile } from "node:fs/promises";
 
 export interface Options {
   signal?: AbortSignal;
   reactStartupUrl?: string;
   root: string; output: string; timeoutMs: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
+  iphoneControlUrl?: string; iphoneAgentCommand?: string;
 }
 function selected<T extends string>(value: string, all: readonly T[]): T[] {
   const names = value.split(",");
@@ -32,7 +35,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url"];
+    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -40,16 +43,25 @@ export function options(args: readonly string[]): Options {
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
+  const iphoneControlUrl = values.get("iphone-control-url"), iphoneAgentCommand = values.get("iphone-agent-command");
+  if (iphoneControlUrl || iphoneAgentCommand) {
+    if (!iphoneControlUrl || !iphoneAgentCommand || !values.get("device-udid") || values.has("iphone-endpoint")) throw new Error("Visible iPhone mode requires control URL, bound command and device UDID, without SafariDriver");
+    validateIphoneControl(iphoneControlUrl, iphoneAgentCommand);
+  }
   return {
     reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
     root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
     browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
     frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
-    deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"),
+    deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"), iphoneControlUrl, iphoneAgentCommand,
   };
 }
 async function nativeTransport(box: Cell, config: Options): Promise<Transport> {
+  if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
+    control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs,
+    saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
+  });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
   const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
@@ -148,6 +160,10 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
       if (blocker) blockers.set(cell.browser, blocker);
       await saveReport(config.output, report);
       console.log(boxId(cell), report.cells[index]?.status);
+      const deviceError = result.attempts.at(-1)?.phases.find(phase => phase.status === "fail" && phase.error.includes("T3 device command failed"));
+      if (deviceError?.status === "fail") throw new Error(deviceError.error);
+      const cleanupError = result.browser === "iphone-safari" ? result.attempts.at(-1)?.phases.find(phase => phase.phase === "cleanup" && phase.status === "fail") : undefined;
+      if (cleanupError?.status === "fail") throw new Error(`iPhone cleanup failed; stopping before another cell: ${cleanupError.error}`);
     }
   } finally {
     server.kill("SIGTERM"); await server.exited;
@@ -167,7 +183,7 @@ export async function unavailableReport(config: Options, error: unknown, current
 }
 if (import.meta.main) {
   const config = options(process.argv.slice(2));
-  const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint;
+  const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint && !config.iphoneControlUrl;
   const report = automaticNative
     ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json") }).catch(async error => {
       if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
