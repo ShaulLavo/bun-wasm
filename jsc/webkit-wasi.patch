@@ -1206,3 +1206,77 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/So
 +        request.fail();
 +#endif
          throwOutOfMemoryError(globalObject, scope);
+diff --git a/Source/JavaScriptCore/runtime/JSArray.cpp b/Source/JavaScriptCore/runtime/JSArray.cpp
+--- a/Source/JavaScriptCore/runtime/JSArray.cpp
++++ b/Source/JavaScriptCore/runtime/JSArray.cpp
+@@ -23,2 +23,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "JSArray.h"
+@@ -2454,2 +2455,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     VM& vm = globalObject->vm();
+@@ -2542,2 +2544,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     VM& vm = globalObject->vm();
+diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCore/runtime/ProxyObject.cpp
+--- a/Source/JavaScriptCore/runtime/ProxyObject.cpp
++++ b/Source/JavaScriptCore/runtime/ProxyObject.cpp
+@@ -26,2 +26,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "ProxyObject.h"
+@@ -156,2 +157,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     NO_TAIL_CALLS();
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -23,2 +23,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "Parser.h"
+@@ -2103,2 +2104,3 @@
+ {
++    WASM_RESERVE_STACK(2048);
+     DepthManager statementDepth(&m_statementDepth);
+@@ -4284,2 +4286,3 @@
+ {
++    WASM_RESERVE_STACK(2048);
+     ASSERT(!hasError());
+diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
+--- a/Source/JavaScriptCore/runtime/JSONObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSONObject.cpp
+@@ -27,2 +27,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "JSONObject.h"
+@@ -1347,2 +1348,11 @@
+ {
++    WASM_RESERVE_STACK(512);
++#if OS(WASI)
++    // Static buffers estimate native stack use. Wasm needs the shadow-stack guard too.
++    if (!m_vm.isSafeToRecurseSoft()) [[unlikely]] {
++        recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
++        return;
++    }
++#endif
++
+     if constexpr (bufferMode == BufferMode::DynamicBuffer) {
+diff --git a/Source/WTF/wtf/StackBounds.h b/Source/WTF/wtf/StackBounds.h
+--- a/Source/WTF/wtf/StackBounds.h
++++ b/Source/WTF/wtf/StackBounds.h
+@@ -29,2 +29,10 @@
+ #include <algorithm>
++
++// The Wasm host stack is outside linear memory. Account for native recursion
++// with few address-taken locals so the existing shadow-stack guard can see it.
++#if OS(WASI)
++#define WASM_RESERVE_STACK(bytes) asm volatile("" : : "r"(__builtin_alloca(bytes)) : "memory")
++#else
++#define WASM_RESERVE_STACK(bytes) do { } while (false)
++#endif
+ #include <wtf/StackPointer.h>

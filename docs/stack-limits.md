@@ -135,7 +135,7 @@ JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Prox
 traps and other C++ reentry start a new `CLoop::execute` activation for each level.
 It costs about 2.1 KB of host stack and 5.8 KB of shadow stack. The WASI
 `StackBounds` port in `jsc/webkit-wasi.patch` limits native recursion to 320 KiB of
-shadow stack, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
+shadow stack by default, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
 128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
 in the C-loop build it also sizes the separate JavaScript frame stack, and 448 KiB
 cut plain recursion from 63,887 calls to 4,085.
@@ -146,7 +146,17 @@ WebKit under `ulimit -s 512` and 45 in WebKit on the Mac, where 224 KiB stopped 
 is not on V8: getters stop at 34, and at 240 KiB (1.25 times) every reentry path and
 fixture still passes on the Mac.
 
-Known gap: JSC's parser (every nesting shape), regular-expression compiler,
+The V8 browser policy gives JSC 800 KiB for getter reentry. Native recursive
+paths with small shadow frames now reserve extra shadow bytes: 512 in both fast
+flattening functions, default Proxy reads and fast JSON serialization, and 2048
+in assignment and statement parsing. The static JSON fast path also checks the
+VM's soft stack limit instead of relying only on its native-frame buffer estimate.
+These reservations do not enlarge the host stack or the C-loop frame stack.
+Firefox, WebKit and unknown hosts keep their existing budgets. The focused
+`stack-getter-headroom` fixture covers 128 getters, the five previously caught
+paths, and getter recovery after the exceptions.
+
+Historical known gap, before this native accounting: JSC's parser (every nesting shape), regular-expression compiler,
 `Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
 plain `JSON.stringify` fast path spend far more host stack per shadow byte than
 its reentry paths (parser blocks about six times more). Deeply nested input still
