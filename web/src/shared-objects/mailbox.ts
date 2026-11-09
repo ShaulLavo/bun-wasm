@@ -1,3 +1,4 @@
+import { createNativeSharedBuffer } from "./native.ts";
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add;
 const atomicNotify = Atomics.notify, atomicCompareExchange = Atomics.compareExchange, atomicWaitAsync = Atomics.waitAsync;
 const sharedMailboxSlotCount = 8;
@@ -32,7 +33,7 @@ export function requireSharedMailboxWake() {
   if (typeof atomicWaitAsync !== "function") throw new Error("Shared mailbox requires host Atomics.waitAsync");
 }
 
-export function createSharedMailbox(buffer = new SharedArrayBuffer(byteOffset + sharedMailboxSlotCount * sharedMailboxSlotBytes)): SharedMailbox {
+export function createSharedMailbox(buffer = createNativeSharedBuffer(byteOffset + sharedMailboxSlotCount * sharedMailboxSlotBytes)): SharedMailbox {
   if (buffer.byteLength !== byteOffset + sharedMailboxSlotCount * sharedMailboxSlotBytes) throw new Error("Invalid shared mailbox size");
   const header = new Int32Array(buffer, 0, headerWords);
   const bytes = new Uint8Array(buffer);

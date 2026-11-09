@@ -1,6 +1,8 @@
-import { messageData, sharedError, sharedObjectLimit, sharedRequest, sharedRouteBatch } from "./protocol.ts";
+import { messageData, sharedError, sharedObjectLimit, sharedPoolClasses, sharedPoolControlWords, sharedPoolLaneCursor, sharedPoolLanes, sharedRequest, sharedRouteBatch } from "./protocol.ts";
+import { createSharedLaneBuffer } from "./lane.ts";
 import { createSharedMailbox, requireSharedMailboxWake } from "./mailbox.ts";
-import type { SharedAttachment, SharedPort, SharedReference, SharedRequest, SharedResponse, SharedRouteCommand } from "./protocol.ts";
+import { createNativeSharedBuffer } from "./native.ts";
+import type { SharedAttachment, SharedPoolGrant, SharedPort, SharedReference, SharedRequest, SharedResponse, SharedRouteCommand } from "./protocol.ts";
 
 interface AttachmentRequest { readonly reference: SharedReference; readonly request: string; }
 interface Source { owner: string | null; peer: string | null; sent: number; version: number; }
@@ -12,6 +14,15 @@ export function createSharedObjectBroker() {
   const clients = new Map<string, Client>();
   const entries = new Map<string, Entry>();
   let disposed = false;
+  let pool: SharedPoolGrant | null = null;
+  function bufferPool(): SharedPoolGrant {
+    pool ??= {
+      control: createNativeSharedBuffer(sharedPoolControlWords * Int32Array.BYTES_PER_ELEMENT),
+      stock: sharedPoolClasses.map(({ bytes, count }) => Array.from({ length: count }, () => createNativeSharedBuffer(bytes))),
+      lanes: Array.from({ length: sharedPoolLanes }, createSharedLaneBuffer),
+    };
+    return pool;
+  }
   // `toward`: the port an in-flight endpoint was sent to; whoever holds that port holds this one.
   interface Endpoint { owner: string | null; origin: string; expected: string | null; toward: string | null; version: number; peer: string | null; sent: number; terminal?: Extract<SharedRouteCommand, { kind: "port-close" }>; }
   const routeOwners = new Map<string, Endpoint>();
@@ -449,6 +460,9 @@ export function createSharedObjectBroker() {
       const onError = () => closeClient(client);
       client.detach = () => { port.removeEventListener("message", onMessage); port.removeEventListener("messageerror", onError); };
       port.addEventListener("message", onMessage); port.addEventListener("messageerror", onError); port.start();
+      // Failing to build or deliver the grant closes the client; the worker's `ready` then rejects.
+      try { send(client, { kind: "pool", grant: bufferPool() }); }
+      catch { closeClient(client); }
     }
     return { id, attach, close: () => closeClient(client) };
   }
@@ -456,8 +470,14 @@ export function createSharedObjectBroker() {
     if (disposed) return;
     disposed = true;
     for (const client of Array.from(clients.values())) closeClient(client);
+    pool = null;
   }
-  return { register, dispose,
+  function inspectPool() {
+    if (!pool) return { created: false, classes: [] as number[], lanes: 0 };
+    const cursors = new Int32Array(pool.control);
+    return { created: true, classes: sharedPoolClasses.map((_, index) => Atomics.load(cursors, index)), lanes: Atomics.load(cursors, sharedPoolLaneCursor) };
+  }
+  return { register, dispose, inspectPool,
     inspectTransfers: () => ({ pins: Array.from(entries.values()).reduce((count, entry) => count + entry.pins.size, 0), attaching: Array.from(clients.values()).reduce((count, client) => count + client.attaching.size, 0) }),
     inspectDeliveries: () => ({ receipts: deliveries.size, deferred: deferredBatches.length }), inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
 }
