@@ -44,6 +44,23 @@ actions.console = () => {
   const f = () => { if (++d === n) return; try { f(); } catch { try { void console.Console; } catch {} } };
   f();
 };
+// Nested CommonJS loads: n generated modules that each require the next, written under
+// STACK_DEPTH_DIR (or the temp directory) and removed again. With STACK_DEPTH_LEAF the last
+// one requires that specifier, so a real package loads below n loader levels.
+actions.require = () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(process.env.STACK_DEPTH_DIR || require('node:os').tmpdir(), 'stack-depth-require-'));
+  const leaf = process.env.STACK_DEPTH_LEAF;
+  const body = (next) => (next ? `module.exports = require(${JSON.stringify(next)});\n` : 'module.exports = 0;\n');
+  try {
+    for (let i = 1; i <= n; i++) fs.writeFileSync(path.join(dir, `m${i}.cjs`), body(i < n ? `./m${i + 1}.cjs` : leaf));
+    const head = n > 0 ? path.join(dir, 'm1.cjs') : leaf;
+    if (head) require(head);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
 actions.promise = async () => { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); await Promise.resolve().then(f); };
 actions.async = async () => { let d = 0; const f = async () => { if (++d < n) await f(); }; await f(); };
 (async () => {

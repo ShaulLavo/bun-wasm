@@ -56,6 +56,7 @@
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
+        "scripts/measure-require-depth.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
