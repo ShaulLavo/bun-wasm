@@ -144,11 +144,11 @@ test("unavailable commit comparison fails rather than skipping native checks", (
   expect(() => select("f".repeat(40), javascript)).toThrow();
 });
 
-function commitInput(path: string): string {
+function commitInput(path: string, content = "changed input\n"): string {
   if (!fixture) throw new Error("Fixture not initialized");
   git(["checkout", "-q", "--detach", base]);
   mkdirSync(join(fixture, path, ".."), { recursive: true });
-  writeFileSync(join(fixture, path), "changed input\n");
+  writeFileSync(join(fixture, path), content);
   git(["add", "."]);
   git(["commit", "-qm", `change ${path}`]);
   return git(["rev-parse", "HEAD"]);
@@ -245,6 +245,24 @@ for (const path of [
     expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=true");
   });
 }
+
+for (const path of [
+  "checks/native-stack-getter-headroom.json",
+  "tests/fixtures/stack-getter-headroom/index.ts",
+  "tests/fixtures/stack-getter-headroom/expected.txt",
+]) {
+  test.each(["pull_request", "push"])(`${path} retains the strict JSC stack embedding gate for %s`, event => {
+    const content = path.startsWith("checks/")
+      ? JSON.stringify({ owner: "native", path: "tests/fixtures/stack-getter-headroom" })
+      : "changed stack fixture input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+    expect(needsJsc([path])).toBe(true);
+  });
+}
+
+test("similarly named stack fixtures do not select the JSC producer", () => {
+  expect(needsJsc(["checks/native-stack-getter-headroom-extra.json", "tests/fixtures/stack-getter-headroom-extra/index.ts"])).toBe(false);
+});
 
 test("unrelated page changes skip JSC; its selected gate builds and executes once", () => {
   expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);

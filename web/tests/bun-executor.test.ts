@@ -756,7 +756,11 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
     expect(generations).not.toContain("7");
     expect(new Set(generations).size).toBe(generations.length);
     expect(env(request("quickjs", inherited))).toEqual(inherited);
-    expect(env(request("jsc", { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" }))).toEqual({ BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" });
+    expect(env(request("jsc", { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" }))).toEqual({ BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7", BUN_WASM_STACK_KIB: "800" });
+    const explicit = { ...inherited, BUN_WASM_STACK_KIB: "6144" };
+    expect(env(request("jsc", explicit))?.BUN_WASM_STACK_KIB).toBe("6144");
+    const unarmed = { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7", BUN_WASM_STACK_KIB: "6144" };
+    expect(env(request("jsc", unarmed))).toEqual(unarmed);
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
 

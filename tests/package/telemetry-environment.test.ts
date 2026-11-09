@@ -165,7 +165,9 @@ for (const engine of ["browser", "quickjs", "jsc"] as const) {
   test(`${engine} public package adapter defaults telemetry across actual admitted worker transport`, async () => {
     const caller = Object.freeze({ PATH: "/caller-only", PWD: "/caller", BUNWASM_EXEC_PATH: "/caller/bun", CUSTOM: "kept" });
     const received = await admittedEnvironment(caller, engine, true);
-    expect(received).toEqual({ PATH: "/caller-only", PWD: "/project", BUNWASM_EXEC_PATH: `${ENGINE_BIN[engine]}/bun`, CUSTOM: "kept", NEXT_TELEMETRY_DISABLED: "1" });
+    const expected: Record<string, string> = { PATH: "/caller-only", PWD: "/project", BUNWASM_EXEC_PATH: `${ENGINE_BIN[engine]}/bun`, CUSTOM: "kept", NEXT_TELEMETRY_DISABLED: "1" };
+    if (engine === "jsc") expected.BUN_WASM_STACK_KIB = "800";
+    expect(received).toEqual(expected);
     expect(caller).toEqual({ PATH: "/caller-only", PWD: "/caller", BUNWASM_EXEC_PATH: "/caller/bun", CUSTOM: "kept" });
   });
 
