@@ -33,6 +33,7 @@
 #include "JSGenericTypedArrayViewInlines.h"
 #include "JSTypedArrays.h"
 #include "JSModuleLoader.h"
+#include "JSModuleNamespaceObject.h"
 #include "JSPromise.h"
 #include "JSSourceCode.h"
 #include "MicrotaskQueue.h"
@@ -266,6 +267,11 @@ JSGlobalContextRef bunjsc_create_context()
         return t;
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
+    JSObject* namespacePrototype = constructEmptyObject(vm.get(), globalObject->nullPrototypeObjectStructure());
+    namespacePrototype->putDirect(vm.get(), Identifier::fromString(vm.get(), "__esModule"_s), jsBoolean(true),
+        PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
+    namespacePrototype->didBecomePrototype(vm.get());
+    globalObject->moduleNamespaceObjectStructure()->setPrototypeWithoutTransition(vm.get(), namespacePrototype);
     return JSGlobalContextRetain(toGlobalRef(globalObject));
 }
 
@@ -474,6 +480,13 @@ JSValueRef bunjsc_proxy_target(JSContextRef ctx, JSValueRef value)
     return toRef(global, proxy->target());
 }
 
+bool bunjsc_is_module_namespace(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    return dynamicDowncast<JSModuleNamespaceObject>(toJS(global, value));
+}
+
 bool bunjsc_is_error(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* global = toJS(ctx);
@@ -538,6 +551,15 @@ JSValueRef bunjsc_shared_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, siz
     JSLockHolder lock(vm);
     auto contents = SharedArrayBufferContents::create({ data, length }, std::nullopt, nullptr, createSharedTask<void(void*)>([](void*) { }), SharedArrayBufferContents::Mode::Default);
     return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Shared), ArrayBuffer::createShared(WTF::move(contents))));
+}
+
+// The storage of a real SharedArrayBuffer, or null for any other value.
+uint8_t* bunjsc_shared_array_buffer_data(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    return buffer && buffer->impl()->isShared() ? static_cast<uint8_t*>(buffer->impl()->data()) : nullptr;
 }
 #endif
 

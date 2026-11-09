@@ -31423,7 +31423,14 @@ static __exception int get_exported_names(JSContext *ctx,
 /* Unfortunately, the spec gives a different behavior from GetOwnProperty ! */
 static int js_module_ns_has(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
-    return (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL);
+    if (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL)
+        return true;
+    return JS_HasProperty(ctx, ctx->class_proto[JS_CLASS_MODULE_NS], atom);
+}
+
+bool JS_bunwasm_IsModuleNamespace(JSValueConst value)
+{
+    return JS_GetClassID(value) == JS_CLASS_MODULE_NS;
 }
 
 static const JSClassExoticMethods js_module_ns_exotic_methods = {
@@ -59274,6 +59281,14 @@ int JS_AddIntrinsicBaseObjects(JSContext *ctx)
         return -1;
     JS_FreeValue(ctx, obj1);
 
+    /* Bun namespaces inherit the marker without replacing their canonical object. */
+    ctx->class_proto[JS_CLASS_MODULE_NS] = JS_NewObjectProto(ctx, JS_NULL);
+    if (JS_IsException(ctx->class_proto[JS_CLASS_MODULE_NS]))
+        return -1;
+    if (JS_DefinePropertyValueStr(ctx, ctx->class_proto[JS_CLASS_MODULE_NS],
+                                  "__esModule", JS_TRUE, 0) < 0)
+        return -1;
+
     /* Function */
     ft.generic_magic = js_function_constructor;
     obj1 = JS_NewCConstructor(ctx, JS_CLASS_BYTECODE_FUNCTION, "Function",
@@ -59556,6 +59571,13 @@ static void *js_bunwasm_shared_array_buffer_mallocz(JSContext *ctx, size_t size)
 {
     JSRuntime *rt = ctx->rt;
     void *ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Regions are outside the malloc accounting, and cycles never refcount to zero. */
+    if (!ptr) {
+        JS_RunGC(rt);
+        ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+    }
+#endif
     if (!ptr) {
         js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_ARRAY_BUFFER);
         JS_ThrowOutOfMemory(ctx);
@@ -59613,6 +59635,15 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         JS_ThrowRangeError(ctx, "invalid max array buffer length");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Each wrapper keeps its own length here, so growth cannot be shared between members. */
+    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
+        *max_len > len) {
+        JS_ThrowTypeError(ctx, "growable SharedArrayBuffer is not supported "
+                          "in a shared-group guest");
+        goto fail;
+    }
+#endif
     if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
         *max_len > len && !rt->sab_funcs.sab_alloc) {
         JS_ThrowTypeError(ctx,
@@ -59758,6 +59789,13 @@ JSValue JS_bunwasm_NewSharedWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_
 #endif
 }
 
+/* The storage of a SharedArrayBuffer, or NULL for any other value. Throws nothing. */
+uint8_t *JS_bunwasm_SharedBufferData(JSValueConst obj)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_SHARED_ARRAY_BUFFER);
+    return abuf ? abuf->data : NULL;
+}
+
 /* Detach a WebAssembly.Memory buffer and its views; false for other values. */
 bool JS_bunwasm_DetachWasmMemoryBuffer(JSContext *ctx, JSValueConst obj)
 {
@@ -59853,7 +59891,8 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
                 p1->u.array.u.ptr = NULL;
             }
         }
-        if (abuf->shared && rt->sab_funcs.sab_free) {
+        /* A wasm_memory wrapper never owns its region, even over an allocated buffer. */
+        if (abuf->shared && rt->sab_funcs.sab_free && !abuf->wasm_memory) {
             rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data);
         } else {
             if (abuf->realloc_func)
@@ -60284,6 +60323,13 @@ static JSValue js_array_buffer_slice(JSContext *ctx,
         JS_ThrowTypeError(ctx, "cannot use identical ArrayBuffer");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Distinct wrappers can view one region, so compare the shared block, not the object. */
+    if (abuf->shared && new_abuf->data == abuf->data) {
+        JS_ThrowTypeError(ctx, "cannot use identical SharedArrayBuffer storage");
+        goto fail;
+    }
+#endif
     if (new_abuf->detached) {
         JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
         goto fail;

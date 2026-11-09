@@ -368,6 +368,7 @@ tests/fixtures/self-spawn-validation/index.js
 tests/fixtures/self-spawn/fork-child.js
 tests/fixtures/self-spawn/index.js
 tests/fixtures/semver-host-functions/index.js
+tests/fixtures/shared-wasm-memory/instance-proxy.js
 tests/fixtures/shebang-cjs/from.cjs
 tests/fixtures/shebang-cjs/index.cjs
 tests/fixtures/shebang-js/from.js

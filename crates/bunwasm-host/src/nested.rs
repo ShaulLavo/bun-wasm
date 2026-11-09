@@ -1,7 +1,8 @@
 //! Native execution of the core's validated regionized modules, in the member Store.
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use wasmtime::{
-    Caller, Extern, Func, Global, GlobalType, Instance, Linker, Module, Mutability, Val, ValType,
+    Caller, Extern, Func, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType,
+    Table, Val, ValType,
 };
 
 use crate::{Host, shm};
@@ -18,6 +19,7 @@ pub(crate) struct State {
     instances: Vec<Guest>,
     functions: Vec<Func>,
     function_keys: std::collections::HashMap<usize, u32>,
+    tables: Vec<Table>,
     memories: Resources<NestedMemory>,
     core_failed: bool,
     admission_error: Option<String>,
@@ -25,6 +27,7 @@ pub(crate) struct State {
     entries: Option<Entries>,
     instantiation_attempts: u64,
     failed_instantiations: u64,
+    refused_reservations: u64,
 }
 
 // Memory slots are reused, but identities never are. Retire a slot rather than wrap.
@@ -109,11 +112,11 @@ impl State {
             .map(|memory| u64::from(memory.maximum().max(1)) * 65536)
             .sum();
         let visible: u64 = memories.clone().map(NestedMemory::len).sum();
-        serde_json::json!({ "modules": self.modules.len(), "instances": self.instances.len(),
+        serde_json::json!({ "modules": self.modules.len(), "instances": self.instances.len(), "tables": self.tables.len(),
             "functions": self.functions.len(), "memories": memories.count(),
             "reserved_committed_bytes": committed, "visible_bytes": visible,
             "memory_slots": self.memories.slots.len(), "core_failed": self.core_failed,
-            "admission_closed": self.admission_error.is_some(), "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations })
+            "admission_closed": self.admission_error.is_some(), "active_invocations": self.invocations.len(), "instantiation_attempts": self.instantiation_attempts, "failed_instantiations": self.failed_instantiations, "refused_reservations": self.refused_reservations })
     }
 }
 
@@ -141,6 +144,15 @@ impl std::fmt::Display for NestedExecution {
     }
 }
 impl std::error::Error for NestedExecution {}
+
+#[derive(Debug)]
+struct TableRange;
+impl std::fmt::Display for TableRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WebAssembly table index or size out of range")
+    }
+}
+impl std::error::Error for TableRange {}
 
 pub(crate) fn bind(core: Instance, store: &mut wasmtime::Store<Host>) -> Result<()> {
     let entries = Entries {
@@ -284,7 +296,9 @@ fn error_reply(error: anyhow::Error, category: &str) -> Reply {
     if error.downcast_ref::<PendingException>().is_some() {
         return Reply::PendingException;
     }
-    let category = if error.downcast_ref::<wasmtime::Trap>().is_some()
+    let category = if error.downcast_ref::<TableRange>().is_some() {
+        "RangeError"
+    } else if error.downcast_ref::<wasmtime::Trap>().is_some()
         || error.downcast_ref::<NestedExecution>().is_some()
     {
         "RuntimeError"
@@ -305,8 +319,13 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 .shm
                 .as_ref()
                 .context("shared memory needs a group member")?;
-            let region = NestedMemory::new(member, initial, maximum)
-                .map_err(|error| anyhow!("region admission: {error:?}"))?;
+            let region = match NestedMemory::new(member, initial, maximum) {
+                Ok(region) => region,
+                Err(error) => {
+                    caller.data_mut().nested.refused_reservations += 1;
+                    bail!("region admission: {error:?}");
+                }
+            };
             Ok(Reply::Handle(
                 caller.data_mut().nested.memories.insert(region)?,
             ))
@@ -349,14 +368,7 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
             instantiate(caller, module, id, bindings)
         }),
         Request::Function { instance, name } => {
-            let instance = caller
-                .data()
-                .nested
-                .instances
-                .get(index(instance)?)
-                .context("invalid instance")?
-                .instance;
-            let function = instance
+            let function = guest_instance(caller, instance)?
                 .get_func(&mut *caller, &name)
                 .context("missing nested function")?;
             function_info(caller, function)
@@ -410,7 +422,119 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 .map_err(|error| anyhow!("shared publication withdrawal: {error:?}"))?;
             Ok(Reply::Count(0))
         }
+        Request::TableExport { instance, name } => table_export(caller, instance, &name),
+        Request::TableLength { table } => Ok(Reply::Count(u32::try_from(
+            nested_table(caller, table)?.size(&*caller),
+        )?)),
+        Request::TableGet { table, index } => table_get(caller, table, index),
+        Request::TableSet {
+            table,
+            index,
+            function,
+        } => {
+            let table = nested_table(caller, table)?;
+            let value = table_entry(caller, function)?;
+            table
+                .set(&mut *caller, u64::from(index), value)
+                .context(TableRange)?;
+            Ok(Reply::Count(0))
+        }
+        Request::TableGrow {
+            table,
+            delta,
+            function,
+        } => {
+            let table = nested_table(caller, table)?;
+            let value = table_entry(caller, function)?;
+            let old = table
+                .grow(&mut *caller, u64::from(delta), value)
+                .context(TableRange)?;
+            Ok(Reply::Count(u32::try_from(old)?))
+        }
+        Request::GlobalGet { instance, name } => {
+            let global = nested_global(caller, instance, &name)?;
+            let value = global.get(&mut *caller);
+            Ok(Reply::Values(vec![numeric(&value)?]))
+        }
+        Request::GlobalSet {
+            instance,
+            name,
+            value,
+        } => {
+            let global = nested_global(caller, instance, &name)?;
+            ensure!(
+                global.ty(&*caller).mutability() == Mutability::Var,
+                "immutable nested global"
+            );
+            global.set(&mut *caller, number(value))?;
+            Ok(Reply::Count(0))
+        }
     }
+}
+
+fn guest_instance(caller: &Caller<'_, Host>, instance: u32) -> Result<Instance> {
+    Ok(caller
+        .data()
+        .nested
+        .instances
+        .get(index(instance)?)
+        .context("invalid instance")?
+        .instance)
+}
+
+fn nested_global(caller: &mut Caller<'_, Host>, instance: u32, name: &str) -> Result<Global> {
+    guest_instance(caller, instance)?
+        .get_global(&mut *caller, name)
+        .context("missing nested global")
+}
+
+fn table_export(caller: &mut Caller<'_, Host>, instance: u32, name: &str) -> Result<Reply> {
+    let table = guest_instance(caller, instance)?
+        .get_table(&mut *caller, name)
+        .context("missing nested table")?;
+    ensure!(
+        RefType::eq(table.ty(&*caller).element(), &RefType::FUNCREF),
+        "unsupported nested table element"
+    );
+    Ok(Reply::Handle(insert(
+        &mut caller.data_mut().nested.tables,
+        table,
+    )?))
+}
+
+fn nested_table(caller: &Caller<'_, Host>, table: u32) -> Result<Table> {
+    caller
+        .data()
+        .nested
+        .tables
+        .get(index(table)?)
+        .copied()
+        .context("invalid nested table")
+}
+
+fn table_get(caller: &mut Caller<'_, Host>, table: u32, position: u32) -> Result<Reply> {
+    let table = nested_table(caller, table)?;
+    let entry = table
+        .get(&mut *caller, u64::from(position))
+        .ok_or(TableRange)?;
+    match entry.as_func().context("nested table element")? {
+        Some(function) => function_info(caller, *function),
+        None => Ok(Reply::Null),
+    }
+}
+
+fn table_entry(caller: &Caller<'_, Host>, function: Option<u32>) -> Result<Ref> {
+    let Some(id) = function else {
+        return Ok(Ref::Func(None));
+    };
+    let function = caller
+        .data()
+        .nested
+        .functions
+        .get(index(id)?)
+        .copied()
+        .context("invalid nested function")?;
+    Ok(Ref::Func(Some(function)))
 }
 
 fn member<'a>(caller: &'a Caller<'_, Host>) -> Result<&'a shm::MemberLease> {

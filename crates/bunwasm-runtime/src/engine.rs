@@ -153,6 +153,10 @@ pub trait Engine: Sized + 'static {
     // --- introspection for console.log / util.types ---
     fn is_promise(&self, v: &Self::Value) -> bool;
     fn is_proxy(&self, v: &Self::Value) -> bool;
+    /// None means this engine has no native namespace brand check.
+    fn is_module_namespace(&self, _v: &Self::Value) -> Option<bool> {
+        None
+    }
     fn is_detachable_buffer(&self, v: &Self::Value) -> bool;
     fn detach_buffer(&self, v: &Self::Value);
     /// A `WebAssembly.Memory` buffer over `length` bytes at `data`, without copying.
@@ -175,6 +179,12 @@ pub trait Engine: Sized + 'static {
         Err(self.error_value(&NativeError::type_error(
             "This engine has no shared-region buffer adapter",
         )))
+    }
+
+    /// The region resource behind a SharedArrayBuffer this member allocated, or None for any
+    /// other value. The engine reads the address from its own object; JS never supplies one.
+    fn shared_buffer_resource(&self, _value: &Self::Value) -> Option<u32> {
+        None
     }
 
     /// Detach a buffer from [`Engine::wasm_memory_buffer`], and every view of it.

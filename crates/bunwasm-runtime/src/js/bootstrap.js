@@ -8,6 +8,8 @@
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {
+    const branded = native.isModuleNamespaceObject?.(value);
+    if (branded !== undefined) return branded;
     return value !== null && typeof value === "object" && Object.getPrototypeOf(value) === null &&
       Object.prototype.toString.call(value) === "[object Module]";
   }

@@ -9,6 +9,12 @@ mod nested_invocation;
 
 #[cfg(bun_wasm_shared_group)]
 mod group;
+#[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/nested_description.rs"]
+mod nested_description;
+#[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/shared_buffer.rs"]
+mod shared_buffer;
 
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
@@ -599,7 +605,12 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.functionInfo", move |a| {
-        rt.borrow().function_info(a.u32(0)?)
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::function_info(id);
+        }
+        rt.borrow().function_info(id)
     });
     let rt = runtime.clone();
     table.add("wasm.createTable", move |a| {
@@ -632,9 +643,14 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.tableIdentity", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::table_identity(id, a.str(1)?);
+        }
         let mut rt = rt.borrow_mut();
         let table = rt
-            .guest(a.u32(0)?)?
+            .guest(id)?
             .instance
             .get_table(&rt.store, a.str(1)?)
             .ok_or_else(|| error("Missing WebAssembly table"))?;
@@ -643,22 +659,37 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.tableLength", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::table_length(id);
+        }
         let rt = rt.borrow();
-        Ok(Val::Num(rt.table(a.u32(0)?)?.size(&rt.store) as f64))
+        Ok(Val::Num(rt.table(id)?.size(&rt.store) as f64))
     });
     let rt = runtime.clone();
     table.add("wasm.tableGet", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::table_get(id, a.u32(1)?);
+        }
         let mut rt = rt.borrow_mut();
         let value = rt
-            .table(a.u32(0)?)?
+            .table(id)?
             .get(&rt.store, u64::from(a.u32(1)?))
             .ok_or_else(|| NativeError::range_error("WebAssembly table index out of bounds"))?;
         rt.js(&value)
     });
     let rt = runtime.clone();
     table.add("wasm.tableSet", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::table_set(id, a.u32(1)?, a.get(2));
+        }
         let mut rt = rt.borrow_mut();
-        let table = rt.table(a.u32(0)?)?;
+        let table = rt.table(id)?;
         let element = table.ty(&rt.store).element();
         let value = rt.wasm(a.get(2), element)?;
         table
@@ -668,8 +699,13 @@ pub fn install(table: &mut Table) {
     });
     let rt = runtime.clone();
     table.add("wasm.tableGrow", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::table_grow(id, a.u32(1)?, a.get(2));
+        }
         let mut rt = rt.borrow_mut();
-        let table = rt.table(a.u32(0)?)?;
+        let table = rt.table(id)?;
         let element = table.ty(&rt.store).element();
         let value = rt.wasm(a.get(2), element)?;
         let old = table
@@ -712,9 +748,14 @@ pub fn install(table: &mut Table) {
         Ok(Val::Num(old as f64))
     });
     table.add("wasm.global", move |a| {
+        let id = a.u32(0)?;
+        #[cfg(bun_wasm_shared_group)]
+        if nested::owns(id) {
+            return nested::global(id, a.str(1)?, (a.0.len() > 2).then(|| a.get(2)));
+        }
         let mut rt = runtime.borrow_mut();
         let global = rt
-            .guest(a.u32(0)?)?
+            .guest(id)?
             .instance
             .get_global(&rt.store, a.str(1)?)
             .ok_or_else(|| error("Missing WebAssembly global"))?;

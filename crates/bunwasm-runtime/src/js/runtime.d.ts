@@ -349,6 +349,7 @@ declare namespace BunWasm {
     evalBuiltin(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
     isPromise(value: unknown): boolean;
     isProxy(value: unknown): boolean;
+    isModuleNamespaceObject?(value: unknown): boolean | undefined;
     isError(value: unknown): boolean;
   }
   interface Internal {

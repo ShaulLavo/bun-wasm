@@ -57,6 +57,15 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         "wasmNestedExecute",
         Rc::new(|e: &E, args: &[E::Value]| e.nested_execute(&arg(e, args, 0), &arg(e, args, 1))),
     ));
+    list.push((
+        "sharedBufferResource",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(match e.shared_buffer_resource(&arg(e, args, 0)) {
+                Some(resource) => e.value_from(Val::Num(f64::from(resource))),
+                None => e.undefined(),
+            })
+        }),
+    ));
     let c = core.clone();
     list.push((
         "compileCjs",
@@ -144,6 +153,13 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
     list.push((
         "isPromise",
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_promise(&arg(e, args, 0)).into()))),
+    ));
+    list.push((
+        "isModuleNamespaceObject",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(e.is_module_namespace(&arg(e, args, 0))
+                .map_or_else(|| e.undefined(), |branded| e.value_from(branded.into())))
+        }),
     ));
     list.push((
         "isError",

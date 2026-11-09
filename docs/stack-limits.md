@@ -116,7 +116,8 @@ stack, so no value can wrap to "no limit". Values that are not positive decimal
 numbers keep the default. The clamp keeps the guard alive, but it does not make a
 budget fit the host: a budget larger than the host stack allows traps as before. The browser executor (`web/src/engine-stack-budget.ts`) passes 32 KiB to
 QuickJS on WebKit and unmeasured hosts. V8 and desktop Firefox keep QuickJS's
-152 KiB default. Firefox retains the conservative 192 KiB JSC budget. In WebKit on the Mac with every function in its first tier, getters,
+152 KiB default. Desktop Firefox uses a measured 208 KiB JSC budget. In WebKit on
+the Mac with every function in its first tier, getters,
 `JSON.stringify` and `toString` reentry trap at 50 KiB, and the fixture's
 `JSON.stringify` traps at 45 KiB while building its RangeError, so the room there is
 about 43 to 47 KiB. At 40 KiB (1.25 times 32) every path and fixture still passes.
@@ -135,25 +136,57 @@ JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Prox
 traps and other C++ reentry start a new `CLoop::execute` activation for each level.
 It costs about 2.1 KB of host stack and 5.8 KB of shadow stack. The WASI
 `StackBounds` port in `jsc/webkit-wasi.patch` limits native recursion to 320 KiB of
-shadow stack, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
-128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
+shadow stack by default, or `BUN_WASM_STACK_KIB` when the host sets it, plus
+JSC's existing 128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
 in the C-loop build it also sizes the separate JavaScript frame stack, and 448 KiB
 cut plain recursion from 63,887 calls to 4,085.
 
 With every function in its first tier, getters have room for 57 levels in Linux
 WebKit under `ulimit -s 512` and 45 in WebKit on the Mac, where 224 KiB stopped them at
-39 and 280 KiB let them trap. The browser worker therefore passes 192 KiB when the page
-is not on V8: getters stop at 34, and at 240 KiB (1.25 times) every reentry path and
-fixture still passes on the Mac.
+39 and 280 KiB let them trap. The browser worker therefore passes 192 KiB on
+WebKit and unmeasured hosts: getters stop at 34, and at 240 KiB (1.25 times) every
+reentry path and fixture still passes on the Mac.
 
-Known gap: JSC's parser (every nesting shape), regular-expression compiler,
-`Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
-plain `JSON.stringify` fast path spend far more host stack per shadow byte than
-its reentry paths (parser blocks about six times more). Deeply nested input still
-traps there as it did before, for example blocks after 415 levels on wasmtime. On the
-native launcher's 16 MiB stack they throw instead, except unary operator chains, which
-trap after 80,618 levels at any budget. Fixing
-them needs reservations in WebKit, like those in QuickJS.
+Desktop Firefox uses 208 KiB. On Firefox 157 on Linux, the real SolidStart
+`StartServer.jsx` SSR compiler fails at 192 KiB in Babel's recursive code generator
+and succeeds at 208 KiB. All 25 recursion paths and both overflow fixtures complete
+or throw catchable exceptions at 208 KiB and at a 260 KiB margin, 1.25 times the
+budget, each in a fresh browser context. Restoring JSC's full 320 KiB default is
+not safe here. The unary bytecode emitter traps at 280 KiB and 320 KiB where the
+smaller budgets reject the input first. The Firefox adjustment leaves the guest
+guard and exception reserve intact. Android, iOS, and unknown hosts retain 192 KiB.
+The focused compiler regression is `web/tests/browser-solid-stack.ts`. The actual
+SolidStart template also passes dev rendering, click, hot reload, build, and
+production preview on this Firefox/JSC host. These measurements were taken on
+2026-11-09.
+
+The V8 browser policy gives JSC 800 KiB for getter reentry. Native recursive
+paths with small shadow frames now reserve extra shadow bytes: 512 in both fast
+flattening functions and default Proxy reads, 1024 in fast JSON serialization,
+and 2048 in assignment and statement parsing. The static JSON fast path also checks the
+VM's soft stack limit instead of relying only on its native-frame buffer estimate.
+These reservations do not enlarge the host stack or the C-loop frame stack.
+Firefox, WebKit and unknown hosts keep their existing budgets. The focused
+`stack-getter-headroom` fixture covers 128 getters, the five previously caught
+paths, and getter recovery after the exceptions. The blocking JSC embedding gate
+also runs it with a 1 MiB Node Worker stack and 800 KiB guest budget, so a large
+launcher stack cannot hide missing native-frame reservations.
+
+Measured on November 9, 2026 in Google Chrome 157 on Linux, getters reach 142
+levels with the 800 KiB browser policy, compared with 56 at 320 KiB. The exact
+Ajv 8.17.1 CommonJS schema-registry control needs 127 getter levels and completes.
+The focused fixture also passes at 1000 KiB, a 1.25-times margin, including getter
+recovery after all five native exceptions. The same fixture passes on a 1 MiB
+Node Worker stack at 800 KiB and a 21 MiB Worker stack at the unchanged 6144 KiB
+Node policy. These are stack controls, not an Angular application qualification.
+
+Remaining gaps are visible in the original browser-stack probe. Unary operator
+chains and the noncapturing-group and lookahead regexp cases still trap at
+200,000 levels in Chrome. Blocks and conditional expressions now throw instead.
+This is not a claim that every parser or regexp shape is safe. The extra accounting
+can reduce native-path nesting capacities on other hosts. Firefox's original two
+stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
+iOS measurement is claimed.
 
 ## Browser-native engine
 
@@ -232,8 +265,9 @@ the same on every host with that budget:
 | Async recursion | trap 335 | 190 | 36 | 5,238 |
 
 With the 152 KiB default, every path is still caught when wasmtime's stack is cut
-to 320 KiB; at 256 KiB plain calls trap. The fixture suites pass with the browser
-budgets: `BUN_WASM_STACK_KIB=32` for QuickJS and `192` for JSC.
+to 320 KiB; at 256 KiB plain calls trap. The fixture suites pass with the
+conservative browser budgets: `BUN_WASM_STACK_KIB=32` for QuickJS and `192` for JSC. Desktop Firefox
+also passes the JSC fixtures at 208 KiB and the 260 KiB margin.
 
 ## Reproduce
 
@@ -253,6 +287,9 @@ scripts/test.sh --no-build stack-overflow stack-overflow-console
 scripts/test.sh --no-build --engine jsc stack-overflow stack-overflow-console
 scripts/test.sh --no-build --engine browser stack-overflow stack-overflow-console
 (cd web && bun run build && node tests/browser-stack.mjs --measure)
+ENGINES=jsc node web/tests/browser-stack.mjs --measure --cold firefox
+bun web/tests/browser-solid-stack.ts                            # actual Firefox/JSC Solid SSR compiler
+BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the old compiler failure
 (cd web && ulimit -s 512 && ENGINES=quickjs,jsc node tests/browser-stack.mjs --measure --cold webkit)   # Darwin-sized worker stacks
 ```
 

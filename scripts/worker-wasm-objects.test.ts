@@ -138,3 +138,23 @@ test("shared Memory buffer keeps the identity of separately posted buffers and v
     expect(value.memory.buffer.byteLength).toBe(pages * 65536);
   }
 });
+
+test("hydration reads an ordinary shared-buffer graph node only once per delivery", async () => {
+  const { client } = brokerClients(cleanup, { lanes: true });
+  const sender = client(), receiver = client();
+  let reads = 0;
+  const target = sourceCodec({ ...receiver.sharedObjects, read(reference) { reads++; return receiver.sharedObjects.read(reference); } });
+  const buffer = new SharedArrayBuffer(8);
+  const graph = sourceCodec(sender.sharedObjects).encode({ first: buffer, second: buffer });
+  await new Promise<void>(resolve => target.wait(graph, resolve));
+  const check = () => {
+    const result = target.decode(graph);
+    if (!result || typeof result !== "object" || !("first" in result) || !("second" in result)) throw new Error("Missing buffer aliases");
+    expect(result.first).toBe(result.second);
+    expect(result.first).toBeInstanceOf(SharedArrayBuffer);
+  };
+  check();
+  expect(reads).toBe(1);
+  check();
+  expect(reads).toBe(2);
+});

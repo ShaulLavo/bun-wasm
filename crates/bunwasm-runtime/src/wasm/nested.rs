@@ -1,11 +1,13 @@
 //! Shared-memory backend. The core owns only validated handles and numeric data.
+use super::nested_description::{
+    Description, Export, Import, ImportKind, Limits, describe, module_record, strings,
+};
 use super::nested_frame as frame;
 use super::nested_invocation::Invocation;
 use super::{error, resource_id};
 use crate::data::{NativeError, NativeResult, Record, Val};
-use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap};
-use wasmparser::{ExternalKind, Parser, Payload, TypeRef, ValType};
+use wasmparser::{Parser, Payload, TypeRef};
 #[path = "nested_wire.rs"]
 mod wire;
 use wire::{BACKEND, Binding, Number, Reply, Request};
@@ -24,8 +26,22 @@ thread_local! {
     #[cfg(bun_wasm_shared_group)]
     static DISPATCH: std::cell::Cell<Option<Dispatch>> = const { std::cell::Cell::new(None) };
     static MODULES: RefCell<BTreeMap<u32, Description>> = const { RefCell::new(BTreeMap::new()) };
-    static INSTANCES: RefCell<BTreeMap<u32, u32>> = const { RefCell::new(BTreeMap::new()) };
-    static FUNCTIONS: RefCell<BTreeMap<u32, Vec<String>>> = const { RefCell::new(BTreeMap::new()) };
+    static INSTANCES: RefCell<BTreeMap<u32, InstanceRecord>> = const { RefCell::new(BTreeMap::new()) };
+    static FUNCTIONS: RefCell<BTreeMap<u32, Signature>> = const { RefCell::new(BTreeMap::new()) };
+    // Wasmtime's table identity is private, so aliases are keyed by instance and export index.
+    static TABLES: RefCell<BTreeMap<(u32, u32), u32>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+#[derive(Clone, Copy)]
+struct InstanceRecord {
+    memory: u32,
+    module: u32,
+}
+
+#[derive(Clone)]
+struct Signature {
+    params: Vec<String>,
+    results: Vec<String>,
 }
 
 #[cfg(bun_wasm_shared_group)]
@@ -74,6 +90,9 @@ fn exchange(input: &Request) -> Result<Reply, NativeError> {
 
 fn request(input: Request) -> Result<Reply, NativeError> {
     match exchange(&input)? {
+        Reply::Error { category, message } if category == "RangeError" => {
+            Err(NativeError::range_error(message))
+        }
         Reply::Error { category, message } => Err(NativeError::error(message).named(&category)),
         Reply::PendingException => {
             Err(NativeError::error("engine-side pending exception").named("NestedPendingException"))
@@ -97,40 +116,6 @@ fn count(input: Request) -> NativeResult {
     Ok(Val::Num(f64::from(value)))
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct Import {
-    module: String,
-    name: String,
-    kind: ImportKind,
-}
-#[derive(Clone, Serialize, Deserialize)]
-enum ImportKind {
-    Function {
-        params: Vec<String>,
-        results: Vec<String>,
-    },
-    Memory,
-    Global(String),
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Export {
-    name: String,
-    kind: String,
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Limits {
-    initial_pages: u32,
-    maximum_pages: Option<u32>,
-}
-/// A compiled module's JS-visible shape. The directory carries it opaquely between members
-/// of one group, which already share every byte, so it needs no second validation.
-#[derive(Clone, Serialize, Deserialize)]
-struct Description {
-    memory: Limits,
-    imports: Vec<Import>,
-    exports: Vec<Export>,
-}
-
 pub(super) fn shared(bytes: &[u8]) -> bool {
     Parser::new(0).parse_all(bytes).any(|payload| match payload {
         Ok(Payload::MemorySection(memories)) => memories.into_iter().any(|memory| memory.is_ok_and(|memory| memory.shared)),
@@ -144,164 +129,13 @@ pub(super) fn validate(bytes: &[u8]) -> bool {
     };
     output
         .memory
-        .is_some_and(|memory| memory.shared && describe(bytes, &memory).is_ok())
+        .is_some_and(|memory| memory.shared && describe(bytes, limits(&memory)).is_ok())
 }
-fn type_name(ty: ValType) -> Result<String, NativeError> {
-    Ok(match ty {
-        ValType::I32 => "i32",
-        ValType::I64 => "i64",
-        ValType::F32 => "f32",
-        ValType::F64 => "f64",
-        ValType::V128 => "v128",
-        ValType::Ref(_) => return Err(error("Unsupported nested reference boundary")),
-    }
-    .to_owned())
-}
-fn strings(types: &[String]) -> Val {
-    Val::Array(
-        types
-            .iter()
-            .map(|value| Val::from(value.as_str()))
-            .collect(),
-    )
-}
-fn import_description(import: &Import) -> Val {
-    let base = Record::new()
-        .set("module", import.module.as_str())
-        .set("name", import.name.as_str());
-    match &import.kind {
-        ImportKind::Function { params, results } => base
-            .set("kind", "function")
-            .set("params", strings(params))
-            .set("results", strings(results))
-            .into(),
-        ImportKind::Memory => base.set("kind", "memory").into(),
-        ImportKind::Global(ty) => base
-            .set("kind", "global")
-            .set("type", ty.as_str())
-            .set("mutable", false)
-            .into(),
-    }
-}
-fn describe(bytes: &[u8], memory: &bunwasm_nested::MemoryPlan) -> Result<Description, NativeError> {
-    let memory = Limits {
+fn limits(memory: &bunwasm_nested::MemoryPlan) -> Limits {
+    Limits {
         initial_pages: memory.initial_pages,
         maximum_pages: memory.maximum_pages,
-    };
-    let mut imports = Vec::new();
-    let mut exports = Vec::new();
-    let mut types = Vec::new();
-    for payload in Parser::new(0).parse_all(bytes) {
-        match payload.map_err(error)? {
-            Payload::TypeSection(section) => describe_types(section, &mut types)?,
-            Payload::ImportSection(section) => describe_imports(section, &types, &mut imports)?,
-            Payload::ExportSection(section) => describe_exports(section, &mut exports)?,
-            _ => {}
-        }
     }
-    Ok(Description {
-        memory,
-        imports,
-        exports,
-    })
-}
-fn describe_types(
-    section: wasmparser::TypeSectionReader<'_>,
-    types: &mut Vec<wasmparser::FuncType>,
-) -> Result<(), NativeError> {
-    for ty in section.into_iter_err_on_gc_types() {
-        types.push(ty.map_err(error)?);
-    }
-    Ok(())
-}
-fn describe_imports(
-    section: wasmparser::ImportSectionReader<'_>,
-    types: &[wasmparser::FuncType],
-    imports: &mut Vec<Import>,
-) -> Result<(), NativeError> {
-    for item in section {
-        imports.push(describe_import(item.map_err(error)?, types)?);
-    }
-    Ok(())
-}
-fn describe_exports(
-    section: wasmparser::ExportSectionReader<'_>,
-    exports: &mut Vec<Export>,
-) -> Result<(), NativeError> {
-    for item in section {
-        exports.push(describe_export(item.map_err(error)?)?);
-    }
-    Ok(())
-}
-fn describe_import(
-    item: wasmparser::Import<'_>,
-    types: &[wasmparser::FuncType],
-) -> Result<Import, NativeError> {
-    let kind = match item.ty {
-        TypeRef::Memory(_) => ImportKind::Memory,
-        TypeRef::Func(index) => {
-            let ty = types
-                .get(index as usize)
-                .ok_or_else(|| error("invalid nested function type"))?;
-            ImportKind::Function {
-                params: ty
-                    .params()
-                    .iter()
-                    .copied()
-                    .map(type_name)
-                    .collect::<Result<_, _>>()?,
-                results: ty
-                    .results()
-                    .iter()
-                    .copied()
-                    .map(type_name)
-                    .collect::<Result<_, _>>()?,
-            }
-        }
-        TypeRef::Global(global) if !global.mutable => {
-            ImportKind::Global(type_name(global.content_type)?)
-        }
-        _ => return Err(error("Unsupported nested import kind")),
-    };
-    Ok(Import {
-        module: item.module.to_owned(),
-        name: item.name.to_owned(),
-        kind,
-    })
-}
-fn describe_export(item: wasmparser::Export<'_>) -> Result<Export, NativeError> {
-    let kind = match item.kind {
-        ExternalKind::Func => "function",
-        ExternalKind::Memory => "memory",
-        _ => {
-            return Err(error(
-                "Nested tables/globals are not yet exposed by this milestone",
-            ));
-        }
-    };
-    Ok(Export {
-        name: item.name.to_owned(),
-        kind: kind.to_owned(),
-    })
-}
-fn module_record(id: u32, description: &Description) -> Val {
-    let imports: Vec<_> = description.imports.iter().map(import_description).collect();
-    let exports: Vec<Val> = description
-        .exports
-        .iter()
-        .map(|export| {
-            Record::new()
-                .set("name", export.name.as_str())
-                .set("kind", export.kind.as_str())
-                .into()
-        })
-        .collect();
-    Record::new()
-        .set("id", id)
-        .set("backend", "nested")
-        .set("imports", imports)
-        .set("exports", exports)
-        .into()
 }
 pub(super) fn compile(bytes: &[u8]) -> NativeResult {
     if MODULES.with(|modules| modules.borrow().len()) >= wire::MAX_RESOURCES {
@@ -314,7 +148,7 @@ pub(super) fn compile(bytes: &[u8]) -> NativeResult {
     if !memory.shared {
         return Err(error("Shared backend cannot import an unshared memory"));
     }
-    let description = describe(bytes, &memory)?;
+    let description = describe(bytes, limits(&memory))?;
     let id = handle(Request::Compile {
         pointer: output.bytes.as_ptr() as usize as u32,
         length: output.bytes.len() as u32,
@@ -367,6 +201,9 @@ pub(super) fn create_memory(initial: u32, maximum: u32) -> NativeResult {
         initial,
         maximum,
     })?)))
+}
+pub(super) fn release_memory(memory: u32) -> NativeResult {
+    count(Request::Release { memory })
 }
 pub(super) fn span(id: u32) -> NativeResult {
     let Reply::Memory {
@@ -522,39 +359,147 @@ fn instantiate_memory(
         bindings,
         invocation: token,
     })?;
-    INSTANCES.with(|instances| instances.borrow_mut().insert(id, memory));
+    let record = InstanceRecord { memory, module };
+    INSTANCES.with(|instances| instances.borrow_mut().insert(id, record));
     Ok(Val::Num(f64::from(id)))
+}
+fn instance_record(instance: u32) -> Result<InstanceRecord, NativeError> {
+    INSTANCES
+        .with(|instances| instances.borrow().get(&instance).copied())
+        .ok_or_else(|| error("Invalid nested instance"))
 }
 pub(super) fn memory_identity(instance: u32) -> NativeResult {
-    let id = INSTANCES
-        .with(|instances| instances.borrow().get(&instance).copied())
-        .ok_or_else(|| error("Invalid nested instance"))?;
-    Ok(Val::Num(f64::from(id)))
+    Ok(Val::Num(f64::from(instance_record(instance)?.memory)))
 }
-pub(super) fn function(instance: u32, name: &str) -> NativeResult {
+fn remember_function(reply: Reply) -> Result<u32, NativeError> {
     let Reply::Function {
         id,
         params,
         results,
-    } = request(Request::Function {
-        instance,
-        name: name.to_owned(),
-    })?
+    } = reply
     else {
         return Err(error("invalid nested function reply"));
     };
-    FUNCTIONS.with(|functions| functions.borrow_mut().insert(id, params.clone()));
+    let signature = Signature { params, results };
+    FUNCTIONS.with(|functions| functions.borrow_mut().insert(id, signature));
+    Ok(id)
+}
+fn signature(function: u32) -> Result<Signature, NativeError> {
+    FUNCTIONS
+        .with(|functions| functions.borrow().get(&function).cloned())
+        .ok_or_else(|| error("Invalid nested function"))
+}
+pub(super) fn function_info(id: u32) -> NativeResult {
+    let signature = signature(id)?;
     Ok(Record::new()
         .set("id", id)
         .set("backend", "nested")
-        .set("params", strings(&params))
-        .set("results", strings(&results))
+        .set("params", strings(&signature.params))
+        .set("results", strings(&signature.results))
         .into())
 }
+pub(super) fn function(instance: u32, name: &str) -> NativeResult {
+    let reply = request(Request::Function {
+        instance,
+        name: name.to_owned(),
+    })?;
+    function_info(remember_function(reply)?)
+}
+fn exported(instance: u32, name: &str, kind: &str) -> Result<Export, NativeError> {
+    let module = instance_record(instance)?.module;
+    let found = MODULES.with(|modules| {
+        let modules = modules.borrow();
+        let exports = &modules.get(&module)?.exports;
+        exports
+            .iter()
+            .find(|export| export.name == name && export.kind == kind)
+            .cloned()
+    });
+    found.ok_or_else(|| error(format!("Missing WebAssembly {kind}")))
+}
+pub(super) fn table_identity(instance: u32, name: &str) -> NativeResult {
+    let export = exported(instance, name, "table")?;
+    let key = (instance, export.index);
+    let known = TABLES.with(|tables| tables.borrow().get(&key).copied());
+    let id = match known {
+        Some(id) => id,
+        None => {
+            let name = name.to_owned();
+            let id = handle(Request::TableExport { instance, name })?;
+            TABLES.with(|tables| tables.borrow_mut().insert(key, id));
+            id
+        }
+    };
+    Ok(Record::new()
+        .set("id", id)
+        .set("backend", "nested")
+        .set("element", "funcref")
+        .into())
+}
+pub(super) fn table_length(table: u32) -> NativeResult {
+    count(Request::TableLength { table })
+}
+pub(super) fn table_get(table: u32, index: u32) -> NativeResult {
+    match request(Request::TableGet { table, index })? {
+        Reply::Null => Ok(Val::Null),
+        reply => Ok(super::tagged("function", remember_function(reply)?)),
+    }
+}
+fn table_function(value: &Val) -> Result<Option<u32>, NativeError> {
+    if matches!(value, Val::Null) {
+        return Ok(None);
+    }
+    let id = super::handle(value, "function")?;
+    if !owns(id) {
+        return Err(NativeError::type_error(
+            "Unsupported mixed-backend function reference",
+        ));
+    }
+    Ok(Some(id))
+}
+pub(super) fn table_set(table: u32, index: u32, value: &Val) -> NativeResult {
+    let function = table_function(value)?;
+    request(Request::TableSet {
+        table,
+        index,
+        function,
+    })?;
+    Ok(Val::Undefined)
+}
+pub(super) fn table_grow(table: u32, delta: u32, value: &Val) -> NativeResult {
+    let function = table_function(value)?;
+    count(Request::TableGrow {
+        table,
+        delta,
+        function,
+    })
+}
+/// Read an exported global, first writing `value` when one is given.
+pub(super) fn global(instance: u32, name: &str, value: Option<&Val>) -> NativeResult {
+    let export = exported(instance, name, "global")?;
+    let name = name.to_owned();
+    if let Some(value) = value {
+        let ty = export
+            .ty
+            .as_deref()
+            .ok_or_else(|| error("untyped nested global"))?;
+        request(Request::GlobalSet {
+            instance,
+            name: name.clone(),
+            value: numeric(value, ty)?,
+        })?;
+    }
+    let Reply::Values(values) = request(Request::GlobalGet { instance, name })? else {
+        return Err(error("invalid nested global reply"));
+    };
+    let value = values
+        .into_iter()
+        .next()
+        .ok_or_else(|| error("invalid nested global reply"))?;
+    Ok(number(value))
+}
 pub(super) fn call(function: u32, values: &[Val], token: u32) -> NativeResult {
-    let params = FUNCTIONS
-        .with(|functions| functions.borrow().get(&function).cloned())
-        .ok_or_else(|| error("Invalid nested function"))?;
+    let params = signature(function)?.params;
     let arguments = numbers(values, &params)?;
     let _invocation = Invocation::enter(token)?;
     let Reply::Values(values) = request(Request::Call {

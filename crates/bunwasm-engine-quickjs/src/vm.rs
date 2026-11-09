@@ -116,6 +116,7 @@ unsafe extern "C" {
     /// The async context promise reactions capture and restore (new reference).
     fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
     fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
+    fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
 }
 
 /// Erase a value's lifetime (all values belong to the one context).
@@ -152,6 +153,34 @@ const INTERRUPT_POLLS: u32 = 8;
 /// QuickJS-ng. Cheap to clone (a reference to the engine).
 #[derive(Clone)]
 pub struct QuickJs(Rc<Inner>);
+
+/// Allocate every SharedArrayBuffer of a group member from a region the core leases.
+#[cfg(bun_wasm_shared_group)]
+unsafe fn install_shared_buffer_storage(runtime: *mut qjs::JSRuntime) {
+    use std::ffi::c_void;
+    unsafe extern "C" {
+        fn bun_shared_buffer_alloc(bytes: u32) -> u32;
+        fn bun_shared_buffer_release(address: u32);
+    }
+    unsafe extern "C" fn allocate(_: *mut c_void, size: qjs::size_t) -> *mut c_void {
+        // SAFETY: the core returns a stable region address, or 0 for failure.
+        unsafe { bun_shared_buffer_alloc(size) as usize as *mut c_void }
+    }
+    unsafe extern "C" fn release(_: *mut c_void, data: *mut c_void) {
+        // SAFETY: an unknown address leaves the core's ledger unchanged.
+        unsafe { bun_shared_buffer_release(data as usize as u32) }
+    }
+    // Non-owning region views share the lease that created them.
+    unsafe extern "C" fn duplicate(_: *mut c_void, _: *mut c_void) {}
+    let functions = qjs::JSSharedArrayBufferFunctions {
+        sab_alloc: Some(allocate),
+        sab_free: Some(release),
+        sab_dup: Some(duplicate),
+        sab_opaque: std::ptr::null_mut(),
+    };
+    // SAFETY: QuickJS copies the table; the runtime is live and has no buffers yet.
+    unsafe { qjs::JS_SetSharedArrayBufferFunctions(runtime, &functions) };
+}
 
 /// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
 #[cfg(bun_wasm_shared_group)]
@@ -263,7 +292,8 @@ impl Engine for QuickJs {
         let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
         #[cfg(bun_wasm_shared_group)]
         unsafe {
-            qjs::JS_SetCanBlock(runtime_raw, true)
+            qjs::JS_SetCanBlock(runtime_raw, true);
+            install_shared_buffer_storage(runtime_raw);
         };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
         let has_interrupt_handler = host.has_interrupt_handler();
@@ -486,6 +516,11 @@ impl Engine for QuickJs {
         v.is_promise()
     }
 
+    fn is_module_namespace(&self, v: &V) -> Option<bool> {
+        // SAFETY: the helper reads only the class ID of this live value.
+        Some(unsafe { JS_bunwasm_IsModuleNamespace(v.as_raw()) })
+    }
+
     fn is_proxy(&self, v: &V) -> bool {
         v.is_proxy()
     }
@@ -526,6 +561,20 @@ impl Engine for QuickJs {
         // SAFETY: the core validated this session's stable region and retains it
         // until the member, engine roots and host instances have all stopped.
         self.wrap(unsafe { JS_bunwasm_NewSharedWasmMemoryBuffer(self.raw(), data, length) })
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_buffer_resource(&self, v: &V) -> Option<u32> {
+        unsafe extern "C" {
+            fn JS_bunwasm_SharedBufferData(value: qjs::JSValue) -> *mut u8;
+            fn bun_shared_buffer_resource(address: u32) -> u32;
+        }
+        // SAFETY: the helper checks the SharedArrayBuffer class and throws nothing, and the
+        // core only looks the address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(JS_bunwasm_SharedBufferData(v.as_raw()) as usize as u32)
+        };
+        (resource != 0).then_some(resource)
     }
 
     fn detach_wasm_memory_buffer(&self, v: &V) -> bool {

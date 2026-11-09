@@ -1,0 +1,7 @@
+default marker, call, and cached identity
+live exports across require and import
+named-only namespace marker
+explicit markers stay live and unchanged
+CommonJS exports unchanged
+canonical namespaces across static-first and dynamic-first imports
+native namespace branding rejects fabricated values and proxies
