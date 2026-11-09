@@ -59571,6 +59571,13 @@ static void *js_bunwasm_shared_array_buffer_mallocz(JSContext *ctx, size_t size)
 {
     JSRuntime *rt = ctx->rt;
     void *ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Regions are outside the malloc accounting, and cycles never refcount to zero. */
+    if (!ptr) {
+        JS_RunGC(rt);
+        ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+    }
+#endif
     if (!ptr) {
         js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_ARRAY_BUFFER);
         JS_ThrowOutOfMemory(ctx);
@@ -59628,6 +59635,15 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         JS_ThrowRangeError(ctx, "invalid max array buffer length");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Each wrapper keeps its own length here, so growth cannot be shared between members. */
+    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
+        *max_len > len) {
+        JS_ThrowTypeError(ctx, "growable SharedArrayBuffer is not supported "
+                          "in a shared-group guest");
+        goto fail;
+    }
+#endif
     if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
         *max_len > len && !rt->sab_funcs.sab_alloc) {
         JS_ThrowTypeError(ctx,
@@ -59773,6 +59789,13 @@ JSValue JS_bunwasm_NewSharedWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_
 #endif
 }
 
+/* The storage of a SharedArrayBuffer, or NULL for any other value. Throws nothing. */
+uint8_t *JS_bunwasm_SharedBufferData(JSValueConst obj)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_SHARED_ARRAY_BUFFER);
+    return abuf ? abuf->data : NULL;
+}
+
 /* Detach a WebAssembly.Memory buffer and its views; false for other values. */
 bool JS_bunwasm_DetachWasmMemoryBuffer(JSContext *ctx, JSValueConst obj)
 {
@@ -59868,7 +59891,8 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
                 p1->u.array.u.ptr = NULL;
             }
         }
-        if (abuf->shared && rt->sab_funcs.sab_free) {
+        /* A wasm_memory wrapper never owns its region, even over an allocated buffer. */
+        if (abuf->shared && rt->sab_funcs.sab_free && !abuf->wasm_memory) {
             rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data);
         } else {
             if (abuf->realloc_func)
@@ -60299,6 +60323,13 @@ static JSValue js_array_buffer_slice(JSContext *ctx,
         JS_ThrowTypeError(ctx, "cannot use identical ArrayBuffer");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Distinct wrappers can view one region, so compare the shared block, not the object. */
+    if (abuf->shared && new_abuf->data == abuf->data) {
+        JS_ThrowTypeError(ctx, "cannot use identical SharedArrayBuffer storage");
+        goto fail;
+    }
+#endif
     if (new_abuf->detached) {
         JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
         goto fail;

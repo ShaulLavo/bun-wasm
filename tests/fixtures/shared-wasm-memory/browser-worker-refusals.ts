@@ -3,6 +3,7 @@ import { Worker, MessageChannel } from 'node:worker_threads';
 
 const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
 const module = new WebAssembly.Module(await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer());
+const tableGlobal = await Bun.file(`${import.meta.dir}/table-global.wasm`).arrayBuffer();
 function refused(operation: () => void) {
   assert.throws(operation, (error: Error) => {
     assert.equal(error.name, 'DataCloneError');
@@ -10,7 +11,12 @@ function refused(operation: () => void) {
     return true;
   });
 }
-for (const value of [memory, module]) {
+assert.throws(() => new WebAssembly.Module(tableGlobal), (error: Error) => {
+  assert.ok(error instanceof WebAssembly.CompileError);
+  assert.match(error.message, /Nested tables and globals are not available on the Browser host/);
+  return true;
+});
+for (const value of [memory, module, new SharedArrayBuffer(8)]) {
   refused(() => { new Worker(`${import.meta.dir}/cross-worker-child.ts`, { workerData: { value } }); });
   const { port1, port2 } = new MessageChannel();
   try { refused(() => port1.postMessage({ value })); }

@@ -10,6 +10,21 @@ The QuickJS-ng 0.16.2 source bundled by rquickjs-sys 0.13.0 is adapted in
 build macro, wrap external SAB prefix views, and use the existing cancellable
 host wait provider. Default split builds retain the prior atomics selection.
 
+In the same group build, QuickJS allocates each SharedArrayBuffer from its own
+region through `JS_SetSharedArrayBufferFunctions` and the core's
+`bun_shared_buffer_alloc`. A refused allocation runs `JS_RunGC` once and retries,
+because cycles never refcount to zero and regions are outside malloc accounting.
+Growable construction is refused, because each wrapper keeps its own length.
+The finalizer skips `sab_free` for a `wasm_memory` wrapper, which never owns its
+region. Slice refuses a species result over the source's own storage before
+copying, comparing storage pointers rather than wrapper objects.
+
+`wasm/shared_buffer.rs` is an original adapter. Each member keeps a ledger from
+buffer address to its region's memory handle. A finalizer only queues the region,
+so no host request runs during collection. The next allocation returns queued
+regions, and member stop releases the rest. Every buffer commits at least one
+64 KiB page and takes one region slot. There is no heap fallback.
+
 The shared-group-only ABI is `runtime_nested.request(pointer, length, out) -> i32`.
 Requests and replies are the closed serde enums in `wasm/nested_wire.rs`.
 Compilation supplies the core-validated regionizer output in an owned input span.
@@ -84,11 +99,38 @@ a shared-group build. `runtime_nested.request` gains `PublishMemory`, `AttachMem
 - A published module is the host's compiled `wasmtime::Module` and the core's opaque
   description of its JS-visible shape. Receivers instantiate it in their own Store
   with their own callbacks, without recompiling.
-- A receiver reuses one local handle per token. A posted buffer is served at its
-  posted length, so old prefix views stay prefixes.
+- A receiver reuses one local handle per token. Each serialized buffer gets a fresh,
+  non-owning wrapper at its posted length, so old prefix views stay prefixes and two
+  deliveries are two objects over one set of bytes. Repeated references in one message
+  stay one object through the codec's own graph map.
+- An ordinary `SharedArrayBuffer` publishes the region its allocation took. Its sender's
+  lease follows the JS wrapper rather than the per-token cache, and a member stop or GC
+  never frees bytes a publication still holds.
 
-Refused with `DataCloneError` at post time: plain `SharedArrayBuffer` (member-heap
-storage dies with its sender), unshared Memory, and modules on the Wasmi backend.
+Refused with `DataCloneError` at post time: growable `SharedArrayBuffer`, unshared Memory,
+modules on the Wasmi backend, and every WebAssembly Table and Global, which are one
+member's capabilities with no clone representation. `structuredClone` refuses Tables and
+Globals too.
+
+## Exported tables and globals (original adapter)
+
+`wasm/nested_description.rs` reads each export's type from the original module.
+Nested modules may export `funcref` tables and numeric globals. An exported reference
+global or non-`funcref` table is a CompileError. `runtime_nested.request` gains
+`TableExport`, `TableLength`, `TableGet`, `TableSet`, `TableGrow`, `GlobalGet` and
+`GlobalSet`, and the reply `Null`.
+
+Table identity is keyed in the core by instance and export index, so aliases are one
+`WebAssembly.Table`. Entries pass through the host's function identity, so
+`table.get(i) === exports.fn`. A table index out of range or a refused grow is a
+RangeError. `table.set` and `table.grow` accept only functions of this backend; anything
+else is a TypeError. No JS root crosses this boundary. Table and function handles are
+session-owned and bounded by the same 4,096-resource limit.
+
+Global aliases are one object within an instance. A validated immutable `WebAssembly.Global`
+import is kept by its import index, so re-exporting it returns the supplied object, also
+across instances and duplicate import slots. A raw numeric import gets a new wrapper per
+instance. A `v128` global refuses JS access with a TypeError before any request.
 
 Wasmtime retains instantiation allocations until its Store ends, including an
 instance whose start traps. The existing native Store limit remains 40 instances.
@@ -126,3 +168,15 @@ host before crossing the import boundary, including checked conversion to its
 32-bit wire length. A valid module with an oversized publication description is
 refused with DataCloneError, rather than trapping at the host import. The discovered
 group fixture includes that case and a real reentrant Memory-and-Module delivery.
+
+Immutable Global imports read their private state through the native value helper,
+not an own value property or valueOf method. Re-export caches retain that same
+privately validated Global even if its public prototype changes. Local clone
+refusal likewise precedes user-controlled Error tags and prototypes.
+
+Instance.exports is a branded prototype accessor, as on a native Instance, rather
+than an own nonconfigurable data property. The canonical exports object remains
+frozen and private to the instance. This permits an unchanged emnapi child
+instance proxy to substitute its exports without violating Proxy invariants.
+The discovered guest regression uses the pinned upstream proxy and real node:wasi
+reactor initialization; it is not real binding registration or thread-pool proof.

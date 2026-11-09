@@ -13,6 +13,8 @@ const MAX_GROUP_PAGES = 65536;
 const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [48, "NoMem"], [71, "Search"]]);
+const TABLE_AND_GLOBAL_REFUSAL = "Nested tables and globals are not available on the Browser host";
+const TABLE_AND_GLOBAL_REQUESTS = ["TableExport", "TableLength", "TableGet", "TableSet", "TableGrow", "GlobalGet", "GlobalSet"];
 
 /** The documented runtime_shm functions this member's Waffle group attachment provides. */
 export interface RegionProvider {
@@ -334,6 +336,7 @@ export class NestedHost {
       const { module, memory, bindings, invocation } = request.Instantiate;
       return this.enter(invocation, () => this.instantiate(module, memory, bindings));
     }
+    if (TABLE_AND_GLOBAL_REQUESTS.some(name => name in request)) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
     if (!("Call" in request)) throw new Error("Same-region worker transport is not available on the Browser host");
     const { function: id, arguments: args, invocation } = request.Call;
     return this.enter(invocation, () => this.call(id, args));
@@ -389,7 +392,10 @@ export class NestedHost {
   private compile(pointer: number, length: number): Reply {
     this.region();
     const bytes = this.copy(pointer, length);
-    const compiled = { module: new WebAssembly.Module(bytes), info: readModuleInfo(bytes) };
+    const module = new WebAssembly.Module(bytes);
+    // Refuse here, before an instance's start code can run and then fail building its exports.
+    if (WebAssembly.Module.exports(module).some(item => item.kind === "table" || item.kind === "global")) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
+    const compiled = { module, info: readModuleInfo(bytes) };
     return { Handle: pushResource(this.modules, compiled) };
   }
 

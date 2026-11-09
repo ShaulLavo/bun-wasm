@@ -4,14 +4,14 @@ declare namespace BunWasm {
   type WasmReference = { kind: 'function' | 'externref'; id: number };
   type WasmValue = number | bigint | WasmReference | null;
   interface WasmFunction { backend?: "nested"; id: number; params: WasmType[]; results: WasmType[] }
-  type WasmExport = { name: string } & (
+  type WasmExport = { name: string; index?: number } & (
     { kind: 'function'; params: WasmType[]; results: WasmType[] } |
     { kind: 'memory' } | { kind: 'table'; element: WasmElement } |
     { kind: 'global'; type: WasmType; mutable: boolean }
   );
   type WasmImport = WasmExport & { module: string };
   interface WasmModule { backend?: "nested"; id: number; imports: WasmImport[]; exports: WasmExport[] }
-  interface WasmTable { id: number; element: WasmElement }
+  interface WasmTable { backend?: "nested"; id: number; element: WasmElement }
   type WasmCall = { values: WasmValue[] } | { call: number; import: number; args: WasmValue[] };
   interface WasmNative {
     sharedMemorySupported(): boolean;
@@ -43,8 +43,9 @@ declare namespace BunWasm {
     global(id: number, name: string, value?: WasmValue): WasmValue;
   }
   interface WasmInternal {
-    native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number, visible?: number): SharedArrayBuffer; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
+    native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number, visible?: number): SharedArrayBuffer; sharedBufferResource?(buffer: SharedArrayBuffer): number | undefined; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
     isWasmMemoryBuffer?: (value: unknown) => boolean;
+    isWasmCapability?: (value: unknown) => boolean;
     /** Same-region Module and Memory transport between members of one group. */
     groupSharedObjects?: SharedObjects;
   }

@@ -22,6 +22,17 @@ Every WebKit hunk below is gated on `BUN_WASM_SHARED_GROUP`. Split builds compil
 - `Source/WTF/wtf/StackBounds.cpp`: a group side has no `__stack_low` or `__stack_high`, because the host
   carves the member stack. The stack origin comes from a local in the outermost `jsc_run` frame,
   so the conservative scan covers every frame that can hold a value.
+- `Source/JavaScriptCore/runtime/ArrayBuffer.h`, `ArrayBuffer.cpp`: `ArrayBuffer::tryCreateGroupShared`
+  allocates a fixed-length SharedArrayBuffer from its own group region through the core's
+  `bun_shared_buffer_alloc`, and its contents' destructor queues `bun_shared_buffer_release`. A
+  refused allocation runs one synchronous full collection, which also finishes sweeping, and tries once more.
+- `Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp`: the non-growable shared path uses it.
+  Growable shared buffers still fail on WASI as [the resizable record](wasi-resizable-buffer-allocation.md) describes.
+- `Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp`: the default-species slice fast path
+  allocates its result the same way, because it never reaches the constructor. A species result
+  over the source's own storage throws TypeError before any byte moves, including for zero length.
+  It compares storage pointers, because region views are distinct `SharedArrayBufferContents`
+  objects with distinct lengths over one base.
 
 `jsc/build-libcxx.sh` rebuilds libc++ and libc++abi with the SDK's own configuration plus PIC and
 atomics. The SDK's archives have no atomics, so `wasm-ld` refuses them under `--shared-memory`.
@@ -40,7 +51,8 @@ setup checks and completes each SDK patch, then rejects any other source changes
 - `scripts/build-engine-jsc.sh`, `scripts/build-native-profile.ts`: the group side link.
 - `crates/bunwasm-jsc/cpp/helpers.cpp`: real SharedArrayBuffer prefix views with
   `SharedArrayBufferContents::create` over the stable region, and JS `Atomics.wait` permission.
-  Nothing is copied, and old prefix views stay live after growth.
+  Nothing is copied, and old prefix views stay live after growth. `bunjsc_shared_array_buffer_data`
+  reports the storage of a real SharedArrayBuffer so the core can name its region.
 - `crates/bunwasm-engine-jsc/src/vm.rs`, `lib.rs`: the shared region view, nested execution and
   stack origin. The bridge in `crates/bunwasm-engine-quickjs/src/nested_bridge.rs` is shared, named
   through a `NestedEngine` alias.

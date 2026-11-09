@@ -103,6 +103,36 @@ pub enum Request {
     Withdraw {
         token: u32,
     },
+    TableExport {
+        instance: u32,
+        name: String,
+    },
+    TableLength {
+        table: u32,
+    },
+    TableGet {
+        table: u32,
+        index: u32,
+    },
+    TableSet {
+        table: u32,
+        index: u32,
+        function: Option<u32>,
+    },
+    TableGrow {
+        table: u32,
+        delta: u32,
+        function: Option<u32>,
+    },
+    GlobalGet {
+        instance: u32,
+        name: String,
+    },
+    GlobalSet {
+        instance: u32,
+        name: String,
+        value: Number,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -130,4 +160,5 @@ pub enum Reply {
         message: String,
     },
     PendingException,
+    Null,
 }

@@ -12,7 +12,12 @@ function refused(workerData: object, reason: RegExp) {
     return true;
   });
 }
-refused({ mode: 'identity', buffer: new SharedArrayBuffer(4) }, /Only WebAssembly shared memory buffers/);
+// JSC cannot construct a growable buffer at all here. QuickJS allows one that cannot grow.
+try {
+  refused({ mode: 'identity', buffer: new SharedArrayBuffer(8, { maxByteLength: 8 }) }, /Growable SharedArrayBuffer/);
+} catch (error) {
+  assert.ok(error instanceof RangeError);
+}
 refused({ mode: 'identity', memory: new WebAssembly.Memory({ initial: 1 }) }, /Only shared WebAssembly memories/);
 refused({ mode: 'identity', module: unshared }, /Only WebAssembly modules with a shared memory/);
 refused({ mode: 'identity', module: oversizedModule() }, /nested request limit/);

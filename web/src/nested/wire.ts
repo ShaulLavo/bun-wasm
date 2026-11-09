@@ -34,7 +34,14 @@ export type Request =
   | { AttachMemory: { token: number } }
   | { PublishModule: { module: number; description: string } }
   | { AttachModule: { token: number } }
-  | { Withdraw: { token: number } };
+  | { Withdraw: { token: number } }
+  | { TableExport: { instance: number; name: string } }
+  | { TableLength: { table: number } }
+  | { TableGet: { table: number; index: number } }
+  | { TableSet: { table: number; index: number; function: number | null } }
+  | { TableGrow: { table: number; delta: number; function: number | null } }
+  | { GlobalGet: { instance: number; name: string } }
+  | { GlobalSet: { instance: number; name: string; value: WasmNumber } };
 
 export type Reply =
   | { Handle: number }
@@ -43,7 +50,8 @@ export type Reply =
   | { Function: { id: number; params: readonly string[]; results: readonly string[] } }
   | { Values: readonly WasmNumber[] }
   | { Error: { category: string; message: string } }
-  | "PendingException";
+  | "PendingException"
+  | "Null";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();

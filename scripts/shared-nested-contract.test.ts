@@ -39,3 +39,10 @@ test('group bridge declarations stay in the two engines that register its cfg', 
   expect(source('crates/bunwasm-engine-quickjs/src/lib.rs')).toContain('#[cfg(bun_wasm_shared_group)]\nmod nested_bridge;');
   expect(source('crates/bunwasm-engine-jsc/src/lib.rs')).toContain('#[cfg(bun_wasm_shared_group)]\n#[path = "../../bunwasm-engine-quickjs/src/nested_bridge.rs"]\nmod nested_bridge;');
 });
+
+test('Store-budget exhaustion is terminal in the shared guest fixture', () => {
+  const guest = source('tests/fixtures/shared-wasm-memory/guest.ts').trim();
+  const expected = source('tests/fixtures/shared-wasm-memory/expected.txt').trim();
+  expect(guest.split('\n').at(-1)).toBe("await import('./metadata-budget.ts');");
+  expect(expected.split('\n').at(-1)).toBe('shared-wasm-memory Store budget: pass');
+});

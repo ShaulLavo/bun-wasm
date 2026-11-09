@@ -175,6 +175,9 @@ fn split_entry() {
             "bun_futex_wake",
             "bun_core_bind_nested",
             "bun_nested_dispatch",
+            "bun_shared_buffer_alloc",
+            "bun_shared_buffer_release",
+            "bun_shared_buffer_resource",
         ] {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
