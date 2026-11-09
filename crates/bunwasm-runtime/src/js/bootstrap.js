@@ -117,7 +117,7 @@
     return `${label} (${formatPosition(file, line, col)})`;
   }
 
-  // CommonJS wrappers (registered by evaluateModule) and ES module bodies,
+  // CommonJS wrappers (registered by wrapperArguments) and ES module bodies,
   // which QuickJS represents as nameless functions printing as native code.
   const topLevelFunctions = new WeakSet();
   internal.topLevelFunctions = topLevelFunctions;
@@ -542,14 +542,8 @@
       defineHidden(this, { parent });
     }
     _compile(content, filename) {
-      return callModuleWrapper(this, compileModule(content, filename), filename);
-    }
-    require(spec) {
-      if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
-        const exposed = internal.require("node_stream_internals").modules;
-        if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
-      }
-      return requireFrom(spec, this);
+      const wrapper = compileModule(content, filename);
+      return wrapper.apply(this.exports, wrapperArguments(this, wrapper, filename));
     }
   }
 
@@ -574,53 +568,54 @@
     const kind = format || native.moduleFormat(path);
     const mod = new Module(path, undefined);
     moduleCache[path] = mod;
+    evaluateModule(mod, path, kind);
+    return mod;
+  }
+
+  // The entry points outside require(): the main module and ES module imports.
+  function evaluateModule(mod, path, kind) {
     try {
-      evaluateModule(mod, path, kind);
+      const wrapper = moduleWrapper(mod, path, kind);
+      if (wrapper) wrapper.apply(mod.exports, wrapperArguments(mod, wrapper, path));
     } catch (err) {
       delete moduleCache[path];
       throw err;
     }
     mod.loaded = true;
-    return mod;
   }
 
-  function evaluateModule(mod, path, kind) {
+  // Data formats fill mod.exports here. Code formats return their compiled wrapper, and the
+  // caller runs it: a frame of this function under the module body would stay live for every
+  // nested require (docs/stack-limits.md).
+  function moduleWrapper(mod, path, kind) {
     if (kind === "json") {
       mod.exports = JSON.parse(native.readFileUtf8(path));
-      return;
+      return undefined;
     }
     if (kind === "html") {
       mod.exports = internal.require("html_server").create(path);
-      return;
+      return undefined;
     }
     if (kind === "text") {
       mod.exports = native.readFileUtf8(path);
-      return;
+      return undefined;
     }
-    if (kind === "esm") {
-      // The host engine can't evaluate an ES module synchronously: it runs
-      // the module converted to CommonJS by Bun's bundler instead.
-      if (native.compileEsmAsCjs) {
-        const wrapper = native.compileEsmAsCjs(path);
-        callModuleWrapper(mod, wrapper, path);
-        return;
-      }
-      mod.exports = native.requireEsm(path);
-      return;
-    }
-    const wrapper = native.compileCjs(path);
-    callModuleWrapper(mod, wrapper, path);
+    if (kind !== "esm") return native.compileCjs(path);
+    // The host engine can't evaluate an ES module synchronously: it runs
+    // the module converted to CommonJS by Bun's bundler instead.
+    if (native.compileEsmAsCjs) return native.compileEsmAsCjs(path);
+    mod.exports = native.requireEsm(path);
+    return undefined;
   }
 
-  function callModuleWrapper(mod, wrapper, path) {
+  function wrapperArguments(mod, wrapper, path) {
     topLevelFunctions.add(wrapper);
-    const require = makeRequire(path, mod);
-    if (wrapper.length !== 6) {
-      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-    }
+    const args = [mod.exports, makeRequire(path, mod), mod, path, dirname(path)];
+    if (wrapper.length !== 6) return args;
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    args.push(meta);
+    return args;
   }
 
   function resolveFrom(spec, parent, options) {
@@ -632,19 +627,46 @@
     return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  function requireFrom(spec, parent) {
-    const resolved = typeof spec === "string" && spec.startsWith("node:")
-      ? native.resolve(spec, parent.filename, true)
-      : resolveFrom(spec, parent);
-    if (isBuiltinId(resolved)) return internal.builtin(resolved);
-    return loadModule(resolved, null).exports;
+  // The whole require path lives in this one function, and the module body runs straight from
+  // it. Every JavaScript frame between a require call and the next module body costs each
+  // nested level about 320 bytes of QuickJS stack (docs/stack-limits.md), so the steps that
+  // finish before the body runs are calls, and the body's own call is not. Without an owner
+  // this is Module.prototype.require. A module's own require passes its module and still
+  // honors a replaced require method.
+  function requireFunction(owner) {
+    return function require(spec) {
+      if (owner && owner.require !== moduleRequire) return owner.require(spec);
+      const parent = owner || this;
+      if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
+        const exposed = internal.require("node_stream_internals").modules;
+        if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
+      }
+      const resolved = typeof spec === "string" && spec.startsWith("node:")
+        ? native.resolve(spec, parent.filename, true)
+        : resolveFrom(spec, parent);
+      if (isBuiltinId(resolved)) return internal.builtin(resolved);
+      const cached = moduleCache[resolved];
+      if (cached) return cached.exports;
+      const kind = native.moduleFormat(resolved);
+      const mod = new Module(resolved, undefined);
+      moduleCache[resolved] = mod;
+      try {
+        const wrapper = moduleWrapper(mod, resolved, kind);
+        if (wrapper) wrapper.apply(mod.exports, wrapperArguments(mod, wrapper, resolved));
+      } catch (err) {
+        delete moduleCache[resolved];
+        throw err;
+      }
+      mod.loaded = true;
+      return mod.exports;
+    };
   }
+  const moduleRequire = requireFunction(undefined);
+  defineHidden(Module.prototype, { require: moduleRequire });
 
   function makeRequire(fromPath, mod) {
     const parent = mod || new Module(fromPath, undefined);
-    function require(spec) {
-      return parent.require(spec);
-    }
+    const require = requireFunction(parent);
     require.resolve = function resolve(spec, options) {
       const resolved = resolveFrom(spec, parent, options);
       return resolved === "node:" + spec ? spec : resolved;
@@ -725,13 +747,7 @@
     mainModule = new Module(path, null);
     mainModule.id = ".";
     moduleCache[path] = mainModule;
-    try {
-      evaluateModule(mainModule, path, format);
-    } catch (err) {
-      delete moduleCache[path];
-      throw err;
-    }
-    mainModule.loaded = true;
+    evaluateModule(mainModule, path, format);
     return undefined;
   };
   internal.getMainModule = () => mainModule;
