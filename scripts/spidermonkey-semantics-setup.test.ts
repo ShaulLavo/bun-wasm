@@ -85,6 +85,7 @@ function prepareRegressionControls() {
     writeFileSync(adapterPath, adapter);
     const filtered = runControls(root, ["--test-name-pattern", "no-matching-test-name", "--pass-with-no-tests"]);
 
+    compilerWrapper(join(root, "bin"), "c++", "sleep 1");
     compilerWrapper(join(root, "bin"), "rustup", "exit 7");
     const failedBuild = runControls(root);
     return { slow, compileElapsedMs, wrongBorrow, filtered, failedBuild };
@@ -94,13 +95,19 @@ function prepareRegressionControls() {
 }
 const controls = prepareRegressionControls();
 
+test("independent native compilers start together instead of spending the setup budget in sequence", () => {
+  const stages = controls.slow.compilerTrace.trim().split("\n").map(line => line.slice(line.indexOf(" ") + 1));
+  expect(stages.slice(0, 2).sort()).toEqual(["c++ entered", "rustup entered"]);
+  expect(stages.slice(2).sort()).toEqual(["c++ exec", "rustup exec"]);
+});
+
 test("native compiler setup can exceed five seconds without consuming either runtime deadline", () => {
   expectCompleted(controls.slow, 0);
   expect(controls.slow.output).toContain(`(pass) ${commonjsTest}`);
   expect(controls.slow.output).toContain(`(pass) ${finalizerTest}`);
   expect(controls.slow.output).not.toContain("timed out");
   expect(controls.slow.exitCode).toBe(0);
-  expect(controls.compileElapsedMs).toBeGreaterThan(12_000);
+  expect(controls.compileElapsedMs).toBeGreaterThan(6_000);
   expect(controls.slow.leftovers).toEqual([]);
 });
 
@@ -116,6 +123,8 @@ test("compiler failure remains blocking and removes partially prepared native co
   expectCompleted(controls.failedBuild, 1);
   expect(controls.failedBuild.output).toContain("Received: 7");
   expect(controls.failedBuild.exitCode).toBe(1);
+  expect(controls.failedBuild.compilerTrace).toContain("c++ exec");
+  expect(controls.failedBuild.elapsedMs).toBeGreaterThan(1_000);
   expect(controls.failedBuild.leftovers).toEqual([]);
 });
 
