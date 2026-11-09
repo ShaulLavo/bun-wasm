@@ -136,8 +136,8 @@ JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Prox
 traps and other C++ reentry start a new `CLoop::execute` activation for each level.
 It costs about 2.1 KB of host stack and 5.8 KB of shadow stack. The WASI
 `StackBounds` port in `jsc/webkit-wasi.patch` limits native recursion to 320 KiB of
-shadow stack, or `BUN_WASM_STACK_KIB` when the host sets it, plus JSC's existing
-128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
+shadow stack by default, or `BUN_WASM_STACK_KIB` when the host sets it, plus
+JSC's existing 128 KiB exception reserve. JSC's `maxPerThreadStackUsage` option cannot do this:
 in the C-loop build it also sizes the separate JavaScript frame stack, and 448 KiB
 cut plain recursion from 63,887 calls to 4,085.
 
@@ -160,14 +160,33 @@ SolidStart template also passes dev rendering, click, hot reload, build, and
 production preview on this Firefox/JSC host. These measurements were taken on
 2026-11-09.
 
-Known gap: JSC's parser (every nesting shape), regular-expression compiler,
-`Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
-plain `JSON.stringify` fast path spend far more host stack per shadow byte than
-its reentry paths (parser blocks about six times more). Deeply nested input still
-traps there as it did before, for example blocks after 415 levels on wasmtime. On the
-native launcher's 16 MiB stack they throw instead, except unary operator chains, which
-trap after 80,618 levels at any budget. Fixing
-them needs reservations in WebKit, like those in QuickJS.
+The V8 browser policy gives JSC 800 KiB for getter reentry. Native recursive
+paths with small shadow frames now reserve extra shadow bytes: 512 in both fast
+flattening functions and default Proxy reads, 1024 in fast JSON serialization,
+and 2048 in assignment and statement parsing. The static JSON fast path also checks the
+VM's soft stack limit instead of relying only on its native-frame buffer estimate.
+These reservations do not enlarge the host stack or the C-loop frame stack.
+Firefox, WebKit and unknown hosts keep their existing budgets. The focused
+`stack-getter-headroom` fixture covers 128 getters, the five previously caught
+paths, and getter recovery after the exceptions. The blocking JSC embedding gate
+also runs it with a 1 MiB Node Worker stack and 800 KiB guest budget, so a large
+launcher stack cannot hide missing native-frame reservations.
+
+Measured on November 9, 2026 in Google Chrome 157 on Linux, getters reach 142
+levels with the 800 KiB browser policy, compared with 56 at 320 KiB. The exact
+Ajv 8.17.1 CommonJS schema-registry control needs 127 getter levels and completes.
+The focused fixture also passes at 1000 KiB, a 1.25-times margin, including getter
+recovery after all five native exceptions. The same fixture passes on a 1 MiB
+Node Worker stack at 800 KiB and a 21 MiB Worker stack at the unchanged 6144 KiB
+Node policy. These are stack controls, not an Angular application qualification.
+
+Remaining gaps are visible in the original browser-stack probe. Unary operator
+chains and the noncapturing-group and lookahead regexp cases still trap at
+200,000 levels in Chrome. Blocks and conditional expressions now throw instead.
+This is not a claim that every parser or regexp shape is safe. The extra accounting
+can reduce native-path nesting capacities on other hosts. Firefox's original two
+stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
+iOS measurement is claimed.
 
 ## Browser-native engine
 

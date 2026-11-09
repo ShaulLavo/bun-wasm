@@ -1,0 +1,8 @@
+128 getters completed
+flat survived
+proxychain survived
+jsonplain survived
+arrow survived
+statement survived
+128 getters completed
+continued
