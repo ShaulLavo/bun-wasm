@@ -75,7 +75,7 @@ function matchingResults(): void {
 }
 function reentrantMatching(): void {
   try { matchingResults(); } catch (error) {
-    if (!(error instanceof RangeError)) throw error;
+    if (!regexpErrors.some(type => error instanceof type)) throw error;
   }
   'x'.replace('x', () => { reentrantMatching(); return ''; });
 }

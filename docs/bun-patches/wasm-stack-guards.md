@@ -122,7 +122,9 @@ result into the existing `TooManyDisjunctions` error, which reports a catchable
 The added match reservation makes this previously silent error reachable with
 fewer nested groups. The fixture compiles a modest quantified pattern before
 native callback reentry, then checks successful `exec`, `test`, `replace` and
-`matchAll` results at each depth. A call may match or throw `RangeError`, but must
-not silently report no match. Shallow matching and a genuine non-match still work
-after unwinding. This control complements the existing compile-depth sweep,
-which cannot detect a lost matching result.
+`matchAll` results at each depth. On JSC a call may match or throw `RangeError`,
+but must not silently report no match. The portable fixture also accepts QuickJS's
+catchable `SyntaxError` when `matchAll` compiles a regexp during deep reentry.
+Wrong matching results still throw an ordinary `Error`, which is not accepted.
+Shallow matching and a genuine non-match must still work after unwinding. This
+control complements the compile-depth sweep, which cannot detect a lost match.
