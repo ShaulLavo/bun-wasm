@@ -2,6 +2,7 @@ import { createContext, runInContext } from "node:vm";
 import type { Framework } from "./catalog";
 import type { Transport } from "./transport";
 import { phases, type Attempt, type Phase } from "./model";
+import type { Runtime } from "waffle";
 function evidence(phase: Phase): unknown {
   switch (phase) {
     case "startup": return { ready: true, status: "ready", engine: "browser", agent: "fixture" };
@@ -19,7 +20,7 @@ export function completeAttempt(): Attempt {
   return { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass", evidence: evidence(phase), startedAt: "now", durationMs: 1, timeoutMs: phase === "cleanup" ? 20_000 : 180_000 })) };
 }
 
-export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0): Promise<T> {
+export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0, filesystem?: Pick<Runtime["filesystem"], "fork">): Promise<T> {
   const pending: Promise<void>[] = [];
   let listening = false, count = 0, message = framework.text;
   const shell = { running: false, lastExit: 0,
@@ -36,14 +37,14 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     dispatch(change: { changes: { insert: string } }) { message = change.changes.insert; },
   };
   const counter = { get textContent() { return `count ${count}`; }, disabled: false, click() { count++; } };
-  const context = createContext({ crypto, URL, TextDecoder, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
+  const context = createContext({ crypto, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, AbortSignal, EventTarget, Event, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
     document: { querySelector(selector: string) {
       if (selector === "#status") return { textContent: "Browser (native) ready" };
       if (selector === "#engine") return { value: "browser" };
       if (selector === framework.button || selector === framework.clicked) return counter;
       return { textContent: message };
     } },
-    playground: { shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
+    playground: { fs: filesystem, shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
       editor: { async open() {}, async save() {}, view },
       term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
     },

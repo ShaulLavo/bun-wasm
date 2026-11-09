@@ -1,25 +1,22 @@
 import { expect, test } from "bun:test";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
-import { namedAngularDiagnostic } from "./angular-diagnostic";
+import { namedAngularDiagnostic, buildAngularDiagnosticSource } from "./angular-diagnostic";
+import { diagnosticFilesystem, diagnosticPath, type DiagnosticFixture } from "./angular-diagnostic-fixture";
 import { withPlayground } from "./test-fixture";
 
-const path = "/tmp/ng-9kxMAf/angular-errors.log";
+const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;
-type Fixture = { framework?: string; output?: string; contents?: string; fail?: boolean; owned?: boolean; missing?: boolean; symlink?: string; stalled?: boolean; slowTerminal?: boolean };
+type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean };
 
 async function runFixture(config: Fixture = {}) {
   const framework = frameworks.find(item => item.id === (config.framework ?? "angular"));
   if (!framework) throw new Error("Missing framework fixture");
-  return withPlayground(framework, 0, async transport => {
+  const filesystem = diagnosticFilesystem(config);
+  try { return await withPlayground(framework, 0, async transport => {
     const logs: string[] = [];
     const events: string[] = [];
-    await transport.evaluate(`globalThis.diagnostic = ${JSON.stringify({ ...config, path, output: config.output ?? reference, bytes: Array.from(new TextEncoder().encode(config.contents ?? "RangeError: Maximum call stack size exceeded\n    at ajv/dist/compile/codegen/index.js:181:24")) })};
-      globalThis.reads = [];
-      playground.fs = {
-        async lookup(path) { reads.push(path); return { kind: diagnostic.symlink === path ? 'symlink' : path.endsWith('.log') ? 'file' : 'dir' }; },
-        async readFile(path) { reads.push(path); if (diagnostic.stalled) return new Promise(() => {}); return diagnostic.missing ? undefined : Uint8Array.from(diagnostic.bytes); }
-      };
+    await transport.evaluate(`globalThis.diagnostic = ${JSON.stringify({ ...config, output: config.output ?? reference })};
       playground.term.buffer.active = { length: 1, getLine() { return { isWrapped: false, translateToString() { return diagnostic.output; } }; } };
       const submit = playground.shell.submit.bind(playground.shell);
       playground.shell.submit = async text => { if (text === 'bun run dev' && diagnostic.fail !== false) { playground.shell.lastExit = 127; return; } return submit(text); };
@@ -28,7 +25,7 @@ async function runFixture(config: Fixture = {}) {
     const pending: Promise<unknown>[] = [];
     let transcripts = 0;
     transport.evaluate = async <T>(expression: string): Promise<T> => {
-      if (expression.includes("async function readDiagnostic")) events.push("diagnostic");
+      if (expression.includes("const read = globalThis.__goalsReadAngularDiagnostic")) events.push("diagnostic");
       if (expression.includes("function transcript")) transcripts++;
       const delay = config.slowTerminal && transcripts === 3 && expression.includes("function transcript");
       const operation = (async () => { if (delay) await Bun.sleep(2050); return evaluate<T>(expression); })();
@@ -44,15 +41,20 @@ async function runFixture(config: Fixture = {}) {
     });
     const durationMs = performance.now() - started;
     await Promise.all(pending);
-    return { result, logs, events: events.slice(), durationMs, reads: await evaluate<string[]>("reads") };
-  });
+    expect(filesystem.disposed()).toBe(true);
+    expect(await evaluate("typeof globalThis.__goalsReadAngularDiagnostic")).toBe("undefined");
+    return { result, logs, events: events.slice(), durationMs, reads: filesystem.operations, readInodes: filesystem.readInodes, ranges: filesystem.ranges, expected: filesystem.expected, replaced: filesystem.replaced() };
+  }, 0, filesystem.filesystem); }
+  finally { await filesystem.close(); }
 }
 
 test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
   const observed = await runFixture({ owned });
   expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("without listening") });
   expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
-  expect(observed.reads).toEqual(["/tmp", "/tmp/ng-9kxMAf", path, path]);
+  expect(observed.reads).toEqual(["preopen", "resolve", "stat", "resolve", "stat", "resolve", "stat", "stat", "read"]);
+  expect(observed.readInodes).toEqual([observed.expected]);
+  expect(observed.ranges).toEqual([[16_384, 0]]);
   expect(observed.logs).toHaveLength(2);
   for (const log of observed.logs) expect(log).toContain("at ajv/dist/compile/codegen/index.js:181:24");
   expect(observed.events[0]).toBe("diagnostic");
@@ -74,7 +76,7 @@ test.each([
 
 test.each(["/tmp", "/tmp/ng-9kxMAf", path])("refuses symlink at %s without reading its target", async symlink => {
   const observed = await runFixture({ symlink });
-  expect(observed.reads.filter(value => value === path)).toHaveLength(symlink === path ? 1 : 0);
+  expect(observed.readInodes).toEqual([]);
   expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
   expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
 });
@@ -113,4 +115,36 @@ test("rejects misleading references and accepts the observed Angular path", () =
   expect(namedAngularDiagnostic(reference)).toBe(path);
   expect(namedAngularDiagnostic(`prefix ${reference}`)).toBeUndefined();
   expect(namedAngularDiagnostic('See "/tmp/ng-abc/secret.txt" for further details.')).toBeUndefined();
+});
+
+test.each(["/tmp", "/tmp/ng-9kxMAf", path])("replacement of %s after resolution cannot redirect the retained handle", async replaced => {
+  const observed = await runFixture({ replacement: { path: replaced, after: "resolve" } });
+  expect(observed.replaced).toBe(true);
+  expect(observed.readInodes.every(inode => inode === observed.expected)).toBe(true);
+  expect(observed.logs.at(-1)).not.toContain("PRIVATE FILE MUST NOT BE READ");
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+});
+
+test.each(["/tmp", "/tmp/ng-9kxMAf", path])("replacement of checked %s before reading cannot expose a private target", async replaced => {
+  const observed = await runFixture({ replacement: { path: replaced, after: "stat" } });
+  expect(observed.replaced).toBe(true);
+  if (replaced === path) {
+    expect(observed.readInodes).toEqual([observed.expected]);
+    expect(observed.logs.at(-1)).toContain("at ajv/dist/compile/codegen/index.js:181:24");
+  } else {
+    expect(observed.readInodes).toEqual([]);
+    expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
+  }
+  expect(observed.logs.at(-1)).not.toContain("PRIVATE FILE MUST NOT BE READ");
+});
+
+test("portable fleet bundle embeds the same pinned reader without remote source dependencies", async () => {
+  const diagnostic = await buildAngularDiagnosticSource();
+  const built = await Bun.build({ entrypoints: [new URL("./angular-diagnostic.ts", import.meta.url).pathname], target: "bun", define: { __GOALS_ANGULAR_DIAGNOSTIC__: JSON.stringify(diagnostic) } });
+  expect(built.success).toBe(true);
+  const source = await built.outputs[0]?.text();
+  if (!source) throw new Error("Missing portable reader bundle");
+  const embedded: unknown = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  if (!embedded || typeof embedded !== "object" || !("angularDiagnostic" in embedded) || typeof embedded.angularDiagnostic !== "function") throw new Error("Missing embedded reader export");
+  await expect(embedded.angularDiagnostic({ async evaluate(expression: string) { expect(expression).toContain("const read = globalThis.__goalsReadAngularDiagnostic"); throw new Error("Embedded reader evaluated"); } }, path, Date.now() + 2000)).rejects.toThrow("Embedded reader evaluated");
 });

@@ -6,6 +6,7 @@ import { sameDeadlines } from "./deadlines";
 import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
 import { bounded } from "./execute";
+import { buildAngularDiagnosticSource } from "./angular-diagnostic";
 import { ownedCommand, withSignals } from "./lifetime";
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 class NativeUnavailable extends Error {}
@@ -38,7 +39,8 @@ export function combine(first: Report, second: Report): Report {
 }
 async function bundle(destination: string, source: Report["source"]): Promise<void> {
   await mkdir(join(destination, "web"), { recursive: true });
-  const runner = await Bun.build({ entrypoints: [resolve(import.meta.dir, "run.ts")], outdir: destination, target: "bun", format: "esm", naming: "run.js", external: ["playwright"] });
+  const diagnostic = await buildAngularDiagnosticSource();
+  const runner = await Bun.build({ entrypoints: [resolve(import.meta.dir, "run.ts")], outdir: destination, target: "bun", format: "esm", naming: "run.js", external: ["playwright"], define: { __GOALS_ANGULAR_DIAGNOSTIC__: JSON.stringify(diagnostic) } });
   const server = await Bun.build({ entrypoints: [resolve("web/serve.ts")], outdir: join(destination, "web"), target: "bun", format: "esm", naming: "serve.ts" });
   if (!runner.success || !server.success) throw new AggregateError(runner.logs.concat(server.logs), "Fleet runner bundle failed");
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
