@@ -1,0 +1,1 @@
+true true|file:///nested/payload.cts|file:///nested/meta.ts|/nested/meta.ts|/nested|/nested/meta.ts|false|payload|local|escaped|import.meta|true

@@ -1331,9 +1331,178 @@ jobs:
       - name: Test vectored reads and browser dependency resolution
         run: bun scripts/test-checks.ts package-extra
 
+  shared-prebuild:
+    name: Shared PIC sysroot and JSC prebuild
+    needs: quality
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    # The ordinary JSC producer budgets 45 minutes for cold C++ and its hand-off.
+    timeout-minutes: 45
+    env:
+      WASI_LIBC_JOBS: "2"
+    outputs:
+      manifest-sha256: ${{ steps.shared-artifact.outputs.manifest-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure private shared sysroot paths
+        run: |
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/release-downloads
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install sysroot build tools
+        run: |
+          if command -v cmake && command -v ninja; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+      - name: Install pinned shared build tools
+        run: bun scripts/ci-build-tools.ts
+      - uses: actions/cache/restore@v4
+        id: shared-sdk
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned WASI SDK
+        if: steps.shared-sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+          trap 'rm -f -- "$archive"' EXIT
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          mkdir -p "$WASM_TOOLS/wasi-sdk"
+          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+      - name: Save completed shared-sdk setup
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
+      - name: Identify shared profile inputs
+        id: shared-inputs
+        run: |
+          source env.sh
+          inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: shared-sysroot-cache
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
+      - name: Build or verify shared profile
+        run: |
+          source env.sh
+          bun scripts/build-wasi-sysroot.ts --shared-pic
+      - name: Save shared profile cache
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
+      - name: Install the shared JSC producer tools
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y ruby gperf bison
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-binaryen
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Prepare shared-profile Binaryen
+        if: needs.quality.outputs.shared-native == 'true'
+        run: bun scripts/ci-binaryen.ts
+      - name: Identify the shared JSC prebuild inputs
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-jsc-inputs
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
+          export JSC_BUILD_DIR="$RUNNER_TEMP/jsc/shared"
+          source jsc/common.sh
+          copy_jsc_config_inputs
+          inputs=$(jsc_inputs_hash)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-jsc-cache
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}
+      - name: Build or verify the shared JSC prebuild
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
+          CI_SHARED_JSC_HIT: ${{ steps.shared-jsc-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CI_SHARED_JSC_HIT" != true ]]; then
+            JSC_PROFILE=shared-group bash scripts/build-jsc.sh
+          fi
+          source jsc/common.sh
+          check_jsc_inputs_stamp
+      - name: Save the shared JSC prebuild
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: ${{ steps.shared-jsc-cache.outputs.cache-primary-key }}
+      - name: Package the verified shared prebuild and sysroot
+        id: shared-artifact
+        env:
+          SHARED_NATIVE: ${{ needs.quality.outputs.shared-native }}
+        run: |
+          source env.sh
+          bundle="$RUNNER_TEMP/shared-prebuild-artifact"
+          mkdir "$bundle"
+          members=(sysroot.tar.zst)
+          tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
+          if [[ "$SHARED_NATIVE" == true ]]; then
+            tar --posix -C "$(dirname "$JSC_BUILD_DIR")" -cf - "$(basename "$JSC_BUILD_DIR")" | zstd -T0 -q -o "$bundle/prebuild.tar.zst"
+            members+=(prebuild.tar.zst)
+          fi
+          {
+            printf 'run=%s\nsha=%s\nshared-native=%s\nsysroot=%s\njsc-build-dir=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$SHARED_NATIVE" "$BUN_WASM_SYSROOT" "$RUNNER_TEMP/jsc/shared"
+            (cd "$bundle" && sha256sum "${members[@]}")
+          } > "$bundle/manifest"
+          tar --posix -C "$bundle" -cf "$RUNNER_TEMP/shared-prebuild.tar" "${members[@]}" manifest
+          echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/shared-prebuild.tar
+          if-no-files-found: error
+          retention-days: 1
+          archive: false
+
   shared-sysroot:
     name: Shared PIC sysroot proof
-    needs: [quality, rust]
+    needs: [quality, rust, shared-prebuild]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     defaults:
@@ -1347,6 +1516,10 @@ jobs:
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
       - uses: actions/checkout@v4
+      - name: Require the shared prebuild producer
+        env:
+          SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
+        run: test "$SHARED_PREBUILD_RESULT" = success
       - name: Require the shared native launcher producer
         if: needs.quality.outputs.shared-native == 'true'
         env:
@@ -1474,20 +1647,57 @@ jobs:
           inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
-        id: shared-sysroot-cache
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-binaryen
         with:
-          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
-          key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
-      - name: Build or verify shared profile
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Prepare shared-profile Binaryen
+        if: needs.quality.outputs.shared-native == 'true'
+        run: bun scripts/ci-binaryen.ts
+      - name: Configure private shared JSC build path
+        run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: shared-prebuild.tar
+          path: ${{ runner.temp }}/shared-prebuild-transfer
+      - name: Import the verified shared prebuild and sysroot
+        env:
+          SHARED_NATIVE: ${{ needs.quality.outputs.shared-native }}
+          SHARED_PREBUILD_MANIFEST_SHA256: ${{ needs.shared-prebuild.outputs.manifest-sha256 }}
+          JSC_PROFILE: shared-group
+          JOBS: "2"
+          CAGE: ""
         run: |
           source env.sh
+          transfer="$RUNNER_TEMP/shared-prebuild-transfer/shared-prebuild.tar"
+          manifest="$RUNNER_TEMP/shared-prebuild-manifest"
+          members=(sysroot.tar.zst)
+          if [[ "$SHARED_NATIVE" == true ]]; then members+=(prebuild.tar.zst); fi
+          [[ "$SHARED_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(tar --posix -tf "$transfer")" == "$(printf '%s\n' "${members[@]}" manifest)" ]]
+          [[ ! -e "$manifest" ]]
+          tar --posix -xOf "$transfer" manifest > "$manifest"
+          echo "$SHARED_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
+          expected=$(printf 'run=%s\nsha=%s\nshared-native=%s\nsysroot=%s\njsc-build-dir=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$SHARED_NATIVE" "$BUN_WASM_SYSROOT" "$JSC_BUILD_DIR")
+          [[ "$(head -n 5 "$manifest")" == "$expected" ]]
+          [[ "$(tail -n +6 "$manifest" | cut -d' ' -f3)" == "$(printf '%s\n' "${members[@]}")" ]]
+          for member in "${members[@]}"; do
+            digest=$(tail -n +6 "$manifest" | awk -v member="$member" '$2 == member { print $1 }')
+            [[ "$(tar --posix -xOf "$transfer" "$member" | sha256sum | cut -d' ' -f1)" == "$digest" ]]
+          done
+          [[ ! -e "$BUN_WASM_SYSROOT" && ! -e "$JSC_BUILD_DIR" ]]
+          mkdir -p "$(dirname "$BUN_WASM_SYSROOT")" "$(dirname "$JSC_BUILD_DIR")"
+          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          test -s "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json"
+          test -s "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a"
           bun scripts/build-wasi-sysroot.ts --shared-pic
-      - name: Save shared profile cache
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
-          key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
+          if [[ "$SHARED_NATIVE" == true ]]; then
+            tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+            source jsc/common.sh
+            check_jsc_inputs_stamp
+          fi
+          rm -r -- "$manifest" "$RUNNER_TEMP/shared-prebuild-transfer"
       - name: Run two-member real-libc proof
         run: |
           source env.sh
@@ -1507,15 +1717,6 @@ jobs:
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - uses: ./.github/actions/rust-build-cache
         if: needs.quality.outputs.shared-native == 'true'
-      - uses: actions/cache/restore@v4
-        if: needs.quality.outputs.shared-native == 'true'
-        id: shared-binaryen
-        with:
-          path: ${{ env.WASM_TOOLS }}/binaryen
-          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
-      - name: Prepare shared-profile Binaryen
-        if: needs.quality.outputs.shared-native == 'true'
-        run: bun scripts/ci-binaryen.ts
       - uses: actions/cache/restore@v4
         if: needs.quality.outputs.shared-native == 'true'
         id: shared-native-cache
@@ -1560,41 +1761,6 @@ jobs:
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
-      - name: Install the shared JSC producer tools
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
-          sudo apt-get update
-          sudo apt-get install -y ruby gperf bison
-      - name: Identify the shared JSC prebuild inputs
-        if: needs.quality.outputs.shared-native == 'true'
-        id: shared-jsc-inputs
-        env:
-          JSC_PROFILE: shared-group
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
-          export JSC_BUILD_DIR="$RUNNER_TEMP/jsc/shared"
-          source jsc/common.sh
-          copy_jsc_config_inputs
-          inputs=$(jsc_inputs_hash)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        if: needs.quality.outputs.shared-native == 'true'
-        id: shared-jsc-cache
-        with:
-          path: ${{ runner.temp }}/jsc/shared
-          key: shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}
-      - name: Build the shared JSC prebuild
-        if: needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true'
-        env:
-          JSC_PROFILE: shared-group
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          source env.sh
-          JSC_PROFILE=shared-group bash scripts/build-jsc.sh
       - name: Produce the shared JSC profile once
         if: needs.quality.outputs.shared-native == 'true'
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
@@ -1614,12 +1780,6 @@ jobs:
           export BUN_WASM_TRACE=1
           bun scripts/test-checks.ts native --profile shared-group
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
-      - name: Save the shared JSC prebuild
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/jsc/shared
-          key: ${{ steps.shared-jsc-cache.outputs.cache-primary-key }}
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -1858,7 +2018,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-sysroot, web, process-bundles, browser-process]
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-sysroot, web, process-bundles, browser-process]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

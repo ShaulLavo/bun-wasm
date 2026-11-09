@@ -12,11 +12,13 @@ import { createSafariTransport } from "./safari-transport";
 import { assetIdentity } from "./assets";
 import { withNativeDriver } from "./native";
 import { withSignals } from "./lifetime";
+import { checkReactStartup, reactStartupURL } from "./react-startup";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 
 export interface Options {
   signal?: AbortSignal;
+  reactStartupUrl?: string;
   root: string; output: string; timeoutMs: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
 }
@@ -30,7 +32,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file"];
+    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -39,6 +41,7 @@ export function options(args: readonly string[]): Options {
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
   return {
+    reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
     root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
     browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
     frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
@@ -124,6 +127,7 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);
   signal.throwIfAborted();
+  if (config.reactStartupUrl) await checkReactStartup(config.reactStartupUrl, config.output, signal);
   const server = Bun.spawn(["bun", "web/serve.ts"], { env: { ...process.env, ROOT: config.root, HOST: "127.0.0.1", PORT: "0", PREVIEW_ORIGINS: "1" }, stdout: "pipe", stderr: "inherit" });
   const resource = { kind: "asset-server" as const, host: hostname(), pid: server.pid, stopped: false };
   report.resources = (report.resources ?? []).concat([resource]);
