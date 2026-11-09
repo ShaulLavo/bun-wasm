@@ -5,6 +5,7 @@ import { parentPort, workerData, MessagePort as NativeMessagePort } from "node:w
 import { bindSharedObjectHost } from "../../../web/src/shared-objects/host";
 import { installSharedBufferRealm } from "../../../web/src/shared-objects/realm";
 import { exportSharedObjects } from "../../../web/src/shared-objects/service";
+import { sharedPoolLanes } from "../../../web/src/shared-objects/protocol";
 import { sourcePorts, type SourcePort } from "./source-runtime";
 import type { Graph } from "./runtime-types";
 
@@ -73,9 +74,13 @@ const senders: Record<string, (port: SourcePort, held: unknown[]) => void> = {
     inner.port1.postMessage({ signal: new SharedArrayBuffer(4), v: "reply" });
   },
   laneExhausted(port, held) {
-    // Spend only lane claims here, not the unrelated eight-slot route outbox.
-    for (let index = 1; index < 32; index++) {
-      if (service.lanes!.create().poolIndex !== index) throw new Error("Unexpected lifetime lane cursor");
+    const lanes = service.lanes;
+    if (!lanes) throw new Error("Shared lane pool is unavailable");
+    // Consume lifetime claims without filling the unrelated route-command mailbox.
+    for (let index = 1; index < sharedPoolLanes; index++) {
+      const backing = lanes.create();
+      if (backing.poolIndex !== index) throw new Error("Unexpected lifetime lane cursor");
+      held.push(backing.buffer);
     }
     const inner = new runtime.MessageChannel();
     held.push(inner);

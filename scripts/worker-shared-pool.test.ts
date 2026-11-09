@@ -274,7 +274,7 @@ async function runCase(name: string): Promise<Record<string, unknown>> {
   const workers: Worker[] = [], ports: NativeMessagePort[] = [];
   const result = Promise.withResolvers<Record<string, unknown>>();
   const deadline = setTimeout(() => result.reject(new Error(`${name} timed out`)), 6000);
-  const extras: { inner?: unknown; sent?: Record<string, unknown> } = {};
+  const extras: { inner?: unknown; sent?: Record<string, unknown>; brokerWait?: ReturnType<typeof Atomics.wait> } = {};
   try {
     const leases = { sender: broker.register(), receiver: broker.register() };
     const file = new URL("./fixtures/shared-objects/pool-receive-worker.ts", import.meta.url);
@@ -284,7 +284,11 @@ async function runCase(name: string): Promise<Record<string, unknown>> {
     function onMessage(lease: typeof leases.sender, value: Record<string, unknown>) {
       if (value.type === "bun-shared-connect") { ports.push(value.port as NativeMessagePort); lease.attach(value.port as NativeMessagePort); return; }
       if (value.kind === "initial") { receiver.postMessage({ kind: "restore", graph: value.graph }); return; }
-      if (value.kind === "ready") { sender.postMessage({ kind: "run" }); return; }
+      if (value.kind === "ready") {
+        sender.postMessage({ kind: "run" });
+        if (name === "laneExhausted") extras.brokerWait = Atomics.wait(new Int32Array(gate), 0, 0, 6000);
+        return;
+      }
       if (value.kind === "inner") { extras.inner = value.value; return; }
       if (value.kind === "sent") { extras.sent = value; return; }
       if (value.kind === "sender-may-exit") { void sender.terminate().then(() => { Atomics.store(new Int32Array(gate), 1, 1); Atomics.notify(new Int32Array(gate), 1); }); return; }
@@ -341,6 +345,7 @@ test("a frame carrying a transferred port is not partially consumed by the named
 }, 8000);
 test("a lane past its quota needs a turn; a port on it still arrives whole and usable", async () => {
   const result = await runCase("laneExhausted");
+  expect(result.brokerWait).toMatch(/^(ok|not-equal)$/);
   expect(result.first).toEqual(named);
   expect(result.afterTurn).toEqual(expect.objectContaining({ kind: "message", v: 33 }));
   expect(result.inner).toEqual({ v: "viaPort" });

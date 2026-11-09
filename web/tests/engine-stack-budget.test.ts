@@ -19,8 +19,8 @@ test("Safari and unmeasured hosts retain both conservative stack budgets", () =>
   expect(engineStackBudgets("", "")).toEqual({ quickjs: "32", jsc: "192" });
 });
 
-test("V8 keeps the guest defaults without changing browser or engine detection", () => {
-  expect(engineStackBudgets("Error\n    at createBunExecutor (worker.js:10:2)", "Chrome/157.0.0.0")).toBeNull();
+test("V8 gives JSC getter reentry room while keeping QuickJS at its default", () => {
+  expect(engineStackBudgets("Error\n    at createBunExecutor (worker.js:10:2)", "Chrome/157.0.0.0")).toEqual({ jsc: "800" });
 });
 
 test.each([
