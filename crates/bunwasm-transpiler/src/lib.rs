@@ -489,6 +489,11 @@ pub fn with_dynamic_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
     bun_js_printer::with_bunwasm_import_referrer(from, f)
 }
 
+/// Lower static external imports only for the host's synchronous ES-module adapter.
+pub fn with_require_esm_namespace<T>(metadata: &str, f: impl FnOnce() -> T) -> T {
+    bun_js_printer::with_bunwasm_require_namespace(metadata, f)
+}
+
 /// Version of the shapes [`with_await_hooks`] prints.
 pub const HOOKS_VERSION: u32 = bun_js_printer::BUNWASM_HOOKS_VERSION;
 
