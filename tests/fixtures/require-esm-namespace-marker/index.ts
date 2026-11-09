@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { types } from "node:util";
+import * as staticNamespace from "./static.mts";
 
 const namespace = require("./default.mts");
 assert.equal(namespace.__esModule, true, "require(esm) marks a default namespace");
@@ -52,3 +53,35 @@ assert.equal(common.default, "common default");
 assert.equal(common.named, 9);
 assert.equal(require("./common.cts"), common);
 console.log("CommonJS exports unchanged");
+
+assert.equal(types.isModuleNamespaceObject(imported), true);
+assert.equal(types.isModuleNamespaceObject(own), true);
+assert.equal(require("./static.mts"), staticNamespace, "static-first imports keep canonical identity");
+assert.equal(staticNamespace.__esModule, true);
+const dynamicFirst = await import("./dynamic.mts");
+assert.equal(require("./dynamic.mts"), dynamicFirst, "dynamic-first imports keep canonical identity");
+assert.equal(dynamicFirst.__esModule, true);
+const empty = await import("./empty.mts");
+assert.equal(require("./empty.mts"), empty);
+assert.equal(empty.__esModule, true);
+assert.deepEqual(Object.keys(empty), []);
+assert.equal(types.isModuleNamespaceObject(empty), true);
+assert.equal(Reflect.set(namespace, "count", 10), false);
+assert.equal(Object.getPrototypeOf(Object.getPrototypeOf(namespace)), null);
+console.log("canonical namespaces across static-first and dynamic-first imports");
+
+const prototype = Object.getPrototypeOf(namespace);
+for (const base of [null, prototype]) {
+  const fabricated = Object.create(base);
+  Object.defineProperty(fabricated, Symbol.toStringTag, { value: "Module" });
+  Object.defineProperty(fabricated, "__esModule", { value: true });
+  Object.preventExtensions(fabricated);
+  assert.equal(types.isModuleNamespaceObject(fabricated), false, "tags and markers do not confer a namespace brand");
+}
+assert.equal(types.isModuleNamespaceObject(new Proxy(namespace, {})), false);
+const throwingProxy = new Proxy({}, { getPrototypeOf() { throw new Error("must not inspect"); } });
+assert.equal(types.isModuleNamespaceObject(throwingProxy), false);
+for (const value of [null, undefined, {}, common, prototype, "Module", 0, () => {}]) {
+  assert.equal(types.isModuleNamespaceObject(value), false);
+}
+console.log("native namespace branding rejects fabricated values and proxies");
