@@ -1,11 +1,12 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inventory } from "./catalog";
 import { deadlinePolicy } from "./deadlines";
 import { combine } from "./fleet";
-import { finish, initialCells, validateReport, type Report, type Attempt } from "./model";
+import { finish, initialCells, validateReport, type Report, type Attempt, type Cell, type RecordedBox } from "./model";
+import { initialReport, options } from "./run";
 import { completeAttempt } from "./test-fixture";
 import { project, viewMarkdown, writeView } from "./view";
 
@@ -40,19 +41,21 @@ test("read-only projection preserves separate runner, product and policy identit
   expect(view.inputs[0]?.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(view.cells[0]).toMatchObject({ overall: { status: "fail", phase: "install" }, latest: { input: 1, attempt: 0 }, install: { status: "fail" } });
   expect(() => validateReport(view)).toThrow("schema");
+  expect(() => project([input(view)])).toThrow("schema");
   expect(() => combine(first, JSON.parse(JSON.stringify(view)))).toThrow("schema");
 });
 
 test("archive inventory retains parked engines and the original policy, but cannot resume", () => {
   const current = report();
   const { buildTimeouts: _builds, ...deadlines } = current.deadlines;
-  const archived = { ...current, deadlines, cells: current.cells.concat(inventory().filter(cell => cell.engine === "browser").map(cell => ({ ...cell, engine: "hermes", status: "pending", reason: "parked", attempts: [] }))) };
+  const cells: Cell<RecordedBox>[] = current.cells;
+  const archived = { ...current, deadlines, cells: cells.concat(inventory().filter(cell => cell.engine === "browser").map((cell): Cell<RecordedBox> => ({ ...cell, engine: "hermes", status: "pending", reason: "parked", attempts: [] }))) };
   expect(() => validateReport(archived)).toThrow();
   const view = project([input(archived)]);
   expect(view.inputs[0]?.report).toEqual(archived);
   expect(view.inputs[0]?.report.cells).toHaveLength(260);
   expect(view.cells).toHaveLength(208);
-  expect(view.cells.some(cell => cell.engine === "hermes")).toBe(false);
+  expect(view.cells.map(cell => cell.engine)).not.toContain("hermes");
 });
 
 test("install pass never upgrades a later partial phase failure to overall PASS", () => {
@@ -78,6 +81,17 @@ test("latest finish then start wins regardless of input order or success, retain
   if (!cell) throw new Error("Missing test cell");
   cell.attempts.unshift(attempt(1));
   expect(project([input(retried)], [box]).cells[0]?.attempts).toHaveLength(2);
+});
+
+test("finish time precedes start time, with start time breaking equal finishes", () => {
+  const slow = report("slow", 1, "install"), fast = report("fast", 2);
+  const slowAttempt = slow.cells.find(cell => cell.attempts.length)?.attempts[0];
+  const fastAttempt = fast.cells.find(cell => cell.attempts.length)?.attempts[0];
+  if (!slowAttempt || !fastAttempt) throw new Error("Missing test attempts");
+  slowAttempt.finishedAt = "2026-11-08T10:03:00.000Z";
+  expect(project([input(slow), input(fast, "/reports/fast.json")], [box]).cells[0]?.overall.status).toBe("fail");
+  fastAttempt.finishedAt = slowAttempt.finishedAt;
+  expect(project([input(slow), input(fast, "/reports/fast.json")], [box]).cells[0]?.overall.status).toBe("pass");
 });
 
 test("equal-time conflicts and duplicate identities fail, identical evidence keeps every source", () => {
@@ -106,6 +120,8 @@ test("rejects wrong schema, malformed histories, phase evidence, times, inventor
   if (!cell?.attempts[0]) throw new Error("Missing test attempt");
   cell.attempts[0].finishedAt = "not a date";
   expect(() => project([input(bad)])).toThrow("time");
+  cell.attempts[0].finishedAt = "2026-11-08T10:01:30";
+  expect(() => project([input(bad)])).toThrow("time");
   cell.attempts[0].finishedAt = "2026-11-08T10:01:30.000Z";
   cell.attempts[0].phases.push(cell.attempts[0].phases[0]!);
   expect(() => project([input(bad)])).toThrow();
@@ -116,6 +132,9 @@ test("rejects wrong schema, malformed histories, phase evidence, times, inventor
   const malformed = JSON.parse(JSON.stringify(failed));
   malformed.cells.find((cell: { attempts: unknown[] }) => cell.attempts.length).attempts[0].phases[1].evidence.code = 1;
   expect(() => project([input(malformed)])).toThrow();
+  const mismatched = report();
+  mismatched.deadlines = deadlinePolicy(170_000);
+  expect(() => project([input(mismatched)])).toThrow("Phase timeout differs");
 });
 
 test("CLI writes only a new view directory and refuses input overwrite", async () => {
@@ -131,5 +150,11 @@ test("CLI writes only a new view directory and refuses input overwrite", async (
     expect(() => validateReport(saved)).toThrow("schema");
     expect(await readFile(path, "utf8")).toBe(contents);
     await expect(writeView([`--output=${root}/view`, path])).rejects.toThrow();
+    await mkdir(join(root, "site"));
+    await mkdir(join(root, "resume"));
+    const stored = JSON.stringify(saved);
+    await writeFile(join(root, "resume/TABLE.json"), stored);
+    await expect(initialReport(options([`--root=${root}/site`, `--output=${root}/resume`, "--resume", "--asset-source=fixture"]))).rejects.toThrow("schema");
+    expect(await readFile(join(root, "resume/TABLE.json"), "utf8")).toBe(stored);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
