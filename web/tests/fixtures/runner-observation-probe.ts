@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createRuntime } from "waffle";
+import { rootObservationHost, containsStopFailure } from "./root-observation-host.ts";
 import { captureProcessObserver, type ProcessObservation } from "waffle/proc/observation";
 import { startRun } from "../../src/runner.ts";
 import type { RunRequest } from "../../src/bun-executor.ts";
@@ -7,7 +7,6 @@ import { fixtureModule } from "../process-module-fixture.ts";
 
 const mode = process.argv[2];
 const NativeWorker = globalThis.Worker;
-const previous = new Map(["Worker", "location", "crossOriginIsolated"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 const workers: ControlledWorker[] = [];
 const stop = Promise.withResolvers<void>();
 const stopping = Promise.withResolvers<void>();
@@ -28,11 +27,11 @@ class ControlledWorker extends NativeWorker {
       if (event.data.type === "cpu-observed") observed.resolve(event.data.observation);
     });
   }
-  override postMessage(request: unknown, transfer: Transferable[] = []) {
+  override postMessage(request: RunRequest, options: Transferable[] | StructuredSerializeOptions = []) {
+    const transfer = Array.isArray(options) ? options : options.transfer ?? [];
     if (!this.root) { super.postMessage(request, transfer); return; }
-    const run = request as RunRequest;
-    posted.resolve(run);
-    super.postMessage({ ...run, gate: gate.buffer }, transfer);
+    posted.resolve(request);
+    super.postMessage({ ...request, gate: gate.buffer }, transfer);
   }
   override terminate(): void | Promise<void> {
     if (!this.root) return super.terminate();
@@ -47,10 +46,7 @@ class ControlledWorker extends NativeWorker {
   }
   nativeStop() { return super.terminate(); }
 }
-Object.defineProperty(globalThis, "Worker", { configurable: true, value: ControlledWorker });
-Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
-Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: false });
-const runtime = createRuntime({ filesystem: { workerURL: new URL("../../src/fs-worker.ts", import.meta.url), mode: "memory" } });
+const { runtime, restore } = rootObservationHost(ControlledWorker);
 let disposal: Promise<void> | undefined;
 try {
   const module = fixtureModule(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
@@ -71,6 +67,7 @@ try {
   assert.equal((await observed.promise).kind, failed ? "selected" : "terminated", "late CPU observer follows native return, not logical collection");
   const result = await (disposal ??= runtime.dispose()).then(() => ({ kind: "disposed" as const }), error => ({ kind: "failed" as const, error }));
   assert.equal(result.kind, failed ? "failed" : "disposed");
+  if (result.kind === "failed") assert.equal(containsStopFailure(result.error, failure), true, "native stop rejection keeps exact identity");
   assert.equal(calls, 1, "native stop is called once");
   console.log(`PASS CPU root observation ${mode}`);
 } finally {
@@ -79,8 +76,5 @@ try {
   Atomics.notify(gate, 1);
   await (disposal ?? runtime.dispose()).catch(() => {});
   await Promise.all(workers.map(worker => worker.nativeStop()));
-  for (const [key, descriptor] of previous) {
-    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-    else Reflect.deleteProperty(globalThis, key);
-  }
+  restore();
 }

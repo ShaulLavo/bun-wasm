@@ -21,12 +21,14 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
   class FakeWorker {
     onmessage?: (event: MessageEvent) => void;
     request!: RuntimeWorkerRequest;
+    holdNativeStop = false;
+    readonly nativeStop = Promise.withResolvers<void>();
     constructor(readonly url: string) {}
     postMessage(request: RuntimeWorkerRequest) {
       this.request = request;
       workers.set(workerProcessState(request.runtimeProcess!).pid, this);
     }
-    terminate() {}
+    terminate() { return this.holdNativeStop ? this.nativeStop.promise : undefined; }
     exit() { this.onmessage?.({ data: { type: "exit", code: 0 } } as MessageEvent); }
   }
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
@@ -72,10 +74,12 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
     // The guest retains its child's writer synchronously, before either the spawn notification
     // reaches the page or the parent's ordinary completion closes its own transferred lifetime.
     leader.descriptors.dispose();
+    leaderWorker.holdNativeStop = true;
     leaderWorker.exit();
     expect(reader.tryRead([new Uint8Array(1)])).toBe(-6);
     const spawn = pending.shift()!;
     leaderWorker.onmessage!({ data: spawn } as MessageEvent);
+    leaderWorker.nativeStop.resolve();
     await until(() => workers.has(descendantPid) || !!supervisor.get(descendantPid)?.result);
     const descendantWorker = workers.get(descendantPid);
     expect(descendantWorker).toBeDefined();
@@ -94,6 +98,7 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
     reader.close();
   } finally {
     for (const table of tables) table.dispose();
+    for (const worker of workers.values()) worker.nativeStop.resolve();
     broker.dispose(); await runtime.dispose();
     for (const port of ports) port.close();
     globalThis.Worker = originalWorker;

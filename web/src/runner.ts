@@ -16,7 +16,8 @@ import { createNotificationBridge, type NotificationBridge } from "waffle/browse
 import { createPreview1Network } from "waffle/browser/preview1-network";
 import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
-import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
+import { claimOutcome, type OutcomeWord } from "waffle/proc/outcome";
+import { captureNativeReturn, captureProcessObserver, type ProcessObserver } from "waffle/proc/observation";
 import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
 import { runtimeRelay } from "./net/relay.js";
@@ -31,11 +32,12 @@ function loadTools(): Promise<WebAssembly.Module> {
     .catch(error => { toolsModule = undefined; throw error; });
 }
 
-function physicalStop(worker: Worker | undefined, stopped: () => void): Promise<void> {
+function physicalStop(worker: Worker, returned: () => void, stopped: () => void): Promise<void> {
   return new Promise<void>(resolve => {
-    const completion: unknown = worker?.terminate();
-    if (completion === undefined) { stopped(); resolve(); return; }
-    resolve(Promise.resolve(completion).then(stopped));
+    const completion: unknown = worker.terminate();
+    const complete = () => { returned(); stopped(); };
+    if (completion === undefined) { complete(); resolve(); return; }
+    resolve(Promise.resolve(completion).then(complete));
   });
 }
 
@@ -209,11 +211,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     throw error;
   }
   let rootOutcome: OutcomeWord | null = null;
+  let rootObserver: ProcessObserver | undefined;
+  let nativeReturned: (() => void) | undefined;
   let rootPid = pid, rootJob = job;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
   let rootConsumerRelease: (() => void) | undefined;
   let worker: Worker | undefined;
+  let workerAcquisition: Promise<Worker> | undefined;
   let subprocess: SubprocessBroker | undefined;
   let finished = false;
   let confirmed = false;
@@ -229,20 +234,28 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     sharedRoute?.close();
     if (workerStopped) return workerStop ?? Promise.resolve();
     workerStopped = true;
+    const completion = Promise.withResolvers<void>();
+    workerStop = completion.promise;
+    void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
+    const stop = (taken: Worker) => physicalStop(taken, () => nativeReturned?.(), () => subprocess?.rootStopped());
+    try {
+      const pending = worker ? stop(worker) : workerAcquisition?.then(stop, () => {});
+      Promise.resolve(pending).then(() => { releaseRootConsumer(); completion.resolve(); }, completion.reject);
+    } catch (error) { completion.reject(error); }
     request.filesystem.port.close();
     request.lookupPort?.close();
     lookupChannel?.port1.close();
     lookupChannel?.port2.close();
     disposeLookup?.();
-    workerStop = physicalStop(worker, () => subprocess?.rootStopped());
-    void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
     releaseNotifications(notifications);
     try { helper?.dispose(); }
     finally {
-      networkOwner?.dispose();
-      networkOwner = undefined;
-      socketRoot?.release();
-      socketRoot = undefined;
+      try { networkOwner?.dispose(); }
+      finally {
+        networkOwner = undefined;
+        socketRoot?.release();
+        socketRoot = undefined;
+      }
     }
     return workerStop;
   };
@@ -258,16 +271,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     endMemorySnapshot(memoryTelemetryId);
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
-    stopWorker();
-    releaseRootConsumer();
+    void Promise.resolve(stopRoot()).catch(() => {});
   }
   function finish(result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) {
     // Page disposal may take ownership while this run is already awaiting its root fence.
     // Its stop hook runs after the owned fence and must settle that existing outcome too.
     if (finished) { if (ownedDisposal) confirm(true); return; }
     if (options.runtime.disposed && !ownedDisposal) return;
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return;
     if (rootOutcome) {
-      const winner = claimOutcome(rootOutcome, signal === undefined
+      const winner = observed?.kind === "selected" ? observed.result : claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
       result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
         ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
@@ -299,7 +313,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     subprocess = new SubprocessBroker(workerUrl, options.runtime, {
       loadTools, network: options.network,
       rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
-      stopRoot: () => { finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true); return stopWorker(); },
+      stopRoot: () => {
+        const observed = rootObserver?.read();
+        if (observed?.kind !== "terminated") finish({ code: observed?.kind === "selected" ? waitStatus(observed.result) : 137 }, false, undefined, true);
+        return stopWorker();
+      },
       output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
     });
   } catch (error) {
@@ -332,19 +350,24 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     try { dispatchBunNetwork(helper, message); }
     catch (error) { finish({ code: 126, error: String(error) }); }
   };
+  const onSharedConnection = (message: BunSharedConnection) => {
+    const observed = rootObserver?.read();
+    const terminal = options.runtime.disposed || finished || Boolean(observed && observed.kind !== "pending");
+    const error = acceptRootSharedConnection(sharedRoute, message, terminal);
+    if (error) finish({ code: 126, error });
+  };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
     if (msg.type === "shared-control-allocation") { subprocess?.rootControlAllocated(msg.buffer); return; }
     if (recordMemorySnapshot(msg)) return;
-    if (msg.type === "bun-shared-connect") {
-      const selected = rootOutcome && readOutcome(rootOutcome);
-      const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));
-      if (error) finish({ code: 126, error });
-      return;
-    }
+    if (msg.type === "bun-shared-connect") { onSharedConnection(msg); return; }
     if (options.runtime.disposed) return;
     if (finished) {
       if (msg.type === "runtime-proc") subprocess?.rejectRuntimeMessage(msg);
+      return;
+    }
+    if (msg.type === "observation-error") {
+      console.error("bun-wasm: root observation failed", msg.message, msg.cleanupErrors);
       return;
     }
     if (msg.type === "cleanup-error") {
@@ -352,7 +375,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       finish({ code: msg.code }, false, msg.signal);
       return;
     }
-    const selected = rootOutcome && readOutcome(rootOutcome);
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return;
+    const selected = observed?.kind === "selected" ? observed.result : null;
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
@@ -393,17 +418,22 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const pendingKills: (2 | 9 | 15)[] = [];
   void (async () => {
     if (finished || options.runtime.disposed) return;
-    // The runtime's pool usually has this worker started already, so the command doesn't wait
-    // for the worker script and its imports. A taking failure is a startup failure (126).
-    const [taken, { workerProcessState, createWorkerProcessTransport }] = await Promise.all([
-      subprocess.takeWorker(workerUrl), import("waffle/proc/worker-client"),
-    ]);
-    if (finished || workerStopped || options.runtime.disposed) return taken.terminate();
+    // Acquisition remains owned even if completion or page disposal wins before it returns.
+    const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
+    if (finished || options.runtime.disposed) return;
+    const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
+    rootObserver = captureProcessObserver(transport);
+    nativeReturned = captureNativeReturn(transport);
+    const state = workerProcessState(transport);
+    rootOutcome = state.signals.outcome;
+    rootPid = state.pid;
+    rootJob = state.job;
+    workerAcquisition = subprocess.takeWorker(workerUrl);
+    const taken = await workerAcquisition;
+    if (finished || workerStopped || options.runtime.disposed) return stopWorker();
     worker = taken;
     worker.onmessage = onMessage;
     worker.onerror = onError;
-    const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
-    const state = workerProcessState(transport);
     const { port: _port, ...filesystem } = request.filesystem;
     transport.data = { ...(transport.data as object | undefined), filesystem };
     if (options.adapter !== "preview1" && isToolCommand(options.args)) {
@@ -416,9 +446,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (!adopted) return;
     const { controlGrant, groupTransfer } = adopted;
     request.memoryGroup = adopted.memoryGroup;
-    rootOutcome = state.signals.outcome;
-    rootPid = state.pid;
-    rootJob = state.job;
     releaseRootConsumer();
     prepared = true;
     for (const signal of pendingKills) kill(signal);
@@ -469,7 +496,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   })().catch(error => finish({ code: 126, error: String(error) }));
   function preparationStopped(): boolean {
     if (finished || options.runtime.disposed) return true;
-    const result = rootOutcome && readOutcome(rootOutcome);
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return true;
+    const result = observed?.kind === "selected" ? observed.result : null;
     if (!result) return false;
     finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
     return true;
@@ -478,7 +507,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {
       outcomeTimer = null;
-      const result = readOutcome(rootOutcome!);
+      const observed = rootObserver!.read();
+      if (observed.kind === "terminated") return;
+      const result = observed.kind === "selected" ? observed.result : null;
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
       if (result?.kind === "signaled") finish({ code: waitStatus(result) }, false, result.code);
@@ -494,7 +525,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // The broker synchronously publishes every job member before any teardown callback. Root
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess?.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
-    const result = readOutcome(rootOutcome!);
+    const observed = rootObserver!.read();
+    const result = observed.kind === "selected" ? observed.result : null;
     if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
   }
   return { done, kill };

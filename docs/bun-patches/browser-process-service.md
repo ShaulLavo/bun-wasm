@@ -140,3 +140,24 @@ Startup diagnostics now acquire their writer lazily, after the immutable typed
 terminal outcome is selected. An already-selected signal does not acquire the
 standard-error lock. Native regressions check diagnostic acquisition itself,
 not only a writer callback after acquisition.
+
+### Root observation ownership
+
+The original adapters in `web/src/{runner,subprocess-broker,worker}.ts` and
+`web/scripts/node-spawn.ts` use Waffle's
+canonical `proc/observation` transfer and native-return capture. The runner retains
+that association before asynchronous Worker acquisition and never reads a recycled
+producer to decide a late observer's result. Native return does not certify physical
+reader closure or replace filesystem, terminal, notification or memory-group cleanup.
+The Worker entry retains observation across its terminal and nested-host imports and
+leaves terminal reporting to the generic bootstrap. No Waffle implementation is
+copied or patched. The browser child launcher remains service-owned and unchanged.
+The Node adapter captures each Worker's native termination separately from logical
+process exit. Pending stops remain owned after an exit event, and rejected stops
+retain their exact reason instead of reporting successful disposal.
+
+The development source reference is `ShaulLavo/waffle`,
+`packages/waffle/proc/{observation,worker-client}.ts` and
+`packages/waffle/browser/{worker,process-broker}.ts` at
+`b6b33bbef5ec603ebe906061dd477d4ce43ee6c9`. This is not a supported package pin.
+The parent must supply the supported replacement before this consumer lands.

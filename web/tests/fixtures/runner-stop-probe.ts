@@ -41,7 +41,7 @@ function trackBroker(options: ConstructorParameters<typeof BrowserProcessBroker>
   const broker = new BrowserProcessBroker(options);
   state.broker = broker;
   const stopped = broker.rootStopped.bind(broker);
-  broker.rootStopped = pid => { state.receipts.push(pid); stopped(pid); };
+  broker.rootStopped = pid => { if (!state.receipts.includes(pid)) state.receipts.push(pid); stopped(pid); };
   const adopt = broker.adoptRuntimeRoot.bind(broker);
   broker.adoptRuntimeRoot = (transport, options) => adopt(transport, { ...options, stop() {
     state.joined.resolve();

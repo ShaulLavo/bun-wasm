@@ -1,5 +1,6 @@
 // Worker entry: Waffle's process bootstrap running Bun's executor (bun-executor.ts).
-import { bootstrap } from "waffle/browser/worker";
+import { captureProcessObserver } from "waffle/proc/observation";
+import { bootstrap, type WorkerExecutor } from "waffle/browser/worker";
 import { createBunExecutor, hasTerminalMetadata, type NestedModule, type RunRequest, type TerminalModule } from "./bun-executor.js";
 
 export type { Engine, RunRequest, SleepMode, WorkerMessage } from "./bun-executor.js";
@@ -27,6 +28,16 @@ const nestedModule = (request: RunRequest): Promise<NestedModule> => request.mem
   : Promise.resolve(undefined);
 ctx.onmessage = async (event: MessageEvent<RunRequest>) => {
   const request = event.data;
-  const [terminal, nested] = await Promise.all([terminalModule(request), nestedModule(request)]);
-  await bootstrap(request, createBunExecutor(request, host, terminal, nested), host);
+  let executor: WorkerExecutor<RunRequest>;
+  try {
+    const observation = request.observation ?? request.runtimeProcess;
+    const observer = observation ? captureProcessObserver(observation) : undefined;
+    const [terminal, nested] = await Promise.all([terminalModule(request), nestedModule(request)]);
+    const observed = observer?.read();
+    executor = observed && observed.kind !== "pending" ? { run: () => 0 }
+      : createBunExecutor(request, host, terminal, nested);
+  } catch (error) {
+    executor = { setup() { throw error; }, run: () => 0 };
+  }
+  await bootstrap(request, executor, host);
 };
