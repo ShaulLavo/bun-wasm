@@ -28,7 +28,6 @@ test("the JSC artifact check runs the busy-loop stdout handshake on the same gue
   expect(command!.slice(2)).toEqual([new URL("../tests/test-stdout-busy-loop.ts", import.meta.url).pathname, "--engine", "jsc", "--wasm", "/dist/bun-jsc.wasm"]);
 });
 
-
 test("JSC stack controls use their discovered fixture with a small real host stack", () => {
   expect(stackFixture()).toEqual({
     path: "tests/fixtures/stack-getter-headroom",

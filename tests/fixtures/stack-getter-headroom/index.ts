@@ -1,12 +1,12 @@
 // Run as a guest TypeScript entry; eval inputs below deliberately exercise JavaScript parsing.
-function getters() {
+function getters(): void {
   let depth = 0;
-  const object = { get value() { return ++depth === 128 ? 1 : 1 + object.value; } };
+  const object: { readonly value: number } = { get value(): number { return ++depth === 128 ? 1 : 1 + object.value; } };
   if (object.value !== 128) throw new Error('getter result changed');
   console.log('128 getters completed');
 }
 const mustCatch = process.env.BUNWASM_STACK_EXPECT_CAUGHT === "1";
-function caught(name, action) {
+function caught(name: string, action: () => unknown): void {
   let caught = false;
   try { action(); } catch (error) {
     if (!(error instanceof RangeError)) throw error;
@@ -17,8 +17,8 @@ function caught(name, action) {
 }
 const depth = 200000;
 getters();
-let array = [];
-let object = {};
+let array: unknown[] = [];
+let object: object = {};
 let proxy = { value: 1 };
 for (let i = 0; i < depth; i++) {
   array = [array];
