@@ -87,6 +87,14 @@ WebAssembly memory buffers are tracked by the original runtime adapter and
 rejected as transfers.
 No Bun vendor patch is needed for these adapters.
 
+Legacy pipe delivery can restore a transferred port before the sender's moving
+record reaches the root broker. Ownership at one transfer version only advances:
+a late moving record cannot replace an already claimed or bound receiver. A
+newer transfer version still changes ownership. This keeps replies routable and
+prevents the original worker's exit from retiring a port now owned by its parent.
+The source regressions cover replies, creator exit and subsequent transfers;
+the unchanged worker-execution and web-worker fixtures are blocking native checks.
+
 The peer-close fixes are retained in the routed adapter. A pending peer-close
 sequence preserves an unstarted peer's queue until it drains, without polling.
 Local closure suppresses future delivery while selected messages finish, with

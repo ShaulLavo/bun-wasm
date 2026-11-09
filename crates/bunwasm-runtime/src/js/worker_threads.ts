@@ -115,6 +115,8 @@
   function own(snapshot: Omit<Snapshot, "queue">, owner: Route | null, origin: Route, ready = true) {
     const previous = owners.get(snapshot.id);
     if (previous && previous.version > snapshot.version) return;
+    // Legacy delivery can claim the new owner before the sender's moving frame arrives.
+    if (previous?.version === snapshot.version && previous.owner !== null && owner === null) return;
     owners.set(snapshot.id, { owner, origin, version: snapshot.version, peer: snapshot.peer, sent: snapshot.sent, ready });
     if (!owner || !ready) return;
     const waiting = pending.get(snapshot.id) || [];
