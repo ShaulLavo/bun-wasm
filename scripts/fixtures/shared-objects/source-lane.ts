@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { join } from "node:path";
-import type * as Native from "../../../web/src/shared-objects/native";
+import type * as NativeCaptures from "../../../web/src/shared-objects/native";
 import type * as Lane from "../../../web/src/shared-objects/lane";
 
 let bundle: Promise<string> | undefined;
@@ -11,7 +11,7 @@ async function source() {
   if (!result.success || !result.outputs[0]) throw new Error("Lane fixture bundle failed");
   return result.outputs[0].text();
 }
-export async function sourceLane(options: { grow?: (buffer: SharedArrayBuffer, length: number) => void; allocate?: (length: number) => void; fixedOnly?: boolean } = {}): Promise<typeof Lane & Pick<typeof Native, "nativeSharedFixed">> {
+export async function sourceLane(options: { grow?: (buffer: SharedArrayBuffer, length: number) => void; allocate?: (length: number) => void; fixedOnly?: boolean } = {}): Promise<typeof Lane & Pick<typeof NativeCaptures, "nativeSharedFixed">> {
   class Native extends SharedArrayBuffer {}
   for (const key of ["byteLength", "growable", "maxByteLength"]) {
     const descriptor = Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, key);
@@ -28,5 +28,5 @@ export async function sourceLane(options: { grow?: (buffer: SharedArrayBuffer, l
   const module = { exports: {} };
   runInNewContext(await (bundle ??= source()), { module, exports: module.exports, SharedArrayBuffer: Native, Uint8Array: Bytes, Int32Array, DataView, Atomics, TextEncoder, TextDecoder, DOMException, Error, RangeError, TypeError, queueMicrotask });
   if (!("openSharedLane" in module.exports) || typeof module.exports.openSharedLane !== "function") throw new Error("Missing lane fixture exports");
-  return module.exports as typeof Lane & Pick<typeof Native, "nativeSharedFixed">;
+  return module.exports as typeof Lane & Pick<typeof NativeCaptures, "nativeSharedFixed">;
 }

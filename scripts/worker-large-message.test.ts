@@ -265,7 +265,7 @@ for (const failure of ["unpooled", "budget", "grow", "full-ring"] as const) test
   const realm = await sourceLane({ grow() { throw new RangeError("native grow rejected"); } });
   const options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {};
   if (failure === "unpooled") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, 32); return grant; };
-  if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget, slotWord); return grant; };
+  if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget); return grant; };
   if (failure === "grow") options.lane = (backing, side, grant) => {
     const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, slots: grant.overflow?.slots[backing.poolIndex] ?? null };
     return realm.openSharedLane(backing.buffer, side, overflow);
