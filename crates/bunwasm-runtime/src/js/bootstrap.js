@@ -89,11 +89,12 @@
     return `${file}:${line}:${col}`;
   }
 
-  function formatCallSite(site) {
+  function formatCallSite(site, keepIdentity = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
-    const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
+    const hotName = typeof rawFile === "string" && rawFile.startsWith("bunwasm:hot:");
+    const file = hotName ? rawFile : internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
@@ -105,16 +106,17 @@
       if (mapped) [line, col] = mapped;
       if (isV8 && !generated) col = pastNew(file, line, col);
     }
+    const shown = !keepIdentity && hotName ? internal.hotDisplayName?.(file) || file : file;
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
-    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(file, line, col);
+    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
     const label = name || "<anonymous>";
     if (site.isNative()) return `${label} (native)`;
     if (file === null || file === undefined) {
       const evalFrame = typeof site.isEval === "function" && site.isEval();
       return `${label} (${evalFrame ? "unknown" : "native"})`;
     }
-    return `${label} (${formatPosition(file, line, col)})`;
+    return `${label} (${formatPosition(shown, line, col)})`;
   }
 
   // CommonJS wrappers (registered by evaluateModule) and ES module bodies,
@@ -131,10 +133,16 @@
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
     let out = "";
-    for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
+    let raw = "";
+    for (let i = start; i < callsites.length; i++) {
+      out += `    at ${formatCallSite(callsites[i])}\n`;
+      if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
+    }
+    if (internal.hotRun) internal.hotErrorStacks.set(error, raw);
     return out;
   };
   internal.defaultPrepareStackTrace = Error.prepareStackTrace;
+  internal.hotErrorStacks = new WeakMap();
 
   function isErrorConstructorFrame(site) {
     return site.isConstructor() && isErrorConstructor(site.getFunction());
@@ -637,6 +645,7 @@
       ? native.resolve(spec, parent.filename, true)
       : resolveFrom(spec, parent);
     if (isBuiltinId(resolved)) return internal.builtin(resolved);
+    internal.hotFileRequire?.();
     return loadModule(resolved, null).exports;
   }
 
@@ -687,6 +696,7 @@
         const resolved = native.resolve(String(spec), path, false);
         const commonJsNamespace = internal.require("require_namespace");
         if (isBuiltinId(resolved)) return commonJsNamespace(internal.builtin(resolved));
+        internal.hotFileRequire?.();
         const format = native.moduleFormat(resolved);
         const exports = loadModule(resolved, format).exports;
         return format === "esm" ? exports : commonJsNamespace(exports);
@@ -710,6 +720,11 @@
     const scripts = internal.require("package_scripts");
     const stdin = requested.endsWith("/[stdin]") && native.mainArg() === "-";
     const path = stdin ? requested : scripts.resolve(requested);
+    if (native.runMode() === "hot") {
+      if (typeof path !== "string" || stdin || process.env.BUNWASM_WORKER_INIT) throw new Error("--hot supports only file-based ESM server entries, not package scripts, stdin or workers");
+      internal.hotRun = internal.require("hot_run");
+      return internal.hotRun.run(path);
+    }
     if (typeof path !== "string") return scripts.run(path);
     if (!stdin && !native.exists(path)) {
       // A worker's missing entry reaches its parent as Node's require error, as in Bun.
@@ -789,6 +804,7 @@
       if (!internal.workerError) printError(err);
     }
     try {
+      internal.hotRun?.dispose();
       try { internal.cancelIoWaiters(); }
       catch (err) { reportExitError(err); }
       process.emit("exit", code);

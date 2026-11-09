@@ -579,6 +579,11 @@
   }
 
   function serve(options = {}) {
+    if (internal.hotServers) return internal.hotServers.serve(options, createServer);
+    return createServer(options);
+  }
+
+  function createServer(options = {}) {
     if (typeof options.fetch !== "function" && !options.routes) {
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
@@ -635,7 +640,7 @@
       },
       reload(next = {}) {
         if (next.fetch) fetchHandler = next.fetch;
-        if (next.error) errorHandler = next.error;
+        if (next.error || internal.hotServers && Object.prototype.hasOwnProperty.call(next, "error")) errorHandler = next.error;
         if (next.routes) {
           htmlServer.dispose(server);
           routes = compileRoutes(next.routes);
@@ -646,6 +651,7 @@
         return server;
       },
       stop(closeActive = false) {
+        internal.hotServers?.close(server);
         if (!stopped) {
           stopped = true;
           waiters.delete(accepting);
@@ -692,18 +698,26 @@
       },
     };
 
-    async function handleRequest(request, conn, keepAlive) {
+    function handleRequest(request, conn, keepAlive) {
+      if (internal.hotServers) return internal.require("hot_request").run(internal.hotServers, server, conn,
+        (snapshot, releaseOnAbort) => runRequest(request, conn, keepAlive, snapshot, releaseOnAbort));
+      return runRequest(request, conn, keepAlive, null, null);
+    }
+
+    async function runRequest(request, conn, keepAlive, snapshot, releaseOnAbort) {
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
+        releaseOnAbort?.(signal);
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
-        return respondToRequest(request, conn, keepAlive, req, url);
+        return respondToRequest(request, conn, keepAlive, req, url, snapshot);
       });
       return result === UPGRADED ? result : result && !stopped;
     }
 
-    async function respondToRequest(request, conn, keepAlive, req, url) {
+    async function respondToRequest(request, conn, keepAlive, req, url, snapshot) {
+      const selectError = () => snapshot ? snapshot.error : errorHandler;
       if (req.signal.aborted) return false;
       let cookies;
       Object.defineProperty(req, "cookies", {
@@ -725,16 +739,20 @@
           res = await route.handler.call(server, req, server);
         } else {
           res = await internal.require("html_server").asset(routes, new URL(url).pathname, request.method, server);
-          if (!res) res = fetchHandler ? await fetchHandler.call(server, req, server) : new Response("Not Found", { status: 404 });
+          if (!res) {
+            const selectedFetch = snapshot ? snapshot.fetch : fetchHandler;
+            res = selectedFetch ? await selectedFetch.call(server, req, server) : new Response("Not Found", { status: 404 });
+          }
         }
       } catch (err) {
-        res = errorHandler ? await errorHandler.call(server, err) : errorResponse(err);
+        const selectedError = selectError();
+        res = selectedError ? await selectedError.call(server, err) : errorResponse(err);
       } finally {
         pending--;
         requests.delete(req);
       }
       if (conn.upgraded) return UPGRADED;
-      if (res === undefined && errorHandler === undefined) res = new Response("", { status: 404 });
+      if (res === undefined && selectError() === undefined) res = new Response("", { status: 404 });
       if (cookies) {
         for (const value of cookies.toSetCookieHeaders()) res.headers.append("Set-Cookie", value);
       }
@@ -742,7 +760,8 @@
       try {
         return await writeResponse(conn, res, request.method, responseKeepAlive);
       } catch (error) {
-        const fallback = errorHandler ? await errorHandler.call(server, error) : errorResponse(error);
+        const selectedError = selectError();
+        const fallback = selectedError ? await selectedError.call(server, error) : errorResponse(error);
         return writeResponse(conn, fallback, request.method, responseKeepAlive);
       }
     }

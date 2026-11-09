@@ -90,6 +90,7 @@ fn retains_conditions_and_exec_argv() {
     bun_core_bind_engine(observe_options);
     assert_eq!(
         run(Options {
+            mode: crate::RunMode::Once,
             entry: Entry::File(entry.clone()),
             args: vec!["user-arg".to_owned()],
             conditions: vec!["split-custom".to_owned(), "second-custom".to_owned()],

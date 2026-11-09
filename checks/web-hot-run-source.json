@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/hot-run-source.test.ts",
+  "localRuntime": true
+}

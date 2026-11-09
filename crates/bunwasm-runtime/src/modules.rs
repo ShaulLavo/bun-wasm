@@ -185,7 +185,7 @@ fn build_error(report: &str, source: &str) -> NativeError {
 
 /// Preparation and registration keep invalid module source as `SyntaxError`;
 /// infrastructure and printer failures retain their `BuildError` contract.
-fn module_compile_error(error: crate::RecordError, source: &str) -> NativeError {
+pub(crate) fn module_compile_error(error: crate::RecordError, source: &str) -> NativeError {
     let report = match error {
         crate::RecordError::Syntax(report) => report,
         crate::RecordError::Other(report) => return build_error(&report, source),
@@ -325,7 +325,7 @@ fn uses_identifier(source: &str, name: &str) -> bool {
 }
 
 /// A shebang line is not valid JS; blank it out but keep the line.
-fn strip_shebang(source: &str) -> String {
+pub(crate) fn strip_shebang(source: &str) -> String {
     if let Some(stripped) = source.strip_prefix("#!") {
         format!("//{stripped}")
     } else {
@@ -335,7 +335,7 @@ fn strip_shebang(source: &str) -> String {
 
 /// Bun lets ES modules use `require`, `__dirname` and `__filename`. Define
 /// them on line 1 (no newline) so line numbers stay intact.
-fn esm_prologue(source: &str) -> String {
+pub(crate) fn esm_prologue(source: &str) -> String {
     let mut prologue = String::new();
     let bindings = [
         ("require", "import.meta.require"),
@@ -465,13 +465,7 @@ impl State {
                 (source, Format::Cjs)
             }
             _ => {
-                let adapted = next_swc::adapt(&raw, path);
-                let out = self
-                    .transpiler
-                    .prepare_module(&adapted, path, loader, &mut |request| {
-                        self.intern_import_request(request)
-                    })
-                    .map_err(|error| module_compile_error(error, &raw))?;
+                let out = self.prepare_javascript(&raw, path, loader)?;
                 let format = self.detect_format(path, &out.code, out.module_kind);
                 #[cfg(feature = "engine-host")]
                 self.source_imports
@@ -493,7 +487,21 @@ impl State {
         Ok(entry)
     }
 
-    fn detect_format(
+    pub(crate) fn prepare_javascript(
+        &self,
+        raw: &str,
+        path: &str,
+        loader: SourceLoader,
+    ) -> Result<crate::Transpiled, NativeError> {
+        let adapted = next_swc::adapt(raw, path);
+        self.transpiler
+            .prepare_module(&adapted, path, loader, &mut |request| {
+                self.intern_import_request(request)
+            })
+            .map_err(|error| module_compile_error(error, raw))
+    }
+
+    pub(crate) fn detect_format(
         &self,
         path: &str,
         code: &str,
@@ -626,7 +634,7 @@ impl State {
         Ok(imports)
     }
 
-    fn source_digest(&self, raw: &[u8]) -> u64 {
+    pub(crate) fn source_digest(&self, raw: &[u8]) -> u64 {
         bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw)
     }
 

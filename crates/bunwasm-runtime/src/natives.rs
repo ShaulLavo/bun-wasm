@@ -530,6 +530,15 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("mainArg", move |_| Ok(st.main_arg.borrow().clone().into()));
+    let st = state.clone();
+    t.add("runMode", move |_| {
+        Ok(if st.mode == crate::RunMode::Hot {
+            "hot"
+        } else {
+            "once"
+        }
+        .into())
+    });
     t.add("env", |_| {
         let fields = std::env::vars_os()
             .map(|(k, v)| {
@@ -1148,6 +1157,22 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .transpile(a.str(0)?, path, crate::transpiler::Loader::from_path(path))
             .map(Val::from)
             .map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
+    t.add("hotPrepare", move |a| st.prepare_hot(a.u32(0)?, a.str(1)?));
+    let st = state.clone();
+    t.add("hotDigest", move |a| {
+        st.hot_digest(a.str(0)?).map(Val::from)
+    });
+    t.add("hotMapPosition", move |a| {
+        Ok(crate::hot_run::map_position(
+            a.opt_str(0),
+            a.opt_str(1),
+            a.u32(2)?,
+            a.u32(3)?,
+            a.u32(4)?,
+            a.u32(5)?,
+        ))
     });
     let st = state.clone();
     t.add("moduleFormat", move |a| {

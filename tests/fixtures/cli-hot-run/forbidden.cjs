@@ -1,0 +1,1 @@
+globalThis.forbiddenHotEffect = true;
