@@ -7,9 +7,9 @@ case "$phase" in --setup|--unit|--browser|all) ;; *) echo "usage: $0 [--setup|--
 
 if [[ "$phase" != --browser ]]; then
   # Release archives already contain prepared Node modules and network assets.
-  (cd "$root" && bun install --frozen-lockfile --ignore-scripts)
-  (cd "$root/web" && bun install --frozen-lockfile --ignore-scripts)
-  (cd "$root/sandbox" && bun install --frozen-lockfile --ignore-scripts)
+  (cd "$root" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)
+  (cd "$root/web" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)
+  (cd "$root/sandbox" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)
   [[ "$phase" != --setup ]] || exit 0
   (
     cd "$root/web"

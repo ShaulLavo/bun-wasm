@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { releaseCacheKey } from "./ci-release-download";
 import record from "./waffle-release-inputs.json";
 // The published programs-v0.0.15 manifest, keeping only the waffle-base package and no install receipt.
 import published from "./fixtures/program-release-v0.0.15.trimmed.json";
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
     *) url=$1; shift ;;
   esac
 done
+[[ "$url" != *'/releases/download/'* ]] || { echo 'Public releases forbidden in this fixture' >&2; exit 22; }
 source=$(awk -F '\\t' -v url="$url" '$1 == url { print $2 }' "$FIXTURE_ROOT/routes")
 [[ -n "$source" ]] || { echo "unrouted $url" >&2; exit 22; }
 cp "$source" "$out"
@@ -43,6 +45,7 @@ function baseUrl(manifest: Manifest): string {
 async function serve(root: string, routes: string[], url: string, bytes: Uint8Array): Promise<void> {
   const path = join(root, "served", String(routes.length));
   await writeFile(path, bytes);
+  if (url.includes("/releases/download/")) await writeFile(join(root, "assets", releaseCacheKey(url)), bytes);
   routes.push(`${url}\t${path}`);
 }
 
@@ -52,6 +55,8 @@ async function fixture(manifest: Manifest) {
   await mkdir(join(repository, "scripts"), { recursive: true });
   await mkdir(join(root, "bin"));
   await mkdir(join(root, "served"));
+  await mkdir(join(root, "assets"));
+  await copyFile(join(import.meta.dir, "ci-release-download.ts"), join(repository, "scripts/ci-release-download.ts"));
   const base = encode("waffle-base archive");
   const tagged = { ...manifest, packages: manifest.packages.map((entry) =>
     entry.name === "waffle-base" ? { ...entry, bytes: base.length, sha256: digest(base) } : entry) };
@@ -80,6 +85,7 @@ function runUpdater(root: string, repository: string) {
   return Bun.spawnSync(["bash", updater], {
     cwd: repository,
     env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, RUNNER_TEMP: root,
+      CI_RELEASE_CACHE: join(root, "assets"), GITHUB_ACTIONS: "true", GITHUB_TOKEN: "",
       FIXTURE_ROOT: root, FIXTURE_REVISION: record.sourceCommit },
     stdout: "pipe",
     stderr: "pipe",
@@ -94,7 +100,7 @@ test("a published peer rebind keeps its schema and rebind tool commit through ev
   try {
     for (let round = 0; round < 2; round++) {
       const result = runUpdater(f.root, f.repository);
-      expect(result.stderr.toString()).toBe("");
+      expect(result.stderr.toString()).toContain("GitHub release cache hit:");
       expect(result.exitCode).toBe(0);
       expect((await readRecord(f.repository)).programs).toEqual({
         tag: "programs-v0.0.15",

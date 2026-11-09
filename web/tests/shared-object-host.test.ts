@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createSharedObjects } from "../src/shared-objects/service";
@@ -157,6 +157,25 @@ test("mismatched and duplicate native port exports fail without leaking leases",
   next.onMessage({ type: "bun-shared-connect", owner: next.request.sharedObjects?.owner, port: extra.port2 });
   expect(second.failures).toHaveLength(1);
   expect(installation.inspect().clients).toBe(0);
+});
+
+test("an unusable grant transport reaches the launch failure path without retaining its route", async () => {
+  const runtime = fixtureRuntime(), installation = install(runtime), first = processContext();
+  const launched = await launch(runtime, first.context);
+  const owner = launched.request.sharedObjects?.owner;
+  if (!owner) throw new Error("Missing private shared owner");
+  const channel = new MessageChannel(), receiver = createSharedObjects(owner, channel.port1);
+  cleanup.add(() => { receiver.close(); channel.port1.close(); channel.port2.close(); });
+  const failure = new Error("grant transport failed");
+  const sending = spyOn(channel.port2, "postMessage").mockImplementation(() => { throw failure; });
+  try {
+    launched.onMessage({ type: "bun-shared-connect", owner, port: channel.port2 });
+    expect(first.failures).toEqual([failure]);
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    launched.cleanup(); receiver.close();
+    await expect(receiver.ready).rejects.toThrow("closed");
+    expect(receiver.inspect().closed).toBe(true);
+  } finally { sending.mockRestore(); }
 });
 
 test("actual engine native binding holds attachment waits, wakes on ready and closes once", async () => {

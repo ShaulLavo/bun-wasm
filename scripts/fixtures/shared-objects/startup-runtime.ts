@@ -26,6 +26,8 @@ const engineSource = readFileSync(new URL("../../../web/src/engine-host.js", imp
 const EngineHost = runInNewContext(engineSource.concat("\nEngineHost;"), {
   TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
   SLOT_NAMES: [], bindSharedObjectHost, createScriptEvaluation, isWasmMemoryBuffer, transferArrayBuffers, installHostCrypto() {},
+  // The real installer replaces its own realm's global; this fixture runs on the test thread.
+  installSharedBufferRealm() {},
 });
 export function startupRuntime(options: { service?: SharedObjectService; graph: Graph; execArgv?: string[]; preload?(path: string): void }) {
   const frames: unknown[] = [], exits: number[] = [], failures: unknown[] = [], entries: unknown[] = [];

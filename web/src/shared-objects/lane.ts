@@ -4,6 +4,7 @@
 // the destination as soon as its commit returns, so a reply posted before a user Atomics.notify
 // reaches the woken receiver's synchronous receive without any broker hop. Decoding it still needs
 // every shared backing it names: one the destination doesn't hold yet attaches through its event loop.
+import { createNativeSharedBuffer } from "./native.ts";
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add, atomicNotify = Atomics.notify, atomicWaitAsync = Atomics.waitAsync;
 const NativeTextEncoder = TextEncoder, NativeTextDecoder = TextDecoder;
 const encoder = new NativeTextEncoder(), decoder = new NativeTextDecoder("utf-8", { fatal: true });
@@ -13,7 +14,7 @@ const writeIndex = 0, readIndex = 1, signalIndex = 2, closedIndex = 3;
 const headerBytes = 2 * ringWords * Int32Array.BYTES_PER_ELEMENT;
 const ringBytes = 1024 * 1024;
 const frameHeaderBytes = 4;
-const sharedLaneBytes = headerBytes + 2 * ringBytes;
+export const sharedLaneBytes = headerBytes + 2 * ringBytes;
 
 export interface SharedLane {
   readonly buffer: SharedArrayBuffer;
@@ -33,7 +34,7 @@ export interface SharedLane {
 }
 
 export function createSharedLaneBuffer(): SharedArrayBuffer {
-  return new SharedArrayBuffer(sharedLaneBytes);
+  return createNativeSharedBuffer(sharedLaneBytes);
 }
 
 function align(bytes: number) { return (bytes + 3) & ~3; }

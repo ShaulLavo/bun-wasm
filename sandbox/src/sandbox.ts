@@ -296,6 +296,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       TMPDIR: "/tmp",
       PORT: String(PORT),
       BUN_WASM_STARTUP: "1",
+      // Output-only stdin is EOF. Vite must not treat it as a request to close the server.
+      CI: "true",
     };
     const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
     if (revision !== this.serverRevision) return;

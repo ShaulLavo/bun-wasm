@@ -8,7 +8,7 @@ runtime_url=$(jq -r '.devDependencies.waffle' package.json)
 version=$(printf '%s' "$runtime_url" | sed -E 's|.*/waffle-v([0-9.]+)/.*|\1|')
 revision=$(git ls-remote https://github.com/ShaulLavo/waffle.git "refs/tags/waffle-v${version}^{}" "refs/tags/waffle-v${version}" | tail -n 1 | cut -f1)
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-curl -fsSL --max-time 120 "$runtime_url" -o "$scratch/runtime.tgz"
+bun scripts/ci-release-download.ts "$runtime_url" "$scratch/runtime.tgz" 120000
 jq --arg url "$runtime_url" --arg version "$version" --arg revision "$revision" \
   --arg sha256 "$(sha256sum "$scratch/runtime.tgz" | cut -d ' ' -f1)" \
   --argjson bytes "$(wc -c < "$scratch/runtime.tgz")" \
@@ -23,7 +23,7 @@ done
 base_url=$(jq -r '.peerDependencies["waffle-base"]' package.json)
 program_tag=$(printf '%s' "$base_url" | cut -d/ -f8)
 manifest_url="https://github.com/ShaulLavo/waffle/releases/download/${program_tag}/program-release.json"
-curl -fsSL --max-time 120 "$manifest_url" -o "$scratch/programs.json"
+bun scripts/ci-release-download.ts "$manifest_url" "$scratch/programs.json" 120000
 # The record keeps the release schema and the commit of the tools that packed it. A normal release
 # is packed by the tools at its own source commit; a peer rebind names its separate tool commit.
 identity=$(jq -ce --arg tag "$program_tag" '
@@ -39,7 +39,7 @@ identity=$(jq -ce --arg tag "$program_tag" '
   | if .toolCommit | type == "string" and test("^[0-9a-f]{40}$") then . else error("Program release tool commit is not a full revision") end
 ' "$scratch/programs.json")
 base=$(jq -ce --arg url "$base_url" '[.packages[] | select(.name == "waffle-base" and .url == $url)] | if length == 1 then .[0] else error("Missing base release") end' "$scratch/programs.json")
-curl -fsSL --max-time 120 "$base_url" -o "$scratch/base.tgz"
+bun scripts/ci-release-download.ts "$base_url" "$scratch/base.tgz" 120000
 test "$(sha256sum "$scratch/base.tgz" | cut -d ' ' -f1)" = "$(jq -r '.sha256' <<< "$base")"
 jq --arg tag "$program_tag" --arg commit "$(jq -er '.sourceCommit' "$scratch/programs.json")" \
   --arg url "$manifest_url" --arg hash "$(sha256sum "$scratch/programs.json" | cut -d ' ' -f1)" \

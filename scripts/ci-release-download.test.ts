@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheKey, releaseDownload as downloadRelease } from "./ci-release-download";
@@ -75,8 +76,16 @@ test("non-release downloads and local non-CI use do not receive the job token", 
   };
   await releaseDownload("https://raw.githubusercontent.com/owner/project/commit/input", { token: "fixture-token", fetch: download });
   expect(authorization).toBeNull();
-  expect(await (await releaseDownload(url, { fetch: download, token: "" })).text()).toBe("source");
-  expect(authorization).toBeNull();
+  const module = new URL("./ci-release-download.ts", import.meta.url).href;
+  const script = `const { releaseDownload } = await import(${JSON.stringify(module)});
+    const response = await releaseDownload(${JSON.stringify(url)}, { cache: undefined, token: "",
+      fetch: async (_url, init) => new Response(new Headers(init?.headers).get("authorization") ?? "none") });
+    console.log(await response.text());`;
+  const local = spawnSync("node", ["--input-type=module", "--eval", script], {
+    env: { ...process.env, GITHUB_ACTIONS: "false", GITHUB_TOKEN: "fixture-token" }, encoding: "utf8",
+  });
+  expect(local.status, local.stderr).toBe(0);
+  expect(local.stdout).toBe("none\n");
 });
 
 test("CI callers use the downloader and consume a completed cache rather than racing setup", async () => {
@@ -86,7 +95,7 @@ test("CI callers use the downloader and consume a completed cache rather than ra
   expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
   expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
   const cache = await Bun.file(new URL("../.github/actions/release-downloads/action.yml", import.meta.url)).text();
-  expect(cache.match(/release-assets-v1-.*?\$\{\{ github.job \}\}-/g)).toHaveLength(2);
+  expect(cache.match(/release-assets-v2-.*?\$\{\{ github.job \}\}-/g)).toHaveLength(2);
   const native = await Bun.file(new URL("./waffle-release-inputs.ts", import.meta.url)).text();
   expect(native.match(/download: Download = releaseDownload/g)).toHaveLength(2);
   const sccache = await Bun.file(new URL("../.github/actions/rust-build-cache/action.yml", import.meta.url)).text();
@@ -129,4 +138,52 @@ test("release diagnostics preserve machine-readable caller stdout", async () => 
     expect(result.stdout.toString()).toBe("fixture-input-key\n");
     expect(result.stderr.toString()).toContain("GitHub release cache hit:");
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("a cold CI release download fails closed without a token, but cached bytes remain usable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bun-wasm-release-no-token-"));
+  const previous = process.env.GITHUB_ACTIONS;
+  process.env.GITHUB_ACTIONS = "true";
+  let calls = 0;
+  try {
+    const options = { token: "", cache: directory, fetch: async () => { calls++; throw new Error("Public release requests are forbidden"); } };
+    await expect(releaseDownload(url, options)).rejects.toThrow("require GITHUB_TOKEN");
+    await Bun.write(join(directory, releaseCacheKey(url)), "cached bytes");
+    expect(await (await releaseDownload(url, options)).text()).toBe("cached bytes");
+    expect(calls).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap exposes bunx and can provision the same Bun version twice", async () => {
+  const root = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-bootstrap-"));
+  try {
+    const fixture = join(root, "fixture");
+    await mkdir(join(fixture, "bun-linux-x64"), { recursive: true });
+    await writeFile(join(fixture, "bun-linux-x64/bun"), "#!/bin/sh\nprintf '1.4.4\\n'\n", { mode: 0o755 });
+    const archive = join(root, "bun.zip");
+    const zip = spawnSync("zip", ["-q", archive, "bun-linux-x64/bun"], { cwd: fixture, encoding: "utf8" });
+    expect(zip.status, zip.stderr).toBe(0);
+    const cache = join(root, "cache");
+    await mkdir(cache);
+    const url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip";
+    await writeFile(join(cache, releaseCacheKey(url)), await readFile(archive));
+    const output = join(root, "path");
+    const env = { ...process.env, RUNNER_TEMP: root, GITHUB_PATH: output, CI_RELEASE_CACHE: cache, CI_BUN_VERSION: "1.4.4", CI_NODE_VERSION: "", GITHUB_ACTIONS: "true", GITHUB_TOKEN: "" };
+    const script = new URL("./ci-bootstrap-tools.ts", import.meta.url).pathname;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const install = spawnSync("node", [script], { env, encoding: "utf8" });
+      expect(install.status, install.stderr).toBe(0);
+      const bin = join(root, "ci-tools/bun-1.4.4/bun-linux-x64");
+      expect((await readFile(output, "utf8")).trim().split("\n")).toContain(bin);
+      expect(await readlink(join(bin, "bunx"))).toBe("bun");
+      const bunx = spawnSync(join(bin, "bunx"), ["--version"], { encoding: "utf8" });
+      expect(bunx.status, bunx.stderr).toBe(0);
+      expect(bunx.stdout.trim()).toBe("1.4.4");
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

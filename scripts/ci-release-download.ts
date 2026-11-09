@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, access } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { setTimeout } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 
 type Options = {
@@ -17,7 +21,7 @@ const retryable = new Set([408, 429, 500, 502, 503, 504]);
 
 async function request(url: string, accept: string, options: Options): Promise<Response> {
   const download = options.fetch ?? fetch;
-  const sleep = options.sleep ?? Bun.sleep;
+  const sleep = options.sleep ?? setTimeout;
   const target = new URL(url);
   const headers = new Headers({ Accept: accept });
   if (target.origin === "https://api.github.com" && options.token) headers.set("Authorization", `Bearer ${options.token}`);
@@ -78,6 +82,34 @@ async function authenticatedRelease(url: string, options: Options): Promise<Resp
   return response;
 }
 
+async function exists(path: string): Promise<boolean> {
+  try { await access(path); return true; }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function fileResponse(path: string): Response {
+  const input = createReadStream(path);
+  const chunks = input[Symbol.asyncIterator]();
+  return new Response(new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await chunks.next();
+        if (chunk.done) controller.close();
+        else controller.enqueue(chunk.value);
+      } catch (error) { controller.error(error); }
+    },
+    cancel() { input.destroy(); },
+  }));
+}
+
+export async function saveReleaseResponse(path: string, response: Response): Promise<void> {
+  if (!response.body) throw new Error("Release download has no body");
+  await pipeline(response.body, createWriteStream(path));
+}
+
 export async function releaseDownload(url: string, options: Options = {}): Promise<Response> {
   const selected = {
     token: process.env.GITHUB_ACTIONS === "true" ? process.env.GITHUB_TOKEN : undefined,
@@ -87,26 +119,27 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
   };
   if (!releasePattern.test(url)) return (selected.fetch ?? fetch)(url, { signal: selected.signal });
   const path = selected.cache ? join(selected.cache, releaseCacheKey(url)) : undefined;
-  if (path && await Bun.file(path).exists()) {
+  if (path && await exists(path)) {
     console.error(`GitHub release cache hit: ${url}`);
-    return new Response(Bun.file(path));
+    return fileResponse(path);
   }
+  if (process.env.GITHUB_ACTIONS === "true" && !selected.token) throw new Error("CI release downloads require GITHUB_TOKEN");
   const response = await authenticatedRelease(url, selected);
   if (!response.ok || !path) return response;
   await mkdir(selected.cache!, { recursive: true });
   const stage = await mkdtemp(join(selected.cache!, ".download-"));
   try {
-    await Bun.write(join(stage, "asset"), response);
+    await saveReleaseResponse(join(stage, "asset"), response);
     await rename(join(stage, "asset"), path);
   } finally { await rm(stage, { recursive: true, force: true }); }
   console.error(`GitHub release ${selected.token ? "authenticated API" : "public"} download: ${url}`);
-  return new Response(Bun.file(path));
+  return fileResponse(path);
 }
 
-if (import.meta.main) {
-  const [url, destination] = process.argv.slice(2);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const [url, destination, timeout] = process.argv.slice(2);
   if (!url || !destination) throw new Error("Usage: ci-release-download.ts URL DESTINATION");
-  const response = await releaseDownload(url);
+  const response = await releaseDownload(url, timeout ? { timeoutMs: Number(timeout) } : {});
   if (!response.ok) throw new Error(`Release download failed: HTTP ${response.status} ${url}`);
-  await Bun.write(destination, response);
+  await saveReleaseResponse(destination, response);
 }

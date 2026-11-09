@@ -450,6 +450,23 @@ test("shared filesystem flush reports failed writes and permits later writes", a
   expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
+test("output-only sandbox commands do not let stdin EOF shut down the dev server", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  expect(page.runs[0]!.env.CI).toBe("true");
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["run", "dev"]);
+  expect(page.runs[1]!.env.CI).toBe("true");
+  expect(page.runs[1]!.env.PORT).toBe("5173");
+  expect(sandbox.serverState.state).toBe("starting");
+  sandbox.restart();
+  expect(page.runs[1]!.kills).toEqual([9]);
+});
+
 test("sandbox Restart cancels a pending install without launching its stale dev command", async () => {
   const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
