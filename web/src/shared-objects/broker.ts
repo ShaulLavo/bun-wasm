@@ -1,6 +1,7 @@
 import { messageData, sharedError, sharedObjectLimit, sharedPoolClasses, sharedPoolControlWords, sharedPoolLaneCursor, sharedPoolLanes, sharedRequest, sharedRouteBatch } from "./protocol.ts";
-import { createSharedLaneBuffer } from "./lane.ts";
+import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
 import { createSharedMailbox, requireSharedMailboxWake } from "./mailbox.ts";
+import { createOverflowGrant, poolDisposedWord } from "./lane-overflow.ts";
 import { createNativeSharedBuffer } from "./native.ts";
 import type { SharedAttachment, SharedPoolGrant, SharedPort, SharedReference, SharedRequest, SharedResponse, SharedRouteCommand } from "./protocol.ts";
 
@@ -20,6 +21,7 @@ export function createSharedObjectBroker() {
       control: createNativeSharedBuffer(sharedPoolControlWords * Int32Array.BYTES_PER_ELEMENT),
       stock: sharedPoolClasses.map(({ bytes, count }) => Array.from({ length: count }, () => createNativeSharedBuffer(bytes))),
       lanes: Array.from({ length: sharedPoolLanes }, createSharedLaneBuffer),
+      overflow: createOverflowGrant(),
     };
     return pool;
   }
@@ -466,9 +468,19 @@ export function createSharedObjectBroker() {
     }
     return { id, attach, close: () => closeClient(client) };
   }
-  function dispose() {
+  function beginDisposal() {
     if (disposed) return;
     disposed = true;
+    if (!pool) return;
+    const control = new Int32Array(pool.control);
+    Atomics.store(control, poolDisposedWord, 1);
+    pool.lanes.forEach((buffer, index) => {
+      const overflow = { control, index, slots: pool!.overflow?.slots[index] ?? null };
+      openSharedLane(buffer, 0, overflow).close(); openSharedLane(buffer, 1, overflow).close();
+    });
+  }
+  function dispose() {
+    beginDisposal();
     for (const client of Array.from(clients.values())) closeClient(client);
     pool = null;
   }
@@ -477,7 +489,7 @@ export function createSharedObjectBroker() {
     const cursors = new Int32Array(pool.control);
     return { created: true, classes: sharedPoolClasses.map((_, index) => Atomics.load(cursors, index)), lanes: Atomics.load(cursors, sharedPoolLaneCursor) };
   }
-  return { register, dispose, inspectPool,
+  return { register, beginDisposal, dispose, inspectPool,
     inspectTransfers: () => ({ pins: Array.from(entries.values()).reduce((count, entry) => count + entry.pins.size, 0), attaching: Array.from(clients.values()).reduce((count, client) => count + client.attaching.size, 0) }),
     inspectDeliveries: () => ({ receipts: deliveries.size, deferred: deferredBatches.length }), inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
 }

@@ -17,6 +17,7 @@ async function restore(graph: Graph, into: Client): Promise<SourcePort> {
 }
 async function connection(lanes = true) {
   const { broker, client } = setup(lanes), sender = client(), receiver = client();
+  await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
   cleanup.add(() => { channel.port1.close(); target.close(); });
@@ -91,11 +92,16 @@ test("a full lane rejects a message before anything detaches", async () => {
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
 });
 
-test("a message larger than the lane is rejected before anything detaches", async () => {
-  const { receiver, source, target } = await connection();
-  const buffer = new ArrayBuffer(8);
-  expect(() => source.postMessage({ text: "x".repeat(1024 * 1024), buffer }, [buffer])).toThrow("byte limit between processes");
+test("a message beyond the encoded overflow cap rejects before anything detaches", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const buffer = new ArrayBuffer(8), carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  expect(() => source.postMessage({ text: "x".repeat(64 * 1024 * 1024), buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("encoded limit");
   expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still attached");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still attached" });
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
   source.postMessage("still open");
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "still open" });
 });

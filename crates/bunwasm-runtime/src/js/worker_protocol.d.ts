@@ -13,7 +13,8 @@ declare namespace BunWasm {
     lane?: PortLane | null;
   }
   /** A channel's shared lane and which of its two rings this end reads. */
-  interface PortLane { buffer: SharedArrayBuffer; side: 0 | 1; }
+  interface LaneBacking { buffer: SharedArrayBuffer; poolIndex: number | null; }
+  interface PortLane extends LaneBacking { side: 0 | 1; }
   interface SharedLane {
     reserve(text: string): { commit(): void; abort(): void } | null;
     drain(consume: (text: string) => void): number;
@@ -29,7 +30,7 @@ declare namespace BunWasm {
     | ["node-buffer", number, number, number] | ["shared", string, number]
     | ["wasm-module", string] | ["wasm-memory", string, number]
     | ["error", string, string, string | null, number] | ["boxed", number]
-    | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number, number];
+    | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: never; poolIndex?: never }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side: 0 | 1; poolIndex: number | null }, number, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
   interface PortTransfer {
     snapshot: PortSnapshot;
@@ -57,7 +58,7 @@ declare namespace BunWasm {
   }
   interface SharedObjects {
     readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
-    readonly lanes?: { create(): SharedArrayBuffer; open(buffer: SharedArrayBuffer, side: 0 | 1): SharedLane };
+    readonly lanes?: { create(): LaneBacking; open(backing: LaneBacking, side: 0 | 1): SharedLane };
     readonly routes?: {
       readonly owner: string;
       readonly enabled: boolean;

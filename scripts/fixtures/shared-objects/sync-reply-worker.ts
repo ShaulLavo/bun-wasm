@@ -35,7 +35,7 @@ function withCloseControl(shared: typeof bound): typeof bound {
     if (stopping && workerData.closeMode === "failure") throw new Error("Close-frame reserve failed while peer open");
     return lane.reserve(text);
   }
-  function open(buffer: SharedArrayBuffer, side: 0 | 1) {
+  function open(buffer: Parameters<typeof lanes.open>[0], side: 0 | 1) {
     const lane = lanes.open(buffer, side);
     return { ...lane, peerClosed: () => peerClosed(lane), reserve: (text: string) => reserve(lane, text) };
   }
