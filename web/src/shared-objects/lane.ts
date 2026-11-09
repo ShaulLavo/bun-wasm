@@ -64,7 +64,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
     const need = large ? descriptorBytes : frameHeaderBytes + align(bytes.byteLength);
     const written = atomicLoad(outbound.header, writeIndex) >>> 0;
     const used = (written - (atomicLoad(outbound.header, readIndex) >>> 0)) >>> 0;
-    if (used > ringBytes) throw laneError("Invalid shared lane cursors");
+    if (used > ringBytes || written % 4 || (atomicLoad(outbound.header, readIndex) >>> 0) % 4) throw laneError("Invalid shared lane cursors");
     if (need > ringBytes - used) return null;
     const slot = large && overflow ? reserveOverflow(overflow, destination, bytes) : null;
     if (slot && descriptor && descriptorView) {
@@ -88,13 +88,13 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
     };
   }
   function poison(error: unknown): never {
-    terminal = error;
+    terminal = error ?? laneError("Shared lane consumption failed");
     atomicStore(inbound.header, closedIndex, 2);
     if (overflow) closeOverflow(overflow.control, overflow.index, side);
-    throw error;
+    throw terminal;
   }
   function frame(read: number, available: number) {
-    if (available > ringBytes || available < frameHeaderBytes) throw laneError("Invalid shared lane frame");
+    if (available > ringBytes || available < frameHeaderBytes || read % 4 || available % 4) throw laneError("Invalid shared lane frame");
     const length = inbound.view.getUint32(read % ringBytes, true);
     if (length !== overflowTag) {
       const need = frameHeaderBytes + align(length);

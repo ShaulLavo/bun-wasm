@@ -40,3 +40,40 @@ engines keep their shared directory and are unchanged. See `docs/worker-threads.
 
 `scripts/worker-shared-pool.test.ts` and `scripts/shared-fresh-backing-browser.test.ts` are the
 blocking checks.
+
+## Private large-message slots
+
+`lane.ts` and `lane-overflow.ts` are also original adapters. Each lifetime lane
+now carries its fixed pool index through the worker codec. The pre-entry grant
+contains one private zero-byte growable backing per direction when native GSAB
+allocation is supported. These backings never enter public shared-object identity
+or guest constructor stock. Native constructor, length, maximum, growable and grow
+operations are captured before guest installation. A host without those operations
+receives an explicit inline-only grant, rather than eager fixed-size substitutes.
+
+The inline ring remains 1 MiB per direction. A 12-byte tagged descriptor carries
+one complete large frame in the same order stream. Admission caps its complete
+UTF-8 packet at 64 MiB and runtime-wide committed growth at 128 MiB. Growth rounds
+to 64 KiB. A second unread large frame on the same direction rejects immediately
+before transfer detachment. This is not native burst parity. Successful growth
+remains charged after copy, abort, close and sender exit. An interrupted producer
+can strand conservative budget until runtime disposal. The 64 maxima permit
+4 GiB of virtual reservation, not 4 GiB of initial resident payload.
+
+The reader makes a fixed ordinary copy and decodes fatal UTF-8 before returning
+slot credit. Endpoint moves keep the same lane, slot state and unsigned generation.
+Explicit receiver close marks its inbound lane immediately while retaining the
+outbound handle for ordered terminal delivery. Installation close publishes a
+shared disposal barrier before retiring any client and still drains committed
+route-outbox records. Individual service close is not runtime disposal.
+
+Grant validation rejects repeated wrapper entries. Distinct backing allocation
+remains a trusted broker invariant. JavaScript reference equality does not detect
+aliases made by separately cloning a SAB. Existing public clone-alias and fresh
+backing attachment limitations remain unchanged. Native detachment that partially
+detaches and then throws, or termination midway through native transfer and route
+movement, is outside the existing transaction guarantee.
+
+The feature's blocking checks are `worker-lane-overflow.test.ts`,
+`worker-large-message.test.ts` and `worker-large-message-browser.test.ts` under
+`scripts/`, alongside the existing pool, startup, codec, custody and sync-reply gates.

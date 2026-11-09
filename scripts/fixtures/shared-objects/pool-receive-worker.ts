@@ -73,10 +73,9 @@ const senders: Record<string, (port: SourcePort, held: unknown[]) => void> = {
     inner.port1.postMessage({ signal: new SharedArrayBuffer(4), v: "reply" });
   },
   laneExhausted(port, held) {
-    for (let index = 0; index < 32; index++) {
-      const local = new runtime.MessageChannel(), carrier = new runtime.MessageChannel();
-      held.push(local, carrier);
-      carrier.port1.postMessage(null, [local.port2]);
+    // Spend only lane claims here, not the unrelated eight-slot route outbox.
+    for (let index = 1; index < 32; index++) {
+      if (service.lanes!.create().poolIndex !== index) throw new Error("Unexpected lifetime lane cursor");
     }
     const inner = new runtime.MessageChannel();
     held.push(inner);

@@ -2,7 +2,8 @@ import { afterEach } from "bun:test";
 import { createSharedObjectBroker } from "../../../web/src/shared-objects/broker";
 import { createSharedObjects } from "../../../web/src/shared-objects/service";
 import { bindSharedObjectHost } from "../../../web/src/shared-objects/host";
-import type { SharedPoolGrant, SharedRequest, SharedResponse } from "../../../web/src/shared-objects/protocol";
+import type { LaneBacking, SharedPoolGrant, SharedRequest, SharedResponse } from "../../../web/src/shared-objects/protocol";
+import type { SharedLane } from "../../../web/src/shared-objects/lane";
 import { sourcePorts } from "./source-runtime";
 
 /** Closers run in reverse after each test of the calling file. */
@@ -18,7 +19,7 @@ export function testCleanup(): Set<() => void> {
 
 export const tick = () => new Promise<void>(resolve => setTimeout(resolve, 5));
 
-interface ClientOptions { grant?: (grant: SharedPoolGrant) => SharedPoolGrant; beforeDetach?: () => void; active?: () => boolean; observe?: (packet: SharedRequest | SharedResponse) => void }
+interface ClientOptions { lane?: (backing: LaneBacking, side: 0 | 1, grant: SharedPoolGrant | null) => SharedLane; grant?: (grant: SharedPoolGrant) => SharedPoolGrant; beforeDetach?: () => void; active?: () => boolean; observe?: (packet: SharedRequest | SharedResponse) => void }
 
 /**
  * One in-process broker and source-runtime clients connected to it. Without lanes, port packets
@@ -29,8 +30,13 @@ export function brokerClients(cleanup: Set<() => void>, options: { lanes: boolea
   cleanup.add(broker.dispose);
   function client(clientOptions: ClientOptions = {}) {
     const lease = broker.register(), channel = new MessageChannel();
+    let granted: SharedPoolGrant | null = null;
     lease.attach({
-      postMessage(packet) { channel.port2.postMessage(packet.kind === "pool" && clientOptions.grant ? { ...packet, grant: clientOptions.grant(packet.grant) } : packet); },
+      postMessage(packet) {
+        const response = packet.kind === "pool" && clientOptions.grant ? { ...packet, grant: clientOptions.grant(packet.grant) } : packet;
+        if (response.kind === "pool") granted = response.grant;
+        channel.port2.postMessage(response);
+      },
       start: () => channel.port2.start(), close: () => channel.port2.close(),
       addEventListener: (type, listener) => channel.port2.addEventListener(type, listener),
       removeEventListener: (type, listener) => channel.port2.removeEventListener(type, listener),
@@ -41,7 +47,14 @@ export function brokerClients(cleanup: Set<() => void>, options: { lanes: boolea
       addEventListener: (type, listener) => channel.port1.addEventListener(type, listener),
       removeEventListener: (type, listener) => channel.port1.removeEventListener(type, listener),
     });
-    const bound = options.lanes ? service : { ...service, lanes: undefined };
+    const original = service.lanes;
+    if (!original) throw new Error("Missing fixture lane service");
+    const laneOverride = clientOptions.lane;
+    const lanes = laneOverride ? { create: original.create, open(backing: LaneBacking, side: 0 | 1) {
+      original.open(backing, side);
+      return laneOverride(backing, side, granted);
+    } } : original;
+    const bound = { ...service, lanes: options.lanes ? lanes : undefined };
     const sharedObjects = bindSharedObjectHost(bound, { active: clientOptions.active ?? (() => true), pending() {}, wake() {} });
     const runtime = sourcePorts({ sharedObjects, beforeDetach: clientOptions.beforeDetach, active: () => !service.inspect().closed && (clientOptions.active?.() ?? true) });
     cleanup.add(() => { runtime.__fixtureShutdown(); service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });

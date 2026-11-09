@@ -319,3 +319,22 @@ The domain-modeling principle selects an explicit state machine. The laziness pr
 This child owns no test dependencies, browser profiles, listeners, services, remote sessions, containers, or scratch probes. It uses only its T3-assigned checkout. The only deliverables are this locally committed plan and compact audit evidence in `/work/reports/goals/astro-angular/large-message/design/`. Keep the assigned checkout clean for the parent's reviewer. The parent owns removal of the retained audit directory and eventual checkout retirement after the feature lands or this checkpoint is superseded.
 
 The parent applied plan-review corrections for disposal entry ordering, complete fixture/ownership inventory and early workload sequencing. Preserve intentionally red tests until behavior changes and fold this corrected plan into the feature's normal independent source-review path. No PR, merge, watch, source force push, or production edit is part of this checkpoint.
+
+## Implementation checkpoint, November 9, 2026
+
+The implementation is in draft PR 561. The minimal coupled grant/lane/codec/disposal
+slice and focused controls took about 0.8 agent hours including prerequisite repair.
+The source Chrome blocked-worker checks pass, with actual atomic wakes and reuse.
+The first matching Browser guest is source f18a687f9. An executable observer
+positive control armed before the unchanged Angular template installed and ran
+`bun run dev`. It reached bundle completion and its existing dev listener. Actual
+large encoded lengths were 1,848,149 and 1,847,574 bytes on lifetime lane 8,
+directions 0 and 1. Both committed and returned copy credit. The runtime reached
+3,801,088 committed bytes, with no busy or unpooled admission in that bounded run.
+The long-running dev command was explicitly stopped at its 90-second observation
+bound. This establishes usefulness, not a cold/warm or full-framework pass.
+
+The diagnostic host has only transport observation hooks. It is not the blocking
+uninstrumented guest-site producer. Failure controls and the uninstrumented browser
+matrix remain separate. Detailed local evidence and cleanup ownership are in
+`/work/reports/goals/astro-angular/large-message/implementation/RESULT.md`.

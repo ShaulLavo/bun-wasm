@@ -1,3 +1,6 @@
+import { sourceLane } from "./fixtures/shared-objects/source-lane";
+import { poolChargedWord, overflowBudget } from "../web/src/shared-objects/lane-overflow";
+import { sharedPoolLaneCursor } from "../web/src/shared-objects/protocol";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -22,9 +25,10 @@ async function connection(options: Parameters<ReturnType<typeof brokerClients>["
   await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   cleanup.add(() => channel.port1.close());
-  const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
+  const graph = sender.runtime.codec.encode(channel.port2, [channel.port2]);
+  const target = await restore(graph, receiver);
   await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
-  return { client, sender, receiver, source: channel.port1, target };
+  return { client, sender, receiver, source: channel.port1, target, graph };
 }
 
 test("large text crosses a runtime lane once, between its preceding and following messages", async () => {
@@ -175,4 +179,113 @@ test("route-outbox rejection after growth keeps the charge and aborts bytes befo
   await sender.settleRoutes();
   source.postMessage(text); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
   expect(Atomics.load(control, 27)).toBe(charge);
+});
+
+test("the runtime admits exactly the encoded cap and rejects the next byte without a sequence hole", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const buffer = new ArrayBuffer(8);
+  const plan = sender.runtime.codec.prepare({ data: { text: "", buffer }, ports: [] }, [buffer]);
+  const overhead = new TextEncoder().encode(JSON.stringify({ kind: "port-data", sequence: 0, graph: plan.graph })).length;
+  plan.abort();
+  const text = "x".repeat(64 * 1024 * 1024 - overhead);
+  source.postMessage({ text, buffer }, [buffer]);
+  expect(buffer.byteLength).toBe(0);
+  const received = receiver.runtime.receiveMessageOnPort(target)?.message;
+  expect(received).toMatchObject({ text });
+  const rejected = new ArrayBuffer(8);
+  expect(() => source.postMessage({ text: text + "x", buffer: rejected }, [rejected])).toThrow("encoded limit");
+  expect(rejected.byteLength).toBe(8);
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  source.postMessage("next"); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "next" });
+});
+
+test("copied A survives a reader move while B reuses the credited slot", async () => {
+  const { client, receiver, source, target } = await connection();
+  const a = "A".repeat(1100000), b = "B".repeat(1100000);
+  source.postMessage("before"); source.postMessage(a); source.postMessage("after");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
+  const next = client(); await next.service.ready;
+  const graph = receiver.runtime.codec.encode(target, [target]);
+  source.postMessage(b);
+  const moved = await restore(graph, next);
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: a });
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: "after" });
+  expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: b });
+  expect(next.runtime.receiveMessageOnPort(moved)).toBeUndefined();
+});
+
+test("a moved writer continues the shared generation and sequence", async () => {
+  const { client, sender, receiver, source, target } = await connection();
+  const text = "x".repeat(1100000);
+  source.postMessage(text); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  const next = client(); await next.service.ready;
+  const moved = await restore(sender.runtime.codec.encode(source, [source]), next);
+  moved.postMessage(text); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+});
+
+test("a large unread carried endpoint outlives the sending service and still replies", async () => {
+  const { client, sender, receiver, source, target } = await connection();
+  const live = client(); await live.service.ready;
+  const reply = new sender.runtime.MessageChannel();
+  const counterpart = await restore(sender.runtime.codec.encode(reply.port1, [reply.port1]), live);
+  await Promise.all([sender.settleRoutes(), live.settleRoutes()]);
+  source.postMessage({ text: "x".repeat(1100000), port: reply.port2 }, [reply.port2]);
+  sender.service.close();
+  const body = receiver.runtime.receiveMessageOnPort(target)?.message;
+  if (!body || typeof body !== "object" || !("port" in body) || !(body.port instanceof receiver.runtime.MessagePort)) throw new Error("Missing carried port");
+  const carried = body.port; cleanup.add(() => carried.close());
+  body.port.postMessage("reply after sender exit");
+  expect(live.runtime.receiveMessageOnPort(counterpart)).toEqual({ message: "reply after sender exit" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+});
+
+test("explicit unread receiver close rejects the next transfer before detachment", async () => {
+  const { sender, source, target } = await connection();
+  const carried = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8), text = "x".repeat(1100000);
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  source.postMessage(text); target.close();
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("closed");
+  expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still owned"); expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(sender.service.inspect().staged).toBe(0);
+});
+
+for (const failure of ["unpooled", "budget", "grow", "full-ring"] as const) test(`${failure} admission preserves transfers, sequence and publication state`, async () => {
+  const realm = await sourceLane({ grow() { throw new RangeError("native grow rejected"); } });
+  const options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {};
+  if (failure === "unpooled") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, 32); return grant; };
+  if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget); return grant; };
+  if (failure === "grow") options.lane = (backing, side, grant) => {
+    const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, slots: grant.overflow?.slots[backing.poolIndex] ?? null };
+    return realm.openSharedLane(backing.buffer, side, overflow);
+  };
+  const { sender, receiver, source, target } = await connection(options);
+  const carried = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  const fill = "f".repeat(1048445);
+  if (failure === "full-ring") source.postMessage(fill);
+  expect(() => source.postMessage({ text: "x".repeat(1100000), buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow();
+  expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still owned"); expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(sender.service.inspect().staged).toBe(0);
+  if (failure === "full-ring") expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: fill });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  source.postMessage("next"); expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "next" });
+});
+
+test("internal JSON consumption failure remains an explicit terminal runtime receive error", async () => {
+  const { sender, receiver, source, target, graph } = await connection();
+  const node = graph.nodes.find(node => node[0] === "port" && node.length === 4);
+  if (!node || node[0] !== "port" || node.length !== 4) throw new Error("Missing lane snapshot");
+  const fixed = graph.nodes[node[3]];
+  if (!fixed || fixed[0] !== "shared") throw new Error("Missing fixed lane reference");
+  const lane = sender.service.lanes!.open({ buffer: sender.service.read({ id: fixed[1], byteLength: fixed[2] }), poolIndex: node[1].poolIndex }, node[1].side === 0 ? 1 : 0);
+  lane.reserve("{")!.commit();
+  expect(() => receiver.runtime.receiveMessageOnPort(target)).toThrow();
+  expect(() => receiver.runtime.receiveMessageOnPort(target)).toThrow();
+  const buffer = new ArrayBuffer(8);
+  expect(() => source.postMessage(buffer, [buffer])).toThrow("closed");
+  expect(buffer.byteLength).toBe(8);
 });

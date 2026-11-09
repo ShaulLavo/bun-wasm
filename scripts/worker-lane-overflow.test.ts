@@ -40,8 +40,8 @@ test("zero-delta reuse works at full budget, another direction cannot grow, clos
   expect(Atomics.load(control, poolChargedWord)).toBe(overflowBudget);
 });
 
-for (const partiallyGrown of [false, true]) test(`native growth failure retains only actual capacity, partial=${partiallyGrown}`, async () => {
-  const lane = await sourceLane({ grow(buffer, length) { if (partiallyGrown) buffer.grow(length); throw new RangeError("grow rejected"); } });
+for (const growth of ["none", "partial", "complete"] as const) test(`native growth failure retains only actual capacity, growth=${growth}`, async () => {
+  const lane = await sourceLane({ grow(buffer, length) { if (growth !== "none") buffer.grow(growth === "partial" ? 65536 : length); throw new RangeError("grow rejected"); } });
   const { sender, receiver, control, overflow } = pair(lane.openSharedLane);
   expect(() => sender.reserve(large)).toThrow("grow rejected");
   expect(Atomics.load(control, poolChargedWord)).toBe(overflow.slots[1].byteLength);
@@ -122,4 +122,32 @@ test("the inclusive encoded cap succeeds and cap plus one rejects", () => {
   sender.reserve(text)!.commit();
   receiver.drain(value => expect(value.length).toBe(overflowLimit));
   expect(() => sender.reserve(text + "x")).toThrow("encoded limit");
+});
+
+test("two directions saturate the real committed budget, and smaller reuse has zero delta", () => {
+  const { sender, receiver, control, overflow, buffer } = pair();
+  const text = "x".repeat(overflowLimit);
+  sender.reserve(text)!.commit(); receiver.drain(value => expect(value.length).toBe(overflowLimit));
+  receiver.reserve(text)!.commit(); sender.drain(value => expect(value.length).toBe(overflowLimit));
+  expect(Atomics.load(control, poolChargedWord)).toBe(overflowBudget);
+  const other = createOverflowGrant();
+  if (!other?.slots[1]) throw new Error("Missing slots");
+  const lane = openSharedLane(createSharedLaneBuffer(), 0, { control, index: 1, slots: other.slots[1] });
+  expect(() => lane.reserve(large)).toThrow("budget exceeded");
+  sender.reserve(large)!.commit(); receiver.drain(value => expect(value).toBe(large));
+  expect(overflow.slots[0].byteLength + overflow.slots[1].byteLength).toBe(overflowBudget);
+  expect(buffer.byteLength).toBe(2097184);
+});
+
+for (const corrupt of ["truncated", "length", "cursor", "phase"] as const) test(`invalid ${corrupt} descriptor is terminal, not empty`, () => {
+  const { sender, receiver, buffer, control } = pair();
+  sender.reserve(large)!.commit();
+  const header = new Int32Array(buffer), descriptor = new DataView(buffer, 32 + 1048576);
+  if (corrupt === "truncated") Atomics.store(header, 4, 8);
+  if (corrupt === "length") descriptor.setUint32(8, 64 * 1024 * 1024 + 1, true);
+  if (corrupt === "cursor") Atomics.store(header, 5, 1);
+  if (corrupt === "phase") Atomics.store(control, slotWord(0, 1), 1);
+  expect(() => receiver.drain(() => {})).toThrow();
+  expect(() => receiver.drain(() => {})).toThrow();
+  expect(() => sender.reserve("later")).toThrow("closed");
 });
