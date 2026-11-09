@@ -116,6 +116,7 @@ unsafe extern "C" {
     /// The async context promise reactions capture and restore (new reference).
     fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
     fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
+    fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
 }
 
 /// Erase a value's lifetime (all values belong to the one context).
@@ -484,6 +485,11 @@ impl Engine for QuickJs {
 
     fn is_promise(&self, v: &V) -> bool {
         v.is_promise()
+    }
+
+    fn is_module_namespace(&self, v: &V) -> Option<bool> {
+        // SAFETY: the helper reads only the class ID of this live value.
+        Some(unsafe { JS_bunwasm_IsModuleNamespace(v.as_raw()) })
     }
 
     fn is_proxy(&self, v: &V) -> bool {
