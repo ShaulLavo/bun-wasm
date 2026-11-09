@@ -19,6 +19,8 @@ What it does, and the limit of what it does:
   to 65,536 bytes) and 32 channel lanes.
 - Failure to construct or deliver the startup grant releases the broker lease and fails the launch.
   Startup does not depend on sending an error through the same broken port.
+- Unbundled Node source consumers include the realm, native-constructor, and lane modules.
+  The module-preparation benchmark resolves the realm import before evaluating its host source.
 - The guest realm's constructor (a `Proxy` of the native one, installed in `EngineHost.start`
   immediately before the guest bootstrap) hands out one of those buffers when the requested fixed
   length has stock. Its argument coercion and error order follow the specification. Host and Waffle
