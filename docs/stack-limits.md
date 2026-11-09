@@ -188,6 +188,53 @@ can reduce native-path nesting capacities on other hosts. Firefox's original two
 stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
 iOS measurement is claimed.
 
+## Nested require
+
+A CommonJS module that requires another keeps the loader's frames on the stack until
+the inner module finishes, so a chain of modules is a recursion path like the others.
+On QuickJS every JavaScript frame costs about 320 bytes of the budget, and entering
+a module body through `Function.prototype.apply` costs about 510 more.
+
+The loader used to hold six of its own functions between one module body and the
+next. It now holds one ([CommonJS loader stack cost](bun-patches/commonjs-loader-stack.md)).
+Measured on November 10, 2026 on the native launcher, with the budget set to the
+value the browser passes:
+
+| QuickJS budget | Plain calls | Nested `require`, six loader frames | Nested `require`, one loader frame |
+| ---: | ---: | ---: | ---: |
+| 32 KiB | 97 | 8 | 20 |
+| 152 KiB | 501 | 51 | 121 |
+
+One level cost 2,858 bytes before and costs 1,217 now: about 400 for the loader
+frame, 510 for the native call and 310 for a trivial module body. About 7 to 8 KiB
+of either budget is spent outside the levels, mostly on compiling the next module.
+
+Real packages at 32 KiB, each loaded alone from an empty stack:
+
+| Package | Deepest chain on Node | Six loader frames | One loader frame |
+| --- | ---: | --- | --- |
+| `prompts` 2.4.2 (loaded by Astro 5.14.1) | 9 modules | `RangeError` | loads, with 7 spare levels |
+| `@angular/cli` 20.3.7 `src/utilities/config.js` (through `@angular-devkit/core` and rxjs) | 14 modules | `RangeError`, needs about 54 KiB | `RangeError`, needs 33 to 34 KiB |
+
+The Angular chain still does not fit in 32 KiB. It now fails twelve modules deep in
+rxjs while compiling the thirteenth. The native call into each module body is the
+largest cost left, and removing it needs a different wrapper shape on every engine.
+A larger budget is not the answer: 40 KiB is the measured ceiling for WebKit above.
+
+JSC completes a 512-module chain at 192 KiB before and after, because its
+JavaScript-to-JavaScript calls stay on the C-loop stack. Its getter guard was live
+in the same run (34 levels). The browser-native engine ignores the budget.
+
+These are launcher measurements of the guest's own guard. They are not a Safari
+run, and they do not show that Astro or Angular start there: later phases of both
+have never run at 32 KiB. An overflow that lands in QuickJS's parser can also
+surface as a `SyntaxError` instead of a `RangeError`. The unchanged loader reported
+`SyntaxError: missing formal parameter` one level past its capacity at 40 KiB.
+
+`tests/fixtures/require-chain-stack` holds the line: a child with
+`BUN_WASM_STACK_KIB=32` loads a 16-module chain, catches unbounded recursion inside
+a nested module, checks that no failed module stayed cached, and loads again.
+
 ## Browser-native engine
 
 `bun-browser.wasm` runs guest JavaScript on the host's engine, which keeps its own
@@ -295,6 +342,23 @@ BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the
 
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
 sets the host stack independently of the linked shadow stack.
+
+The `require` path writes its chain of modules into a private scratch directory and
+removes it. `--leaf-root` and `--leaf` end the chain in a real installed package, and
+the result is how many levels fit above it. A package that cannot load alone is
+reported as `refused_at_zero`, not as a capacity of zero:
+
+```sh
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 32 require plain
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 32 \
+  --leaf-root <project with node_modules> --leaf node_modules/prompts/index.js require
+python3 scripts/measure-stack.py --engine jsc --budget-kib 192 require getter
+scripts/test.sh --no-build require-chain-stack
+```
+
+`scripts/measure-require-depth.ts` is a Node preload for the other half of the
+question: with `REQUIRE_DEPTH_TARGETS` it prints the CommonJS chain above a named
+module the first time it loads, then exits before the application starts.
 
 ## Blocking browser check
 
