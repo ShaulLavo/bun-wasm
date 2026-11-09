@@ -101,7 +101,7 @@ export async function updateReleaseLock(directory: string, download = releaseDow
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
   try {
     const metadata = object(JSON.parse(manifest.toString()));
-    const inputs = await discoverInputs(metadata, lock.toString(), scratch, (url, options) => download(url, { ...options, signal: controller.signal }));
+    const inputs = await discoverInputs(metadata, lock.toString(), scratch, (url, options) => download(url, { ...options, signal: AbortSignal.any([controller.signal, options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 180_000)]) }));
     const locations = new Map(Array.from(inputs, ([url, input]) => [url, input.archive]));
     await writeResolverInputs(inputs, scratch, locations);
     await writeFile(join(directory, "package.json"), JSON.stringify(rebindReleaseLocations(metadata, locations)));

@@ -166,7 +166,8 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   const upload = uploads[0]!;
   expect(upload.uses).toBe("actions/upload-artifact@v7");
   expect(upload.with).toEqual({ path: "${{ runner.temp }}/jsc-prebuild.tar", "if-no-files-found": "error", "retention-days": 1, archive: false });
-  expect(steps(producer)[steps(producer).indexOf(upload) - 1]?.name).toBe(packageName);
+  const uploadIndex = steps(producer).findIndex(item => item.uses === "actions/upload-artifact@v7");
+  expect(steps(producer)[uploadIndex - 1]?.name).toBe(packageName);
   expect(producer.outputs).toEqual({ "manifest-sha256": "${{ steps.jsc-artifact.outputs.manifest-sha256 }}" });
   expect(step(native, "name", importName).env).toEqual({ JOBS: "2", CAGE: "", JSC_PREBUILD_MANIFEST_SHA256: "${{ needs.jsc-prebuild.outputs.manifest-sha256 }}" });
   // No background work or bare PIDs cross a step boundary in the hand-off.

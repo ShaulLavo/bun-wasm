@@ -108,6 +108,10 @@ test("CI bootstraps tools, ICU and every install through the authenticated adapt
   expect(workflow.includes("oven-sh/setup-bun@")).toBe(false);
   expect(workflow.includes("actions/setup-node@")).toBe(false);
   expect(workflow.includes("bun install ")).toBe(false);
+  const updater = await Bun.file(new URL("../.github/workflows/owned-dependency-update.yml", import.meta.url)).text();
+  expect(updater).toContain("GITHUB_TOKEN: ${{ github.token }}");
+  expect(updater.includes("setup-node@")).toBe(false);
+  expect(await Bun.file(new URL("../.github/scripts/update-owned-dependencies.sh", import.meta.url)).text()).toContain("bun scripts/ci-update-lock.ts web");
   expect(await Bun.file(new URL("../jsc/build-icu.sh", import.meta.url)).text()).toContain("scripts/ci-release-download.ts");
 });
 
@@ -128,6 +132,9 @@ test("updating new URL pins resolves their release transitives offline and resto
     expect(await readFile(join(source, "package.json"), "utf8")).toBe(fixture.manifest);
     await installStagedPackages(source, ["--frozen-lockfile", "--offline"], fixture.download);
     expect(await readFile(join(source, "bun.lock"), "utf8")).toBe(canonical);
+    await expect(updateReleaseLock(source, async () => new Response("wrong bytes"), true)).rejects.toThrow("integrity mismatch");
+    expect(await readFile(join(source, "bun.lock"), "utf8")).toBe(canonical);
+    expect(await readFile(join(source, "package.json"), "utf8")).toBe(fixture.manifest);
   } finally {
     if (previous === undefined) delete process.env.BUN_INSTALL_CACHE_DIR;
     else process.env.BUN_INSTALL_CACHE_DIR = previous;

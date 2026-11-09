@@ -29,6 +29,7 @@ jobs:
           node-version: 26.12.1
       - name: Generate version pins and lockfiles
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

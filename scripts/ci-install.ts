@@ -43,7 +43,7 @@ export async function installStagedPackages(directory: string, args: readonly st
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
 
   try {
-    const locations = await stageReleasePackages(directory, directory, (url, options) => download(url, { ...options, signal: controller.signal }), join(scratch, "archives"));
+    const locations = await stageReleasePackages(directory, directory, (url, options) => download(url, { ...options, signal: AbortSignal.any([controller.signal, options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 180_000)]) }), join(scratch, "archives"));
     verifyStagedResolutions(lock.toString(), await readFile(join(directory, "bun.lock"), "utf8"), locations);
     await runBunInstall(directory, args, controller.signal);
   } finally {
