@@ -2,7 +2,7 @@
   "name": "bun-wasm",
   "version": "0.0.61",
   "private": true,
-  "waffleHostInterface": 1,
+  "waffleHostInterface": 2,
   "type": "module",
   "exports": {
     ".": {
@@ -101,7 +101,7 @@
   "peerDependencies": {
     "waffle": "*",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.111/waffle-relay-0.0.111.tgz"
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.114/waffle-relay-0.0.114.tgz"
   },
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
@@ -110,7 +110,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.113/waffle-0.0.113.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.114/waffle-0.0.114.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "miniflare": "5.20261012.0-beta",

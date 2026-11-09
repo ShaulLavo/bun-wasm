@@ -137,7 +137,7 @@ test("public adoption keeps the exact build pin separate from wildcard placement
   expect(metadata.peerDependencies.waffle).toBe("*");
   expect(metadata.devDependencies.waffle).toBe(release.url);
   expect(metadata.peerDependencies["waffle-base"]).toBe(release.programs.base.url);
-  expect(release.hostInterface).toBe(1);
+  expect(release.hostInterface).toBe(metadata.waffleHostInterface);
   expect(release.programs.schema).toBe("waffle-program-release/2");
   expect(release.programs.toolCommit).toMatch(/^[a-f0-9]{40}$/);
   for (const scope of ["web", "sandbox"]) {

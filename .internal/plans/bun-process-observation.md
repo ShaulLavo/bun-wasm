@@ -1,6 +1,6 @@
 # Bun process observation through native return
 
-Status: Approved. Implementation and focused checks are complete on the development input. Supported Waffle replacement is required before landing.
+Status: Approved. Runtime and relay 0.0.114 are pinned and locally checked. Matching interface-2 programs and reviewed, merged Bash source remain required before landing.
 
 ## Contract
 
@@ -27,7 +27,7 @@ The feature-owned `checks/web-runner-process-observation.json` runs the real CPU
 
 ## Landing dependency
 
-No development archive URL or version bump belongs in this PR. The parent owns the supported Waffle release and matching manifest and lockfile replacement. Run normal checks again on that supported replacement and obtain one independent review before landing. This worker does not merge or release.
+Root, Web, and sandbox now select published runtime 0.0.114. Root and Web select its paired relay. Root metadata and native release inputs use host interface 2 and source 341bf1452d98e280a5c718af2775a839ff4042fa. Frozen installs pass without preparing or rebuilding those packages. The coordinator owns normal CI and merge after programs 0.0.16 and the reviewed, merged interface-2 Bash source complete the tuple. No development archive URL or package version bump belongs in this PR.
 
 
 ## Local gate results
@@ -43,3 +43,5 @@ The reviewer reproduced disposal reentering through `runtime.processes()` before
 ## Published runtime qualification
 
 Runtime and relay 0.0.114 are published, source 341bf1452d98e280a5c718af2775a839ff4042fa. The complete program tuple is still pending. Runtime-only qualification found that the published SDK acknowledges its controller through an internal recursive `rootStopped` call. The grant-lifetime test now observes Bun's own acknowledgment boundary, without counting SDK recursion as another consumer stop. All existing assertions remain: one native termination, one consumer acknowledgment, a live grant before return, and no grant after return. No production change is needed for that distinction.
+
+After reconciling main at 95cc826e1, the normal JavaScript quality command passes on the committed public runtime selection. The focused observation, ownership, and host-interface suites pass 210 tests. Package checks pass 335 tests. Interface tests derive their matching and nonmatching metadata from the selection, preserving exact rejection coverage without treating interface 1 as current. Historical self-contained interface-1 fixtures remain unchanged. Complete Web acceptance remains blocked by the old program family and Bash source until their replacements arrive.

@@ -16,6 +16,7 @@ import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import * as preparation from "../tests/shell-product/prepare-flow";
 import { assertInstalledWaffle, assertWafflePeer, networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 import { parseHostInterface } from "./waffle-release-inputs";
+import release from "./waffle-release-inputs.json";
 import { writeInstalledWaffleFixture } from "./fixtures/waffle-host-interface";
 import { WorkerJobs } from "../tests/shell-product/worker-jobs";
 import { confirmWorkerProcessJob, createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -720,7 +721,7 @@ test("actual preparation caller restores Bun from the packed archive without edi
     const cached = join(directory, "borrowed-cache");
     await Promise.all([temporary, source, installed, cached].map(path => mkdir(path, { recursive: true })));
     const waffle = "git+https://github.com/ShaulLavo/waffle.git#" + "a".repeat(40);
-    const metadata = JSON.stringify({ name: "bun-wasm", waffleHostInterface: 1, peerDependencies: { waffle } });
+    const metadata = JSON.stringify({ name: "bun-wasm", waffleHostInterface: release.hostInterface, peerDependencies: { waffle } });
     await writeFile(join(source, "package.json"), metadata);
     await writeFile(join(source, "launcher.ts"), 'export const clean = "packed archive";\n');
     const archive = "bun-wasm-test.tgz";
@@ -732,7 +733,7 @@ test("actual preparation caller restores Bun from the packed archive without edi
     await writeFile(join(installed, "stale-only.ts"), "not in the archive");
     await writeInstalledWaffleFixture(destination, waffle);
     const shell = join(destination, "node_modules/bash-web");
-    await writeFile(join(shell, "package.json"), JSON.stringify({ name: "bash-web", waffleHostInterface: 1, peerDependencies: { waffle } }));
+    await writeFile(join(shell, "package.json"), JSON.stringify({ name: "bash-web", waffleHostInterface: release.hostInterface, peerDependencies: { waffle } }));
     const driver = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product-prepare.ts"), "utf8");
     const peer = driver.match(/^async function peer\([\s\S]*?^}/m)?.[0];
     if (!peer) throw new Error("Missing preparation peer check");
@@ -1031,7 +1032,7 @@ test("Retained Waffle selection checks Shell, peer, host, and network provenance
     await Bun.write(networkPath, networkInputHash);
     await expect(readWaffleSelection(directory, commits)).rejects.toThrow();
     const expected = await writeWaffleSelection(directory, commits);
-    expect(expected).toEqual({ ...commits, hostInterface: parseHostInterface(1, "fixture"), networkInputHash });
+    expect(expected).toEqual({ ...commits, hostInterface: parseHostInterface(release.hostInterface, "fixture"), networkInputHash });
     expect(await readWaffleSelection(directory, commits)).toEqual(expected);
     expect(await Bun.file(selectionPath).json()).toEqual(expected);
     await expect(readWaffleSelection(directory, { ...commits, shellCommit: "c".repeat(40) })).rejects.toThrow("Retained Waffle selection");

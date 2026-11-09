@@ -157,8 +157,8 @@ The Node adapter captures each Worker's native termination separately from logic
 process exit. Pending stops remain owned after an exit event, and rejected stops
 retain their exact reason instead of reporting successful disposal.
 
-The development source reference is `ShaulLavo/waffle`,
+The published runtime source reference is `ShaulLavo/waffle`,
 `packages/waffle/proc/{observation,worker-client}.ts` and
 `packages/waffle/browser/{worker,process-broker}.ts` at
-`b6b33bbef5ec603ebe906061dd477d4ce43ee6c9`. This is not a supported package pin.
-The parent must supply the supported replacement before this consumer lands.
+`341bf1452d98e280a5c718af2775a839ff4042fa`, runtime 0.0.114 with host interface 2.
+The matching program families and shell source remain required before this consumer lands.

@@ -26,7 +26,7 @@ for (const value of invalid.concat([NaN, Infinity, -Infinity])) {
 
 test("the parser accepts the full positive safe-integer domain and equality is exact", () => {
   expect(Number(parseHostInterface(Number.MAX_SAFE_INTEGER, "fixture"))).toBe(Number.MAX_SAFE_INTEGER);
-  expect(packageHostInterface({ waffleHostInterface: 1 }, "fixture")).toBe(required);
+  expect(packageHostInterface({ waffleHostInterface: release.hostInterface }, "fixture")).toBe(required);
   expect(() => assertExactHostInterface(parseHostInterface(1, "family"), parseHostInterface(2, "runtime"), "family")).toThrow("does not match runtime");
 });
 
@@ -52,7 +52,7 @@ test("wildcard placement retains one physical runtime, one lock entry, and uncha
 });
 
 const packages = ["waffle", "bun-wasm", "bash-web", "waffle-base", "waffle-coreutils", "@waffle/python"];
-const cases = packages.flatMap(name => invalid.concat([2]).map(value => ({ name, value })));
+const cases = packages.flatMap(name => invalid.concat([release.hostInterface + 1]).map(value => ({ name, value })));
 for (const { name, value } of cases) {
   test(`${name} rejects host metadata ${JSON.stringify(value)} before any bundling`, async () => {
     await withInstallation(async root => {
@@ -123,7 +123,7 @@ test("a matching interface cannot substitute a different Git lock edge", async (
   }, historical);
 });
 
-for (const value of invalid.concat([2])) {
+for (const value of invalid.concat([release.hostInterface + 1])) {
   test(`Bun rejects host metadata ${JSON.stringify(value)} before packing or installing`, async () => {
     await withInstallation(async root => {
       const bun = join(root, "node_modules/bun-wasm");
