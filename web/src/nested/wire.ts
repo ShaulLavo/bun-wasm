@@ -49,6 +49,7 @@ export type Reply =
   | { Memory: { pointer: number; pages: number; maximum: number; committed: number } }
   | { Function: { id: number; params: readonly string[]; results: readonly string[] } }
   | { Values: readonly WasmNumber[] }
+  | { AttachedModule: { id: number; description: string } }
   | { Error: { category: string; message: string } }
   | "PendingException"
   | "Null";

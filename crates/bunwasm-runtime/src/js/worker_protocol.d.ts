@@ -231,7 +231,7 @@ declare namespace BunWasm {
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
     workerNoWarnings?: boolean;
-    require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild };
+    require(name: "spawn"): { spawnWorker(argv: string[], options: Record<string, unknown>, worker: object): WorkerChild };
     require(name: "worker_stdio"): {
       readable(source: ReadableStream<Uint8Array>): { stream: WorkerReadable; drained: Promise<void> };
       writable(sink: { write(chunk: unknown): unknown; end(): void }): WorkerWritable;

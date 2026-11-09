@@ -1,10 +1,11 @@
 # Shared nested Wasm, QuickJS and Browser host
 
-Classification: Original host adapters. `web/src/nested/host.ts`, `wire.ts` and
-`module-info.ts` are the Browser counterpart of the native service described in
+Classification: Original host adapters. `web/src/nested/host.ts`, `wire.ts`, `publication.ts`
+and `module-info.ts` are the Browser counterpart of the native service described in
 [Shared nested Wasm, QuickJS and native host](shared-nested-native.md). No interpreter,
-compiler algorithm or upstream runtime implementation is copied into these files. The guest,
-wire contract and regionizer are unchanged.
+compiler algorithm or upstream runtime implementation is copied into these files. The wire
+contract and regionizer are unchanged. One guest change belongs to this work: `spawn.ts` gains a
+private `spawnWorker`, used only by `worker_threads.ts`, in place of a public `_worker` option.
 
 A memory group member's worker loads the host on demand and supplies the shared-group-only
 `runtime_nested.request` import. Regionized modules compile and run on the page's own
@@ -15,18 +16,29 @@ The host uses only public surfaces of the pinned Waffle package: `createRuntime(
 root adoption with `"group"`, `admitRootMemoryGroup`, `launchWorker({ memoryGroup })`, and the
 worker executor's `namespaces` and `beforeBindings` hooks. A group core imports only the
 `runtime_shm` functions it uses, so the host passes a small declaration module to the public
-`wasi.imports` to resolve `shm_create`, `shm_detach`, `futex_wait32`, `futex_wait64` and
-`futex_wake` from Waffle's documented ABI.
+`wasi.imports` to resolve `shm_create`, `shm_detach`, `shm_publish`, `shm_publication_open`,
+`shm_withdraw`, `futex_wait32`, `futex_wait64` and `futex_wake` from Waffle's documented ABI.
 
 Requests and replies follow the frozen serde enums in `wasm/nested_wire.rs`. I64 and F64
 payloads keep their decimal text, because JSON numbers would round them. The JS API does not
 reflect function types, so `module-info.ts` reads them from the regionized bytes.
 
 Each nested memory is one `shm_create` region of its whole declared maximum, charged by the
-group owner. Handles carry a slot and generation, as on the native host. Growth zeroes the
-newly visible pages before publishing the length and never moves storage. A failed defined
-memory detaches its region. Waffle's owner reclaims published regions and holds after the
-member's physical stop.
+group owner, plus a 16-byte page cell. Handles carry a slot and generation, as on the native
+host. Waffle zeroes the whole reservation when it is created, and growth is a compare-and-swap on
+the cell, so it never moves storage or holds a lock a stopped member could leave behind. A failed
+defined memory detaches both regions. Waffle's owner reclaims holds at the member's physical stop.
+
+Workers of a group core join their parent's group, chosen only by the typed `request.worker` field
+that `spawnWorker` sets. An environment marker or a public `_worker` option starts a new group.
+`PublishMemory` and `PublishModule` make one atomic owner publication each, and the receiver opens
+it in one owner step that takes every hold and returns the owner's extents. Kind, relationship,
+extents and metadata live in the owner; guest memory holds only the page cell and the module bytes,
+so `publication.ts` checks what it reads there before building a view. A module travels as its
+original description (UTF-8 JSON) followed by regionized code, and each receiver compiles its own
+copy through the same path as `Compile`. A publication survives its sender's stop and ends when
+withdrawn or when the group ends. Only the publishing incarnation can withdraw it. Publication
+tokens are full u32 values and leave the owner only through an output pointer.
 
 Nested waits and notifies, and QuickJS `Atomics`, use the same `runtime_shm` futex calls on the
 same group address. A blocked member is cancelled by Waffle's hard stop. An exit or trap out of
@@ -44,11 +56,15 @@ Differences from the native host:
 - The JS API reads one value per import module and name. Two imports with the same name and
   different function types are refused with a `LinkError`.
 - f32 and f64 values cross JS numbers at this boundary, so NaN payload bits are not guaranteed.
-- Nested modules that export a table or global are refused at compile, before any start code
-  runs. An ordinary SharedArrayBuffer takes a region through the same `Reserve` path as a
-  Memory, and posting one is refused like any other shared object.
-- A group core spawned as a child starts its own group. Same-region worker attachment is later
-  work. Single-agent tests are not cross-worker acceptance.
+- Nested modules that export a table or global are refused at compile and at attachment, before
+  any start code runs.
+- A Memory uses two owner regions, so the default 4,096-region policy allows 2,048 Memories in a
+  group, half of native's. Publications are limited to 4,096, as on native.
+- Withdrawal is narrower than native's: only the incarnation that published may withdraw.
+- `Worker.terminate()` returns before the agent has stopped. A worker blocked in `Atomics.wait`
+  stays a listed waiter until Blink forces it out about two seconds later, so a wake sent in that
+  window can count it. The supported stop boundary is the broker's successful physical stop, and
+  it does not prove the agent's readers have closed.
 
 `scripts/shared-wasm-memory-browser.test.ts` runs the shared fixture in a real group guest in
 Chromium, owned by `checks/browser-guest-shared-wasm-memory.json`. The Shared PIC job consumes
@@ -64,7 +80,11 @@ Native instantiation reads each validated import occurrence in order, including 
 names with matching function types. The host supplies those captured bindings through
 ordered namespace getters rather than overwriting an earlier callback.
 
-The Browser group fixture attempts shared-backend Memory and Module publication
-through both workerData and a MessageChannel. Each must fail with DataCloneError
-and the Browser host's explicit same-region-transport diagnostic, rather than
-passing through an unrelated Wasmi or unsupported-worker refusal.
+The Browser group fixture shares Memory, Module and SharedArrayBuffer objects through
+workerData and MessageChannel, including a receiver blocked with no event-loop turn, a sender
+the page has confirmed stopped before any attachment, moved ports with queued messages, and
+concurrent growth. `page-control.ts` carries the page's owner-side facts to those fixtures,
+because a guest's own `process.pid` is a fixed 1. Membership rows compare the owner's group id for
+each kind of start. After the run the page inspects each retained ended owner and the page budget.
+`web/tests/nested-host-publication.test.ts` runs the real `NestedHost` against Waffle's real owner
+for every refusal and rollback, using publications a guest would never make.

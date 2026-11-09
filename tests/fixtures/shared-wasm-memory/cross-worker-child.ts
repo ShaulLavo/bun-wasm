@@ -89,9 +89,10 @@ function sender() {
 }
 
 function blocked() {
-  const exports = instantiate(module!, memory!);
+  const exports = instantiate(module!, memory!, () => { Atomics.wait(words(), 26, 0); });
   ready(24);
   if (how === 'nested') exports.wait(26 * 4, 0, -1n);
+  else if (how === 'callback') exports.callback(1);
   else Atomics.wait(words(), 26, 0);
   throw new Error('blocked worker must be terminated, not woken');
 }

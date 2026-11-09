@@ -62,7 +62,17 @@ function serve(out: string): number {
   return server.port!;
 }
 
-type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly { members: number; retained: number; regions: number; holds: number; pins: number; watches: number }[] };
+type OwnerCounters = { members: number; retained: number; regions: number; holds: number; pins: number; watches: number; published: number };
+type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly OwnerCounters[]; ended?: readonly OwnerCounters[]; budget?: number };
+
+/** Every owner this run created has ended and holds nothing; the page budget is back to zero. */
+function assertRetired(value: Result): void {
+  assert.ok((value.ended?.length ?? 0) > 0, "the run never observed a group owner");
+  for (const { members, retained, regions, holds, pins, watches, published } of value.ended!) {
+    assert.deepEqual({ members, retained, regions, holds, pins, watches, published }, { members: 0, retained: 0, regions: 0, holds: 0, pins: 0, watches: 0, published: 0 });
+  }
+  assert.equal(value.budget, 0, "the page budget is released with the last group");
+}
 
 async function result(page: Page): Promise<Result> {
   await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: 240_000 });
@@ -90,6 +100,7 @@ async function runBrowser(type: BrowserType, name: string, port: number): Promis
   assert.ok((value.peak?.regions ?? 0) > 0, "the owner never saw a real nested region");
   assert.ok((value.peak?.committedBytes ?? 0) > 0, "the owner never charged group backing");
   assert.deepEqual(value.groups, [], "members, regions, holds and pins are released after physical stop");
+  assertRetired(value);
 }
 
 try {

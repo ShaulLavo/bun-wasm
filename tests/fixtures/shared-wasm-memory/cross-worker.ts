@@ -2,6 +2,7 @@
 // reference, by native Bun. Workers are real worker_threads members of the parent's group.
 import { strict as assert } from 'node:assert';
 import { Worker } from 'node:worker_threads';
+import { memberTag, stoppedPhysically } from './page-control.ts';
 
 const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
 const module = new WebAssembly.Module(moduleBytes);
@@ -17,8 +18,8 @@ type Exports = {
 function exported(memory: WebAssembly.Memory, compiled = module) {
   return new WebAssembly.Instance(compiled, { env: { memory, observe() {} } }).exports as unknown as Exports;
 }
-function spawn(mode: string, data: object = {}) {
-  const worker = new Worker(child, { workerData: { mode, ...data } });
+function spawn(mode: string, data: object = {}, tag?: string) {
+  const worker = new Worker(child, { workerData: { mode, ...data }, argv: tag ? [memberTag(tag)] : [] });
   const exited = new Promise<number>((resolve, reject) => { worker.once('exit', resolve); worker.once('error', reject); });
   return { worker, exited };
 }
@@ -79,14 +80,16 @@ function waitResults(view: Int32Array, exports: Exports) {
   assert.equal(Atomics.wait(view, 32, 6), 'not-equal');
   assert.equal(Atomics.wait(view, 32, 5, 0), 'timed-out');
 }
-async function terminated(memory: WebAssembly.Memory, view: Int32Array, how: 'nested' | 'js') {
+async function terminated(memory: WebAssembly.Memory, view: Int32Array, how: 'nested' | 'js' | 'callback') {
   Atomics.store(view, 24, 0);
-  const { worker, exited } = spawn('blocked', { memory, module, how });
+  const tag = `cross-worker-blocked-${how}`;
+  const { worker, exited } = spawn('blocked', { memory, module, how }, tag);
   waitFor(view, 24);
   // Terminate releases the waiter without any wake reaching this word.
   assert.equal(await worker.terminate(), 1);
   assert.equal(await exited, 1);
-  assert.equal(Atomics.notify(view, 26, 1), 0, 'the terminated waiter is gone');
+  stoppedPhysically(tag);
+  assert.equal(Atomics.notify(view, 26, 1), 0, `the terminated ${how} waiter is gone`);
 }
 async function senderExit() {
   const { worker, exited } = spawn('sender', { module });
@@ -147,6 +150,7 @@ await jsWaitNestedNotify(memory, view, exports);
 waitResults(view, exports);
 await terminated(memory, view, 'nested');
 await terminated(memory, view, 'js');
+await terminated(memory, view, 'callback');
 await senderExit();
 await postedLoad(memory, view);
 await reentrantDelivery();
