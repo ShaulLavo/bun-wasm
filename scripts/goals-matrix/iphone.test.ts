@@ -120,6 +120,7 @@ test("an outstanding install observation cannot block confirmed native tab clean
 test("successful native-owned cleanup preserves the final terminal log", async () => {
   const framework = frameworks[0]!;
   await withPlayground(framework, 0, async transport => {
+    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
     const logs: string[] = [];
     let closed = false;
     transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
@@ -136,6 +137,7 @@ test("successful native-owned cleanup preserves the final terminal log", async (
 test("a stalled final terminal read saves the completed transcript and still closes the native page", async () => {
   const framework = frameworks[0]!;
   await withPlayground(framework, 0, async transport => {
+    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
     const evaluate = transport.evaluate;
     let reads = 0;
     transport.evaluate = <T>(source: string) => {
@@ -162,6 +164,7 @@ test("a stalled final terminal read saves the completed transcript and still clo
 test("a terminal log write failure cannot skip native resource teardown", async () => {
   const framework = frameworks[0]!;
   await withPlayground(framework, 0, async transport => {
+    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
     let closed = false;
     transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
