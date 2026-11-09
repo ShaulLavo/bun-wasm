@@ -7,7 +7,8 @@ import { releaseCacheKey, releaseDownload } from "./ci-release-download";
 import { runBunInstall } from "./ci-install";
 import { lockedReleasePackages, rebindReleaseLocations } from "./ci-stage-release-packages";
 
-type ReleaseInput = { manifest: Record<string, unknown>; integrity: string; archive: string };
+type InputArchive = { manifest: Record<string, unknown>; integrity: string; archive: string };
+type ResolverInput = InputArchive & ({ kind: "release" } | { kind: "git"; resolution: string; archiveId: string });
 const releasePattern = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/[^/]+\/[^/]+$/;
 const gitPattern = /^(?:git\+https:\/\/github\.com\/|github:)([\w.-]+)\/([\w.-]+?)(?:\.git)?#([\da-f]{7,40})$/;
 
@@ -25,7 +26,7 @@ async function discoverInputs(manifest: Record<string, unknown>, lock: string, s
   const pins = new Map(lockedReleasePackages(lock).map(pin => [pin.url, pin.integrity]));
   const pending = dependencySpecs(manifest, true).concat(Array.from(pins.keys()));
   const seen = new Set<string>();
-  const inputs = new Map<string, ReleaseInput>();
+  const inputs = new Map<string, ResolverInput>();
   for (const spec of pending) {
     if (seen.has(spec)) continue;
     seen.add(spec);
@@ -35,27 +36,38 @@ async function discoverInputs(manifest: Record<string, unknown>, lock: string, s
   return inputs;
 }
 
-async function sourceMetadata(spec: string, scratch: string, pins: ReadonlyMap<string, string>, inputs: Map<string, ReleaseInput>, download: typeof releaseDownload): Promise<Record<string, unknown> | undefined> {
+async function sourceMetadata(spec: string, scratch: string, pins: ReadonlyMap<string, string>, inputs: Map<string, ResolverInput>, download: typeof releaseDownload): Promise<Record<string, unknown> | undefined> {
   const git = gitPattern.exec(spec);
-  if (git) {
-    const response = await download(`https://raw.githubusercontent.com/${git[1]}/${git[2]}/${git[3]}/package.json`);
-    if (!response.ok) throw new Error(`Git package metadata failed: HTTP ${response.status}`);
-    return object(await response.json());
-  }
-  if (!releasePattern.test(spec)) return undefined;
-  const response = await download(spec);
-  if (!response.ok) throw new Error(`Release package metadata failed: HTTP ${response.status}`);
+  if (!git && !releasePattern.test(spec)) return undefined;
+  const url = git ? `https://codeload.github.com/${git[1]}/${git[2]}/legacy.tar.gz/${git[3]}` : spec;
+  const response = await download(url);
+  if (!response.ok) throw new Error(`Package source metadata failed: HTTP ${response.status}`);
   const bytes = await response.bytes();
   const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
   if (pins.has(spec) && pins.get(spec) !== integrity) throw new Error("Locked release integrity mismatch");
   const archive = join(scratch, `${releaseCacheKey(spec)}.tgz`);
   await writeFile(archive, bytes);
-  const manifest = object(JSON.parse(execFileSync("tar", ["-xOzf", archive, "package/package.json"], { encoding: "utf8" })));
-  inputs.set(spec, { manifest, integrity, archive: join(scratch, `${releaseCacheKey(spec)}-metadata.tgz`) });
+  const prefix = git ? execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).split("\n")[0]!.replace(/\/$/, "") : "package";
+  const manifest = object(JSON.parse(execFileSync("tar", ["-xOzf", archive, "--", `${prefix}/package.json`], { encoding: "utf8" })));
+  const input = { manifest, integrity, archive: join(scratch, `${releaseCacheKey(spec)}-metadata.tgz`) };
+  if (!git) { inputs.set(spec, { kind: "release", ...input }); return manifest; }
+  const expected = `${git[1]}-${git[2]}-`;
+  const revision = prefix.slice(expected.length);
+  if (!prefix.startsWith(expected) || !/^[a-f0-9]{7,40}$/.test(revision) || !git[3]!.startsWith(revision)) throw new Error("Invalid Git archive identity");
+  inputs.set(spec, { kind: "git", ...input, resolution: `github:${git[1]}/${git[2]}#${revision}`, archiveId: prefix });
   return manifest;
 }
 
-async function writeResolverInputs(inputs: ReadonlyMap<string, ReleaseInput>, scratch: string, locations: ReadonlyMap<string, string>) {
+function resolverLocations(inputs: ReadonlyMap<string, ResolverInput>): Map<string, string> {
+  const locations = new Map<string, string>();
+  for (const [spec, input] of inputs) {
+    if (input.kind === "git") locations.set(input.resolution, input.archive);
+    locations.set(spec, input.archive);
+  }
+  return locations;
+}
+
+async function writeResolverInputs(inputs: ReadonlyMap<string, ResolverInput>, scratch: string, locations: ReadonlyMap<string, string>) {
   const packageDirectory = join(scratch, "metadata", "package");
   await mkdir(packageDirectory, { recursive: true });
   for (const input of inputs.values()) {
@@ -72,16 +84,19 @@ function inlineJson(value: unknown): string {
   return `{ ${entries.map(([key, entry]) => `${JSON.stringify(key)}: ${inlineJson(entry)}`).join(", ")} }`;
 }
 
-function canonicalLock(staged: string, locations: ReadonlyMap<string, string>, inputs: ReadonlyMap<string, ReleaseInput>): string {
+function canonicalLock(staged: string, locations: ReadonlyMap<string, string>, inputs: ReadonlyMap<string, ResolverInput>): string {
   const reverse = new Map(Array.from(locations, ([url, local]) => [local, url]));
   const restored = staged.replace(/"(?:[^"\\]|\\.)*"/g, token => JSON.stringify(rebindReleaseLocations(JSON.parse(token), reverse)));
   const lock = object(Bun.JSONC.parse(restored));
   const packages = object(lock.packages);
-  for (const entry of Object.values(packages)) {
+  for (const [name, entry] of Object.entries(packages)) {
     if (!Array.isArray(entry) || typeof entry[0] !== "string") throw new Error("Invalid resolved lock entry");
     const spec = entry[0].slice(entry[0].indexOf("@", 1) + 1);
     const input = inputs.get(spec);
-    if (input) entry[entry.length - 1] = input.integrity;
+    if (input?.kind === "git") {
+      const packageName = entry[0].slice(0, entry[0].indexOf("@", 1));
+      packages[name] = [`${packageName}@${input.resolution}`, entry[1], input.archiveId, input.integrity];
+    } else if (input) entry[entry.length - 1] = input.integrity;
   }
   return restored.split("\n").map(line => {
     const match = /^    ("(?:[^"\\]|\\.)*"): \[/.exec(line);
@@ -102,7 +117,7 @@ export async function updateReleaseLock(directory: string, download = releaseDow
   try {
     const metadata = object(JSON.parse(manifest.toString()));
     const inputs = await discoverInputs(metadata, lock.toString(), scratch, (url, options) => download(url, { ...options, signal: AbortSignal.any([controller.signal, options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 180_000)]) }));
-    const locations = new Map(Array.from(inputs, ([url, input]) => [url, input.archive]));
+    const locations = resolverLocations(inputs);
     await writeResolverInputs(inputs, scratch, locations);
     await writeFile(join(directory, "package.json"), JSON.stringify(rebindReleaseLocations(metadata, locations)));
     await writeFile(join(directory, "bun.lock"), JSON.stringify(rebindReleaseLocations(Bun.JSONC.parse(lock.toString()), locations)));

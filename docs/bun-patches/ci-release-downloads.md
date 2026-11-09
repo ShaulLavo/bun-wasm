@@ -42,16 +42,22 @@ installs with `--offline`, so no public release request can make that proof pass
 ## Updating release pins
 
 `scripts/ci-update-lock.ts` owns the updater's existing lock-only, scripts-disabled
-resolution. It follows release dependency metadata and pinned Git package manifests,
+resolution. It follows release dependency metadata and pinned Git source archives,
 authenticates release archives, and verifies unchanged pins against their old integrity.
 Temporary metadata-only tarballs let Bun resolve newly selected dependencies without
 public release requests. They are resolver inputs only, never installed product archives.
 
 The output lock restores canonical published URLs and SHA-512s of the original release
-bytes. The product manifest is restored exactly. Temporary metadata archives, manifests
+bytes. Pinned Git archives use GitHub's legacy source archive, retaining the original
+archive digest, resolved commit and archive-directory identity that Bun records. Git
+metadata also enters the temporary solver, so its new release transitives cannot
+escape staging. The product manifest is restored exactly. Temporary metadata archives, manifests
 and downloads are removed. The regression resolves new direct and scoped transitive pins
 with all network access disabled, then installs the resulting canonical lock through
 frozen staging. That second install checks the original bytes against the restored digest.
+A separate offline Git-to-scoped-release fixture checks canonical Git and release identity.
+The reached Web host shell helper uses the same frozen installer for all three projects;
+its direct-install paths are included in the coverage regression.
 The updater's explicit record downloads keep their existing 120-second bound.
 
 ## Cache lifetime

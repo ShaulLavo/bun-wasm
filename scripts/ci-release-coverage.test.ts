@@ -12,12 +12,12 @@ import { selectNodeRelease } from "./ci-bootstrap-tools";
 const releaseUrl = (name: string) => `https://github.com/owner/project/releases/download/v1/${name.replaceAll("/", "-")}.tgz`;
 const digest = (bytes: Uint8Array) => `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
 
-async function packageArchive(root: string, name: string, dependencies: Record<string, string>) {
+async function packageArchive(root: string, name: string, dependencies: Record<string, string>, prefix = "package") {
   const source = join(root, name);
-  await mkdir(join(source, "package"), { recursive: true });
-  await writeFile(join(source, "package/package.json"), JSON.stringify({ name, version: "1.0.0", dependencies }));
+  await mkdir(join(source, prefix), { recursive: true });
+  await writeFile(join(source, prefix, "package.json"), JSON.stringify({ name, version: "1.0.0", dependencies }));
   const archive = join(source, "input.tgz");
-  expect(Bun.spawnSync(["tar", "-czf", archive, "-C", source, "package"]).exitCode).toBe(0);
+  expect(Bun.spawnSync(["tar", "-czf", archive, "-C", source, prefix]).exitCode).toBe(0);
   return readFile(archive);
 }
 
@@ -108,6 +108,9 @@ test("CI bootstraps tools, ICU and every install through the authenticated adapt
   expect(workflow.includes("oven-sh/setup-bun@")).toBe(false);
   expect(workflow.includes("actions/setup-node@")).toBe(false);
   expect(workflow.includes("bun install ")).toBe(false);
+  const helper = await Bun.file(new URL("./test-web-host.sh", import.meta.url)).text();
+  expect(helper).not.toMatch(/\bbun install\b/);
+  expect(helper.match(/scripts\/ci-install\.ts/g)).toHaveLength(3);
   const updater = await Bun.file(new URL("../.github/workflows/owned-dependency-update.yml", import.meta.url)).text();
   expect(updater).toContain("GITHUB_TOKEN: ${{ github.token }}");
   expect(updater.includes("setup-node@")).toBe(false);
@@ -180,4 +183,44 @@ test("release caches can grow after partial restore without saving duplicate war
     const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
     expect(workflow.match(/uses: \.\/\.github\/actions\/save-release-downloads/g)?.length).toBe(workflow.match(/uses: \.\/\.github\/actions\/release-downloads/g)?.length);
   } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+
+test("new Git pins resolve scoped release transitives offline and preserve canonical Git archive identity", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-update-git-offline-"));
+  const previous = process.env.BUN_INSTALL_CACHE_DIR;
+  try {
+    const fixture = await releaseFixture(scratch);
+    const revision = "1234567890123456789012345678901234567890";
+    const git = `git+https://github.com/owner/project.git#${revision}`;
+    const archiveId = "owner-project-1234567";
+    const bytes = await packageArchive(scratch, "git-parent", { example: releaseUrl("example") }, archiveId);
+    const source = join(scratch, "source");
+    await mkdir(source);
+    const manifest = JSON.stringify({ name: "consumer", dependencies: { "git-parent": git } });
+    await writeFile(join(source, "package.json"), manifest);
+    await writeFile(join(source, "bun.lock"), JSON.stringify({ lockfileVersion: 2, configVersion: 1, workspaces: { "": { name: "consumer" } }, packages: {} }));
+    process.env.BUN_INSTALL_CACHE_DIR = join(scratch, "empty-cache");
+    const download = async (url: string) => {
+      if (url === `https://raw.githubusercontent.com/owner/project/${revision}/package.json`) return Response.json({ name: "git-parent", version: "1.0.0", dependencies: { example: releaseUrl("example") } });
+      if (url === `https://codeload.github.com/owner/project/legacy.tar.gz/${revision}`) return new Response(bytes);
+      return fixture.download(url);
+    };
+    await updateReleaseLock(source, download, true);
+    const canonical = await readFile(join(source, "bun.lock"), "utf8");
+    expect(canonical.includes(scratch)).toBe(false);
+    const python = await fixture.download(releaseUrl("@waffle/python"));
+    expect(Bun.JSONC.parse(canonical)).toMatchObject({
+      workspaces: { "": { dependencies: { "git-parent": git } } },
+      packages: {
+        "git-parent": ["git-parent@github:owner/project#1234567", { dependencies: { example: releaseUrl("example") } }, archiveId, digest(bytes)],
+        "@waffle/python": [`@waffle/python@${releaseUrl("@waffle/python")}`, {}, digest(await python.bytes())],
+      },
+    });
+    expect(await readFile(join(source, "package.json"), "utf8")).toBe(manifest);
+  } finally {
+    if (previous === undefined) delete process.env.BUN_INSTALL_CACHE_DIR;
+    else process.env.BUN_INSTALL_CACHE_DIR = previous;
+    await rm(scratch, { recursive: true, force: true });
+  }
 });
