@@ -158,14 +158,21 @@ paths, and getter recovery after the exceptions. The blocking JSC embedding gate
 also runs it with a 1 MiB Node Worker stack and 800 KiB guest budget, so a large
 launcher stack cannot hide missing native-frame reservations.
 
-Historical known gap, before this native accounting: JSC's parser (every nesting shape), regular-expression compiler,
-`Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the
-plain `JSON.stringify` fast path spend far more host stack per shadow byte than
-its reentry paths (parser blocks about six times more). Deeply nested input still
-traps there as it did before, for example blocks after 415 levels on wasmtime. On the
-native launcher's 16 MiB stack they throw instead, except unary operator chains, which
-trap after 80,618 levels at any budget. Fixing
-them needs reservations in WebKit, like those in QuickJS.
+Measured on November 9, 2026 in Google Chrome 157 on Linux, getters reach 142
+levels with the 800 KiB browser policy, compared with 56 at 320 KiB. The exact
+Ajv 8.17.1 CommonJS schema-registry control needs 127 getter levels and completes.
+The focused fixture also passes at 1000 KiB, a 1.25-times margin, including getter
+recovery after all five native exceptions. The same fixture passes on a 1 MiB
+Node Worker stack at 800 KiB and a 21 MiB Worker stack at the unchanged 6144 KiB
+Node policy. These are stack controls, not an Angular application qualification.
+
+Remaining gaps are visible in the original browser-stack probe. Unary operator
+chains and the noncapturing-group and lookahead regexp cases still trap at
+200,000 levels in Chrome. Blocks and conditional expressions now throw instead.
+This is not a claim that every parser or regexp shape is safe. The extra accounting
+can reduce native-path nesting capacities on other hosts. Firefox's original two
+stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
+iOS measurement is claimed.
 
 ## Browser-native engine
 
