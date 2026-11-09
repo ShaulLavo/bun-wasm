@@ -107,10 +107,7 @@ impl State {
             .slots
             .iter()
             .filter_map(|slot| slot.value.as_ref());
-        let committed: u64 = memories
-            .clone()
-            .map(|memory| u64::from(memory.maximum().max(1)) * 65536)
-            .sum();
+        let committed: u64 = memories.clone().map(NestedMemory::reserved_bytes).sum();
         let visible: u64 = memories.clone().map(NestedMemory::len).sum();
         serde_json::json!({ "modules": self.modules.len(), "instances": self.instances.len(), "tables": self.tables.len(),
             "functions": self.functions.len(), "memories": memories.count(),
@@ -336,7 +333,7 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 pointer: region.base(),
                 pages: region.pages(),
                 maximum: region.maximum(),
-                committed: u64::from(region.maximum().max(1)) * 65536,
+                committed: region.reserved_bytes(),
             })
         }
         Request::Grow { memory: id, delta } => Ok(Reply::Count(
