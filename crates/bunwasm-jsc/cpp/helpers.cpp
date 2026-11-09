@@ -270,6 +270,7 @@ JSGlobalContextRef bunjsc_create_context()
     JSObject* namespacePrototype = constructEmptyObject(vm.get(), globalObject->nullPrototypeObjectStructure());
     namespacePrototype->putDirect(vm.get(), Identifier::fromString(vm.get(), "__esModule"_s), jsBoolean(true),
         PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
+    namespacePrototype->didBecomePrototype(vm.get());
     globalObject->moduleNamespaceObjectStructure()->setPrototypeWithoutTransition(vm.get(), namespacePrototype);
     return JSGlobalContextRetain(toGlobalRef(globalObject));
 }
