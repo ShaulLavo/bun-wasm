@@ -16,16 +16,40 @@ function compilerWrapper(directory: string, name: string, prelude: string): void
   const compiler = Bun.which(name);
   if (!compiler) throw new Error(`Missing ${name}`);
   const quoted = `'${compiler.replaceAll("'", "'\\''")}'`;
-  writeFileSync(join(directory, name), `#!/bin/sh\n${prelude}\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+  const trace = (stage: string) => `printf '%s %s %s\\n' "$(date +%s)" '${name}' '${stage}' >> "$BUN_WASM_SM_COMPILER_TRACE"`;
+  writeFileSync(join(directory, name), `#!/bin/sh\n${trace("entered")}\n${prelude}\n${trace("exec")}\nexec ${quoted} "$@"\n`, { mode: 0o755 });
+}
+
+function processOutcome(result: Pick<Bun.SyncSubprocess, "exitCode" | "signalCode" | "exitedDueToTimeout" | "exitedDueToMaxBuffer">) {
+  return {
+    exitCode: result.exitCode,
+    signalCode: result.signalCode ?? null,
+    timedOut: result.exitedDueToTimeout === true,
+    maxBufferExceeded: result.exitedDueToMaxBuffer === true,
+  };
 }
 
 function runControls(root: string, args: readonly string[] = []) {
+  const trace = join(root, "compiler.trace");
+  writeFileSync(trace, "");
+  const started = performance.now();
   const result = Bun.spawnSync([process.execPath, "test", "./scripts/spidermonkey-semantics.test.ts"].concat(args), {
     cwd: root,
-    env: { ...process.env, TMPDIR: join(root, "tmp"), PATH: `${join(root, "bin")}:${process.env.PATH}` },
+    env: { ...process.env, TMPDIR: join(root, "tmp"), PATH: `${join(root, "bin")}:${process.env.PATH}`, BUN_WASM_SM_COMPILER_TRACE: trace },
     timeout: 30_000,
   });
-  return { exitCode: result.exitCode, output: result.stdout.toString() + result.stderr.toString(), leftovers: readdirSync(join(root, "tmp")) };
+  return {
+    ...processOutcome(result),
+    elapsedMs: performance.now() - started,
+    output: result.stdout.toString() + result.stderr.toString(),
+    leftovers: readdirSync(join(root, "tmp")),
+    compilerTrace: readFileSync(trace, "utf8"),
+    compilerCommands: { cxx: readFileSync(join(root, "bin/c++"), "utf8"), rustup: readFileSync(join(root, "bin/rustup"), "utf8") },
+  };
+}
+
+function expectCompleted(result: ReturnType<typeof runControls>, exitCode: number): void {
+  expect(result, JSON.stringify(result, null, 2)).toMatchObject({ exitCode, signalCode: null, timedOut: false, maxBufferExceeded: false });
 }
 
 // These child suites compile real extracted controls, so prepare them outside test timers too.
@@ -71,6 +95,7 @@ function prepareRegressionControls() {
 const controls = prepareRegressionControls();
 
 test("native compiler setup can exceed five seconds without consuming either runtime deadline", () => {
+  expectCompleted(controls.slow, 0);
   expect(controls.slow.output).toContain(`(pass) ${commonjsTest}`);
   expect(controls.slow.output).toContain(`(pass) ${finalizerTest}`);
   expect(controls.slow.output).not.toContain("timed out");
@@ -80,6 +105,7 @@ test("native compiler setup can exceed five seconds without consuming either run
 });
 
 test("the compiled finalizer control still rejects destruction under the registry borrow", () => {
+  expectCompleted(controls.wrongBorrow, 1);
   expect(controls.wrongBorrow.output).toContain("RefCell already borrowed");
   expect(controls.wrongBorrow.output).toContain(`(fail) ${finalizerTest}`);
   expect(controls.wrongBorrow.exitCode).toBe(1);
@@ -87,13 +113,24 @@ test("the compiled finalizer control still rejects destruction under the registr
 });
 
 test("compiler failure remains blocking and removes partially prepared native controls", () => {
+  expectCompleted(controls.failedBuild, 1);
   expect(controls.failedBuild.output).toContain("Received: 7");
   expect(controls.failedBuild.exitCode).toBe(1);
   expect(controls.failedBuild.leftovers).toEqual([]);
 });
 
 test("filtering out every runtime test still removes module setup outputs", () => {
+  expectCompleted(controls.filtered, 0);
   expect(controls.filtered.output).not.toContain(`(pass) ${finalizerTest}`);
   expect(controls.filtered.exitCode).toBe(0);
   expect(controls.filtered.leftovers).toEqual([]);
+});
+
+test("setup results preserve explicit subprocess timeout outcomes", () => {
+  const result = Bun.spawnSync([process.execPath, "-e", "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)"], { timeout: 100 });
+  const outcome = processOutcome(result);
+  expect(outcome.timedOut).toBe(true);
+  expect(outcome.signalCode).not.toBeNull();
+  expect(outcome.exitCode).not.toBe(0);
+  expect(outcome.maxBufferExceeded).toBe(false);
 });
