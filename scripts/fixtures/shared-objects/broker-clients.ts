@@ -58,18 +58,20 @@ export function brokerClients(cleanup: Set<() => void>, options: { lanes: boolea
     const sharedObjects = bindSharedObjectHost(bound, { active: clientOptions.active ?? (() => true), pending() {}, wake() {} });
     const runtime = sourcePorts({ sharedObjects, beforeDetach: clientOptions.beforeDetach, active: () => !service.inspect().closed && (clientOptions.active?.() ?? true) });
     cleanup.add(() => { runtime.__fixtureShutdown(); service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });
-    function settleRoutes(): Promise<void> {
-      if (!service.inspectRoutes().outbound) return Promise.resolve();
-      return new Promise(resolve => {
-        function received() {
-          if (service.inspectRoutes().outbound) return;
-          channel.port1.removeEventListener("message", received); resolve();
-        }
-        channel.port1.addEventListener("message", received);
-        cleanup.add(() => channel.port1.removeEventListener("message", received));
-      });
-    }
-    return { service, sharedObjects, runtime, settleRoutes };
+    return { service, sharedObjects, runtime, settleRoutes: () => settleRoutes(service, channel.port1, cleanup) };
   }
   return { broker, client };
+}
+
+function settleRoutes(service: ReturnType<typeof createSharedObjects>, port: MessagePort, cleanup: Set<() => void>): Promise<void> {
+  if (!service.inspectRoutes().outbound) return Promise.resolve();
+  const { promise, resolve } = Promise.withResolvers<void>();
+  function received() {
+    if (service.inspectRoutes().outbound) return;
+    port.removeEventListener("message", received);
+    resolve();
+  }
+  port.addEventListener("message", received);
+  cleanup.add(() => port.removeEventListener("message", received));
+  return promise;
 }

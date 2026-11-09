@@ -298,3 +298,50 @@ test("internal JSON consumption failure remains an explicit terminal runtime rec
   expect(() => source.postMessage(buffer, [buffer])).toThrow("closed");
   expect(buffer.byteLength).toBe(8);
 });
+
+
+for (const fault of ["descriptor-copy", "generation-write"] as const) test(`${fault} preparation failure preserves transfers and permits large reuse`, async () => {
+  let reject = false;
+  const lane = await sourceLane({
+    subarray(length) { if (reject && fault === "descriptor-copy" && length === 12) throw new RangeError("descriptor preparation failed"); },
+    write(value) { if (reject && fault === "generation-write" && value === 2) throw new RangeError("descriptor preparation failed"); },
+  });
+  let grant: import("../web/src/shared-objects/protocol").SharedPoolGrant | undefined;
+  const { sender, receiver, source, target, graph } = await connection({
+    grant(value) { grant = value; return value; },
+    lane(backing, side, pool) {
+      const overflow = backing.poolIndex === null || !pool ? undefined : { control: new Int32Array(pool.control), index: backing.poolIndex, slots: pool.overflow?.slots[backing.poolIndex] ?? null };
+      return lane.openSharedLane(backing.buffer, side, overflow);
+    },
+  });
+  const node = graph.nodes.find(node => node[0] === "port" && node.length === 4);
+  if (!grant || !node || node[0] !== "port" || node.length !== 4 || node[1].poolIndex === null) throw new Error("Missing pooled snapshot");
+  const control = new Int32Array(grant.control), word = slotWord(node[1].poolIndex, node[1].side);
+  const text = "x".repeat(1100000);
+  source.postMessage(text);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  const charged = Atomics.load(control, poolChargedWord);
+  expect(charged).toBeGreaterThan(text.length);
+  const carried = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  source.postMessage("before");
+  reject = true;
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("descriptor preparation failed");
+  reject = false;
+  expect(Atomics.load(control, word) & 3).toBe(0);
+  expect(Atomics.load(control, word + 2)).toBe(0);
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged);
+  expect(buffer.byteLength).toBe(8);
+  expect(sender.service.inspect().staged).toBe(0);
+  carried.port2.postMessage("still owned");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  source.postMessage(text);
+  source.postMessage("after");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  expect(Atomics.load(control, word) & 3).toBe(0);
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged);
+});

@@ -25,7 +25,7 @@ export interface SharedLane {
   readonly buffer: SharedArrayBuffer;
   /**
    * Prepares a frame toward the peer; nothing is visible until commit. Null when the peer's ring
-   * has no room now; throws DataCloneError for a frame larger than the whole ring or a closed peer.
+   * has no room now; throws DataCloneError for a frame beyond its encoded limit or a closed peer.
    */
   reserve(text: string): { commit(): void; abort(): void } | null;
   /** This side stops reading for good: the peer's later reservations throw. */
@@ -66,17 +66,17 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
     const used = (written - (atomicLoad(outbound.header, readIndex) >>> 0)) >>> 0;
     if (used > ringBytes || written % 4 || (atomicLoad(outbound.header, readIndex) >>> 0) % 4) throw laneError("Invalid shared lane cursors");
     if (need > ringBytes - used) return null;
-    const slot = large && overflow ? reserveOverflow(overflow, destination, bytes) : null;
-    if (slot && descriptor && descriptorView) {
-      descriptorView.setUint32(0, overflowTag, true); descriptorView.setUint32(4, slot.generation, true); descriptorView.setUint32(8, bytes.byteLength, true);
+    // Allocate descriptor views and the caller token before claiming the overflow slot.
+    if (descriptor && descriptorView) {
+      descriptorView.setUint32(0, overflowTag, true); descriptorView.setUint32(8, bytes.byteLength, true);
       outbound.copyIn(descriptor, written);
     } else {
       outbound.view.setUint32(written % ringBytes, bytes.byteLength, true);
       outbound.copyIn(bytes, (written + frameHeaderBytes) >>> 0);
     }
-    reserved = true;
+    let slot: ReturnType<typeof reserveOverflow> | null = null;
     let prepared = true;
-    return {
+    const reservation = {
       commit() {
         if (!prepared) return;
         prepared = false; reserved = false;
@@ -86,6 +86,12 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
       },
       abort() { if (!prepared) return; prepared = false; reserved = false; slot?.abort(); },
     };
+    slot = large && overflow ? reserveOverflow(overflow, destination, bytes) : null;
+    try {
+      (descriptor ? outbound.view : null)?.setUint32((written + frameHeaderBytes) % ringBytes, slot?.generation ?? 0, true);
+      reserved = true;
+      return reservation;
+    } catch (error) { slot?.abort(); throw error; }
   }
   function poison(error: unknown): never {
     terminal = error ?? laneError("Shared lane consumption failed");
