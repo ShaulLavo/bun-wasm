@@ -52,6 +52,7 @@ export function installRuntimeSharedObjects(runtime: ProcessRuntime): SharedObje
   function close() {
     if (closed) return;
     closed = true;
+    broker.beginDisposal();
     installations.delete(runtime);
     for (const route of Array.from(routes)) route.close();
     broker.dispose();

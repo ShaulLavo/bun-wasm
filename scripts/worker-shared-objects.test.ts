@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { installRuntimeSharedObjects } from "../web/src/shared-objects/runtime";
+import { processRuntimeFixture } from "../web/tests/process-runtime-fixture";
 import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
 import { createSharedObjects, exportSharedObjects } from "../web/src/shared-objects/service";
 import type { SharedPort, SharedRequest, SharedResponse } from "../web/src/shared-objects/protocol";
@@ -364,4 +366,47 @@ test("a thrown source delivery aborts publication without detaching port or buff
   expect(service.inspect()).toMatchObject({ buffers: 0, staged: 0 });
   await tick();
   expect(broker.inspect().objects).toBe(0);
+});
+
+test("installation close publishes the disposal barrier before its first lease retirement", async () => {
+  const runtime = processRuntimeFixture({}), installation = installRuntimeSharedObjects(runtime);
+  const channels: MessageChannel[] = [], services: ReturnType<typeof createSharedObjects>[] = [];
+  let probe: (() => void) | undefined, retirements = 0;
+  function observeRetirement(packet: SharedRequest | SharedResponse) {
+    if (packet.kind !== "closed") return;
+    retirements++; probe?.();
+  }
+  function member() {
+    const route = installation.open(), channel = new MessageChannel();
+    channels.push(channel);
+    const send = channel.port2.postMessage.bind(channel.port2);
+    channel.port2.postMessage = packet => {
+      observeRetirement(packet); send(packet);
+    };
+    route.accept({ type: "bun-shared-connect", owner: route.owner, port: channel.port2 });
+    const service = createSharedObjects(route.owner, channel.port1); services.push(service);
+    return service;
+  }
+  try {
+    const a = member(), b = member(); await Promise.all([a.ready, b.ready]);
+    const backing = a.lanes!.create();
+    if (backing.poolIndex === null) throw new Error("Expected a pooled lane");
+    const left = a.lanes!.open(backing, 0);
+    const right = b.lanes!.open({ poolIndex: backing.poolIndex, buffer: b.read({ id: `pool/l${backing.poolIndex}`, byteLength: backing.buffer.byteLength }) }, 1);
+    left.reserve("committed")!.commit();
+    probe = () => {
+      expect(() => left.reserve("inline after disposal")).toThrow("runtime is closed");
+      expect(() => right.drain(() => {})).toThrow("runtime is closed");
+    };
+    installation.close(); installation.close();
+    expect(retirements).toBe(2);
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(installation.inspectTransfers()).toEqual({ pins: 0, attaching: 0 });
+    expect(() => installation.open()).toThrow("closed");
+  } finally {
+    installation.close();
+    for (const service of services) service.close();
+    for (const channel of channels) { channel.port1.close(); channel.port2.close(); }
+    await runtime.dispose();
+  }
 });

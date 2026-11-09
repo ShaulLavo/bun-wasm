@@ -76,9 +76,12 @@ const senders: Record<string, (port: SourcePort, held: unknown[]) => void> = {
   laneExhausted(port, held) {
     const lanes = service.lanes;
     if (!lanes) throw new Error("Shared lane pool is unavailable");
-    // Deplete lifetime stock without filling the unrelated route-command mailbox.
-    // The real port transfer below still crosses the exhausted-lane boundary.
-    for (let index = 0; index < sharedPoolLanes; index++) held.push(lanes.create());
+    // Consume lifetime claims without filling the unrelated route-command mailbox.
+    for (let index = 1; index < sharedPoolLanes; index++) {
+      const backing = lanes.create();
+      if (backing.poolIndex !== index) throw new Error("Unexpected lifetime lane cursor");
+      held.push(backing.buffer);
+    }
     const inner = new runtime.MessageChannel();
     held.push(inner);
     inner.port1.on("message", value => host.postMessage({ kind: "inner", value }));

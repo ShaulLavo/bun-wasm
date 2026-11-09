@@ -112,7 +112,7 @@
           const meta = { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed };
           if (!snapshot.lane) return ["port", meta, queue];
-          return ["port", { ...meta, side: snapshot.lane.side }, queue, visit(snapshot.lane.buffer, true)];
+          return ["port", { ...meta, side: snapshot.lane.side, poolIndex: snapshot.lane.poolIndex }, queue, visit(snapshot.lane.buffer, true)];
         }
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
@@ -302,8 +302,8 @@
           case "boxed": result = Object(read(node[1])); break;
           case "port": {
             const queue: unknown[] = [];
-            const { side, ...meta } = node[1];
-            const lane = node.length === 4 && side !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side } : null;
+            const { side, poolIndex, ...meta } = node[1];
+            const lane = node.length === 4 && side !== undefined && poolIndex !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side, poolIndex } : null;
             const port = hooks.restore({ ...meta, queue, lane });
             memory.set(index, port); restored.push(port);
             const messages = read(node[2]);
@@ -392,9 +392,10 @@
     // A port node may name its channel's shared lane and the side of it this end reads.
     function validPortNode(node: unknown[]) {
       if (!validPort(node[1], depth, nodeBuffer, shared) || !ref(node[2])) return false;
-      const side = (node[1] as { side?: unknown }).side;
-      if (node.length === 3) return side === undefined;
-      return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1);
+      const { side, poolIndex } = node[1] as { side?: unknown; poolIndex?: unknown };
+      if (node.length === 3) return side === undefined && poolIndex === undefined;
+      return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1)
+        && (poolIndex === null || typeof poolIndex === "number" && Number.isInteger(poolIndex) && poolIndex >= 0 && poolIndex < 32);
     }
     function valid(node: unknown): boolean {
       if (!Array.isArray(node)) return false;

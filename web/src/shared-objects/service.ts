@@ -1,4 +1,6 @@
 import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
+import { assertPoolActive } from "./lane-overflow.ts";
+import type { LaneBacking } from "./protocol.ts";
 import { createSharedMailbox } from "./mailbox.ts";
 import { messageData, sharedAttachmentValue, sharedBufferLength, sharedError, sharedObjectLimit, sharedPoolClasses, sharedPoolLaneCursor, sharedResponse, sharedRouteCommand } from "./protocol.ts";
 import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPoolGrant, SharedPort, SharedPublication, SharedReference, SharedRouteCommand, SharedWasmValue } from "./protocol.ts";
@@ -123,7 +125,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     if (closed || !routesEnabled) return;
     wakeMailbox();
   }
-  function active() { if (closed) throw closed; }
+  function active() { if (closed) throw closed; if (poolCursors) assertPoolActive(poolCursors); }
   function present(reference: SharedReference) {
     active();
     const failure = failures.get(reference.id);
@@ -149,6 +151,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   /** Lifetime quota: a saturating cursor, never past capacity, and never reused. */
   function claimSlot<T>(cursor: number, buffers: readonly T[]): T | null {
     if (closed || !poolCursors) return null;
+    assertPoolActive(poolCursors);
     for (;;) {
       const slot = Atomics.load(poolCursors, cursor);
       if (slot >= buffers.length) { poolRefused++; return null; }
@@ -160,8 +163,10 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     const buffers = classIndex === undefined ? undefined : pool?.stock[classIndex];
     return buffers && classIndex !== undefined ? claimSlot(classIndex, buffers) : null;
   }
-  function createLane(): SharedArrayBuffer {
-    return (pool && claimSlot(sharedPoolLaneCursor, pool.lanes)) ?? createSharedLaneBuffer();
+  function createLane(): LaneBacking {
+    active();
+    const buffer = pool && claimSlot(sharedPoolLaneCursor, pool.lanes);
+    return buffer ? { buffer, poolIndex: pool!.lanes.indexOf(buffer) } : { buffer: createSharedLaneBuffer(), poolIndex: null };
   }
   function read(reference: SharedReference) {
     const attachment = present(reference);
@@ -338,7 +343,16 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
-  const lanes = { create: createLane, open(buffer: SharedArrayBuffer, side: 0 | 1) { active(); return openSharedLane(buffer, side); } };
+  function guardedLane(lane: ReturnType<typeof openSharedLane>) {
+    return { ...lane, reserve(text: string) { active(); return lane.reserve(text); }, drain(consume: (text: string) => void) { active(); return lane.drain(consume); } };
+  }
+  const lanes = { create: createLane, open(backing: LaneBacking, side: 0 | 1) {
+    active();
+    const { buffer, poolIndex } = backing;
+    if (poolIndex === null) return guardedLane(openSharedLane(buffer, side));
+    if (!Number.isInteger(poolIndex) || poolIndex < 0 || !pool || pool.lanes[poolIndex] !== buffer || !poolCursors) throw sharedError("Invalid shared lane pool index");
+    return guardedLane(openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, slots: pool.overflow?.slots[poolIndex] ?? null }));
+  } };
   return { ready, claimBuffer, poolStats: () => ({ claims: poolClaims, refused: poolRefused }), mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
     inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };

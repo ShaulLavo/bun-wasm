@@ -146,3 +146,31 @@ explicit matching buffer node still aliases that Memory's canonical buffer.
 Queued-port graphs retain their existing availability preflight and later
 independent decode. The native and Browser wire declarations include the Null
 unit reply even while the Browser host refuses table/global operations.
+
+## Bounded large lane frames
+
+The original lane adapter now uses a pre-attached private growable slot per
+lifetime direction. A tagged descriptor stays in the existing inline ring and
+commits only after the existing transfer transaction succeeds. The codec carries
+the fixed lane's pool index and side, never a public reference to a growable slot.
+All private grant and lane consumers, including the real-worker synchronous-reply
+fixture, use the same descriptor.
+
+A complete UTF-8 encoded packet may use up to 64 MiB. Runtime-wide committed
+capacity is bounded at 128 MiB and never refunded while the runtime is live.
+A busy slot, exhausted lifetime lane pool, unavailable GSAB capability, full ring,
+exhausted byte budget or allocation failure rejects before detachment. Receive
+copies bytes and text before returning credit. Malformed descriptors, UTF-8 and
+internal consume failures persist as terminal lane errors, not empty receives.
+This preserves admitted synchronous delivery, not arbitrary native burst parity.
+
+Explicit receiver closure and runtime disposal publish shared closed state.
+Runtime installation starts disposal before its first route retirement. It still
+drains committed outbox custody records, and individual service exit leaves live
+remote lanes intact. The specific pool adapter record documents native capture,
+virtual maxima, high-water retention and unchanged public backing limits.
+
+Lane-less same-realm endpoints retain synchronous receive during their scheduled
+close turn without delivering new message events. The shared-lane close barrier
+remains immediate. Focused source controls and the unchanged native close fixtures
+cover both paths.
