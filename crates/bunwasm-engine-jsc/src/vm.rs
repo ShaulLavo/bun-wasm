@@ -727,6 +727,11 @@ impl Engine for Jsc {
         self.promise_state(v).is_some()
     }
 
+    fn is_module_namespace(&self, v: &JsVal) -> Option<bool> {
+        // SAFETY: the helper checks the live value under its VM lock.
+        Some(unsafe { bunjsc_is_module_namespace(ctx(), v.raw()) })
+    }
+
     fn is_proxy(&self, v: &JsVal) -> bool {
         !unsafe { bunjsc_proxy_target(ctx(), v.raw()) }.is_null()
     }
