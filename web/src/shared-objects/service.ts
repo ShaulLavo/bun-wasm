@@ -151,6 +151,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   /** Lifetime quota: a saturating cursor, never past capacity, and never reused. */
   function claimSlot<T>(cursor: number, buffers: readonly T[]): T | null {
     if (closed || !poolCursors) return null;
+    assertPoolActive(poolCursors);
     for (;;) {
       const slot = Atomics.load(poolCursors, cursor);
       if (slot >= buffers.length) { poolRefused++; return null; }
@@ -342,12 +343,15 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
+  function guardedLane(lane: ReturnType<typeof openSharedLane>) {
+    return { ...lane, reserve(text: string) { active(); return lane.reserve(text); }, drain(consume: (text: string) => void) { active(); return lane.drain(consume); } };
+  }
   const lanes = { create: createLane, open(backing: LaneBacking, side: 0 | 1) {
     active();
     const { buffer, poolIndex } = backing;
-    if (poolIndex === null) return openSharedLane(buffer, side);
+    if (poolIndex === null) return guardedLane(openSharedLane(buffer, side));
     if (!Number.isInteger(poolIndex) || poolIndex < 0 || !pool || pool.lanes[poolIndex] !== buffer || !poolCursors) throw sharedError("Invalid shared lane pool index");
-    return openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, slots: pool.overflow?.slots[poolIndex] ?? null });
+    return guardedLane(openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, slots: pool.overflow?.slots[poolIndex] ?? null }));
   } };
   return { ready, claimBuffer, poolStats: () => ({ claims: poolClaims, refused: poolRefused }), mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),

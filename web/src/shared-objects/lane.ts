@@ -121,6 +121,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
       catch (error) { if (error instanceof RangeError) throw error; return poison(error); }
       atomicStore(inbound.header, readIndex, (read + packet.need) | 0);
       if (packet.large && overflow) creditOverflow(overflow, side);
+      if (atomicLoad(inbound.header, closedIndex)) return count;
       try { consume(packet.text); } catch (error) { return poison(error); }
       count++;
     }

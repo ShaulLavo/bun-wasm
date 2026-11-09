@@ -40,7 +40,18 @@ export function brokerClients(cleanup: Set<() => void>, options: { lanes: boolea
     const sharedObjects = bindSharedObjectHost(bound, { active: clientOptions.active ?? (() => true), pending() {}, wake() {} });
     const runtime = sourcePorts({ sharedObjects, beforeDetach: clientOptions.beforeDetach });
     cleanup.add(() => { service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });
-    return { service, sharedObjects, runtime };
+    function settleRoutes(): Promise<void> {
+      if (!service.inspectRoutes().outbound) return Promise.resolve();
+      return new Promise(resolve => {
+        function received() {
+          if (service.inspectRoutes().outbound) return;
+          channel.port1.removeEventListener("message", received); resolve();
+        }
+        channel.port1.addEventListener("message", received);
+        cleanup.add(() => channel.port1.removeEventListener("message", received));
+      });
+    }
+    return { service, sharedObjects, runtime, settleRoutes };
   }
   return { broker, client };
 }

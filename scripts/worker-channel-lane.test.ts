@@ -20,6 +20,7 @@ async function connection(lanes = true) {
   await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
   cleanup.add(() => { channel.port1.close(); target.close(); });
   return { broker, client, sender, receiver, source: channel.port1, target };
 }
