@@ -1,11 +1,14 @@
 import { test, expect } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
-import { nativeButtonRef, validateIphoneControl } from "./iphone-transport";
+import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { frameworks } from "./catalog";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { ownedCommand } from "./lifetime";
+import { mkdtemp, writeFile, readFile, chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("visible iPhone options reject SafariDriver-shaped or non-loopback controls", () => {
   validateIphoneControl("http://127.0.0.1:1234/__goals_iphone/" + "a".repeat(64), "/bound/agent-device");
@@ -62,4 +65,30 @@ test("native cleanup shares one deadline, cancels its child and never dispatches
   expect(started.every(item => item.at < deadline && item.timeoutMs <= deadline - item.at + 1)).toBe(true);
   await Bun.sleep(250);
   expect(started.length).toBe(count);
+});
+
+test("transport close is cached and reaps its timed-out native command before any further input", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-close-"));
+  const path = "/__goals_iphone/" + "c".repeat(64);
+  const log = join(root, "commands.jsonl");
+  const agent = join(root, "agent-device");
+  await writeFile(agent, `#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';\nawait appendFile(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),pid:process.pid})+'\\n');\nif(process.argv[2]==='press')await Bun.sleep(2000);\n`);
+  await chmod(agent, 0o755);
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    return Response.json(new URL(request.url).pathname.endsWith("/configure") ? "http://127.0.0.1:1234/" : { nonce: "own-tab", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
+  } });
+  const transport = await createIphoneTransport({ control: server.url.origin + path, agent, deviceUDID: "fixture", timeoutMs: 90000 });
+  try {
+    await transport.navigate("http://127.0.0.1:1234/");
+    const started = Date.now();
+    const closing = transport.close(true, 150);
+    expect(transport.close(true, 150)).toBe(closing);
+    await expect(closing).rejects.toThrow("T3 device command failed");
+    expect(Date.now() - started).toBeLessThan(1000);
+    const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.map(row => row.args[0])).toEqual(["open", "press"]);
+    expect(() => process.kill(rows[1].pid, 0)).toThrow();
+    await Bun.sleep(200);
+    expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(2);
+  } finally { await transport.close(true, 150).catch(() => {}); await server.stop(true); await rm(root, { recursive: true, force: true }); }
 });
