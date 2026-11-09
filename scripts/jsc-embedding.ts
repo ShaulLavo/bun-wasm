@@ -48,7 +48,7 @@ export function stackFixture() {
   const manifest = "native-stack-getter-headroom.json";
   const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
   if (check.owner !== "native") throw new Error("JSC stack fixture needs its native check owner");
-  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800"] };
+  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
 function testFixtures(artifact: string): void {

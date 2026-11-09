@@ -68,6 +68,7 @@ unknown-host policies remain unchanged. The `stack-getter-headroom` fixture keep
 that getters still work after the exceptions. Native fixture discovery owns it.
 The original `scripts/jsc-embedding.ts` host adapter reads that feature manifest
 and also runs the same fixture on its matched JSC pair with a 1 MiB Node Worker
-stack and the 800 KiB guest budget. This is a blocking runtime control, not a source
+stack and the 800 KiB guest budget, requiring RangeError on all five paths.
+Other engines may finish an operation iteratively, but must still continue. This is a blocking runtime control, not a source
 pattern test. Real Chrome warm and fresh-context controls remain a separate
 qualification step.

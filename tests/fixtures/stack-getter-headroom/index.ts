@@ -5,13 +5,15 @@ function getters() {
   if (object.value !== 128) throw new Error('getter result changed');
   console.log('128 getters completed');
 }
+const mustCatch = process.env.BUNWASM_STACK_EXPECT_CAUGHT === "1";
 function caught(name, action) {
+  let caught = false;
   try { action(); } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    console.log(name, 'RangeError');
-    return;
+    caught = true;
   }
-  throw new Error(`${name} did not reach a catchable stack guard`);
+  if (mustCatch && !caught) throw new Error(`${name} did not reach a catchable stack guard`);
+  console.log(name, "survived");
 }
 const depth = 200000;
 getters();
