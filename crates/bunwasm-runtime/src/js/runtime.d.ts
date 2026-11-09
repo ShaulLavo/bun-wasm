@@ -108,7 +108,7 @@ declare namespace BunWasm {
     emitDestroy(): this;
   }
   interface Internal {
-    builtin(name: "node:async_hooks"): { AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource } };
+    builtin(name: "node:async_hooks"): AsyncHooks;
   }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {
@@ -138,6 +138,7 @@ declare namespace BunWasm {
 declare namespace BunWasm {
   interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
   interface RuntimeProcess {
+    exitCode?: number;
     cwd(): string;
     nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
     emitWarning?(warning: Error): void;

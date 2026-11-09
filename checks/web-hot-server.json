@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/hot-server.test.ts",
+  "localRuntime": true
+}

@@ -1,7 +1,7 @@
 //! `bun` for wasm32-wasip1: argument parsing and wiring of the transpiler
 //! into the runtime.
 
-use bunwasm_runtime::{Entry, Options, Transpiler};
+use bunwasm_runtime::{Entry, Options, RunMode, Transpiler};
 
 const HELP: &str = "\
 Bun is a fast JavaScript runtime. This is bun.wasm: Bun's runtime on WebAssembly (WASI).
@@ -30,6 +30,7 @@ Flags:
   -v, --version                  Print version and exit
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
+      --hot                      Reload an ESM server in the same process
       --conditions <condition>   Add a package-export resolution condition
 
 Not available in bun.wasm: upgrade.
@@ -566,7 +567,7 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
-    Run(Entry, Vec<String>, Vec<String>, Vec<String>),
+    Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunMode),
     Build(Vec<String>),
     Lint,
     Install(String, Vec<String>),
@@ -676,9 +677,22 @@ fn parse(args: Vec<String>, executable: &str) -> Command {
     parse_command(args, false)
 }
 
+fn run_command(
+    entry: Entry,
+    args: Vec<String>,
+    conditions: Vec<String>,
+    exec_argv: Vec<String>,
+    mode: RunMode,
+) -> Command {
+    if mode == RunMode::Hot && !matches!(&entry, Entry::File(path) if path != "-") {
+        return usage_error("--hot supports only file-based ESM server entries");
+    }
+    Command::Run(entry, args, conditions, exec_argv, mode)
+}
+
 fn node_command(args: Vec<String>) -> Command {
     match parse_command(args, true) {
-        Command::Run(Entry::File(file), args, conditions, exec_argv) => {
+        Command::Run(Entry::File(file), args, conditions, exec_argv, mode) => {
             // Node operands are files even when their names match Bun commands or package scripts.
             let path = std::env::current_dir().unwrap_or_default().join(file);
             Command::Run(
@@ -686,6 +700,7 @@ fn node_command(args: Vec<String>) -> Command {
                 args,
                 conditions,
                 exec_argv,
+                mode,
             )
         }
         command => command,
@@ -705,7 +720,7 @@ fn direct_file(file: &str) -> String {
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
-    parse_command_with_flags(args, run_file, Vec::new(), Vec::new())
+    parse_command_with_flags(args, run_file, Vec::new(), Vec::new(), RunMode::Once)
 }
 
 fn parse_command_with_flags(
@@ -713,13 +728,15 @@ fn parse_command_with_flags(
     run_file: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
+    mode: RunMode,
 ) -> Command {
     let mut rest = args.into_iter();
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
+    let mut mode = mode;
     while let Some(arg) = rest.next() {
         if run_file && (arg == "-" || !arg.starts_with('-')) {
-            return Command::Run(Entry::File(arg), rest.collect(), conditions, exec_argv);
+            return run_command(Entry::File(arg), rest.collect(), conditions, exec_argv, mode);
         }
         if arg == "--conditions" {
             let Some(value) = rest.next() else {
@@ -735,7 +752,26 @@ fn parse_command_with_flags(
             exec_argv.push(arg);
             continue;
         }
+        if mode == RunMode::Hot
+            && matches!(
+                arg.as_str(),
+                "build"
+                    | "bun"
+                    | "install"
+                    | "i"
+                    | "x"
+                    | "bunx"
+                    | "create"
+                    | "init"
+                    | "lint"
+                    | "fmt" | "add" | "a" | "ci" | "remove" | "rm" | "r" | "uninstall" | "pm" | "update" | "up" | "c"
+            )
+        {
+            return usage_error("--hot supports only file-based ESM server entries");
+        }
         match arg.as_str() {
+            "--hot" => { mode = RunMode::Hot; exec_argv.push(arg); continue; }
+            "--watch" => return usage_error("--watch restart mode is not supported in bun-wasm"),
             "-v" | "--version" => {
                 println!("{}", bunwasm_runtime::BUN_VERSION);
                 return Command::Exit(0);
@@ -754,7 +790,7 @@ fn parse_command_with_flags(
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
                 };
-                return Command::Run(Entry::Eval(code), rest.collect(), conditions, exec_argv);
+                return run_command(Entry::Eval(code), rest.collect(), conditions, exec_argv, mode);
             }
             "-p" | "--print" => {
                 let Some(code) = rest.next() else {
@@ -764,15 +800,16 @@ fn parse_command_with_flags(
                     "const __bunwasm_print = await (0, eval)({code:?}); \
                      console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
                 );
-                return Command::Run(Entry::Eval(wrapped), Vec::new(), conditions, exec_argv);
+                return run_command(Entry::Eval(wrapped), Vec::new(), conditions, exec_argv, mode);
             }
             "lint" | "fmt" => return Command::Lint,
             "test" => {
-                return Command::Run(
+                return run_command(
                     Entry::Test(rest.collect()),
                     Vec::new(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "build" | "bun" => return Command::Build(rest.collect()),
@@ -782,22 +819,24 @@ fn parse_command_with_flags(
             "create" | "c" => return create_command(rest.collect()),
             "init" => return Command::Init(rest.collect()),
             "repl" => {
-                return Command::Run(
+                return run_command(
                     Entry::Eval(REPL.to_owned()),
                     rest.collect(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "exec" => {
                 let Some(script) = rest.next() else {
                     return usage_error("bun exec needs a script to run");
                 };
-                return Command::Run(
+                return run_command(
                     Entry::Eval(EXEC.to_owned()),
                     vec![script],
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
@@ -807,12 +846,12 @@ fn parse_command_with_flags(
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
-            "run" => return parse_command_with_flags(rest.collect(), true, conditions, exec_argv),
+            "run" => return parse_command_with_flags(rest.collect(), true, conditions, exec_argv, mode),
             "--" => {
                 let Some(file) = rest.next() else {
                     return usage_error("bun run needs a file to run");
                 };
-                return Command::Run(Entry::File(file), rest.collect(), conditions, exec_argv);
+                return run_command(Entry::File(file), rest.collect(), conditions, exec_argv, mode);
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--smol" | "--no-install" => continue,
@@ -821,11 +860,12 @@ fn parse_command_with_flags(
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
-                return Command::Run(
+                return run_command(
                     Entry::File(direct_file(file)),
                     rest.collect(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
         }
@@ -891,7 +931,7 @@ fn main() {
         argv.collect()
     };
     let command = parse(args, &executable);
-    let (entry, args, conditions, exec_argv) = match command {
+    let (entry, args, conditions, exec_argv, mode) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
             eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
@@ -908,14 +948,22 @@ fn main() {
         }
         Command::X(args) => {
             match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
-                Ok((file, args)) => (Entry::File(file), args, Vec::new(), Vec::new()),
+                Ok((file, args)) => (
+                    Entry::File(file),
+                    args,
+                    Vec::new(),
+                    Vec::new(),
+                    RunMode::Once,
+                ),
                 Err(error) => {
                     eprintln!("error: {error}");
                     std::process::exit(1);
                 }
             }
         }
-        Command::Run(entry, args, conditions, exec_argv) => (entry, args, conditions, exec_argv),
+        Command::Run(entry, args, conditions, exec_argv, mode) => {
+            (entry, args, conditions, exec_argv, mode)
+        }
     };
     let code = bunwasm_runtime::run(Options {
         entry,
@@ -923,6 +971,7 @@ fn main() {
         conditions,
         exec_argv,
         transpiler: transpiler(),
+        mode,
     });
     // The host engine runs the program after `_start` returns.
     if code == 0 && bunwasm_runtime::host_engine_ready() {
@@ -946,7 +995,7 @@ mod tests {
                 ],
                 false,
             );
-            let Command::Run(_, _, conditions, exec_argv) = command else {
+            let Command::Run(_, _, conditions, exec_argv, _) = command else {
                 panic!("{mode} discarded runtime flags");
             };
             assert_eq!(conditions, ["custom"], "{mode}");
@@ -967,7 +1016,7 @@ mod tests {
             ],
             false,
         );
-        let Command::Run(Entry::File(entry), args, conditions, exec_argv) = command else {
+        let Command::Run(Entry::File(entry), args, conditions, exec_argv, _) = command else {
             panic!("expected a file command");
         };
         assert_eq!(entry, "entry.ts");
@@ -979,7 +1028,7 @@ mod tests {
     #[test]
     fn conditions_work_for_node_file_operands() {
         let command = node_command(vec!["--conditions=vitest".into(), "entry.ts".into()]);
-        let Command::Run(Entry::File(entry), _, conditions, exec_argv) = command else {
+        let Command::Run(Entry::File(entry), _, conditions, exec_argv, _) = command else {
             panic!("expected a node file command");
         };
         assert!(entry.ends_with("/entry.ts"));

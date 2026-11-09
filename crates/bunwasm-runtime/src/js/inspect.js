@@ -1427,7 +1427,7 @@
   function nativeFrame(name, source, line, col) {
     if (source.startsWith("bun-wasm:")) return null;
     const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
-    const url = typeof internal.displayName === "function" ? internal.displayName(source) : source;
+    const url = source.startsWith("bunwasm:hot:") ? source : typeof internal.displayName === "function" ? internal.displayName(source) : source;
     let [file, lineNo, column] = [url, line, col];
     const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(generated ? source : file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
@@ -1438,7 +1438,8 @@
   }
 
   function parseErrorStack(error) {
-    const stack = safeGet(error, "stack");
+    const formattedStack = safeGet(error, "stack");
+    const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
     if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
     let frames;
     try { frames = savedErrorFrames(error, stack); }
@@ -1534,7 +1535,8 @@
   }
 
   function formatFrame(frame) {
-    const loc = frame.file + ":" + frame.line + ":" + frame.column;
+    const file = internal.hotDisplayName?.(frame.file) ?? frame.file;
+    const loc = file + ":" + frame.line + ":" + frame.column;
     return frame.name ? "      at " + frame.name + " (" + loc + ")\n" : "      at " + loc + "\n";
   }
 
