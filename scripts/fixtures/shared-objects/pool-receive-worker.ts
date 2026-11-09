@@ -5,6 +5,7 @@ import { parentPort, workerData, MessagePort as NativeMessagePort } from "node:w
 import { bindSharedObjectHost } from "../../../web/src/shared-objects/host";
 import { installSharedBufferRealm } from "../../../web/src/shared-objects/realm";
 import { exportSharedObjects } from "../../../web/src/shared-objects/service";
+import { sharedPoolLanes } from "../../../web/src/shared-objects/protocol";
 import { sourcePorts, type SourcePort } from "./source-runtime";
 import type { Graph } from "./runtime-types";
 
@@ -73,11 +74,11 @@ const senders: Record<string, (port: SourcePort, held: unknown[]) => void> = {
     inner.port1.postMessage({ signal: new SharedArrayBuffer(4), v: "reply" });
   },
   laneExhausted(port, held) {
-    for (let index = 0; index < 32; index++) {
-      const local = new runtime.MessageChannel(), carrier = new runtime.MessageChannel();
-      held.push(local, carrier);
-      carrier.port1.postMessage(null, [local.port2]);
-    }
+    const lanes = service.lanes;
+    if (!lanes) throw new Error("Shared lane pool is unavailable");
+    // Deplete lifetime stock without filling the unrelated route-command mailbox.
+    // The real port transfer below still crosses the exhausted-lane boundary.
+    for (let index = 0; index < sharedPoolLanes; index++) held.push(lanes.create());
     const inner = new runtime.MessageChannel();
     held.push(inner);
     inner.port1.on("message", value => host.postMessage({ kind: "inner", value }));
