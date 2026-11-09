@@ -123,3 +123,74 @@ test("server readiness observes the task's configured free guest port", async ()
   const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, undefined, [], 41373);
   expect(await start(transport, "bun run dev --port 41373", 100, 41373)).toBe("http://preview/");
 });
+
+test("a replacement during deferred activation returns the current binding, not the retired origin", async () => {
+  const activation = Promise.withResolvers<string>();
+  const waiting = Promise.withResolvers<void>();
+  const transport = page(async (_shell, listen) => { listen(); await new Promise(() => {}); }, activation.promise);
+  await transport.evaluate("globalThis.bindingURL = 'http://retired/'; playground.previews.url = () => bindingURL; void 0");
+  const evaluate = transport.evaluate.bind(transport);
+  let checks = 0;
+  transport.evaluate = async <T>(expression: string): Promise<T> => {
+    const value = await evaluate<T>(expression);
+    if (expression.includes("function previewReady") && ++checks === 2) waiting.resolve();
+    return value;
+  };
+  const started = start(transport, "starts while replacing its preview", 1000);
+  try {
+    await waiting.promise;
+    await evaluate("bindingURL = 'http://replacement/'; void 0");
+  } finally { activation.resolve("ready"); }
+  expect(await started).toBe("http://replacement/");
+});
+
+async function replacementNavigation(failure: Error | undefined, replace = true) {
+  const framework = frameworks[0]!;
+  return withPlayground(framework, 0, async transport => {
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const navigations: string[] = [];
+    let documentURL = "";
+    let firstRenderURL: string | undefined;
+    await transport.evaluate("globalThis.bindingURL = 'http://retired/'; playground.previews.url = () => bindingURL; void 0");
+    const evaluate = transport.evaluate.bind(transport);
+    transport.evaluate = async <T>(expression: string): Promise<T> => {
+      if (expression.includes("function rendered") && firstRenderURL === undefined) firstRenderURL = documentURL;
+      return evaluate<T>(expression);
+    };
+    transport.openPreview = async url => {
+      navigations.push(url); documentURL = url;
+      if (url !== "http://retired/") return;
+      entered.resolve(); await resume.promise;
+      if (failure) throw failure;
+    };
+    const running = execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000,
+      async createTransport() { return transport; }, async saveLog() {},
+    });
+    try {
+      await entered.promise;
+      if (replace) await evaluate("bindingURL = 'http://replacement/'; void 0");
+    } finally { resume.resolve(); }
+    return { result: await running, navigations, firstRenderURL };
+  });
+}
+
+test("navigation follows a changed binding after the old origin closes, including production preview", async () => {
+  const observed = await replacementNavigation(new Error("retired origin refused connection"));
+  expect(observed.result.status).toBe("pass");
+  expect(observed.navigations).toEqual(["http://retired/", "http://replacement/", "http://replacement/"]);
+  expect(observed.firstRenderURL).toBe("http://replacement/");
+});
+
+test("successful navigation to a superseded binding is not accepted as the current page", async () => {
+  const observed = await replacementNavigation(undefined);
+  expect(observed.result.status).toBe("pass");
+  expect(observed.firstRenderURL).toBe("http://replacement/");
+  expect(observed.navigations).toEqual(["http://retired/", "http://replacement/", "http://replacement/"]);
+});
+
+test("a navigation failure on an unchanged binding is preserved without another attempt", async () => {
+  const observed = await replacementNavigation(new Error("genuine transport failure"), false);
+  expect(observed.result).toMatchObject({ status: "fail", phase: "render", error: expect.stringContaining("genuine transport failure") });
+  expect(observed.navigations).toEqual(["http://retired/"]);
+});

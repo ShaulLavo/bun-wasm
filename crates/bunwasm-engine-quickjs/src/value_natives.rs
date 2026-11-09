@@ -146,6 +146,13 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_promise(&arg(e, args, 0)).into()))),
     ));
     list.push((
+        "isModuleNamespaceObject",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(e.is_module_namespace(&arg(e, args, 0))
+                .map_or_else(|| e.undefined(), |branded| e.value_from(branded.into())))
+        }),
+    ));
+    list.push((
         "isError",
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_error(&arg(e, args, 0)).into()))),
     ));
