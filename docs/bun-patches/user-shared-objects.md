@@ -134,3 +134,8 @@ and process exit drops every outstanding reply pin before the broker ends.
 Accepted aliases remain process-owned and stay usable when another process exits.
 The lifetime regression runs the same cancellation races for SAB, Module and
 Memory, including publication rollback and a destination replaced by a new lease.
+
+Publication now has an explicit commit phase after delivery. Once committed, a
+later abort cannot retract a receipt the peer can already observe. The existing
+broker transaction still stages delivery before transfer finalization and commits
+only when both succeed. Native group publication uses the same codec contract.

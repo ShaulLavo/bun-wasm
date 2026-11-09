@@ -17,6 +17,11 @@ declare namespace BunWasm {
     sharedMemorySupported(): boolean;
     nestedCallbackLimit(): number;
     createSharedMemory(initial: number, maximum: number): number;
+    publishSharedMemory(id: number): number;
+    attachSharedMemory(token: number): number;
+    publishSharedModule(id: number): number;
+    attachSharedModule(token: number): WasmModule;
+    withdrawShared(token: number): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;
     instantiate(id: number, bindings: (number | bigint | null | WasmReference | { kind: 'callback'; id: number })[], invocation?: number): number;
@@ -38,8 +43,10 @@ declare namespace BunWasm {
     global(id: number, name: string, value?: WasmValue): WasmValue;
   }
   interface WasmInternal {
-    native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number): SharedArrayBuffer; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
+    native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number, visible?: number): SharedArrayBuffer; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
     isWasmMemoryBuffer?: (value: unknown) => boolean;
+    /** Same-region Module and Memory transport between members of one group. */
+    groupSharedObjects?: SharedObjects;
   }
   interface Native { wasm: WasmNative }
 }

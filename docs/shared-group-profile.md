@@ -83,6 +83,14 @@ through atomic cells and owned copies. The group backing outlives the member's S
 member is released once its thread has stopped and its instances are destroyed. A fatal signal
 interrupts a member blocked in a futex wait.
 
+Members of a group share WebAssembly objects by reference. `postMessage` and `workerData` publish
+a shared `WebAssembly.Memory` or a shared-backend `WebAssembly.Module` in the group's directory,
+and the receiver leases the same region and compiled code. Memory buffers keep their length when
+sent, so an old prefix stays a prefix. A publication holds its region until the last member
+stops, so a sender's exit cannot free bytes another member can still receive. Anything else is a
+`DataCloneError` when it is posted, including a plain `new SharedArrayBuffer()`, whose storage is
+the sender's own heap on this host. See [the native record](bun-patches/shared-nested-native.md).
+
 ## Processes on the Browser host
 
 The page admits a group core as the first member of a new group, and a spawned group core
