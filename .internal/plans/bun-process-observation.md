@@ -39,3 +39,7 @@ The complete Web unit suite passes 1,806 tests and skips one. Its only failure i
 ## Independent review correction
 
 The reviewer reproduced disposal reentering through `runtime.processes()` before acquisition was stored. The run completed, but native termination never ran. The runner now schedules acquisition after storing its promise. The CI-discovered reentrant control arms a real CPU observer before acquisition, holds its return, and checks exactly one native stop, no guest start, and a late `terminated` result. It failed before the fix with a zero stop count and passes afterward. Types, lint, discovery, and the 93 focused tests pass.
+
+## Published runtime qualification
+
+Runtime and relay 0.0.114 are published, source 341bf1452d98e280a5c718af2775a839ff4042fa. The complete program tuple is still pending. Runtime-only qualification found that the published SDK acknowledges its controller through an internal recursive `rootStopped` call. The grant-lifetime test now observes Bun's own acknowledgment boundary, without counting SDK recursion as another consumer stop. All existing assertions remain: one native termination, one consumer acknowledgment, a live grant before return, and no grant after return. No production change is needed for that distinction.

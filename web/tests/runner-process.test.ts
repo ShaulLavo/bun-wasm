@@ -994,8 +994,11 @@ test("manual roots declare the posted module and keep their grant through physic
     expect(state.request.controlGrant).toBe(grant);
     const allocated = spyOn(service, "rootControlAllocated");
     const received = Promise.withResolvers<void>();
-    const stop = service.rootStopped.bind(service);
-    const physicalStop = spyOn(service, "rootStopped").mockImplementation(pid => { stop(pid); received.resolve(); });
+    const stop = SubprocessBroker.prototype.rootStopped;
+    const physicalStop = spyOn(SubprocessBroker.prototype, "rootStopped").mockImplementation(function (this: SubprocessBroker) {
+      stop.call(this);
+      received.resolve();
+    });
     const terminate = spyOn(state.worker, "terminate").mockImplementation(() => stopped.promise);
     try {
       const allocate = createSharedControlAllocator(grant, buffer => state.worker.onmessage?.(new MessageEvent("message", { data: { type: "shared-control-allocation", buffer } })));
