@@ -73,7 +73,10 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     await bus.execute("preview", "document.querySelector('button').click()", 3000);
     expect(await bus.execute("preview", "globalThis.__goalsIphoneClick.trusted", 3000)).toBe(false);
     await bus.execute("preview", "document.querySelector('button').textContent = 'Count 0'", 3000);
-    await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);
+    await bus.execute("preview", "Object.defineProperty(performance, 'timeOrigin', { get: () => 123 })", 3000);
+    const anchored = await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);
+    expect(anchored).toMatchObject({ timeOrigin: bus.state("preview")?.timeOrigin, nonce: bus.state("preview")?.nonce });
+    expect(bus.state("preview")?.timeOrigin).not.toBe(123);
     const frame = page.frameLocator("iframe");
     await frame.getByRole("button", { name: "Count 0" }).click();
     expect(await bus.execute("preview", "({trusted:globalThis.__goalsIphoneClick.trusted, text:document.querySelector('button').textContent})", 3000)).toEqual({ trusted: true, text: "Count 1" });

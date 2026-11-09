@@ -76,9 +76,9 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       const snapshot = await device(["snapshot", "-i"], Math.max(1, deadline - Date.now()));
       const ref = nativeButtonRef(snapshot, before.label);
       await device(["press", ref], Math.max(1, deadline - Date.now()));
-      const expression = `(() => { const s = globalThis.__goalsIphoneClick; return { trusted: s?.trusted === true, sameTarget: s?.target === document.querySelector(${JSON.stringify(button)}), timeOrigin: performance.timeOrigin, url: location.href, after: document.querySelector(${JSON.stringify(clicked)})?.textContent?.trim() ?? '' }; })()`;
+      const expression = `(() => { const s = globalThis.__goalsIphoneClick, key = globalThis.__goalsIphoneDocument; return { trusted: s?.trusted === true, sameTarget: s?.target === document.querySelector(${JSON.stringify(button)}), timeOrigin: key?.timeOrigin, nonce: key?.nonce, url: location.href, after: document.querySelector(${JSON.stringify(clicked)})?.textContent?.trim() ?? '' }; })()`;
       const expected = before.before.replace(/\b0\b/, "1");
-      const after = await until(() => evaluate<Record<string, unknown>>(expression), value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.after === expected, Math.max(1, deadline - Date.now()));
+      const after = await until(() => evaluate<Record<string, unknown>>(expression), value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, Math.max(1, deadline - Date.now()));
       return { before: before.before, after: after.after, trusted: true, nativeRef: ref, inputMethod: "T3 device_open XCTest" };
     },
     async close() {

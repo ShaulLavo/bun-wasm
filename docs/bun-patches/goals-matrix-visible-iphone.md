@@ -8,6 +8,9 @@ uses an ordinary Safari owner page with an actual framework iframe. It injects a
 small command observer into the test HTML through the existing preview-origin
 binding, without changing the application bundles or guest bytes. The observer
 retains the actual preview URL and document time origin across file edits.
+The time origin is captured once when the observer starts. Safari's repeated
+`performance.timeOrigin` reads varied by milliseconds in the native control;
+the immutable observer nonce and retained target identify the same document.
 
 The native click path arms a trusted-event observer on the actual enabled button,
 finds its unique visible accessibility reference, and invokes the exact bound

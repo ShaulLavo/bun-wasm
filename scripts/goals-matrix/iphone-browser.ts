@@ -1,8 +1,10 @@
 type BrowserTask = { id: number; source: string; deadline: number };
+declare global { var __goalsIphoneDocument: { nonce: string; url: string; timeOrigin: number } | undefined; }
 
 // Serialized into the test page, independently of the application bundles.
 export function installIphoneObserver(endpoint: string, nonce: string): void {
   const key = { nonce, url: location.href, timeOrigin: performance.timeOrigin };
+  globalThis.__goalsIphoneDocument = key;
   let stopped = false;
   let pending = false;
   const timer = setInterval(() => { void poll(); }, 50);
@@ -49,7 +51,7 @@ export function presentIphonePreview(url: string | null): void {
   document.body.appendChild(frame);
 }
 
-export function armIphoneClick(button: string, clicked: string): { before: string; label: string; url: string; timeOrigin: number } {
+export function armIphoneClick(button: string, clicked: string): { before: string; label: string; url: string; timeOrigin: number; nonce: string } {
   const target = document.querySelector<HTMLButtonElement>(button);
   const before = document.querySelector(clicked)?.textContent?.trim() ?? "";
   if (!target || target.disabled || !/\b0\b/.test(before)) throw new Error("iPhone counter is not ready at zero");
@@ -58,8 +60,10 @@ export function armIphoneClick(button: string, clicked: string): { before: strin
   if (document.visibilityState !== "visible" || document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== target) throw new Error("iPhone counter is not visibly hittable");
   const label = target.getAttribute("aria-label") ?? target.innerText.trim();
   if (!label) throw new Error("iPhone counter has no accessible label");
-  const state = { trusted: false, target, timeOrigin: performance.timeOrigin };
+  const key = globalThis.__goalsIphoneDocument;
+  if (!key) throw new Error("Missing iPhone document identity");
+  const state = { trusted: false, target };
   Object.assign(globalThis, { __goalsIphoneClick: state });
   target.addEventListener("click", event => { state.trusted = event.isTrusted; }, { once: true });
-  return { before, label, url: location.href, timeOrigin: performance.timeOrigin };
+  return { before, label, ...key };
 }

@@ -36,7 +36,7 @@ if (import.meta.main) {
   });
   observeIphoneOrigins(bus, control.url.origin);
   const serve = Bun.serve;
-  Object.defineProperty(Bun, "serve", { configurable: true, writable: true, value(options: unknown) {
+  Object.defineProperty(Bun, "serve", { value(options: unknown) {
     if (!options || typeof options !== "object" || !("fetch" in options) || typeof options.fetch !== "function") throw new Error("Expected playground server options");
     const fetch = options.fetch;
     const server = Reflect.apply(serve, Bun, [{ ...options, async fetch(request: Request, server: unknown) {
