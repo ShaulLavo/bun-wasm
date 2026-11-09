@@ -2,7 +2,7 @@
 // reference, by native Bun. Workers are real worker_threads members of the parent's group.
 import { strict as assert } from 'node:assert';
 import { Worker } from 'node:worker_threads';
-import { agentClosed, memberTag, ownerReleased } from './page-control.ts';
+import { agentArmed, agentClosed, memberTag, ownerReleased } from './page-control.ts';
 
 const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
 const module = new WebAssembly.Module(moduleBytes);
@@ -85,6 +85,7 @@ async function terminated(memory: WebAssembly.Memory, view: Int32Array, how: 'ne
   const tag = `cross-worker-blocked-${how}`;
   const { worker, exited } = spawn('blocked', { memory, module, how }, tag);
   waitFor(view, 24);
+  agentArmed(tag);
   // Terminate releases the waiter without any wake reaching this word.
   assert.equal(await worker.terminate(), 1);
   assert.equal(await exited, 1);

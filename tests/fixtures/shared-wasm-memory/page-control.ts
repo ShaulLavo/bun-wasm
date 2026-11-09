@@ -45,9 +45,25 @@ export function ownerReleased(name: string): OwnerHolds | undefined {
   return JSON.parse(published(`${root}/gone/${name}`));
 }
 
-/** Blocks until the tagged member's agent has ended, seen as the Web Lock it held being released. */
+/**
+ * Call before stopping a member whose end `agentClosed` will prove. Blocks until the page has seen
+ * the agent hold its lifetime lock, and refuses at once if the page cannot observe that agent.
+ */
+export function agentArmed(name: string): void {
+  if (root === undefined) return;
+  const deadline = Date.now() + DEADLINE_MS;
+  while (!existsSync(`${root}/armed/${name}`)) {
+    if (existsSync(`${root}/unarmable/${name}`)) throw new Error(`The page cannot observe the agent of ${name}`);
+    if (Date.now() > deadline) throw new Error(`The page never saw ${name} hold its lock`);
+    pause(5);
+  }
+}
+
+/** Blocks until the tagged member's armed agent has ended, seen as its held Web Lock being released. */
 export function agentClosed(name: string): void {
-  if (root !== undefined) published(`${root}/closed/${name}`);
+  if (root === undefined) return;
+  if (!existsSync(`${root}/armed/${name}`)) throw new Error(`${name} was stopped without an armed observer`);
+  published(`${root}/closed/${name}`);
 }
 
 /** A member tagged `stall-open-*` has taken its holds and is blocked on the owner's reply. */

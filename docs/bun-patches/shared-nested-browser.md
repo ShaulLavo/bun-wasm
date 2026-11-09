@@ -87,8 +87,9 @@ the owner has released before any attachment, ports moved with decoded and with 
 messages, receivers stopped before and during attachment, and concurrent growth. `page-control.ts`
 carries the page's owner-side facts to those fixtures, because a guest's own `process.pid` is a
 fixed 1. `ownerReleased` is the broker's supported stop. `agentClosed` is the agent's real end: the
-page's test build runs each worker with one held Web Lock (`web/tests/shared-wasm-agent/worker.ts`)
-and reports when the browser drops it. Membership rows compare the owner's group id for each kind
+page's test build runs each worker with one Web Lock (`web/tests/shared-wasm-agent/`), reports when
+it is actually held, and reports when the browser drops it. A row that uses `agentClosed` must first
+pass `agentArmed`, and it refuses if the page cannot observe that agent. Membership rows compare the owner's group id for each kind
 of start. After the run the page inspects each retained ended owner and the page budget. A separate
 page refuses one member's native terminate and asserts its retained debt.
 `web/tests/nested-host-publication.test.ts` runs the real `NestedHost` against Waffle's real owner

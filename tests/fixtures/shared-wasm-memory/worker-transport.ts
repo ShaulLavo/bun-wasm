@@ -2,7 +2,7 @@
 // real worker_threads members of one group. Worker control is carried only by shared gate words.
 import { strict as assert } from 'node:assert';
 import { MessageChannel, receiveMessageOnPort, Worker, type WorkerOptions } from 'node:worker_threads';
-import { attachStalled, memberTag, ownerReleased } from './page-control.ts';
+import { agentArmed, attachStalled, memberTag, ownerReleased } from './page-control.ts';
 
 const child = `${import.meta.dir}/worker-transport-child.ts`;
 const moduleBytes = await Bun.file(`${import.meta.dir}/cross-worker.wasm`).arrayBuffer();
@@ -163,6 +163,20 @@ async function receiverStopDuringAttach() {
   port1.close();
 }
 
+/** A row that needs the agent's end must refuse to start when the page cannot observe it. */
+async function unobservableAgentRefused() {
+  const gate = new Int32Array(new SharedArrayBuffer(16));
+  const { port1, port2 } = new MessageChannel();
+  const tag = 'unarmed-receiver';
+  const receiver = start({ mode: 'blockedReceiver', gate: gate.buffer, port: port2, seed: 21 }, [port2], tag);
+  await opened(gate, 0);
+  assert.throws(() => agentArmed(tag), /cannot observe the agent/);
+  assert.equal(await receiver.worker.terminate(), 1);
+  assert.equal(await receiver.exited, 1);
+  ownerReleased(tag);
+  port1.close();
+}
+
 async function concurrentGrowth() {
   const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
   const growers = [0, 1, 2, 3].map(() => start({ mode: 'grower', memory, module }));
@@ -192,6 +206,7 @@ await decodedQueuedTransfer();
 await undecodedQueuedTransfer();
 await receiverStopBeforeAttach();
 await receiverStopDuringAttach();
+await unobservableAgentRefused();
 await concurrentGrowth();
 await startCallback();
 console.log('shared-wasm-memory worker transport: pass');

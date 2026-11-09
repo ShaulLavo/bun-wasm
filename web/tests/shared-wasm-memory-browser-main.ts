@@ -4,6 +4,7 @@ import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { prepareProgram } from "../../src/assets.ts";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { startRun } from "../src/runner";
+import { AgentLockObserver, heldLockNames } from "./shared-wasm-agent/observer";
 
 const FIXTURE = "/home/user/fixture";
 const CONTROL = "/home/user/control";
@@ -11,6 +12,7 @@ const CONTROL = "/home/user/control";
 const MEMBER_TAG = "--shared-wasm-member=";
 const STALL_OPEN = "stall-open-";
 const FAIL_STOP = "fail-stop-";
+const UNARMED = "unarmed-";
 const GROUP_OPEN = 10;
 const STALLED_OPEN = 2;
 const DEBT_ENTRY = "failed-stop.ts";
@@ -94,8 +96,7 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
   const gone = new Set<number>();
   const retained = new Set<string>();
   const agentOf = new Map<string, string>();
-  const locked = new Set<string>();
-  const closed = new Set<string>();
+  const unarmable = new Set<string>();
   const releasedAt = new Map<string, number>();
   const delays: Record<string, number> = {};
   let querying = false;
@@ -111,7 +112,14 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
       await runtime.filesystem.flush();
     });
   };
+  // `unarmed-*` is the regression control: the page says at once that it cannot observe the agent.
+  const refuseObserver = (tag: string) => {
+    if (unarmable.has(tag)) return;
+    unarmable.add(tag);
+    publish(`${CONTROL}/unarmable/${tag}`, "unarmable");
+  };
   const bindAgent = (pid: number, tag: string) => {
+    if (tag.startsWith(UNARMED) || !navigator.locks) return refuseObserver(tag);
     const agent = agents.get(children()?.get(pid)?.worker as Worker);
     if (!agent || agentOf.has(tag)) return;
     agent.tag = tag;
@@ -146,19 +154,17 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
     releasedAt.set(tag, performance.now());
     publish(`${CONTROL}/gone/${tag}`, ownerHolds(owners.get(groupOf.get(pid) ?? "")));
   };
-  const observeLock = (tag: string, id: string, present: ReadonlySet<string | undefined>) => {
-    if (present.has(id)) { locked.add(tag); return; }
-    if (!locked.has(tag) || closed.has(tag)) return;
-    closed.add(tag);
-    const released = releasedAt.get(tag);
-    if (released !== undefined) delays[tag] = Math.round(performance.now() - released);
-    publish(`${CONTROL}/closed/${tag}`, "closed");
-  };
+  const lockObserver = new AgentLockObserver({
+    armed: tag => publish(`${CONTROL}/armed/${tag}`, "armed"),
+    closed: tag => {
+      const released = releasedAt.get(tag);
+      if (released !== undefined) delays[tag] = Math.round(performance.now() - released);
+      publish(`${CONTROL}/closed/${tag}`, "closed");
+    },
+  });
   const queryLocks = async () => {
     querying = true;
-    const { held = [], pending = [] } = await navigator.locks.query();
-    const present = new Set(held.concat(pending).map(lock => lock.name));
-    for (const [tag, id] of agentOf) observeLock(tag, id, present);
+    lockObserver.observe(agentOf, heldLockNames(await navigator.locks.query()));
     querying = false;
   };
   return {
@@ -166,7 +172,7 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
       const live = new Set<number>();
       for (const group of processes.memoryGroups()) observeGroup(group, live);
       for (const [pid, tag] of tags) if (!live.has(pid) && !gone.has(pid)) release(pid, tag);
-      if (!querying) void queryLocks();
+      if (!querying && navigator.locks) void queryLocks();
     },
     settled: () => writes,
     ended: () => Array.from(owners.values(), owner => owner.snapshot()),
@@ -195,7 +201,7 @@ async function run() {
   });
   await runtime.filesystem.mkdirp(FIXTURE);
   for (const name of names) await runtime.filesystem.writeFile(`${FIXTURE}/${name}`, await bytes(`./fixture/${name}`));
-  for (const directory of ["group", "gone", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
+  for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
   const kind: unknown = await (await fetch("./program/kind.json")).json();
   if (kind !== "quickjs" && kind !== "jsc") throw new Error("Invalid program kind");
