@@ -145,6 +145,9 @@ test("public adoption keeps the exact build pin separate from wildcard placement
   expect(release.hostInterface).toBe(metadata.waffleHostInterface);
   expect(release.programs.schema).toBe("waffle-program-release/2");
   expect(release.programs.toolCommit).toMatch(/^[a-f0-9]{40}$/);
+  expect(release.programs.sourceCommit).toMatch(/^[a-f0-9]{40}$/);
+  expect(release.programs.base.sourceTree).toMatch(/^[a-f0-9]{40}$/);
+  expect(release.programs.base.sourceDirectory).toMatch(/^packages\/[^/]+$/);
   for (const scope of ["web", "sandbox"]) {
     const consumer = await Bun.file(join(root, scope, "package.json")).json();
     expect(consumer.dependencies.waffle).toBe(release.url);

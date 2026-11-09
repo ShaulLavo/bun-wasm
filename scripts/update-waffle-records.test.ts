@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheKey } from "./ci-release-download";
@@ -229,3 +229,64 @@ test("the updater refuses a same-version runtime URL outside its release before 
     expect(await readFile(join(f.repository, "scripts/waffle-release-inputs.json"), "utf8")).toBe(f.before);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
+
+
+test("a partial final write preserves the complete record and removes its sibling stage", async () => {
+  const f = await fixture(published);
+  try {
+    await writeFile(join(f.root, "bin/cat"), '#!/usr/bin/env bash\nprintf copied > "$FIXTURE_ROOT/final-copy"\nhead -c 32 "$1"\nexit 1\n');
+    await chmod(join(f.root, "bin/cat"), 0o755);
+    expect(runUpdater(f.root, f.repository).exitCode).not.toBe(0);
+    expect(await readFile(join(f.root, "final-copy"), "utf8")).toBe("copied");
+    expect(await readFile(join(f.repository, "scripts/waffle-release-inputs.json"), "utf8")).toBe(f.before);
+    const files = await readdir(join(f.repository, "scripts"));
+    expect(files.sort()).toEqual(["ci-release-download.ts", "waffle-release-inputs.json"]);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("atomic record replacement preserves the existing file mode", async () => {
+  const f = await fixture(published);
+  try {
+    const path = join(f.repository, "scripts/waffle-release-inputs.json");
+    await chmod(path, 0o640);
+    expect(runUpdater(f.root, f.repository).exitCode).toBe(0);
+    expect((await stat(path)).mode & 0o777).toBe(0o640);
+    expect((await readRecord(f.repository)).programs.tag).toBe(published.tag);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+for (const value of [undefined, null, 0, "", "short", "g".repeat(40)]) {
+  test(`the updater rejects original program source ${JSON.stringify(value)} without replacing it`, async () => {
+    const f = await fixture({ ...published, sourceCommit: value });
+    try {
+      const result = runUpdater(f.root, f.repository);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("original program source commit");
+      expect(await readFile(join(f.repository, "scripts/waffle-release-inputs.json"), "utf8")).toBe(f.before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+}
+
+const invalidBaseSources = [
+  { field: "sourceTree", value: undefined }, { field: "sourceTree", value: null },
+  { field: "sourceTree", value: 0 }, { field: "sourceTree", value: "short" },
+  { field: "sourceTree", value: "g".repeat(40) },
+  { field: "sourceDirectory", value: undefined }, { field: "sourceDirectory", value: null },
+  { field: "sourceDirectory", value: "" }, { field: "sourceDirectory", value: "/packages/base" },
+  { field: "sourceDirectory", value: "packages/../base" }, { field: "sourceDirectory", value: "packages//base" },
+  { field: "sourceDirectory", value: "packages/./base" }, { field: "sourceDirectory", value: "packages\\base" },
+  { field: "sourceDirectory", value: "packages/\u0000base" },
+];
+for (const { field, value } of invalidBaseSources) {
+  test(`the updater rejects base ${field} ${JSON.stringify(value)} without replacing it`, async () => {
+    const manifest = { ...published, packages: published.packages.map(entry =>
+      entry.name === "waffle-base" ? { ...entry, [field]: value } : entry) };
+    const f = await fixture(manifest);
+    try {
+      const result = runUpdater(f.root, f.repository);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("Base source directory or tree");
+      expect(await readFile(join(f.repository, "scripts/waffle-release-inputs.json"), "utf8")).toBe(f.before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+}

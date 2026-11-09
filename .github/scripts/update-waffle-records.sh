@@ -2,7 +2,15 @@
 set -euo pipefail
 
 scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/waffle-records-XXXXXX")
-trap 'rm -rf "$scratch"' EXIT
+record_stage=
+cleanup() {
+  if [[ -n "$record_stage" ]]; then rm -f -- "$record_stage"; fi
+  rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 record=scripts/waffle-release-inputs.json
 host_interface=$(jq -er '.waffleHostInterface | select(type == "number" and . > 0 and . == floor and . <= 9007199254740991)' package.json)
 require_interface() {
@@ -66,6 +74,7 @@ identity=$(jq -ce --arg tag "$program_tag" '
   if .schema != "waffle-program-release/2" then error("Unsupported program release schema: \(.schema)")
   elif .tag != $tag then error("Program release manifest names \(.tag), not \($tag)")
   elif .dirty != false or .tagState != "tagged" then error("Program release was not packed from its clean tag")
+  elif (.sourceCommit | type == "string" and test("^[0-9a-f]{40}$") | not) then error("The original program source commit is not a full revision")
   else {schema, toolCommit: tool_commit} end
   | if .toolCommit | type == "string" and test("^[0-9a-f]{40}$") then . else error("Program release tool commit is not a full revision") end
 ' "$scratch/programs.json")
@@ -74,6 +83,16 @@ if ! jq -e --argjson expected "$host_interface" '.runtime.waffleHostInterface ==
   exit 1
 fi
 base=$(jq -ce --arg url "$base_url" '[.packages[] | select(.name == "waffle-base" and .url == $url)] | if length == 1 then .[0] else error("Missing base release") end' "$scratch/programs.json")
+if ! jq -e '
+  def revision: type == "string" and test("^[0-9a-f]{40}$");
+  def source_path: type == "string" and length > 0 and (startswith("/") | not)
+    and (contains("\\") | not) and (contains("\u0000") | not)
+    and (split("/") | all(. != "" and . != "." and . != ".."));
+  (.sourceTree | revision) and (.sourceDirectory | source_path)
+' <<< "$base" > /dev/null; then
+  echo 'Base source directory or tree is invalid' >&2
+  exit 1
+fi
 bun scripts/ci-release-download.ts "$base_url" "$scratch/base.tgz" 120000
 test "$(sha256sum "$scratch/base.tgz" | cut -d ' ' -f1)" = "$(jq -r '.sha256' <<< "$base")"
 test "$(wc -c < "$scratch/base.tgz")" = "$(jq -r '.bytes' <<< "$base")"
@@ -86,5 +105,9 @@ jq --arg tag "$program_tag" --arg commit "$(jq -er '.sourceCommit' "$scratch/pro
   '.programs = {tag: $tag, sourceCommit: $commit, manifest: {url: $url, bytes: $bytes, sha256: $hash},
     base: ($base | {url, bytes, sha256, sourceDirectory, sourceTree, version})} + $identity' \
   "$scratch/record.json" > "$scratch/next.json"
-# A failed update leaves the record untouched; copying in place keeps its file mode.
-cat "$scratch/next.json" > "$record"
+# Stage beside the record so the final rename stays on its filesystem.
+record_stage=$(mktemp "${record}.stage.XXXXXX")
+chmod --reference="$record" "$record_stage"
+cat "$scratch/next.json" > "$record_stage"
+mv -fT -- "$record_stage" "$record"
+record_stage=

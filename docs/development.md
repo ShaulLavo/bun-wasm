@@ -80,7 +80,9 @@ manifests together. Set the root `waffleHostInterface` to the released interface
 Run `.github/scripts/update-waffle-records.sh` to refresh archive hashes, sizes,
 tagged source revisions, native source files, and program provenance.
 The updater refuses mixed interfaces or native files that differ from the runtime
-archive. A failed update leaves `scripts/waffle-release-inputs.json` unchanged.
+archive. It validates the original program commit and base source identity formats.
+Validation or staging failures keep `scripts/waffle-release-inputs.json` unchanged.
+The completed record replaces the old file through an atomic sibling rename.
 
 Regenerate the lockfiles with Bun, then verify frozen installs in all three scopes.
 Run the normal quality, package, and Web gates. Use the shared-group CI checks for
