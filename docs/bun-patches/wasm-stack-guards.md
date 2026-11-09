@@ -55,8 +55,8 @@ The WASI additions to the same pinned WebKit's `JSArray.cpp`, `ProxyObject.cpp`,
 exception returns. It changes neither the upstream recursion algorithm nor the
 C-loop's JavaScript frame capacity.
 
-The two fast flattening functions, default Proxy property reads and fast JSON
-serialization reserve 512 shadow bytes per native frame. The assignment and
+The two fast flattening functions and default Proxy property reads reserve
+512 shadow bytes per native frame. Fast JSON serialization reserves 1024 bytes. The assignment and
 statement parsers reserve 2048 bytes. Fast JSON's static-buffer path also checks
 the VM's soft limit. Its upstream stack estimate assumes native frames and cannot
 by itself protect Wasm's separate host stack. Non-WASI builds add no reservation.

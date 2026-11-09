@@ -148,7 +148,7 @@ fixture still passes on the Mac.
 
 The V8 browser policy gives JSC 800 KiB for getter reentry. Native recursive
 paths with small shadow frames now reserve extra shadow bytes: 512 in both fast
-flattening functions, default Proxy reads and fast JSON serialization, and 2048
+flattening functions and default Proxy reads, 1024 in fast JSON serialization, and 2048
 in assignment and statement parsing. The static JSON fast path also checks the
 VM's soft stack limit instead of relying only on its native-frame buffer estimate.
 These reservations do not enlarge the host stack or the C-loop frame stack.

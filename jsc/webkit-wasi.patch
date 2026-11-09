@@ -1256,7 +1256,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  #include "JSONObject.h"
 @@ -1347,2 +1348,11 @@
  {
-+    WASM_RESERVE_STACK(512);
++    WASM_RESERVE_STACK(1024);
 +#if OS(WASI)
 +    // Static buffers estimate native stack use. Wasm needs the shadow-stack guard too.
 +    if (!m_vm.isSafeToRecurseSoft()) [[unlikely]] {
