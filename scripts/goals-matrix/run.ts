@@ -162,6 +162,8 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
       console.log(boxId(cell), report.cells[index]?.status);
       const deviceError = result.attempts.at(-1)?.phases.find(phase => phase.status === "fail" && phase.error.includes("T3 device command failed"));
       if (deviceError?.status === "fail") throw new Error(deviceError.error);
+      const cleanupError = result.browser === "iphone-safari" ? result.attempts.at(-1)?.phases.find(phase => phase.phase === "cleanup" && phase.status === "fail") : undefined;
+      if (cleanupError?.status === "fail") throw new Error(`iPhone cleanup failed; stopping before another cell: ${cleanupError.error}`);
     }
   } finally {
     server.kill("SIGTERM"); await server.exited;

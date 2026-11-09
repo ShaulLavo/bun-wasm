@@ -4,6 +4,7 @@ import { ownedCommand } from "./lifetime";
 import { until } from "./playground";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 import { object } from "./evidence";
+import { closeIphoneTab } from "./iphone-cleanup";
 
 type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; saveNative?(text: string): Promise<void> };
 export function validateIphoneControl(control: string, agent: string): void {
@@ -21,24 +22,31 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let role: "host" | "preview" = "host";
   let opened = false;
   let deviceFailed = false;
+  let title = "";
+  let closing: Promise<void> | undefined;
+  const lifetime = new AbortController();
+  const active = new Set<Promise<string>>();
   const capabilities: Record<string, unknown> = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": config.deviceUDID, transport: "visible-safari-xctest", safariDriverSession: false };
   async function request(action: string, value?: object): Promise<unknown> {
     const response = await fetch(config.control + "/" + action, { method: value ? "POST" : "GET", headers: value ? { "content-type": "application/json" } : {},
-      body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.timeout(config.timeoutMs) });
+      body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(config.timeoutMs)]) });
     const answer: unknown = await response.json();
     if (!response.ok) throw new Error(`iPhone observer: ${JSON.stringify(answer)}`);
     return answer;
   }
-  async function device(args: string[], timeoutMs: number): Promise<string> {
+  async function device(args: string[], timeoutMs: number, signal = lifetime.signal): Promise<string> {
+    signal.throwIfAborted();
+    const action = ownedCommand([config.agent].concat(args), signal, timeoutMs);
+    active.add(action);
     try {
-      const output = await ownedCommand([config.agent].concat(args), undefined, timeoutMs);
+      const output = await action;
       await config.saveNative?.(JSON.stringify({ command: [config.agent].concat(args), output, at: new Date().toISOString() }) + "\n");
       return output;
     } catch (error) {
       deviceFailed = true;
       await config.saveNative?.(JSON.stringify({ command: [config.agent].concat(args), error: String(error), at: new Date().toISOString() }) + "\n");
       throw new Error(`T3 device command failed: ${String(error)}`);
-    }
+    } finally { active.delete(action); }
   }
   async function evaluate<T>(source: string): Promise<T> {
     return await request(role + "/execute", { source, timeoutMs: config.timeoutMs }) as T;
@@ -50,6 +58,15 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     role = "host";
     await evaluate(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
   }
+  async function close(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    lifetime.abort(new Error("iPhone transport closing"));
+    await Promise.allSettled(Array.from(active));
+    if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
+    if (!opened) return;
+    await closeIphoneTab(device, title, deadline);
+    opened = false;
+  }
   return {
     capabilities,
     async navigate(url) {
@@ -59,6 +76,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       const state = await ready("host");
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       capabilities.userAgent = state.userAgent;
+      if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
+      title = "Goals " + state.nonce;
     },
     evaluate,
     async openPreview(url) {
@@ -81,21 +100,6 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       const after = await until(() => evaluate<Record<string, unknown>>(expression), value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, Math.max(1, deadline - Date.now()));
       return { before: before.before, after: after.after, trusted: true, nativeRef: ref, inputMethod: "T3 device_open XCTest" };
     },
-    async close() {
-      if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
-      if (!opened) return;
-      role = "host";
-      const title = await evaluate<string>("document.title");
-      // Safari's tab grid exposes each tab title followed by its own Close button.
-      await device(["press", 'label="More" role=button'], 5000);
-      await device(["press", 'label="All Tabs"'], 5000);
-      const snapshot = await device(["snapshot", "-i"], 5000);
-      const lines = snapshot.split("\n");
-      const index = lines.findIndex(line => line.includes(`[button] ${JSON.stringify(title)}`));
-      const close = index >= 0 ? /^(@e\d+(?:~s\d+)?) \[button\] "Close"/.exec(lines[index + 1] ?? "")?.[1] : undefined;
-      if (!close) throw new Error("Cannot identify the task's Safari tab for cleanup");
-      await device(["press", close], 5000);
-      opened = false;
-    },
+    close(_interruptPending = false, timeoutMs = 10_000) { return closing ??= close(timeoutMs); },
   };
 }

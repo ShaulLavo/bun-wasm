@@ -8,6 +8,8 @@ import { nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { frameworks } from "./catalog";
+import { closeIphoneTab } from "./iphone-cleanup";
+import { ownedCommand } from "./lifetime";
 
 test("visible iPhone options reject SafariDriver-shaped or non-loopback controls", () => {
   validateIphoneControl("http://127.0.0.1:1234/__goals_iphone/" + "a".repeat(64), "/bound/agent-device");
@@ -99,3 +101,74 @@ async function waitReady(bus: IphoneBus, role: "host" | "preview"): Promise<void
     await Bun.sleep(20);
   }
 }
+
+test("native cleanup shares one deadline, cancels its child and never dispatches a later input", async () => {
+  const started: { args: string[]; at: number; timeoutMs: number }[] = [];
+  let active = 0;
+  const deadline = Date.now() + 200;
+  await expect(closeIphoneTab(async (args, timeoutMs, signal) => {
+    expect(active).toBe(0);
+    active++;
+    started.push({ args, at: Date.now(), timeoutMs });
+    try {
+      const delay = started.length === 1 ? 10 : 500;
+      return await ownedCommand([process.execPath, "-e", `await Bun.sleep(${delay}); console.log('done')`], signal, timeoutMs);
+    } finally { active--; }
+  }, "owned tab", deadline)).rejects.toThrow();
+  const count = started.length;
+  expect(count).toBeGreaterThan(0);
+  expect(count).toBeLessThanOrEqual(2);
+  expect(active).toBe(0);
+  expect(started.every(item => item.at < deadline && item.timeoutMs <= deadline - item.at + 1)).toBe(true);
+  await Bun.sleep(250);
+  expect(started.length).toBe(count);
+});
+
+test("real product service worker injects the configured preview even when HTTP never sees its HTML", async () => {
+  const built = await Bun.build({ entrypoints: [new URL("../../web/src/sw.ts", import.meta.url).pathname], target: "browser", define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify("/* socket fixture */") } });
+  if (!built.success || !built.outputs[0]) throw new AggregateError(built.logs, "Product service worker did not build");
+  const source = await built.outputs[0].text();
+  const bus = new IphoneBus("/__goals_iphone/" + "b".repeat(64));
+  let ownerOrigin = "";
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => bus.handle(request, ownerOrigin) });
+  let networkPreviewRequests = 0;
+  const owner = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path.startsWith("/__preview/")) { networkPreviewRequests++; return new Response("HTTP must not serve the preview", { status: 500 }); }
+    if (path === "/sw.js") return observeIphoneResponse(new Response(source, { headers: { "content-type": "text/javascript", "service-worker-allowed": "/" } }), request.url, bus, control.url.origin);
+    const html = `<!doctype html><html><body>owner<script>
+      navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data?.type !== 'preview-request') return;
+        const port = event.ports[0];
+        port.postMessage({type:'accepted'});
+        port.postMessage({type:'head',status:200,statusText:'OK',headers:[['content-type','text/html']]});
+        port.postMessage({type:'data',chunk:new TextEncoder().encode('<!doctype html><html><body><h1>real worker preview</h1><button>Increment</button></body></html>')});
+        port.postMessage({type:'end'});
+      });
+    </script></body></html>`;
+    return observeIphoneResponse(new Response(html, { headers: { "content-type": "text/html" } }), request.url, bus, control.url.origin);
+  } });
+  ownerOrigin = owner.url.origin;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    bus.configure("host", owner.url.href);
+    await page.goto(owner.url.href);
+    await waitReady(bus, "host");
+    await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/__preview/" });
+      const worker = registration.installing ?? registration.waiting ?? registration.active;
+      if (!worker) throw new Error("Missing actual preview worker");
+      if (worker.state === "activated") return;
+      await new Promise<void>(resolve => worker.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
+    });
+    const preview = owner.url.origin + "/__preview/5173/";
+    bus.configure("preview", preview);
+    await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000);
+    await waitReady(bus, "preview");
+    expect(await bus.execute("preview", "document.querySelector('h1').textContent", 3000)).toBe("real worker preview");
+    expect(bus.state("preview")?.url).toBe(preview);
+    expect(networkPreviewRequests).toBe(0);
+    await page.evaluate(async () => { for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister(); });
+  } finally { await browser.close(); bus.close(); await owner.stop(true); await control.stop(true); }
+}, 15000);

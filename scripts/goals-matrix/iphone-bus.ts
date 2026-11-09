@@ -17,14 +17,20 @@ export class IphoneBus {
     this.pages.set(role, { url, nonce: crypto.randomUUID(), visible: false });
   }
   state(role: Role): Page | null { return this.pages.get(role) ?? null; }
-  inject(html: string, url: string, endpoint: string): string {
+  script(url: string, endpoint: string): string | undefined {
     const entry = Array.from(this.pages).find(([, page]) => page.url === url);
-    if (!entry) return html;
+    if (!entry) return;
     const [role, page] = entry;
     if (page.timeOrigin !== undefined) throw new Error("Unexpected iPhone document replacement");
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
-    const source = title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)});`;
-    return html.replace(/<\/body\s*>/i, end => `<script>${source.replace(/<\/script/gi, "<\\/script")}</script>` + end);
+    return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)});`;
+  }
+  inject(html: string, url: string, endpoint: string): string {
+    const source = this.script(url, endpoint);
+    if (!source) return html;
+    const closing = Array.from(html.matchAll(/<\/body\s*>/gi)).at(-1)?.index;
+    if (closing === undefined) throw new Error("iPhone observer needs closing body HTML");
+    return html.slice(0, closing) + `<script>${source.replace(/<\/script/gi, "<\\/script")}</script>` + html.slice(closing);
   }
   execute(role: Role, source: string, timeoutMs: number): Promise<unknown> {
     if (this.pending.has(role)) throw new Error("iPhone observer command already pending");
@@ -76,6 +82,12 @@ export class IphoneBus {
     const route = new URL(request.url).pathname.slice(this.path.length + 1);
     const headers = { "access-control-allow-origin": request.headers.get("origin") ?? "null", "access-control-allow-headers": "content-type", "access-control-allow-methods": "POST, GET", "cache-control": "no-store", "vary": "Origin" };
     if (request.method === "OPTIONS") return new Response(null, { headers });
+    if (route === "preview/script" && request.method === "GET") {
+      const url = new URL(request.url).searchParams.get("url");
+      if (!url || url !== this.state("preview")?.url || request.headers.get("origin") !== productOrigin) return new Response(null, { status: 204, headers });
+      const source = this.script(url, new URL(request.url).origin);
+      return new Response(source, { headers: { ...headers, "content-type": "text/javascript" } });
+    }
     try { return Response.json(await this.route(route, request, productOrigin), { headers }); }
     catch (error) { return Response.json({ error: String(error) }, { status: 400, headers }); }
   }

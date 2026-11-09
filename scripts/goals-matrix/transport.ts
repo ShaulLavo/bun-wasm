@@ -10,7 +10,7 @@ export interface Transport {
   useHost(): Promise<void>;
   usePreview(): Promise<void>;
   closePreview(): Promise<void>;
-  close(interruptPending?: boolean): Promise<void>;
+  close(interruptPending?: boolean, timeoutMs?: number): Promise<void>;
 }
 export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, options?: EvaluationOptions): Promise<T> {
   if (!options?.observation) return page.evaluate(expression);

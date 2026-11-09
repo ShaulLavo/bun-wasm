@@ -1,7 +1,14 @@
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { IphoneBus } from "./iphone-bus";
+import { observeIphoneServiceWorker } from "./iphone-service-worker";
 
 export async function observeIphoneResponse(response: Response, url: string, bus: IphoneBus, endpoint: string): Promise<Response> {
+  if (response.status === 200 && new URL(url).pathname.endsWith("/sw.js")) {
+    const source = `(${observeIphoneServiceWorker.toString()})(${JSON.stringify(endpoint + bus.path)});\n`;
+    const headers = new Headers(response.headers);
+    headers.delete("content-length"); headers.delete("etag"); headers.set("cache-control", "no-store");
+    return new Response(source + await response.text(), { status: response.status, headers });
+  }
   if (response.status !== 200 || !response.headers.get("content-type")?.startsWith("text/html")) return response;
   if (response.headers.has("content-encoding")) throw new Error("iPhone observer requires uncompressed HTML");
   const text = await response.text();
