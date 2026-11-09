@@ -1,5 +1,5 @@
 import { sourceLane } from "./fixtures/shared-objects/source-lane";
-import { poolChargedWord, overflowBudget } from "../web/src/shared-objects/lane-overflow";
+import { poolChargedWord, overflowBudget, slotWord } from "../web/src/shared-objects/lane-overflow";
 import { sharedPoolLaneCursor } from "../web/src/shared-objects/protocol";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -142,21 +142,30 @@ test("a failed native detach aborts large bytes but retains successful capacity 
 });
 
 test("unread A moves without returning credit, the new owner copies it before B reuses the slot", async () => {
-  const { client, sender, receiver, source, target } = await connection();
-  const next = client(); await next.service.ready;
+  let grant: import("../web/src/shared-objects/protocol").SharedPoolGrant | undefined;
+  const { client, sender, receiver, source, target, graph } = await connection({ grant(value) { grant = value; return value; } });
+  const node = graph.nodes.find(node => node[0] === "port" && node.length === 4);
+  if (!grant || !node || node[0] !== "port" || node.length !== 4 || node[1].poolIndex === null) throw new Error("Missing pooled snapshot");
+  const control = new Int32Array(grant.control), word = slotWord(node[1].poolIndex, node[1].side);
   const a = "A".repeat(1100000), b = "B".repeat(1100000);
   source.postMessage("before"); source.postMessage(a); source.postMessage("after");
-  const moved = await restore(receiver.runtime.codec.encode(target, [target]), next);
+  expect(Atomics.load(control, word) & 3).toBe(2);
+  const snapshot = receiver.runtime.codec.encode(target, [target]);
+  const next = client(); await next.service.ready;
+  const moved = await restore(snapshot, next);
+  expect(Atomics.load(control, word) & 3).toBe(2);
   expect(() => source.postMessage(b)).toThrow("slot is busy");
   expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: "before" });
   expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: a });
   expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: "after" });
+  expect(Atomics.load(control, word) & 3).toBe(0);
   source.postMessage(b); expect(next.runtime.receiveMessageOnPort(moved)).toEqual({ message: b });
   expect(next.runtime.receiveMessageOnPort(moved)).toBeUndefined();
   await Promise.all([sender.settleRoutes(), receiver.settleRoutes(), next.settleRoutes()]);
-  let closes = 0; moved.on("close", () => closes++); source.close();
-  await new Promise<void>(resolve => setTimeout(resolve, 30));
-  next.runtime.pump(); await new Promise<void>(resolve => setImmediate(resolve));
+  let closes = 0;
+  const closed = new Promise<void>(resolve => moved.on("close", () => { closes++; resolve(); }));
+  source.close(); await closed;
+  source.close(); await new Promise<void>(resolve => setImmediate(resolve));
   expect(closes).toBe(1);
 });
 
@@ -256,7 +265,7 @@ for (const failure of ["unpooled", "budget", "grow", "full-ring"] as const) test
   const realm = await sourceLane({ grow() { throw new RangeError("native grow rejected"); } });
   const options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {};
   if (failure === "unpooled") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, 32); return grant; };
-  if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget); return grant; };
+  if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget, slotWord); return grant; };
   if (failure === "grow") options.lane = (backing, side, grant) => {
     const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, slots: grant.overflow?.slots[backing.poolIndex] ?? null };
     return realm.openSharedLane(backing.buffer, side, overflow);

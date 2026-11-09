@@ -68,7 +68,11 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
     const browser = await task.launch(name === "chromium" ? chromium : webkit);
     const context = await browser.newContext();
     if (inlineOnly) await context.addInitScript(() => {
-      for (const key of ["growable", "maxByteLength", "grow"]) Reflect.deleteProperty(SharedArrayBuffer.prototype, key);
+      const Native = SharedArrayBuffer;
+      globalThis.SharedArrayBuffer = new Proxy(Native, { construct(target, args, constructor) {
+        if (args[0] === 0 && args[1]?.maxByteLength === 67108864) throw new RangeError("Private overflow allocation unavailable");
+        return Reflect.construct(target, args, constructor);
+      } });
     });
     const page = await context.newPage(), url = await task.serve();
     await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);

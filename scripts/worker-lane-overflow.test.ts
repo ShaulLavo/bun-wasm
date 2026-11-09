@@ -151,3 +151,11 @@ for (const corrupt of ["truncated", "length", "cursor", "phase"] as const) test(
   expect(() => receiver.drain(() => {})).toThrow();
   expect(() => sender.reserve("later")).toThrow("closed");
 });
+
+test("missing native growable getters do not break fixed-buffer recognition or inline messages", async () => {
+  const lane = await sourceLane({ fixedOnly: true }), buffer = lane.createSharedLaneBuffer();
+  expect(lane.nativeSharedFixed(buffer, buffer.byteLength)).toBe(true);
+  const a = lane.openSharedLane(buffer, 0), b = lane.openSharedLane(buffer, 1);
+  a.reserve("small")!.commit(); expect(b.drain(text => expect(text).toBe("small"))).toBe(1);
+  expect(() => a.reserve(large)).toThrow("byte limit");
+});

@@ -3,10 +3,10 @@ import { createNativeGrowableBuffer, nativeSharedGrow, nativeSharedLength } from
 export const overflowLimit = 64 * 1024 * 1024;
 export const overflowBudget = 128 * 1024 * 1024;
 export const overflowPage = 65536;
-export const poolLaneCount = 32;
+const poolLaneCount = 32;
 export const poolChargedWord = 27, poolDisposedWord = 28, poolSlotStart = 29;
 export const poolControlWords = poolSlotStart + poolLaneCount * 2 * 3;
-export const slotEmpty = 0, slotReserved = 1, slotPublished = 2, slotCopying = 3, slotClosed = 4;
+const slotEmpty = 0, slotReserved = 1, slotPublished = 2, slotCopying = 3, slotClosed = 4;
 export type SlotPair = readonly [SharedArrayBuffer, SharedArrayBuffer];
 export interface OverflowGrant { readonly slots: readonly SlotPair[]; }
 export interface LaneOverflow { readonly control: Int32Array; readonly slots: SlotPair | null; readonly index: number; }
