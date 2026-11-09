@@ -11,6 +11,7 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -448,6 +449,8 @@ class EngineHost {
     if (!this.o.modules) native.hostUseModuleRecords();
     let internal;
     try {
+      // The guest's constructor from here on; first-party and Waffle allocators captured the native one at bundle evaluation.
+      if (this.o.sharedObjects) installSharedBufferRealm(this.o.sharedObjects.claimBuffer);
       const factory = this.evalPolyfill("bootstrap");
       internal = factory(native);
     } catch (err) {

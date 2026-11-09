@@ -66,6 +66,20 @@ one per direction, moved with the port when it is transferred.
   blocked in `Atomics.wait`. Until then that packet, and those after it, stay queued in
   order. They are delivered once, with the shared identity preserved. esbuild's fresh
   request SharedArrayBuffer attaches this way on its service worker, which isn't blocked.
+- Fresh buffers for a blocked receiver: the Browser engine pre-attaches 672 native fixed
+  buffers at exact lengths and 32 lanes to every process before its guest starts, so a
+  program that posts a fresh buffer of one of those lengths and then notifies a blocked
+  peer works without an event-loop turn. The lengths are every multiple of 4 up to 64,
+  then powers of two up to 65,536. Each is a lifetime quota for the runtime, handed out
+  once and never reused. Any other shared value (another length, a requested-growable
+  buffer, a `WebAssembly.Memory` or `Module`, or a buffer past its quota) still attaches
+  through the receiver's event loop.
+- Named failure: when `receiveMessageOnPort` reaches a message it cannot decode in that
+  turn, it throws an error with code `ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED` instead of
+  returning `undefined`. The message stays queued, whole, including any ports it carried,
+  and a later event-loop turn delivers it. This does not make arbitrary fresh objects
+  deliverable to a receiver that never yields. See
+  `docs/bun-patches/original-adapter-shared-buffer-pool.md`.
 - Rejection: a message is rejected with `DataCloneError` before anything detaches when
   the ring is full (the receiver hasn't read 1 MiB of earlier messages), the frame is
   larger than a ring, or the peer has closed or been retired.

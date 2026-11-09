@@ -104,6 +104,9 @@ entries, and repeated flags are errors. An override applies to that framework's
 install phase across selected browsers and engines. It does not change cache
 behavior or other frameworks, and no Nuxt override is enabled implicitly.
 
+For a read-only summary of independent historical runs, use the
+[framework evidence view](goals-report-view.md). It never creates a resumable campaign.
+
 Reports use schema 2. `TABLE.json` records the effective install deadline for
 every framework, the campaign deadline, and the fixed cleanup deadline in
 `deadlines`. Each phase records its own `timeoutMs`, checked against that policy
@@ -153,3 +156,39 @@ The Pages starter excludes only the pinned unused Turbopack and experimental
 React production runtime files from Next server tracing. A restricted-dependency
 SSR control validates the selected trace, including a missing-runtime negative
 control. See [the adapter record](bun-patches/next-build-scheduling.md).
+
+## Measure the root React sandbox
+
+For a PC campaign, pass `--react-startup-url=http://127.0.0.1:PORT/` to
+`run.ts` or `fleet.ts`. Serve the matching production sandbox build on that
+explicit free port first. This check runs once on the local controller before
+the matrix and writes `react-startup.json` beside `TABLE.json`.
+
+The check uses three fresh Chromium contexts. Each cold navigation starts without
+HTTP, service worker, guest filesystem, or package state. Each warm measurement
+reloads the same context after the cold preview renders and its counter works.
+The browser process and OS cache remain shared. The renderer must display the
+React heading and counter, paint two frames, and increment the counter. Listening
+or an iframe load alone does not pass. Observed HTTP errors fail the check.
+
+The cold median render budget is 6,900 ms. Warm samples cannot replace cold
+samples. Each complete sample has a fixed 30,000 ms failure deadline, independent
+of campaign or install overrides. The budget is about 14.9 percent above the
+6,004.2 ms local good cold median measured on November 8, 2026. Recalibrate on a
+named execution host before treating that number as portable to other machines.
+This flag does not enable itself in existing scheduled campaigns.
+
+To compare two builds without enforcing that machine-specific budget, run:
+
+```sh
+source env.sh
+bun scripts/measure-react-startup.ts --url http://127.0.0.1:48941/ \
+  --baseline http://127.0.0.1:48942/ --samples 3 --headed \
+  --revision current --baseline-revision previous --output /absolute/startup.json
+```
+
+Use the same host and browser for both URLs. The runner alternates revision order
+and records installed React and Vite versions, startup phases, cache-hit marks,
+response statuses, browser version, and browser cleanup. `--limit-ms` enforces a
+cold median limit for the current revision, never the average of both revisions.
+Warm renders also must stay below that limit.

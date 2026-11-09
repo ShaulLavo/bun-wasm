@@ -1,13 +1,21 @@
 name: Release download cache
-description: Cache public release bytes by their complete original URL
+description: Restore public release bytes by their complete original URL
 runs:
   using: composite
   steps:
     - shell: bash
-      run: echo "CI_RELEASE_CACHE=$RUNNER_TEMP/github-release-assets" >> "$GITHUB_ENV"
-    - uses: actions/cache@v4
+      run: |
+        echo "CI_RELEASE_CACHE=$RUNNER_TEMP/github-release-assets" >> "$GITHUB_ENV"
+        echo "CI_RELEASE_CACHE_KEY=release-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/bun.lock', 'scripts/waffle-release-inputs.json', 'scripts/ci-*.ts', '.github/workflows/ci.yml', '.github/actions/rust-build-cache/action.yml') }}" >> "$GITHUB_ENV"
+    - uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/github-release-assets
-        key: release-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/bun.lock', 'scripts/waffle-release-inputs.json', 'scripts/ci-*.ts', '.github/workflows/ci.yml', '.github/actions/rust-build-cache/action.yml') }}
+        key: ${{ env.CI_RELEASE_CACHE_KEY }}-restore
         restore-keys: |
-          release-assets-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+          ${{ env.CI_RELEASE_CACHE_KEY }}-
+          release-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+    - shell: bash
+      run: |
+        mkdir -p "$CI_RELEASE_CACHE"
+        fingerprint=$(find "$CI_RELEASE_CACHE" -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+        echo "CI_RELEASE_CACHE_INITIAL=$fingerprint" >> "$GITHUB_ENV"

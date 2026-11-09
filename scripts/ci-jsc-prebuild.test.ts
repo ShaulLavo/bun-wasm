@@ -114,14 +114,16 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
     const id = String(item.id ?? "");
     return ["Configure portable quality toolchain homes", "Install native build tools", "Identify host build tools", "Install pinned WASI SDK",
       "Save completed sdk setup", "Install pinned Binaryen", "Save completed binaryen-cache setup", "Identify JSC prebuild inputs"].includes(name)
-      || ["sdk", "binaryen-cache"].includes(id) || uses.startsWith("oven-sh/setup-bun") || uses === "actions/checkout@v4"
-      || item.run === "bun install --frozen-lockfile --ignore-scripts"
+      || ["sdk", "binaryen-cache"].includes(id) || uses === "./.github/actions/setup-tools" || uses === "actions/checkout@v4"
+      || item.run === 'bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts'
       || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
   });
-  const producerShared = shared(producer);
+  const bunSetup = (items: Job[]) => items.map(item => item.uses === "./.github/actions/setup-tools"
+    ? { ...item, with: { "bun-version": record(item.with)["bun-version"] } } : item);
+  const producerShared = bunSetup(shared(producer));
   expect(producerShared).toHaveLength(14);
-  expect(producerShared).toEqual(shared(native));
-  expect(producerShared).toEqual(shared(checkpoint));
+  expect(producerShared).toEqual(bunSetup(shared(native)));
+  expect(producerShared).toEqual(bunSetup(shared(checkpoint)));
   const nativePaths = run(native, "Configure private JSC build paths");
   expect(run(producer, "Configure private JSC build paths")).toBe(nativePaths.slice(0, nativePaths.indexOf("\n")));
   expect(run(native, "Configure private JSC build paths")).toContain('JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"\n');
@@ -159,10 +161,13 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   expect(importScript).toContain('sysroot_digest=$(tail -n +5 "$manifest" | awk');
   expect(importScript).toContain('== "$prebuild_digest"');
   expect(importScript).toContain('== "$sysroot_digest"');
-  const upload = steps(producer).at(-1)!;
+  const uploads = steps(producer).filter(item => item.uses === "actions/upload-artifact@v7");
+  expect(uploads).toHaveLength(1);
+  const upload = uploads[0]!;
   expect(upload.uses).toBe("actions/upload-artifact@v7");
   expect(upload.with).toEqual({ path: "${{ runner.temp }}/jsc-prebuild.tar", "if-no-files-found": "error", "retention-days": 1, archive: false });
-  expect(steps(producer).at(-2)?.name).toBe(packageName);
+  const uploadIndex = steps(producer).findIndex(item => item.uses === "actions/upload-artifact@v7");
+  expect(steps(producer)[uploadIndex - 1]?.name).toBe(packageName);
   expect(producer.outputs).toEqual({ "manifest-sha256": "${{ steps.jsc-artifact.outputs.manifest-sha256 }}" });
   expect(step(native, "name", importName).env).toEqual({ JOBS: "2", CAGE: "", JSC_PREBUILD_MANIFEST_SHA256: "${{ needs.jsc-prebuild.outputs.manifest-sha256 }}" });
   // No background work or bare PIDs cross a step boundary in the hand-off.

@@ -8,6 +8,7 @@ export interface DeadlinePolicy {
   buildTimeouts: Record<string, number>;
   cleanupTimeoutMs: typeof cleanupTimeoutMs;
 }
+export type RecordedDeadlinePolicy = Omit<DeadlinePolicy, "buildTimeouts"> & { buildTimeouts?: Record<string, number> };
 export function parseTimeout(value: string, option = "timeout-ms"): number {
   const timeoutMs = Number(value);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 900_000) throw new Error(`${option} must be an integer from 100 through 900000`);

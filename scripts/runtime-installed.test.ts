@@ -54,7 +54,7 @@ function cleanup(): Promise<void> {
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 
-test("a clean consumer install prepares Waffle Node exports from the pinned Git commit", async () => {
+test("a clean consumer install prepares Waffle Node exports from the pinned release", async () => {
   const root = resolve(import.meta.dir, "..");
   const source = join(root, "web");
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-waffle-install-"));
@@ -70,13 +70,8 @@ test("a clean consumer install prepares Waffle Node exports from the pinned Git 
     mkdirSync(consumer, { recursive: true });
     for (const file of ["package.json", "bun.lock"]) writeFileSync(join(consumer, file), readFileSync(join(source, file)));
     if (process.env.CI_RELEASE_CACHE) {
-      await stageReleasePackages(source, consumer);
-      await run("bun", ["install", "--lockfile-only", "--ignore-scripts"], consumer, {
-        BUN_INSTALL_CACHE_DIR: join(scratch, "resolution-cache"),
-        BUN_INSTALL_GLOBAL_DIR: global,
-        BUN_CONFIG_DIR: config,
-      });
-      verifyStagedResolutions(readFileSync(join(source, "bun.lock"), "utf8"), readFileSync(join(consumer, "bun.lock"), "utf8"));
+      const locations = await stageReleasePackages(source, consumer);
+      verifyStagedResolutions(readFileSync(join(source, "bun.lock"), "utf8"), readFileSync(join(consumer, "bun.lock"), "utf8"), locations);
     }
     expect(readdirSync(cache)).toEqual([]);
     expect(existsSync(join(consumer, "node_modules"))).toBe(false);

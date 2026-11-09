@@ -1,5 +1,5 @@
 import { boxId, inventory, browsers, engines, frameworks, type Box } from "./catalog";
-import { validateDeadlines, type DeadlinePolicy } from "./deadlines";
+import { validateDeadlines, type DeadlinePolicy, type RecordedDeadlinePolicy } from "./deadlines";
 import { object, text, observed } from "./evidence";
 export const phases = ["startup", "install", "dev", "render", "click", "hot-reload", "build", "preview", "cleanup"] as const;
 export type Phase = typeof phases[number];
@@ -8,7 +8,8 @@ export type PhaseResult = { phase: Phase; startedAt: string; durationMs: number;
   | { status: "fail"; error: string }
 );
 export type Attempt = { startedAt: string; finishedAt: string; phases: PhaseResult[]; browser: Record<string, unknown> };
-export type Cell = Box & { attempts: Attempt[] } & (
+export type RecordedBox = Omit<Box, "engine"> & { engine: string };
+export type Cell<B extends RecordedBox = Box> = B & { attempts: Attempt[] } & (
   | { status: "pending"; reason: string }
   | { status: "not runnable yet"; reason: string; discovery: unknown }
   | { status: "pass" }
@@ -25,7 +26,9 @@ export interface Report {
   resources?: { kind: "asset-server"; host: string; pid: number; stopped: boolean }[];
 }
 export function initialCells(): Cell[] { return inventory().map(box => ({ ...box, status: "pending", reason: "Not selected or not attempted yet", attempts: [] })); }
-export function finish(box: Box, attempt: Attempt, earlier: readonly Attempt[] = []): Cell {
+export function finish(box: Box, attempt: Attempt, earlier?: readonly Attempt[]): Cell;
+export function finish(box: RecordedBox, attempt: Attempt, earlier?: readonly Attempt[]): Cell<RecordedBox>;
+export function finish(box: RecordedBox, attempt: Attempt, earlier: readonly Attempt[] = []): Cell<RecordedBox> {
   const identity = { framework: box.framework, browser: box.browser, engine: box.engine };
   const attempts = earlier.concat([attempt]);
   const failed = attempt.phases.find(result => result.status === "fail");
@@ -45,11 +48,11 @@ function array(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new Error("Expected an array");
   return value;
 }
-function phaseResult(value: unknown, engine: string, framework: string, deadlines: DeadlinePolicy): PhaseResult {
+function phaseResult(value: unknown, engine: string, framework: string, deadlines: RecordedDeadlinePolicy): PhaseResult {
   const data = object(value);
   const phase = phases.find(phase => phase === data.phase);
   if (!phase || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid phase or duration");
-  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : phase === "build" ? (deadlines.buildTimeouts[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
+  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : phase === "build" ? (deadlines.buildTimeouts?.[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
   if (data.timeoutMs !== timeoutMs) throw new Error("Phase timeout differs from report deadline policy");
   const base = { phase, timeoutMs: data.timeoutMs, startedAt: text(data.startedAt), durationMs: data.durationMs };
   if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };
@@ -57,7 +60,7 @@ function phaseResult(value: unknown, engine: string, framework: string, deadline
   observed(phase, data.evidence, engine);
   return { ...base, status: "pass", evidence: data.evidence };
 }
-function attempt(value: unknown, engine: string, framework: string, deadlines: DeadlinePolicy): Attempt {
+function attempt(value: unknown, engine: string, framework: string, deadlines: RecordedDeadlinePolicy): Attempt {
   const data = object(value);
   return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, engine, framework, deadlines)) };
 }
@@ -67,16 +70,21 @@ function validateCell(value: unknown, deadlines: DeadlinePolicy): Box {
   const framework = frameworks.find(value => value.id === data.framework)?.id;
   if (!browser || !engine || !framework) throw new Error("Unknown box");
   const box = { framework, browser, engine };
-  const attempts = array(data.attempts).map(value => attempt(value, engine, framework, deadlines));
-  if (data.status === "pending") { text(data.reason); if (attempts.length) throw new Error("Pending box has attempts"); return box; }
-  if (data.status === "not runnable yet") { text(data.reason); object(data.discovery); return box; }
+  validateCellEvidence(data, box, deadlines);
+  return box;
+}
+export function validateCellEvidence(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): asserts value is Cell<RecordedBox> {
+  const data = object(value);
+  if (data.framework !== box.framework || data.browser !== box.browser || data.engine !== box.engine) throw new Error("Box identity differs");
+  const attempts = array(data.attempts).map(value => attempt(value, box.engine, box.framework, deadlines));
+  if (data.status === "pending") { text(data.reason); if (attempts.length) throw new Error("Pending box has attempts"); return; }
+  if (data.status === "not runnable yet") { text(data.reason); object(data.discovery); return; }
   if (data.status !== "pass" && data.status !== "fail") throw new Error("Unknown cell status");
   const latest = attempts.at(-1);
   if (!latest) throw new Error("Attempted status without an attempt");
   const rebuilt = finish(box, latest, attempts.slice(0, -1));
   if (rebuilt.status !== data.status) throw new Error("Status differs from phase evidence");
   if (rebuilt.status === "fail" && (rebuilt.error !== data.error || rebuilt.phase !== data.phase)) throw new Error("First failure was not preserved");
-  return box;
 }
 export function validateReport(value: unknown): asserts value is Report {
   const report = object(value);
@@ -99,7 +107,7 @@ function validateResource(value: unknown): void {
   if (resource.kind !== "asset-server" || typeof resource.pid !== "number" || !Number.isSafeInteger(resource.pid) || resource.pid < 1 || typeof resource.stopped !== "boolean") throw new Error("Invalid owned resource");
 }
 
-function assertBrowser(box: Box, capabilities: Record<string, unknown>): void {
+function assertBrowser(box: RecordedBox, capabilities: Record<string, unknown>): void {
   const name = String(capabilities.browserName ?? "").toLowerCase();
   const expected = box.browser === "iphone-safari" ? "safari" : box.browser;
   if (name !== expected) throw new Error(`Wrong browser label: ${name} cannot report ${box.browser}`);

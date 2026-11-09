@@ -15,7 +15,7 @@ test("staged assets retain the entire locked URL and integrity identity", () => 
   expect(() => lockedReleasePackages(lock(""))).toThrow("integrity");
 });
 
-test("staging verifies original bytes before publishing supported fixture-local overrides", async () => {
+test("staging verifies original bytes before rebinding temporary manifests and locks", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "bun-wasm-stage-packages-"));
   try {
     const manifest = JSON.stringify({ dependencies: { example: url } });
@@ -23,15 +23,14 @@ test("staging verifies original bytes before publishing supported fixture-local 
     await writeFile(join(fixture, "bun.lock"), lock());
     await expect(stageReleasePackages(fixture, fixture, async () => new Response("wrong bytes"))).rejects.toThrow("integrity mismatch");
     expect(await readFile(join(fixture, "package.json"), "utf8")).toBe(manifest);
-    await stageReleasePackages(fixture, fixture, async input => { expect(input).toBe(url); return new Response(bytes); });
+    const locations = await stageReleasePackages(fixture, fixture, async input => { expect(input).toBe(url); return new Response(bytes); });
     const staged = JSON.parse(await readFile(join(fixture, "package.json"), "utf8"));
-    expect(staged.dependencies.example).toBe(url);
-    expect(await readFile(staged.overrides.example)).toEqual(bytes);
-    expect(await readFile(join(fixture, "bun.lock"), "utf8")).toBe(lock());
+    expect(await readFile(staged.dependencies.example)).toEqual(bytes);
+    verifyStagedResolutions(lock(), await readFile(join(fixture, "bun.lock"), "utf8"), locations);
   } finally { await rm(fixture, { recursive: true, force: true }); }
 });
 
 test("fixture lock resolution cannot change unrelated pinned packages", () => {
   expect(() => verifyStagedResolutions(lock(), lock())).not.toThrow();
-  expect(() => verifyStagedResolutions(lock(), lock().replace("other@1.0.0", "other@2.0.0"))).toThrow("other");
+  expect(() => verifyStagedResolutions(lock(), lock().replace("other@1.0.0", "other@2.0.0"))).toThrow("non-release");
 });
