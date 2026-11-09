@@ -1,4 +1,7 @@
+import { batchSnapshot, ownedTabClose, proveTabClosed } from "./iphone-tab-snapshot";
+
 export type NativeCommand = (args: string[], timeoutMs: number, signal: AbortSignal) => Promise<string>;
+type Step = { command: "press" | "snapshot"; input: Record<string, unknown> };
 
 export async function closeIphoneTab(command: NativeCommand, title: string, deadline: number): Promise<void> {
   const lifetime = new AbortController();
@@ -9,18 +12,22 @@ export async function closeIphoneTab(command: NativeCommand, title: string, dead
     return timeoutMs;
   };
   const timer = setTimeout(() => lifetime.abort(new Error("iPhone cleanup deadline expired")), remaining());
-  const run = (args: string[]) => command(args, remaining(), lifetime.signal);
+  async function batch(steps: Step[]) {
+    const output = await command(["batch", "--steps", JSON.stringify(steps), "--on-error", "stop", "--json"], remaining(), lifetime.signal);
+    remaining();
+    return batchSnapshot(output, steps.map(step => step.command));
+  }
   try {
-    await run(["press", 'label="More" role=button']);
-    await run(["press", 'label="All Tabs"']);
-    const snapshot = await run(["snapshot", "-i"]);
-    const lines = snapshot.split("\n");
-    const matches = lines.flatMap((line, index) => line.includes(`[button] ${JSON.stringify(title)}`) ? [index] : []);
-    const index = matches.length === 1 ? matches[0] : undefined;
-    const close = index !== undefined ? /^(@e\d+(?:~s\d+)?) \[button\] "Close"/.exec(lines[index + 1] ?? "")?.[1] : undefined;
-    if (!close) throw new Error("Cannot identify the task's Safari tab for cleanup");
-    await run(["press", close]);
-    const after = await run(["snapshot", "-i"]);
-    if (after.includes(`[button] ${JSON.stringify(title)}`)) throw new Error("Task Safari tab is still present after native close");
+    await command(["press", 'label="More" role=button'], remaining(), lifetime.signal);
+    const before = await batch([
+      { command: "press", input: { target: { kind: "selector", selector: 'label="All Tabs"' } } },
+      { command: "snapshot", input: { interactiveOnly: true } },
+    ]);
+    const ref = ownedTabClose(before, title);
+    const after = await batch([
+      { command: "press", input: { target: { kind: "ref", ref } } },
+      { command: "snapshot", input: { interactiveOnly: true } },
+    ]);
+    proveTabClosed(before, after, title);
   } finally { clearTimeout(timer); lifetime.abort(); }
 }

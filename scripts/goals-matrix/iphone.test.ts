@@ -5,6 +5,7 @@ import { checkClick } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { frameworks } from "./catalog";
 import { closeIphoneTab } from "./iphone-cleanup";
+import { tabBatch, tabOverview } from "./iphone-tab-fixture";
 import { ownedCommand } from "./lifetime";
 import { mkdtemp, writeFile, readFile, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -97,13 +98,15 @@ test("transport close is cached and reaps its timed-out native command before an
 });
 
 test("native cleanup rejects a successful input receipt when the owned tab is still visible", async () => {
-  const snapshot = '@e1 [button] "owned tab"\n@e2 [button] "Close"';
+  const snapshot = tabBatch(tabOverview(["owned tab", "Unrelated"]));
   const commands: string[][] = [];
   await expect(closeIphoneTab(async args => {
     commands.push(args);
-    return args[0] === "snapshot" ? snapshot : "Tapped";
-  }, "owned tab", Date.now() + 1000)).rejects.toThrow("still present");
-  expect(commands.filter(args => args[0] === "snapshot")).toHaveLength(2);
+    return args[0] === "batch" ? snapshot : "Tapped";
+  }, "owned tab", Date.now() + 1000)).rejects.toThrow("unproved");
+  expect(commands.map(args => args[0])).toEqual(["press", "batch", "batch"]);
+  const steps = commands.filter(args => args[0] === "batch").map(args => JSON.parse(args[2]!));
+  expect(steps.map(batch => batch.map((step: { command: string }) => step.command))).toEqual([["press", "snapshot"], ["press", "snapshot"]]);
 });
 
 test("an outstanding install observation cannot block confirmed native tab cleanup", async () => {
@@ -111,8 +114,9 @@ test("an outstanding install observation cannot block confirmed native tab clean
   const agent = join(root, "agent-device");
   const closed = join(root, "closed");
   const log = join(root, "commands.jsonl");
-  const snapshot = '@e1 [button] "Goals own-tab"\n@e2 [button] "Close"\n@e3 [button] "owner tab"';
-  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='press'&&args[1]==='@e2')await writeFile(${JSON.stringify(closed)},'closed');\nif(args[0]==='snapshot')console.log(existsSync(${JSON.stringify(closed)})?'@e3 [button] "owner tab"':${JSON.stringify(snapshot)});\n`);
+  const snapshot = tabBatch(tabOverview(["Goals own-tab", "owner tab"]));
+  const after = tabBatch(tabOverview(["owner tab"]));
+  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='batch'){const steps=JSON.parse(args[2]);if(steps[0].input.target.ref==='@e2')await writeFile(${JSON.stringify(closed)},'closed');console.log(existsSync(${JSON.stringify(closed)})?${JSON.stringify(after)}:${JSON.stringify(snapshot)});}\n`);
   await chmod(agent, 0o755);
   try { await pendingCleanupControl(agent, log, closed); }
   finally { await rm(root, { recursive: true, force: true }); }
@@ -213,7 +217,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
       expect(logs[0]).toContain("Final terminal observation unavailable");
       expect(await readFile(closed, "utf8")).toBe("closed");
       const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-      expect(commands.at(-1)).toEqual(["snapshot", "-i"]);
+      expect(commands.map(args => args[0])).toEqual(["open", "press", "batch", "batch"]);
     } finally { release.resolve(); await transport.close(true).catch(() => {}); await server.stop(true); }
   });
 }
