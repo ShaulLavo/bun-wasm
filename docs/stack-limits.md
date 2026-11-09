@@ -154,7 +154,9 @@ VM's soft stack limit instead of relying only on its native-frame buffer estimat
 These reservations do not enlarge the host stack or the C-loop frame stack.
 Firefox, WebKit and unknown hosts keep their existing budgets. The focused
 `stack-getter-headroom` fixture covers 128 getters, the five previously caught
-paths, and getter recovery after the exceptions.
+paths, and getter recovery after the exceptions. The blocking JSC embedding gate
+also runs it with a 1 MiB Node Worker stack and 800 KiB guest budget, so a large
+launcher stack cannot hide missing native-frame reservations.
 
 Historical known gap, before this native accounting: JSC's parser (every nesting shape), regular-expression compiler,
 `Array.prototype.flat`, `JSON.parse` revivers, Proxy chains without traps and the

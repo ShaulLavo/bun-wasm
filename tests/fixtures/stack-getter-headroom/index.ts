@@ -1,4 +1,4 @@
-// Test input is JavaScript so the guest exercises its own parser and getters.
+// Run as a guest TypeScript entry; eval inputs below deliberately exercise JavaScript parsing.
 function getters() {
   let depth = 0;
   const object = { get value() { return ++depth === 128 ? 1 : 1 + object.value; } };

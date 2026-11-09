@@ -65,5 +65,9 @@ The browser adapter gives V8 800 KiB for JSC getter reentry only after these nat
 paths have their own accounting. QuickJS's V8 default and the Firefox, WebKit and
 unknown-host policies remain unchanged. The `stack-getter-headroom` fixture keeps
 128 nested getters and the previously caught native paths together, then checks
-that getters still work after the exceptions. Native fixture discovery owns it;
-real Chrome warm and fresh-context controls remain a separate qualification step.
+that getters still work after the exceptions. Native fixture discovery owns it.
+The original `scripts/jsc-embedding.ts` host adapter reads that feature manifest
+and also runs the same fixture on its matched JSC pair with a 1 MiB Node Worker
+stack and the 800 KiB guest budget. This is a blocking runtime control, not a source
+pattern test. Real Chrome warm and fresh-context controls remain a separate
+qualification step.
