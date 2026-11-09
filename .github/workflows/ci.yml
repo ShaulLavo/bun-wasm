@@ -37,12 +37,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
       - name: Resolve immutable comparison refs
         id: refs
@@ -69,10 +67,10 @@ jobs:
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Install locked JavaScript tools and application dependencies
         run: |
-          bun install --frozen-lockfile --ignore-scripts
-          (cd web && bun install --frozen-lockfile)
-          (cd sandbox && bun install --frozen-lockfile)
-          (cd site && bun install --frozen-lockfile)
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+          (cd web && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
+          (cd sandbox && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
+          (cd site && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
       - name: Publish the completed dependency cache before consumer jobs
         if: steps.bun-dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -96,11 +94,14 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: bun scripts/test-checks.ts cmake
 
+      - uses: ./.github/actions/save-release-downloads
+
   # The JSC C/C++ prebuild has its own job and budget. Every native selection runs it,
   # because the tools fixture links JSC even when the JSC engine gates are off. It owns
   # the run's one sysroot and one prebuild (built, or restored and verified), their
   # caches and the hand-off artifact.
   # Boat's public-repository allowlist cannot admit the built-in GitHub Actions bot.
+
   jsc-prebuild:
     name: JSC C/C++ prebuild
     needs: quality
@@ -123,10 +124,10 @@ jobs:
           echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
       - name: Install native build tools
         run: |
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
@@ -209,7 +210,7 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - name: Identify sysroot build inputs
         id: sysroot-inputs
         run: |
@@ -334,6 +335,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           archive: false
+      - uses: ./.github/actions/save-release-downloads
 
   native-quality:
     name: Native quality checkpoint
@@ -379,14 +381,12 @@ jobs:
           echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/rust-build-cache
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -554,7 +554,7 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - uses: actions/cache/restore@v4
         id: sources-cache
         with:
@@ -780,6 +780,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+      - uses: ./.github/actions/save-release-downloads
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -819,14 +820,12 @@ jobs:
           echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/rust-build-cache
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
+      - uses: ./.github/actions/rust-build-cache
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -990,7 +989,7 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - name: Configure private JSC build paths
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
@@ -1131,7 +1130,7 @@ jobs:
           # Cargo does not see sysroot or C toolchain changes, so every build input is in the key.
           key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
-        run: bun install --cwd web --frozen-lockfile
+        run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile
       - name: Build the common engine core once
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -1299,7 +1298,7 @@ jobs:
             ${{ runner.temp }}/jsc-prebuild.log
           if-no-files-found: error
           retention-days: 1
-
+      - uses: ./.github/actions/save-release-downloads
 
   package:
     needs: quality
@@ -1312,24 +1311,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile
       - run: bun run check
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
       - name: Test vectored reads and browser dependency resolution
         run: bun scripts/test-checks.ts package-extra
+      - uses: ./.github/actions/save-release-downloads
 
   shared-prebuild:
     name: Shared PIC sysroot and JSC prebuild
@@ -1356,18 +1354,16 @@ jobs:
           echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - name: Install sysroot build tools
         run: |
           if command -v cmake && command -v ninja; then exit 0; fi
@@ -1499,6 +1495,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           archive: false
+      - uses: ./.github/actions/save-release-downloads
 
   shared-sysroot:
     name: Shared PIC sysroot proof
@@ -1545,18 +1542,16 @@ jobs:
           echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - name: Install sysroot build tools
         run: |
           if command -v cmake && command -v ninja; then exit 0; fi
@@ -1757,7 +1752,7 @@ jobs:
         if: needs.quality.outputs.shared-native == 'true'
         run: |
           source env.sh
-          bun install --cwd web --frozen-lockfile --ignore-scripts
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
@@ -1792,6 +1787,7 @@ jobs:
       - name: Shared profile cache result
         if: needs.quality.outputs.shared-native == 'true'
         run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
+      - uses: ./.github/actions/save-release-downloads
 
   web:
     needs: quality
@@ -1805,12 +1801,10 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
-      - uses: actions/setup-node@v4
-        with:
           node-version: '26'
       - uses: actions/cache/restore@v4
         with:
@@ -1867,6 +1861,7 @@ jobs:
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
         run: bash ../scripts/test-web-host.sh --browser
+      - uses: ./.github/actions/save-release-downloads
 
   process-bundles:
     needs: quality
@@ -1876,15 +1871,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --cwd web --frozen-lockfile --linker=isolated
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --linker=isolated
       - name: Build each process fixture once for all browsers
         run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
       - uses: actions/upload-artifact@v4
@@ -1893,6 +1888,7 @@ jobs:
           path: ${{ runner.temp }}/process-bundles
           retention-days: 1
           if-no-files-found: error
+      - uses: ./.github/actions/save-release-downloads
 
   browser-process:
     needs: [quality, rust, process-bundles]
@@ -1910,10 +1906,10 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: ./.github/actions/release-downloads
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1922,7 +1918,7 @@ jobs:
         with:
           name: process-bundles
           path: ${{ runner.temp }}/process-bundles
-      - run: bun install --frozen-lockfile --linker=isolated
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --linker=isolated
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
           if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
@@ -1996,7 +1992,7 @@ jobs:
           BUN_WASM_TRANSFER_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
           TMPDIR: ${{ runner.temp }}
         run: |
-          bun install --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}
       # Feature-owned checks (checks/browser-guest-*.json) that serve the playground site the rust
       # job built once from its receipt-verified guest. Each check verifies the site's closed
@@ -2013,8 +2009,9 @@ jobs:
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
           TMPDIR: ${{ runner.temp }}
         run: |
-          bun install --cwd .. --frozen-lockfile --ignore-scripts
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest
+      - uses: ./.github/actions/save-release-downloads
 
   update-status:
     name: Report automated update statuses

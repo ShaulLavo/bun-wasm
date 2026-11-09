@@ -645,10 +645,10 @@ for (const fail of [false, true]) {
 
 test("package preparation builds once, and non-package installs skip lifecycle builds", () => {
   const adapter = workflow.split("\n  package:\n")[1]!.split("\n  web:\n")[0]!;
-  expect(adapter).toContain("run: bun install --frozen-lockfile");
+  expect(adapter).toContain('run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile');
   expect(adapter).not.toContain("run: bun run build");
-  expect(quality).toContain("bun install --frozen-lockfile --ignore-scripts");
-  expect(rust).toContain("bun install --frozen-lockfile --ignore-scripts");
+  expect(quality).toContain('bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts');
+  expect(rust).toContain('bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts');
 });
 
 test("the WASI lint probe cannot dirty release build timestamps", () => {

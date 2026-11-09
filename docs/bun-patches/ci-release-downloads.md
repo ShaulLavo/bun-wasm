@@ -8,8 +8,11 @@ release-asset API endpoint using the job's ephemeral token. It caches bytes unde
 the SHA-256 of the complete original URL, never the token or temporary signed URL.
 Retries are limited to three HTTP attempts with one- and two-second backoff.
 Redirects are bounded and restricted to GitHub's API and asset hosts. Authorization
-is sent only to the API. CMake, Ninja, Binaryen, SDK, Wasmtime and wasm-tools keep
-their existing archive checksums and version checks.
+is sent only to the API. Cold CI requests fail without a token rather than falling
+back to public downloads. Cached bytes remain usable without a token. Node and Bun
+execute the same transport. CMake, Ninja, Binaryen, SDK, Wasmtime and wasm-tools keep
+their existing archive checksums and version checks. ICU 78.3 now uses this transport
+before its unchanged SHA-256 check in `jsc/build-icu.sh`.
 
 The sccache adapter replaces acquisition in mozilla-actions/sccache-action
 `src/setup.ts` at `d651010b8da762cde178750d8eda7b5febfe147a`. That action's pinned
@@ -17,24 +20,48 @@ version path uses unauthenticated `downloadTool` calls even when its default tok
 input is present. The local adapter keeps v0.19.0, its published SHA-256 validation
 and a version check. The existing private cache-server wrapper owns shutdown.
 
-`scripts/ci-stage-release-packages.ts` feeds the intentionally cold consumer test
-through Bun's supported local-tarball overrides. Each archive first matches the
-SHA-512 integrity from the unchanged source lockfile. Only the temporary fixture
-manifest gets overrides. A separate resolution cache prepares its temporary
-lockfile; non-release package resolutions must remain identical. The actual
-install still uses an empty Bun cache and the same frozen-install deadline, then
-runs every existing export, preparation and dependency-resolution assertion.
-This does not authenticate Bun's own remote-tarball requests. Non-release Git
-inputs retain their original transport.
+## Frozen consumer installs
 
-The existing Ubuntu quality job publishes its completed normal Bun cache before
-consumer jobs start. Bun uses its supported `BUN_INSTALL_CACHE_DIR` setting
-inside the checkout, so the cached archive path is portable between Ubuntu and
-boat home-directory layouts. Its key hashes every frozen lockfile, including
-exact URLs and integrities. Boat consumers restore this supported cache rather than relying
-on a first unauthenticated release download from their address.
+Bun 1.4.4 ignores package-name overrides for explicit URL dependencies. Authenticating
+a staging download therefore did not stop its resolver from fetching the same public
+URL again. This affected direct and transitive dependencies, including scoped packages.
 
-Download and cache diagnostics go to stderr so callers may keep stdout as a
-single machine-readable fingerprint or GitHub step output. Hermetic receipt CLI
-fixtures copy the downloader alongside its Waffle-input caller, preserving the
-real module dependency closure rather than replacing imports with stubs.
+`scripts/ci-stage-release-packages.ts` checks each original archive against the
+unchanged source lock's SHA-512. It rebinds release URL strings in a temporary manifest
+and lock to those exact local archives. Reverse translation must reproduce the whole
+original lock, including non-release packages, metadata and integrities. It does not
+repack product archives, resolve new versions or seed Bun's cache through private APIs.
+
+`scripts/ci-install.ts` wraps every ordinary blocking CI install. It restores the exact
+original manifest and lock on success or failure. Existing install flags and lifecycle
+choices remain. The clean consumer fixture uses the same rebinding, starts with no
+installed dependencies and an empty cache, retains its frozen-install deadline, and
+runs every original export and preparation assertion. A focused nested fixture also
+installs with `--offline`, so no public release request can make that proof pass.
+
+## Updating release pins
+
+`scripts/ci-update-lock.ts` owns the updater's existing lock-only, scripts-disabled
+resolution. It follows release dependency metadata and pinned Git package manifests,
+authenticates release archives, and verifies unchanged pins against their old integrity.
+Temporary metadata-only tarballs let Bun resolve newly selected dependencies without
+public release requests. They are resolver inputs only, never installed product archives.
+
+The output lock restores canonical published URLs and SHA-512s of the original release
+bytes. The product manifest is restored exactly. Temporary metadata archives, manifests
+and downloads are removed. The regression resolves new direct and scoped transitive pins
+with all network access disabled, then installs the resulting canonical lock through
+frozen staging. That second install checks the original bytes against the restored digest.
+The updater's explicit record downloads keep their existing 120-second bound.
+
+## Cache lifetime
+
+The release cache restores before tool bootstrap and saves at job end only if its
+URL-addressed file inventory grew. The inventory digest gives a new immutable cache
+key after a partial restore gains assets. An unchanged warm inventory never invokes
+`actions/cache/save`, so repeated runs do not store duplicate full caches.
+
+The ordinary Bun cache retains its checkout-relative `BUN_INSTALL_CACHE_DIR` and frozen
+lock-based keys. It can accelerate registry and Git inputs, but release acquisition no
+longer depends on it being warm. Download diagnostics go to stderr so callers retain
+machine-readable stdout.

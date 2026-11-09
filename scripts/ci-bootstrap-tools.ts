@@ -37,7 +37,7 @@ async function installArchive(url: string, destination: string, kind: "node" | "
   } finally { await rm(stage, { recursive: true, force: true }); }
 }
 
-export async function setupTools(root: string, bunVersion: string, nodeVersion?: string, download = releaseDownload): Promise<string[]> {
+async function setupTools(root: string, bunVersion: string, nodeVersion?: string, download = releaseDownload): Promise<string[]> {
   if (process.platform !== "linux" || process.arch !== "x64") throw new Error("CI bootstrap requires Linux x64");
   if (!/^\d+\.\d+\.\d+$/.test(bunVersion)) throw new Error("Bun version must be exact");
   const paths: string[] = [];

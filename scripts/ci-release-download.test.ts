@@ -86,7 +86,7 @@ test("CI callers use the downloader and consume a completed cache rather than ra
   expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
   expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
   const cache = await Bun.file(new URL("../.github/actions/release-downloads/action.yml", import.meta.url)).text();
-  expect(cache.match(/release-assets-v1-.*?\$\{\{ github.job \}\}-/g)).toHaveLength(2);
+  expect(cache.match(/release-assets-v2-.*?\$\{\{ github.job \}\}-/g)).toHaveLength(2);
   const native = await Bun.file(new URL("./waffle-release-inputs.ts", import.meta.url)).text();
   expect(native.match(/download: Download = releaseDownload/g)).toHaveLength(2);
   const sccache = await Bun.file(new URL("../.github/actions/rust-build-cache/action.yml", import.meta.url)).text();
@@ -129,4 +129,23 @@ test("release diagnostics preserve machine-readable caller stdout", async () => 
     expect(result.stdout.toString()).toBe("fixture-input-key\n");
     expect(result.stderr.toString()).toContain("GitHub release cache hit:");
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+
+test("a cold CI release download fails closed without a token, but cached bytes remain usable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bun-wasm-release-no-token-"));
+  const previous = process.env.GITHUB_ACTIONS;
+  process.env.GITHUB_ACTIONS = "true";
+  let calls = 0;
+  try {
+    const options = { token: "", cache: directory, fetch: async () => { calls++; throw new Error("Public release requests are forbidden"); } };
+    await expect(releaseDownload(url, options)).rejects.toThrow("require GITHUB_TOKEN");
+    await Bun.write(join(directory, releaseCacheKey(url)), "cached bytes");
+    expect(await (await releaseDownload(url, options)).text()).toBe("cached bytes");
+    expect(calls).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

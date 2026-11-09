@@ -123,6 +123,7 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
     console.error(`GitHub release cache hit: ${url}`);
     return fileResponse(path);
   }
+  if (process.env.GITHUB_ACTIONS === "true" && !selected.token) throw new Error("CI release downloads require GITHUB_TOKEN");
   const response = await authenticatedRelease(url, selected);
   if (!response.ok || !path) return response;
   await mkdir(selected.cache!, { recursive: true });
