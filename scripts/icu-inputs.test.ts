@@ -25,14 +25,25 @@ WASI_SDK_PATH=${JSON.stringify(join(root, "sdk"))}
     writeFileSync(join(root, "sysroot/bun-wasm-sysroot.json"), "fixture sysroot\n");
     writeFileSync(join(root, "sdk/VERSION"), "fixture sdk\n");
     const executable = (path: string, source: string) => writeFileSync(join(root, path), `#!/usr/bin/env bash\n${source}\n`, { mode: 0o755 });
-    executable("bin/bun", `printf '%s\\n' "$@" > ${JSON.stringify(join(root, "sysroot-args"))}`);
-    executable("bin/curl", "echo 'fixture refuses downloads' >&2; exit 71");
+    executable("bin/bun", `if [[ "$1" == ${JSON.stringify(join(root, "scripts/ci-release-download.ts"))} ]]; then
+  printf '%s\\n' "$@" > ${JSON.stringify(join(root, "download-args"))}
+  echo 'fixture refuses release downloads' >&2
+  exit 71
+fi
+[[ "$1" == ${JSON.stringify(join(root, "scripts/build-wasi-sysroot.ts"))} ]] || exit 73
+printf '%s\\n' "$@" > ${JSON.stringify(join(root, "sysroot-args"))}`);
+    executable("bin/curl", "echo 'fixture rejects public curl downloads' >&2; exit 72");
     for (const tool of ["bin/cc", "bin/c++", "sdk/bin/clang", "sdk/bin/clang++"]) executable(tool, "echo 'fixture compiler version 1'");
     const invoke = (env: NodeJS.ProcessEnv = {}) => Bun.spawnSync(["bash", join(root, "jsc/build-icu.sh")], {
       env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, CC: join(root, "bin/cc"), CXX: join(root, "bin/c++"), CPATH: "", C_INCLUDE_PATH: "", CPLUS_INCLUDE_PATH: "", JSC_PROFILE: "split", ...env },
     });
     const cold = invoke();
     expect(cold.exitCode, cold.stderr.toString()).toBe(71);
+    expect(readFileSync(join(root, "download-args"), "utf8").trim().split("\n")).toEqual([
+      join(root, "scripts/ci-release-download.ts"),
+      "https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz",
+      join(root, "icu/icu4c-78.3-sources.tgz"),
+    ]);
     for (const lib of ["icudata", "icuuc", "icui18n"]) {
       mkdirSync(join(root, "icu/prefix/lib"), { recursive: true });
       writeFileSync(join(root, `icu/prefix/lib/lib${lib}.a`), `fixture ${lib}`);

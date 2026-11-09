@@ -425,8 +425,14 @@
       };
     }
     static #receive(port: MessagePort) {
-      if (!port.#state?.queue.length) return undefined;
-      const message = messagePacket(port.#state.queue.shift()).data;
+      const state = port.#state;
+      if (!state) return undefined;
+      if (!state.queue.length) {
+        if (!port.#attachmentWait) return undefined;
+        // The head frame cannot decode in this synchronous turn. It stays pending, whole, and delivers once this thread's event loop runs.
+        throw Object.assign(new Error("receiveMessageOnPort: the next message needs a shared backing that is not attached in this thread; it will be delivered once this thread's event loop runs"), { code: "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED" });
+      }
+      const message = messagePacket(state.queue.shift()).data;
       port.#maybeClose();
       return { message };
     }

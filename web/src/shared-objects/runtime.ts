@@ -14,6 +14,8 @@ export interface SharedObjectRuntime {
   close(): void;
   inspect(): { clients: number; objects: number; waiting: number };
   inspectTransfers(): { pins: number; attaching: number };
+  /** Lifetime claims so far: per stock class in `sharedPoolClasses` order, and channel lanes. */
+  inspectPool(): { created: boolean; classes: number[]; lanes: number };
 }
 
 /** Internal host installation, deliberately separate from registering the public Bun adapter. */
@@ -54,7 +56,7 @@ export function installRuntimeSharedObjects(runtime: ProcessRuntime): SharedObje
     for (const route of Array.from(routes)) route.close();
     broker.dispose();
   }
-  const installation = { open, close, inspect: broker.inspect, inspectTransfers: broker.inspectTransfers };
+  const installation = { open, close, inspect: broker.inspect, inspectTransfers: broker.inspectTransfers, inspectPool: broker.inspectPool };
   installations.set(runtime, installation);
   return installation;
 }
