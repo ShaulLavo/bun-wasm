@@ -25,12 +25,17 @@ below the host wasm call-stack limit, read from `BUN_WASM_STACK_KIB` when set,
 while retaining JSC's exception reserve. Its separate C-loop JavaScript frame
 reservation keeps its existing capacity. This extends the platform hunk in
 `jsc/webkit-wasi.patch`; it changes no upstream JavaScript algorithms. The
-browser executor's choice of budget in `web/src/engine-stack-budget.ts` is original code.
-It retains QuickJS's default on desktop Gecko Firefox after cold overflow-safety checks
-at 1.25 times that budget. Safari, Firefox on iOS, and unknown hosts keep the
-smaller budget. JSC's policy and explicit environment overrides do not change.
-`web/tests/browser-quickjs-stack.ts` is an original browser harness over the
-existing stack-depth fixture.
+browser executor's choice of budget in `web/src/engine-stack-budget.ts` is original
+adapter code. It retains QuickJS's default on desktop Gecko Firefox after cold
+overflow-safety checks at 1.25 times that budget. Safari, Firefox on iOS, and
+unknown hosts keep the smaller QuickJS budget. Explicit environment overrides
+remain unchanged. `web/tests/browser-quickjs-stack.ts` is an original browser
+harness over the existing stack-depth fixture.
+
+Desktop Firefox uses a measured 208 KiB JSC budget instead of the 192 KiB WebKit
+fallback. Its original compiler regression in `web/tests/browser-solid-stack.ts`
+loads the installed SolidStart source and Babel Solid preset without copying or
+changing their implementations.
 [Stack limits](../stack-limits.md) records the measurements and reproducer.
 
 `tests/fixtures/stack-overflow-console/index.js` adapts the script in Bun's
