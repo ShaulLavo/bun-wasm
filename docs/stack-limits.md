@@ -194,6 +194,13 @@ catchable error from 400. Unary chains completed to 5,000 and trapped by 10,000;
 they now complete to 700 and throw from 1,000, and `await` chains complete to 400
 and throw by 700.
 
+These depth measurements start with a shallow matching stack. A pattern compiled
+there can still exhaust the interpreter during native callback reentry. On WASI,
+that matching failure now keeps its error result and throws the existing
+`RangeError` instead of silently returning `null` or `false`. The fixture checks
+successful `exec`, `test`, `replace` and `matchAll` results during reentry, then
+checks matching and a genuine non-match after unwinding.
+
 This is not a claim that every shape is safe. Long left-deep chains (`x+x+…`,
 `x&&x&&…`, `x.a.a…`, `x()()…`) still trap at 200,000 levels on wasmtime. They
 recurse in bytecode generation too, but generated code can really be that long, so a

@@ -1394,14 +1394,48 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
  {
 +    WASM_RESERVE_STACK(1024);
      if (needsDebugHook()) [[unlikely]]
+diff --git a/Source/JavaScriptCore/runtime/RegExpInlines.h b/Source/JavaScriptCore/runtime/RegExpInlines.h
+--- a/Source/JavaScriptCore/runtime/RegExpInlines.h
++++ b/Source/JavaScriptCore/runtime/RegExpInlines.h
+@@ -243,1 +243,11 @@
++#if OS(WASI)
++    if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
++        if (nullOrGlobalObject) {
++            auto throwScope = DECLARE_THROW_SCOPE(vm);
++            throwScope.throwException(nullOrGlobalObject, Yarr::errorToThrow(nullOrGlobalObject, Yarr::ErrorCode::TooManyDisjunctions));
++        }
++        return -1;
++    }
++#endif
++
+     ASSERT(result >= -1);
+@@ -392,2 +402,11 @@
+     }
++#if OS(WASI)
++    if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
++        if (nullOrGlobalObject) {
++            auto throwScope = DECLARE_THROW_SCOPE(vm);
++            throwScope.throwException(nullOrGlobalObject, Yarr::errorToThrow(nullOrGlobalObject, Yarr::ErrorCode::TooManyDisjunctions));
++        }
++        return MatchResult::failed();
++    }
++#endif
+ #if REGEXP_FUNC_TEST_DATA_GEN
 diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
 --- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
 +++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
-@@ -1822,2 +1822,3 @@ public:
+@@ -1822,2 +1822,3 @@
      {
 +        WASM_RESERVE_STACK(2048);
          if (!isSafeToRecurse()) [[unlikely]]
-@@ -2782,2 +2783,3 @@ public:
+@@ -2338,1 +2339,6 @@
++#if OS(WASI)
++        if (result == JSRegExpResult::ErrorNoMemory)
++            return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);
++#endif
++
+         return output[0];
+@@ -2782,2 +2788,3 @@
      {
 +        WASM_RESERVE_STACK(1024);
          if (!isSafeToRecurse()) [[unlikely]]

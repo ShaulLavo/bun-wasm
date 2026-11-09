@@ -62,5 +62,29 @@ for (const levels of [100, 300, 700, 1400, 3000, 10000]) {
   for (const source of Object.values(patterns)) interior(() => new RegExp(source(levels)).exec('aaa'));
 }
 console.log('interior depths survived');
+const nestedRepeatSource = `^${'(?:'.repeat(40)}a${')*'.repeat(40)}$`;
+const nestedRepeat = new RegExp(nestedRepeatSource);
+const globalRepeat = new RegExp(nestedRepeatSource, 'g');
+function matchingResults(): void {
+  if (nestedRepeat.exec('a')?.[0] !== 'a') throw new Error('regexp exec lost a matching result');
+  if (!nestedRepeat.test('a')) throw new Error('regexp test lost a matching result');
+  if ('a'.replace(nestedRepeat, 'matched') !== 'matched') throw new Error('regexp replace lost a matching result');
+  globalRepeat.lastIndex = 0;
+  const matches = Array.from('a'.matchAll(globalRepeat), match => match[0]);
+  if (matches.length !== 1 || matches[0] !== 'a') throw new Error('regexp matchAll lost a matching result');
+}
+function reentrantMatching(): void {
+  try { matchingResults(); } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+  }
+  'x'.replace('x', () => { reentrantMatching(); return ''; });
+}
+matchingResults();
+try { reentrantMatching(); } catch (error) {
+  if (!(error instanceof RangeError)) throw error;
+}
+matchingResults();
+if (nestedRepeat.exec('b') !== null || nestedRepeat.test('b')) throw new Error('regexp no-match result changed');
+console.log('regexp reentrant matches remain correct');
 getters();
 console.log('continued');

@@ -19,5 +19,6 @@ negative lookahead survived
 anchored groups survived
 repeated groups survived
 interior depths survived
+regexp reentrant matches remain correct
 128 getters completed
 continued

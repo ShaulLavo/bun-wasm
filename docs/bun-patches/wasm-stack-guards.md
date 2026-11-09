@@ -54,6 +54,7 @@ fixed recovery marker instead of spawning a child test process.
 | [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/webkit-wasi.patch`, unary and regexp accounting](#jsc-unary-and-regexp-accounting) | Port | Reserve shadow stack in unary bytecode generation and Yarr's recursive passes, and add the parser's stack check to `await` chains. |
+| [`jsc/webkit-wasi.patch`, regexp matching errors](#jsc-regexp-matching-errors) | Port | Preserve interpreter recursion failures and report the existing catchable error instead of an ordinary no-match result. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -102,9 +103,26 @@ reserves 1024 bytes per level. So do Yarr's recursive compile passes:
 call sites and is also the path for long left-deep chains.
 
 `parseAwaitExpression` recursed with no check at all. It now reserves 2048 bytes
-and calls the parser's existing `failIfStackOverflow`, which is the only upstream
-behavior change here: a chain of `await` that would have crashed reports a stack
-overflow instead. No other upstream algorithm or error changes.
+and calls the parser's existing `failIfStackOverflow`: a chain of `await` that
+would have crashed reports a stack overflow instead. The matching-error correction
+below also preserves the error reported by Yarr's recursion guard.
 
 The `stack-getter-headroom` fixture owns the regressions and also sweeps interior
 depths, because a pattern shallow enough to compile can still reach a later pass.
+
+## JSC regexp matching errors
+
+The same pinned WebKit's `yarr/YarrInterpreter.cpp` and
+`runtime/RegExpInlines.h` have a WASI-only **Port**. When matching exhausts its
+recursion budget, the interpreter preserves `ErrorNoMemory` instead of returning
+the unchanged no-match offset. Both `RegExp::matchInlineOnce` overloads turn that
+result into the existing `TooManyDisjunctions` error, which reports a catchable
+`RangeError`. A genuine no-match result is unchanged. Non-WASI builds are unchanged.
+
+The added match reservation makes this previously silent error reachable with
+fewer nested groups. The fixture compiles a modest quantified pattern before
+native callback reentry, then checks successful `exec`, `test`, `replace` and
+`matchAll` results at each depth. A call may match or throw `RangeError`, but must
+not silently report no match. Shallow matching and a genuine non-match still work
+after unwinding. This control complements the existing compile-depth sweep,
+which cannot detect a lost matching result.
