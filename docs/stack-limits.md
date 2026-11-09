@@ -130,6 +130,26 @@ React Router's ordinary CommonJS dependency loading. Firefox on Android remains 
 still uses WebKit and keeps it too. Unknown Firefox platforms also keep the
 smaller budget.
 
+### Native callable frames
+
+QuickJS dispatches native callable classes before entering the bytecode
+interpreter. On the production WASI build, the old dispatcher reserved a
+288-byte interpreter activation even for native calls. The extracted dispatcher
+reserves no shadow bytes; only bytecode and generator execution enter that
+activation. `Function.prototype.call` and `apply` no longer keep the unused frame
+while reentering JavaScript. Interrupt polling, native class dispatch, frame
+bookkeeping and the stack guards are unchanged.
+
+At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
+55 nested calls through both methods, catches unbounded apply recursion and
+continues. The same production core with the old engine fails that fixture on
+both the native launcher and desktop Safari 26.4. All 25 recursion paths and both
+overflow fixtures also recover in fresh Safari sessions at 32 KiB and the existing
+40 KiB safety margin. These are stack controls, not framework acceptance results.
+The browser-guest manifest discovers the cold WebKit check; the native manifest
+discovers the focused fixture. The guest's 8 MiB shadow stack, 7 MiB override clamp
+and browser budget remain unchanged.
+
 ## JSC
 
 JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Proxy
