@@ -82,3 +82,17 @@ stack and the 800 KiB guest budget, requiring RangeError on all five paths.
 Other engines may finish an operation iteratively, but must still continue. This is a blocking runtime control, not a source
 pattern test. Real Chrome warm and fresh-context controls remain a separate
 qualification step.
+
+## QuickJS native call dispatch
+
+The same QuickJS-ng 0.16.2 source bundled by rquickjs-sys 0.13.0 now dispatches
+native callable classes before entering the bytecode interpreter. This is a
+**Port**. `JS_CallInternal` retains the original interrupt poll and native class
+lookup. `JS_CallBytecode` owns the interpreter's locals and `JSStackFrame` only
+for bytecode and generator execution. Previously a native `call` or `apply`
+retained an unused interpreter activation throughout its callback into JavaScript.
+
+The class call, flags, arguments, exception paths and current-frame bookkeeping
+are unchanged. No stack budget or frame reservation is widened or removed.
+The original `stack-native-call` fixture checks bounded call and apply recursion
+at the 32 KiB Safari budget, followed by catchable overflow and recovery.

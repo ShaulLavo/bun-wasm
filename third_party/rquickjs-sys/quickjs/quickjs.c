@@ -18264,8 +18264,30 @@ static bool needs_backtrace(JSValue exc)
     return can_store_error_stack(exc) || can_add_backtrace(exc);
 }
 
+/* Native calls must not retain the bytecode interpreter's locals while
+   reentering JavaScript. Keep dispatch outside that large activation. */
+static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
+                              JSValueConst this_obj, JSValueConst new_target,
+                              int argc, JSValueConst *argv, int flags);
+
+static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
+                              JSValueConst this_obj, JSValueConst new_target,
+                              int argc, JSValueConst *argv, int flags)
+{
+    if (js_poll_interrupts(ctx))
+        return JS_EXCEPTION;
+    if (JS_VALUE_GET_TAG(func_obj) == JS_TAG_OBJECT &&
+        JS_VALUE_GET_OBJ(func_obj)->class_id != JS_CLASS_BYTECODE_FUNCTION) {
+        JSClassCall *call = ctx->rt->class_array[JS_VALUE_GET_OBJ(func_obj)->class_id].call;
+        if (!call)
+            return JS_ThrowTypeErrorNotAFunction(ctx);
+        return call(ctx, func_obj, this_obj, argc, argv, flags);
+    }
+    return JS_CallBytecode(ctx, func_obj, this_obj, new_target, argc, argv, flags);
+}
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
-static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
                                int argc, JSValueConst *argv, int flags)
 {
@@ -18305,8 +18327,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define BREAK           SWITCH(pc)
 #endif
 
-    if (js_poll_interrupts(caller_ctx))
-        return JS_EXCEPTION;
     if (unlikely(JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)) {
         if (flags & JS_CALL_FLAG_GENERATOR) {
             JSAsyncFunctionState *s = JS_VALUE_GET_PTR(func_obj);
@@ -18330,20 +18350,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             else
                 goto restart;
         } else {
-            goto not_a_function;
+            return JS_ThrowTypeErrorNotAFunction(caller_ctx);
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
-    if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
-        JSClassCall *call_func;
-        call_func = rt->class_array[p->class_id].call;
-        if (!call_func) {
-        not_a_function:
-            return JS_ThrowTypeErrorNotAFunction(caller_ctx);
-        }
-        return call_func(caller_ctx, func_obj, this_obj, argc,
-                         argv, flags);
-    }
     b = p->u.func.function_bytecode;
 
     if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
