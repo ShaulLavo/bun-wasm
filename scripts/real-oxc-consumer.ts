@@ -42,20 +42,22 @@ export function requireOxcInputs(program: string, launcher: string, browser: str
   assert.equal(programKind(new WebAssembly.Module(readFileSync(browser))), "single", "Expected the Browser-engine control guest");
 }
 
-type Row = { name: string; status: number | null; signal: NodeJS.Signals | null; elapsedMs: number; stdout: string; stderr: string };
+type Row = { name: string; status: number | null; signal: NodeJS.Signals | null; timedOut: boolean; elapsedMs: number; stdout: string; stderr: string };
 
-async function command(rows: Row[], name: string, executable: string, args: string[], env: NodeJS.ProcessEnv, signal: AbortSignal, timeout = 90_000): Promise<Row> {
+export async function command(rows: Row[], name: string, executable: string, args: string[], env: NodeJS.ProcessEnv, signal: AbortSignal, timeout = 90_000): Promise<Row> {
   signal.throwIfAborted();
   const started = performance.now();
-  const row: Row = { name, status: null, signal: null, elapsedMs: 0, stdout: "", stderr: "" };
+  const row: Row = { name, status: null, signal: null, timedOut: false, elapsedMs: 0, stdout: "", stderr: "" };
   rows.push(row);
   let failure: Error | undefined;
   await new Promise<void>(finished => {
-    const child = spawn(executable, args, { cwd: root, env, signal, timeout, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(executable, args, { cwd: root, env, signal, stdio: ["ignore", "pipe", "pipe"] });
+    const deadline = setTimeout(() => { row.timedOut = true; child.kill("SIGTERM"); }, timeout);
     child.stdout.setEncoding("utf8").on("data", (text: string) => { row.stdout += text; });
     child.stderr.setEncoding("utf8").on("data", (text: string) => { row.stderr += text; });
     child.once("error", error => { failure = error; });
     child.once("close", (status, stopped) => {
+      clearTimeout(deadline);
       row.status = status; row.signal = stopped; row.elapsedMs = performance.now() - started;
       console.log(JSON.stringify(row));
       finished();
@@ -63,6 +65,7 @@ async function command(rows: Row[], name: string, executable: string, args: stri
   });
   if (failure) throw failure;
   signal.throwIfAborted();
+  assert.equal(row.timedOut, false, `${name} exceeded its bound`);
   assert.equal(row.signal, null, `${name} exceeded its bound`);
   assert.equal(row.status, 0, `${name}: ${row.stderr}`);
   return row;

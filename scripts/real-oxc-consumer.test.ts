@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendCustomSection } from "../src/engine-kind";
 import { quickjsPair, sharedQuickjsPair } from "../tests/package/quickjs-plan-fixture";
-import { oxcFixture, oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcInputs, requireOxcTree } from "./real-oxc-consumer";
+import { command, oxcFixture, oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcInputs, requireOxcTree } from "./real-oxc-consumer";
 import { selectChecks } from "./test-checks";
 
 function scratch(check: (directory: string) => void): void {
@@ -99,4 +99,29 @@ test("the canonical Oxc fixture preserves the authoritative handoff bytes", () =
     expect(createHash("sha256").update(readFileSync(join(oxcFixture, file))).digest("hex")).toBe(sha256);
   }
   expect(Object.keys(fixtureHashes)).toHaveLength(4);
+});
+
+test("the Oxc command rejects a deadline-induced zero exit with exact parser output", async () => {
+  const rows: Parameters<typeof command>[0] = [];
+  const child = 'process.on("SIGTERM", () => { process.stderr.write("terminated-by-deadline\\n"); process.exit(0); }); process.stdout.write("ExportNamedDeclaration 0\\n"); setInterval(() => {}, 1000);';
+  const controller = new AbortController();
+  const watchdog = setTimeout(() => controller.abort(), 4000);
+  try {
+    await expect(command(rows, "deadline-exit-zero", process.execPath, ["-e", child], process.env, controller.signal, 1000)).rejects.toThrow("exceeded its bound");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.timedOut).toBe(true);
+    expect(rows[0]?.status).toBe(0);
+    expect(rows[0]?.signal).toBeNull();
+    expect(rows[0]?.stdout).toBe(oxcOutputs["index.ts"]);
+    expect(rows[0]?.stderr).toBe("terminated-by-deadline\n");
+  } finally { clearTimeout(watchdog); }
+}, 5000);
+
+test("the Oxc command accepts a natural zero exit before its unchanged bound", async () => {
+  const rows: Parameters<typeof command>[0] = [];
+  const row = await command(rows, "natural-exit-zero", process.execPath, ["-e", 'process.stdout.write("ExportNamedDeclaration 0\\n");'], process.env, new AbortController().signal);
+  expect(row.timedOut).toBe(false);
+  expect(row.status).toBe(0);
+  expect(row.signal).toBeNull();
+  expect(row.stdout).toBe(oxcOutputs["index.ts"]);
 });
