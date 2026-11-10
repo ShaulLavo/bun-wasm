@@ -15,6 +15,7 @@ type Watch = { change(kind: string, file: string | null): void; error(error: unk
 
 function harness(initial: Input, unsupported = false) {
   const inputs = new Map<string, Input>([["/app/entry.mts", initial]]);
+  const resolvedPaths = new Map<string, string>();
   const watches = new Map<string, Watch>();
   const tasks = new Set<() => void>();
   const errors: unknown[] = [];
@@ -62,7 +63,8 @@ function harness(initial: Input, unsupported = false) {
     modulePath: (name: string) => name,
     hotDigest: digest,
     resolveImport(specifier: string, from: string) {
-      const name = path.resolve(path.dirname(from), specifier);
+      const target = path.resolve(path.dirname(from), specifier);
+      const name = resolvedPaths.get(target) ?? target;
       if (!inputs.has(name)) throw Object.assign(new Error("missing import"), { specifier, referrer: from });
       return name;
     },
@@ -109,7 +111,7 @@ function harness(initial: Input, unsupported = false) {
   const runner = getFactory("hot_run")(internal);
   async function settle() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
   async function flush() { const batch = Array.from(tasks); tasks.clear(); for (const task of batch) task(); await settle(); }
-  return { runner, inputs, watches, errors, commits, directories, tasks, process, settle, flush,
+  return { runner, inputs, resolvedPaths, watches, errors, commits, directories, tasks, process, settle, flush,
     get runs() { return runs; }, get bindings() { return bindings; }, get stops() { return stops; },
     importBad: () => vm.runInContext("loadBad()", context),
     resume() { ready?.(); }, race(callback: () => void) { duringRead = callback; } };
@@ -242,3 +244,71 @@ test("a failed dynamic preparation keeps the original rejection identity in its 
     expect(host.commits).toHaveLength(1);
   } finally { host.runner.dispose(); }
 });
+
+test("an edit delivered during rejecting finite TLA schedules its corrected bytes", async () => {
+  const host = harness({ body: 'throw new Error("old evaluation failed");', wait: true });
+  try {
+    host.runner.run("/app/entry.mts");
+    await host.settle();
+    host.inputs.set("/app/entry.mts", { body: "effect();serve();" });
+    host.watches.get("/app")!.change("change", "entry.mts");
+    host.resume();
+    await host.settle();
+    await host.flush();
+    expect(host.commits).toHaveLength(1);
+    expect(host.runs).toBe(1);
+    host.watches.get("/app")!.change("change", "entry.mts");
+    await host.flush();
+    expect(host.commits).toHaveLength(1);
+  } finally { host.runner.dispose(); }
+  expect(host.watches.size).toBe(0);
+  expect(host.tasks.size).toBe(0);
+});
+
+test("unchanged events during finite TLA do not re-evaluate after either outcome", async () => {
+  for (const body of ["effect();serve();", 'effect();throw new Error("same bytes");']) {
+    const host = harness({ body, wait: true });
+    try {
+      host.runner.run("/app/entry.mts");
+      await host.settle();
+      host.watches.get("/app")!.change("change", "entry.mts");
+      host.resume();
+      await host.settle();
+      await host.flush();
+      expect(host.runs).toBe(1);
+      expect(host.tasks.size).toBe(0);
+    } finally { host.runner.dispose(); }
+  }
+});
+
+for (const target of [
+  { request: "./later", file: "/app/later.ts", root: "/app" },
+  { request: "./directory", file: "/app/directory/index.ts", root: "/app/directory" },
+  { request: "package", file: "/app/node_modules/package/index.ts", root: "/app/node_modules/package" },
+]) {
+  test(`missing resolution recovers ${target.request} without touching its importer`, async () => {
+    const host = harness({ body: "effect();serve();", imports: [target.request] });
+    host.resolvedPaths.set(path.resolve("/app", target.request), target.file);
+    host.directories.set("/app/node_modules", 3);
+    host.directories.set(target.root, 4);
+    try {
+      host.runner.run("/app/entry.mts");
+      await host.settle();
+      expect(host.commits).toHaveLength(0);
+      host.watches.get("/app")!.change("rename", "unrelated.ts");
+      await host.flush();
+      expect(host.errors).toHaveLength(1);
+      host.inputs.set(target.file, { body: "" });
+      expect(host.watches.has(target.root)).toBe(true);
+      host.watches.get(target.root)!.change("rename", path.basename(target.file));
+      await host.flush();
+      expect(host.commits).toHaveLength(1);
+      expect(host.runs).toBe(1);
+      host.watches.get(target.root)?.change("rename", path.basename(target.file));
+      await host.flush();
+      expect(host.commits).toHaveLength(1);
+    } finally { host.runner.dispose(); }
+    expect(host.watches.size).toBe(0);
+    expect(host.tasks.size).toBe(0);
+  });
+}

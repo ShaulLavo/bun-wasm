@@ -3,6 +3,7 @@
   type Graph = BunWasm.HotGraph;
   type Source = BunWasm.HotSource;
   type Prepared = ReturnType<RecordSessionBindings["load"]>;
+  type Recovery = { specifier: string; referrer: string; mode: BunWasm.ImportMode };
   const parseJson = JSON.parse;
   const native = internal.native;
   const fs = internal.builtin("node:fs");
@@ -54,10 +55,12 @@
   let state: RunnerState = { kind: "waiting" };
   let failed: Set<string> = new Set();
   let failedInputs = new Map<string, string>();
+  let failedResolutions: readonly Recovery[] = [];
   let observed = new Map<string, string>();
   let entry: string | null = null;
   let revision = 0;
   let dirty = false;
+  let pendingChange = false;
   let scheduled: unknown = null;
 
   function closed(): boolean { return state.kind === "closed"; }
@@ -74,15 +77,20 @@
     }
   }
 
+  function appendInterests(interests: Set<string>, graph: Graph | null): void {
+    if (!graph) return;
+    for (const file of graph.interests) interests.add(file);
+  }
+
   function allInterests(): Set<string> {
     const interests = new Set(failed);
     if (entry) interests.add(entry);
-    for (const graph of pendingImports.keys()) for (const file of graph.interests) interests.add(file);
-    for (const graph of leasedGraphs) for (const file of graph.interests) interests.add(file);
-    if (state.kind === "serving") for (const file of state.graph.interests) interests.add(file);
+    for (const graph of pendingImports.keys()) appendInterests(interests, graph);
+    for (const graph of leasedGraphs) appendInterests(interests, graph);
+    if (state.kind === "serving") appendInterests(interests, state.graph);
     if (state.kind === "updating") {
-      for (const file of state.candidate.interests) interests.add(file);
-      if (state.previous) for (const file of state.previous.interests) interests.add(file);
+      appendInterests(interests, state.candidate);
+      appendInterests(interests, state.previous);
     }
     return interests;
   }
@@ -171,15 +179,22 @@
     inController(reconcile);
   }
 
-  function recovery(graph: Graph, error: unknown): void {
+  function recoveryTarget(graph: Graph, target: string): void {
+    interested(graph, target);
+    interested(graph, path.resolve(target, "package.json"));
+  }
+
+  function recovery(graph: Graph, error: unknown, mode: BunWasm.ImportMode): void {
     if (error === null || typeof error !== "object" || !("specifier" in error) || !("referrer" in error)) return;
     if (typeof error.specifier !== "string" || typeof error.referrer !== "string") return;
     const specifier = error.specifier;
+    const requests = recoveries.get(graph)!;
+    requests.push({ specifier, referrer: error.referrer, mode });
     let root = path.dirname(native.modulePath(error.referrer));
-    if (specifier.startsWith(".") || specifier.startsWith("/")) { interested(graph, path.resolve(root, specifier)); return; }
+    if (specifier.startsWith(".") || specifier.startsWith("/")) { recoveryTarget(graph, path.resolve(root, specifier)); return; }
     if (specifier.includes(":")) return;
     for (;;) {
-      interested(graph, path.resolve(root, "node_modules", specifier));
+      recoveryTarget(graph, path.resolve(root, "node_modules", specifier));
       const parent = path.dirname(root);
       if (parent === root) return;
       root = parent;
@@ -188,7 +203,7 @@
 
   function resolve(graph: Graph, specifier: string, referrer: string, mode: BunWasm.ImportMode): string {
     try { return native.resolveImport(specifier, referrer, mode); }
-    catch (error) { recovery(graph, error); throw error; }
+    catch (error) { recovery(graph, error, mode); throw error; }
   }
 
   function active(graph: Graph): boolean { return state.kind !== "closed" && graph.phase !== "cancelled"; }
@@ -226,6 +241,7 @@
     for (const request of record.r) prepare(graph, resolve(graph, request, name, "inferred"));
   }
 
+  const recoveries = new WeakMap<Graph, Recovery[]>();
   const records = new WeakMap<Graph, Map<string, Prepared>>();
   const preparationErrors = new WeakMap<Graph, Map<string, { value: unknown }>>();
 
@@ -271,6 +287,7 @@
         inController(reconcile);
       },
     };
+    recoveries.set(graph, []);
     records.set(graph, new Map());
     preparationErrors.set(graph, new Map());
     return graph;
@@ -320,9 +337,18 @@
     for (const [file, stamp] of failedInputs) observed.set(file, stamp);
   }
 
+  function resolutionRecovered(requests: readonly Recovery[]): boolean {
+    for (const request of requests) {
+      try { native.resolveImport(request.specifier, request.referrer, request.mode); return true; }
+      catch {}
+    }
+    return false;
+  }
+
   function differs(): boolean {
     for (const file of allInterests()) if (fingerprint(file) !== observed.get(file)) return true;
-    return false;
+    if (resolutionRecovered(failedResolutions)) return true;
+    return state.kind === "serving" && resolutionRecovered(recoveries.get(state.graph) ?? []);
   }
 
   function cancel(graph: Graph): void {
@@ -330,6 +356,7 @@
     pendingImports.delete(graph);
     servers.abort(graph);
     graph.releaseDiagnostics();
+    recoveries.delete(graph);
     records.delete(graph);
     preparationErrors.delete(graph);
     graph.sources.clear();
@@ -341,6 +368,7 @@
     const graph = newGraph();
     state = { kind: "updating", previous, candidate: graph };
     dirty = false;
+    pendingChange = false;
     servers.begin(graph);
     try {
       prepare(graph, entry);
@@ -355,6 +383,7 @@
       state = { kind: "serving", graph };
       failed = new Set();
       failedInputs = new Map();
+      failedResolutions = [];
       if (previous) retire(previous);
       inController(reconcile);
       saveObserved();
@@ -372,11 +401,13 @@
     if (graph.phase !== "committed") {
       failed = graph.interests;
       failedInputs = graph.inputs;
+      failedResolutions = recoveries.get(graph) ?? [];
       cancel(graph);
       state = previous ? { kind: "serving", graph: previous } : { kind: "waiting" };
       inController(reconcile);
       saveObserved();
     }
+    if (pendingChange) { pendingChange = false; dirty ||= differs(); }
     if (dirty) schedule();
   }
 
@@ -394,6 +425,7 @@
   function changed(): void {
     if (state.kind === "closed") return;
     // Events are hints. A delayed duplicate does not force another evaluation.
+    if (state.kind === "updating") { pendingChange = true; return; }
     schedule();
   }
 
@@ -410,6 +442,7 @@
     servers.dispose();
     failed.clear();
     failedInputs.clear();
+    failedResolutions = [];
     observed.clear();
     diagnostics.clear();
     pendingImports.clear();
