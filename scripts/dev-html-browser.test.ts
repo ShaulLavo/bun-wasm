@@ -704,8 +704,8 @@ for (const lateNotice of [false, true]) {
               return socket;
             },
           });
-          const originalFetch = window.fetch.bind(window);
-          window.fetch = async (input, init) => {
+          const originalFetch = window.fetch;
+          window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
             const count: unknown = Reflect.get(window, "disconnectFetches");
             Reflect.set(window, "disconnectFetches", typeof count === "number" ? count + 1 : 1);
             const response = await originalFetch(input, init);
@@ -722,7 +722,7 @@ for (const lateNotice of [false, true]) {
                 resolve(response);
               });
             });
-          };
+          }, originalFetch);
         }, lateNotice);
         await page.goto(server.url);
         await until(() => server.privateOpened === 1);
