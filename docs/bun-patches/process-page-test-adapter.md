@@ -52,8 +52,12 @@ The `delayed-finish` regression defers finish entry initialization by 500 ms;
 it does not change command budgets or any original case. The late-error control
 also permits the shared host's existing single interrupted-finish cleanup document,
 never another execution of the case body.
-The consumer uses published Waffle 0.0.111, source
-`96acfb246bb565cd008ad498e08230829c3a773a`, through public tarball pins.
+The consumer uses published Waffle 0.0.116, source
+`0a72873186ed359a974222f14e67dc568c8adf1d`, through public tarball pins.
+The hosted controls require confirmed teardown for their session, launcher, server,
+storage and scratch. They declare neither an application fixture nor its callbacks,
+so those two cleanup owners must report `not-created`. No active owner may use that
+status, and no `unconfirmed` teardown is accepted.
 The page-suite object uses `satisfies PageSuite<ProcessRequest>` so its callable
 page-owned run method stays narrow while the shared type also permits host-owned
 cases. No private Waffle checkout or future `HostCase.allocateDatabase` API is used.

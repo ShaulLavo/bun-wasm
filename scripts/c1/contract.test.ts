@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths, handoffMemberPaths, selectedReleaseArchives } from "../producer-closure.ts";
@@ -8,10 +8,11 @@ import waffleRelease from "../waffle-release-inputs.json";
 import {
   DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, type ConsumerHandoff,
 } from "./contract.ts";
-import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
+import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureInputManifest, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
 import { admitIntake, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
 import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
+import { admitReleases } from "./inputs.ts";
 
 const scratch: string[] = [];
 /** Test-owned cleanup: the fixture's own sealed directories are made writable only to delete them. */
@@ -218,10 +219,42 @@ test("parsers reject unknown fields, unauthenticated verified labels and a Relay
 test("the delivery keeps the runtime and relay archives this source pins, not a historical name", () => {
   const archives = selectedReleaseArchives();
   expect(archives.runtime).toEqual({ version: waffleRelease.version, url: waffleRelease.url, path: `runtime/waffle-${waffleRelease.version}.tgz` });
-  expect(archives.relay.path).toBe(`relay/waffle-relay-${archives.relay.version}.tgz`);
+  expect(archives.relay).toEqual({ version: waffleRelease.relay.version, url: waffleRelease.relay.url,
+    path: `relay/waffle-relay-${waffleRelease.relay.version}.tgz` });
   const registry = completePublicationArtifactPaths();
   expect(registry).toContain(archives.runtime.path);
   expect(registry).toContain(archives.relay.path);
   expect(registry.some(path => path.includes("runtime107"))).toBe(false);
   expect(new Set(registry).size).toBe(registry.length);
+});
+
+
+function releaseAdmissionFixture() {
+  const root = fresh();
+  const tuple = { runtime: waffleRelease.version, relay: waffleRelease.relay.version,
+    programs: waffleRelease.programs.tag, programManifestSchema: waffleRelease.programs.schema,
+    hostInterface: waffleRelease.hostInterface };
+  const input = fixtureInputManifest(root, tuple);
+  const archives = input.programs.archives.map(file => ({ name: "waffle-base", filename: file.path.split("/").at(-1), sha256: file.sha256, bytes: file.bytes }));
+  writeFileSync(input.programs.manifest.path, JSON.stringify({ schema: tuple.programManifestSchema, tag: tuple.programs,
+    sourceCommit: waffleRelease.programs.sourceCommit, runtime: { waffleHostInterface: tuple.hostInterface }, packages: archives }));
+  writeFileSync(input.programs.checksums.path, archives.map(file => `${file.sha256}  ${file.filename}\n`).join(""));
+  const manifest = { ...input, programs: { ...input.programs, manifest: fileIdentity(input.programs.manifest.path), checksums: fileIdentity(input.programs.checksums.path) } };
+  const pin = { ...waffleRelease, sha256: input.runtime.archive.sha256, bytes: input.runtime.archive.bytes,
+    relay: { ...waffleRelease.relay, sha256: input.relay.archive.sha256, bytes: input.relay.archive.bytes },
+    programs: { ...waffleRelease.programs, manifest: { ...waffleRelease.programs.manifest,
+      sha256: manifest.programs.manifest.sha256, bytes: manifest.programs.manifest.bytes } } };
+  mkdirSync(join(root, "scripts"));
+  const path = join(root, "scripts/waffle-release-inputs.json");
+  writeFileSync(path, JSON.stringify(pin));
+  return { root, manifest, pin, path };
+}
+
+test("release admission binds relay bytes to the selected source record", () => {
+  const f = releaseAdmissionFixture();
+  expect(() => admitReleases(f.manifest, f.root)).not.toThrow();
+  for (const [key, value] of Object.entries({ sha256: "0".repeat(64), bytes: 0, version: "0.0.999", hostInterface: 1 })) {
+    writeFileSync(f.path, JSON.stringify({ ...f.pin, relay: { ...f.pin.relay, [key]: value } }));
+    expect(() => admitReleases(f.manifest, f.root)).toThrow("relay archive differs from the source's relay release pin");
+  }
 });

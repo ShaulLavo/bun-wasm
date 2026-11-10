@@ -53,6 +53,8 @@ fixed recovery marker instead of spawning a child test process.
 | [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
 | [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
+| [`jsc/webkit-wasi.patch`, unary and regexp accounting](#jsc-unary-and-regexp-accounting) | Port | Reserve shadow stack in unary bytecode generation and Yarr's recursive passes, and add the parser's stack check to `await` chains. |
+| [`jsc/webkit-wasi.patch`, regexp matching errors](#jsc-regexp-matching-errors) | Port | Preserve interpreter recursion failures and report the existing catchable error instead of an ordinary no-match result. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -82,3 +84,47 @@ stack and the 800 KiB guest budget, requiring RangeError on all five paths.
 Other engines may finish an operation iteratively, but must still continue. This is a blocking runtime control, not a source
 pattern test. Real Chrome warm and fresh-context controls remain a separate
 qualification step.
+
+## JSC unary and regexp accounting
+
+The same pinned WebKit's `bytecompiler/NodesCodegen.cpp`, `yarr/YarrPattern.cpp`,
+`yarr/YarrInterpreter.cpp` and `parser/Parser.cpp` get further WASI additions, class
+**Port**. These recursions already had stack guards, but each level spends almost
+no shadow stack, so the guards never fired before the host stack ran out.
+
+Bytecode generation for `UnaryOpNode`, `UnaryPlusNode`, `TypeOfValueNode`,
+`VoidNode`, `DeleteValueNode` and the negated-condition form of `LogicalNotNode`
+reserves 1024 bytes per level. So do Yarr's recursive compile passes:
+`copyDisjunction`, `copyTerm`, `setupAlternativeOffsets`,
+`setupDisjunctionOffsets`, `recomputeStartsWithBOL`, `factorAlternatives`,
+`termsMayMatchNewline` and `ByteCompiler::emitDisjunction`. The interpreter's
+`matchDisjunction` reserves 2048. The reservations sit in each node's own
+`emitBytecode` and not in the shared `emitNode` dispatcher, which is inlined at many
+call sites and is also the path for long left-deep chains.
+
+`parseAwaitExpression` recursed with no check at all. It now reserves 2048 bytes
+and calls the parser's existing `failIfStackOverflow`: a chain of `await` that
+would have crashed reports a stack overflow instead. The matching-error correction
+below also preserves the error reported by Yarr's recursion guard.
+
+The `stack-getter-headroom` fixture owns the regressions and also sweeps interior
+depths, because a pattern shallow enough to compile can still reach a later pass.
+
+## JSC regexp matching errors
+
+The same pinned WebKit's `yarr/YarrInterpreter.cpp` and
+`runtime/RegExpInlines.h` have a WASI-only **Port**. When matching exhausts its
+recursion budget, the interpreter preserves `ErrorNoMemory` instead of returning
+the unchanged no-match offset. Both `RegExp::matchInlineOnce` overloads turn that
+result into the existing `TooManyDisjunctions` error, which reports a catchable
+`RangeError`. A genuine no-match result is unchanged. Non-WASI builds are unchanged.
+
+The added match reservation makes this previously silent error reachable with
+fewer nested groups. The fixture compiles a modest quantified pattern before
+native callback reentry, then checks successful `exec`, `test`, `replace` and
+`matchAll` results at each depth. On JSC a call may match or throw `RangeError`,
+but must not silently report no match. The portable fixture also accepts QuickJS's
+catchable `SyntaxError` when `matchAll` compiles a regexp during deep reentry.
+Wrong matching results still throw an ordinary `Error`, which is not accepted.
+Shallow matching and a genuine non-match must still work after unwinding. This
+control complements the compile-depth sweep, which cannot detect a lost match.
