@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pruneArchives } from "../web/scripts/ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const actionPath = new URL("../.github/actions/browser-deps/action.yml", import.meta.url);
@@ -35,7 +36,11 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
     expect(JSON.stringify(job)).not.toContain("browser-apt-v2");
     const steps = job.steps;
     if (!Array.isArray(steps)) throw new Error("Expected job steps");
-    const setup = steps.map(record).filter(step => step.uses === "./.github/actions/browser-deps");
+    const entries = steps.map(record);
+    const setup = entries.filter(step => step.uses === "./.github/actions/browser-deps");
+    const installing = entries.findIndex(step => String(step.run).startsWith("bunx playwright install "));
+    expect(installing).toBeGreaterThan(entries.findIndex(step => step.uses === "./.github/actions/browser-deps"));
+    expect(JSON.stringify(entries)).not.toContain("playwright install --with-deps");
     expect(setup).toHaveLength(1);
     const expected = id === "web" ? "chromium webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
     expect(record(setup[0]?.with).browsers).toBe(expected);
@@ -49,9 +54,16 @@ test("cache identity is browser-set independent and refreshed for runner and Pla
   const config = record(restore?.with);
   expect(config.path).toBe("${{ runner.temp }}/browser-apt/*.deb");
   expect(String(config.key)).not.toContain("inputs.browsers");
+  expect(String(config.key)).toContain("hashFiles('web/scripts/ci-browser-deps.ts')");
   expect(String(config.key)).toContain("steps.browser-image.outputs.image");
   expect(String(config.key)).toContain("steps.browser-image.outputs.playwright");
-  expect(config["restore-keys"]).toBe("browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-\n");
+  expect(config["restore-keys"]).toBeUndefined();
+  const fallback = steps.find(step => record(step.with ?? {})["restore-keys"] !== undefined);
+  expect(fallback?.uses).toBe("actions/cache/restore@v4");
+  expect(fallback?.if).toBe("steps.browser-cache.outputs.cache-hit != 'true'");
+  expect(record(fallback?.with).key).toBe("${{ steps.browser-cache.outputs.cache-primary-key }}");
+  expect(record(fallback?.with).path).toBe(config.path);
+  expect(record(fallback?.with)["restore-keys"]).toBe("browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-\n");
   const identity = steps.find(step => step.id === "browser-image");
   const command = identity?.run;
   if (typeof command !== "string") throw new Error("Expected cache identity command");
@@ -84,7 +96,15 @@ test("only main seeds the shared archive cache, before browser downloads or test
   expect(setup).toBeGreaterThan(restore);
   expect(save).toBeGreaterThan(setup);
   const saving = steps[save];
-  expect(saving?.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browser-cache.outputs.cache-hit != 'true'");
+  const condition = saving?.if;
+  if (typeof condition !== "string") throw new Error("Expected cache save condition");
+  const allowed = (event: string, ref: string, hit: string) => new Function("return (" + condition
+    .replaceAll("github.event_name", JSON.stringify(event)).replaceAll("github.ref", JSON.stringify(ref))
+    .replaceAll("steps.browser-cache.outputs.cache-hit", JSON.stringify(hit)) + ")")();
+  expect(allowed("push", "refs/heads/main", "false")).toBe(true);
+  expect(allowed("push", "refs/heads/main", "true")).toBe(false);
+  expect(allowed("pull_request", "refs/pull/1/merge", "false")).toBe(false);
+  expect(allowed("workflow_dispatch", "refs/heads/main", "false")).toBe(false);
   expect(record(saving?.with).path).toBe(record(steps[restore]?.with).path);
   expect(record(saving?.with).key).toBe("${{ steps.browser-cache.outputs.cache-primary-key }}");
   expect(JSON.stringify(steps)).not.toContain("continue-on-error");
@@ -96,7 +116,12 @@ function dependencyFixture(directory: string): void {
   mkdirSync(join(directory, "node_modules/playwright"), { recursive: true });
   copyFileSync(new URL("../web/scripts/ci-browser-deps.ts", import.meta.url), join(directory, "scripts/ci-browser-deps.ts"));
   writeFileSync(join(directory, "node_modules/playwright/cli.js"), `
-    const packages = process.argv.slice(4).map(browser => "lib" + browser);
+    const browsers = process.argv.slice(4);
+    if (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER) {
+      process.stdout.write("All system dependencies are installed.\\n");
+      process.exit(0);
+    }
+    const packages = browsers.map(browser => "lib" + browser);
     process.stdout.write("Missing system dependencies (" + packages.length + "):\\n" + packages.join("\\n") + "\\n");
   `);
   writeFileSync(join(directory, "sudo"), `#!${process.execPath}
@@ -106,10 +131,10 @@ function dependencyFixture(directory: string): void {
   `, { mode: 0o755 });
 }
 
-function setupDependencies(directory: string, browsers: string[], failUpdate = false) {
+function setupDependencies(directory: string, browsers: string[], failUpdate = false, installed = "") {
   return spawnSync(process.execPath, [join(directory, "scripts/ci-browser-deps.ts")].concat(browsers), {
     encoding: "utf8", env: { ...process.env, PATH: directory + ":" + process.env.PATH,
-      GITHUB_ACTIONS: "true", RUNNER_TEMP: directory, APT_CALLS: join(directory, "apt-calls"), FAIL_UPDATE: failUpdate ? "1" : "0" },
+      GITHUB_ACTIONS: "true", RUNNER_TEMP: directory, APT_CALLS: join(directory, "apt-calls"), FAIL_UPDATE: failUpdate ? "1" : "0", INSTALLED_BROWSER: installed },
   });
 }
 
@@ -139,5 +164,31 @@ test("failed signed-index refresh stops before planning or installing any cached
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("apt-get update failed");
     expect(readFileSync(join(directory, "apt-calls"), "utf8").trim().split("\n")).toHaveLength(1);
+  });
+});
+
+test("refreshed archive pools discard obsolete and unrelated debs before saving", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-cache-"));
+  try {
+    for (const filename of ["libcurrent_2.deb", "libcurrent_1.deb", "libunrelated.deb", "lock"]) writeFileSync(join(directory, filename), filename);
+    const current = { uri: "https://example.invalid/current.deb", filename: "libcurrent_2.deb", size: 1, sha256: "a".repeat(64) };
+    await pruneArchives([current], directory);
+    expect(readdirSync(directory).sort()).toEqual(["libcurrent_2.deb", "lock"]);
+    await pruneArchives([], directory);
+    expect(readdirSync(directory).sort()).toEqual(["lock"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a preinstalled browser still fills the complete pool without installing other browsers", () => {
+  fixture(directory => {
+    dependencyFixture(directory);
+    const result = setupDependencies(directory, ["chromium"], false, "chromium");
+    expect(result.status, result.stderr).toBe(0);
+    const calls = readFileSync(join(directory, "apt-calls"), "utf8").trim().split("\n");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("--print-uris");
+    expect(calls[1]).toContain("libwebkit");
   });
 });
