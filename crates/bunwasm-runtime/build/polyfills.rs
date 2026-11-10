@@ -88,7 +88,11 @@ fn generate(table: &mut String, name: &str, generator: &Path, input: &Path, out:
     println!("cargo:rerun-if-changed={}", generator.display());
     let destination = out.join(format!("{name}.js"));
     eprintln!("runtime-js phase={name} source={}", input.display());
-    let runner = if name == "dev_html_client" { "bun" } else { "node" };
+    let runner = if name == "dev_html_client" {
+        "bun"
+    } else {
+        "node"
+    };
     let output = Command::new(runner)
         .arg(generator)
         .arg(input)
