@@ -61,12 +61,14 @@ test("no consumer keeps its own capacity number", () => {
   expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   const capacity = /536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES/;
-  const parserOracle = "scripts/fixtures/quickjs-parser-stack.c";
-  // The standalone parser oracle sets a native pthread stack, not a guest memory ceiling.
+  const nativeOracles = ["scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-parser-stack.c"];
+  // These standalone engine oracles set native pthread stacks, not guest memory ceilings.
   expect(tracked(capacity.source)
-    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([parserOracle]);
-  expect(read(parserOracle).split("\n").filter(line => capacity.test(line)))
-    .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
+    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual(nativeOracles);
+  for (const path of nativeOracles) {
+    expect(read(path).split("\n").filter(line => capacity.test(line)))
+      .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
+  }
 });
 
 test("shell consumers read the maximum through the validating reader", () => {
