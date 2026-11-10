@@ -26,8 +26,8 @@ async function until(check: () => boolean | Promise<boolean>, log: () => string)
   throw new Error(`Hot live control timed out\n${log()}`);
 }
 
-function application(port: number): string {
-  return `import text from "./page.html" with { type: "text" };
+function application(port: number, specifier = "./page.html"): string {
+  return `import text from ${JSON.stringify(specifier)} with { type: "text" };
 const state = globalThis.hotIdentity ??= { runs: 0, server: null };
 const run = ++state.runs;
 const server = Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch() {
@@ -77,6 +77,11 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
     expect(await response("before", "1")).toBe(true);
     writeFileSync(join(scratch, "page.html"), "after!");
     await until(() => response("after!", "2"), () => output);
+    writeFileSync(join(scratch, "entry.ts"), application(port, "./later"));
+    await until(() => output.includes("Cannot find module './later'"), () => output);
+    expect(await response("after!", "2")).toBe(true);
+    writeFileSync(join(scratch, "later.ts"), "extensionless");
+    await until(() => response("extensionless", "3"), () => output);
     expect(child.exitCode).toBeNull();
   } finally {
     if (child?.pid) await stopProcessGroup(child);
