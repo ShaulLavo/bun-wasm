@@ -1228,6 +1228,8 @@ jobs:
           if-no-files-found: error
 
       - name: Blocking native fixture checks
+        env:
+          INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
