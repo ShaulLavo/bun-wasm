@@ -1,0 +1,6 @@
+1 | export const word = ;
+                        ^
+SyntaxError: Unexpected ;
+    at /dependency.ts:1:21
+
+Bun vVERSION (PLATFORM)
