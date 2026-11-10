@@ -27,7 +27,7 @@ export function requireOxcTree(tree: string): void {
     const manifest: unknown = JSON.parse(readFileSync(join(tree, "node_modules", name, "package.json"), "utf8"));
     assert.ok(manifest && typeof manifest === "object" && "name" in manifest && manifest.name === name && "version" in manifest && manifest.version === "0.94.0", `Expected published ${name}@0.94.0`);
   }
-  assert.ok(statSync(join(tree, "node_modules/@oxc-parser/binding-wasm32-wasi/parser.wasm")).isFile());
+  assert.ok(statSync(join(tree, "node_modules/@oxc-parser/binding-wasm32-wasi/parser.wasm32-wasi.wasm")).isFile());
   assert.ok(statSync(join(tree, "node_modules/@oxc-parser/binding-wasm32-wasi/parser.wasi.cjs")).isFile());
 }
 

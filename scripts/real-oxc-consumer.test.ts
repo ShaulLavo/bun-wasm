@@ -125,3 +125,20 @@ test("the Oxc command accepts a natural zero exit before its unchanged bound", a
   expect(row.signal).toBeNull();
   expect(row.stdout).toBe(oxcOutputs["index.ts"]);
 });
+
+test("the installed-tree check accepts the official parser package layout", () => {
+  scratch(directory => {
+    cpSync(oxcFixture, directory, { recursive: true });
+    for (const name of ["oxc-parser", "@oxc-parser/binding-wasm32-wasi"]) {
+      const packageRoot = join(directory, "node_modules", name);
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name, version: "0.94.0" }));
+    }
+    const binding = join(directory, "node_modules/@oxc-parser/binding-wasm32-wasi");
+    writeFileSync(join(binding, "parser.wasm32-wasi.wasm"), new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    writeFileSync(join(binding, "parser.wasi.cjs"), "module.exports = {};\n");
+    expect(() => requireOxcTree(directory)).not.toThrow();
+    rmSync(join(binding, "parser.wasm32-wasi.wasm"));
+    expect(() => requireOxcTree(directory)).toThrow("ENOENT");
+  });
+});
