@@ -13,8 +13,23 @@ Changes under `spidermonkey/`, both SM crates and the side/receipt scripts selec
 that blocking owner and the launcher. The library and side each have one
 producer invocation. The consumer uses `test-checks.ts native --profile
 shared-group`, including the unchanged shared-memory fixture. It fails on
-missing selected output. It does not admit Browser-host SM or prove either
-interpreter tier from an environment variable.
+missing selected output. For SM only, the discovered runner runs that same pair
+once with `interp` and once with `pbl`. It sets the selector and trace flag in
+both launcher and guest environments. QuickJS and JSC keep their one-run path.
+
+Each SM run must return the original exact stdout and native exit status. Every
+observed engine return must have positive interrupt polls. Interpreter returns
+must have zero portable-baseline entries; PBL returns must have positive entries.
+Missing, malformed or mismatched traces fail the gate. The last returning
+member's trace must precede the final owner-settlement records, so a child's
+trace cannot substitute for a missing final member observation. The final
+physical-stop snapshot must have no members, reservations, retained members,
+regions, pins, holds, watches, waiters or published entries, with no bypass.
+
+The driver prints all stderr unchanged, including expected trap diagnostics.
+It reads only the exact engine and accounting records for qualification. No
+fixture or clock changes, extra producer invocation, Browser-host admission or
+timing-based tier inference is involved.
 
 The Mozilla fetch initializes its exact-pin sparse tree as a Git promisor
 remote, so lazy source blobs work on fresh hosted runners. The recipe owns
@@ -40,6 +55,8 @@ directory hierarchy. It includes `source.txt`, `spidermonkey-shared.json`, the
 original common-core receipt and the library receipt, not just Wasm binaries.
 
 Local orchestration tests use subprocess recorders. They do not stand in for
-the real engine fixture or a cold hosted build. The parent combines this patch
-with the author's stack/tier corrections and owns the first hosted cache miss,
-cache-hit log check, independent review and PR merge.
+the real engine fixture or a cold hosted build. The qualified author head `8929c0ebe` is merged into this integration branch.
+A real local driver run uses its retained side with the explicitly identified
+older core and launcher. That private composition tests the driver, not current
+producer provenance. The parent owns the first hosted cache miss, cache-hit log
+check, independent review and PR merge.

@@ -34,6 +34,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
+  "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
   "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
   "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",

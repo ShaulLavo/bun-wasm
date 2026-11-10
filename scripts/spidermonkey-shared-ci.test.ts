@@ -24,6 +24,7 @@ for (const path of [
   'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts',
   'crates/bunwasm-spidermonkey/build.rs', 'crates/bunwasm-engine-spidermonkey/src/vm.rs',
   'checks/quality-spidermonkey-shared-ci.json', 'scripts/build-native-profile.test.ts',
+  'scripts/spidermonkey-native-qualification.ts', 'scripts/spidermonkey-native-qualification.test.ts', 'checks/quality-spidermonkey-native-qualification.json',
 ]) test(`SM input ${path} selects the blocking shared producer and native launcher`, () => {
   expect(needsSharedNative([path])).toBe(true);
   expect(needsRust([path])).toBe(true);
@@ -103,4 +104,17 @@ test('real workflow steps wire the library, existing core, side and discovered c
     ]);
     expect(calls.filter(line => line.includes('remote.origin.promisor'))).toHaveLength(1);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('the discovered native consumer qualifies both SM tiers without a second producer or a changed clock', () => {
+  const driver = readFileSync(new URL('./native-profile-fixtures.ts', import.meta.url), 'utf8');
+  expect(driver).toContain("artifacts.engine === 'spidermonkey'");
+  expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(path, artifacts, env, tier))');
+  expect(driver).toContain('verifySpiderMonkeyQualification(result.stderr, tier)');
+  expect(driver).toContain('timeout: 120_000');
+  expect(driver).toContain('result.stdout !== expected');
+  expect(driver).toContain("process.stderr.write(result.stderr ?? '')");
+  expect(driver).not.toMatch(/build-native|build-bun|build-engine|\.replace\(|\.filter\(/);
+  expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-native-qualification.test.ts')).toHaveLength(1);
 });

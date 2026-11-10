@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -150,5 +151,49 @@ test('the real native fixture runner invokes the original command and rejects wr
     expect(() => runProfileFixtures(['tests/fixtures/shared-wasm-memory'], env)).toThrow('output differs');
     rmSync(program);
     expect(() => runProfileFixtures(['tests/fixtures/shared-wasm-memory'], env)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('the native CLI runs one SM pair on both actual tiers and preserves all stderr', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-tier-cli-'));
+  try {
+    const program = join(root, 'bun.wasm');
+    const launcher = join(root, 'bun-wasm');
+    const record = join(root, 'record');
+    writeFileSync(program, pairCore());
+    writeFileSync(join(root, 'spidermonkey-engine.wasm'), pairSide(true));
+    const script = [
+      '#!/bin/sh',
+      'printf "%s\\n" "$BUN_WASM_SPIDERMONKEY_TIER $BUN_WASM_SPIDERMONKEY_TRACE $BUN_WASM_TRACE $*" >> "$RECORDER_ARGS"',
+      'cat "$RECORDER_EXPECTED"',
+      'entries=0; if [ "$BUN_WASM_SPIDERMONKEY_TIER" = pbl ]; then entries=9; fi',
+      'if [ "$RECORDER_MODE" = missing ]; then exit 0; fi',
+      'if [ "$RECORDER_MODE" = mismatched ]; then entries=1; fi',
+      'printf "unrelated stderr %s\\n" "$BUN_WASM_SPIDERMONKEY_TIER" >&2',
+      'printf "bun-wasm spidermonkey: stack_low=0x7a0000 stack_high=0xfa0000 stack_bytes=8388608 register_depth=16 entry_depth=1392 interrupt_polls=123 portable_baseline_entries=%s\\n" "$entries" >&2',
+      'printf "%s\\n" "bun-wasm nested resources: {}" "bun-wasm group before physical stop: GroupSnapshot {}" >&2',
+      'printf "%s\\n" "bun-wasm group after physical stop: GroupSnapshot { members: 0, reserved: 0, retained: 0, regions: 0, pins: 0, holds: 0, watches: 0, waiters: 0, committed_bytes: 166002688, free_bytes: 165937152, bypassed: false, published: 0 }" >&2',
+    ].join('\n');
+    writeFileSync(launcher, script + '\n', { mode: 0o755 });
+    const env = { ...process.env, BUN_WASM_PROFILE_PROGRAM: program, BUN_WASM_LAUNCHER: launcher,
+      BUN_WASM_SPIDERMONKEY_TIER: 'ignored ambient selector', RECORDER_ARGS: record, RECORDER_MODE: 'pass',
+      RECORDER_EXPECTED: join(import.meta.dir, '../tests/fixtures/shared-wasm-memory/expected.txt') };
+    const run = () => spawnSync(process.execPath, [join(import.meta.dir, 'native-profile-fixtures.ts'), 'tests/fixtures/shared-wasm-memory'], { env, encoding: 'utf8' });
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+    const calls = readFileSync(record, 'utf8').trim().split('\n');
+    expect(calls).toHaveLength(2);
+    for (const [index, tier] of ['interp', 'pbl'].entries()) {
+      expect(calls[index]).toStartWith(`${tier} 1 1 --wasm ${program} `);
+      expect(calls[index]).toContain(`--env BUN_WASM_SPIDERMONKEY_TIER=${tier} --env BUN_WASM_SPIDERMONKEY_TRACE=1 -- run /guest.ts`);
+      expect(result.stderr).toContain(`unrelated stderr ${tier}\n`);
+    }
+    expect(result.stdout.match(/"returningMembers": 1/g)).toHaveLength(2);
+    expect(result.stderr.split('\n').filter(Boolean)).toHaveLength(10);
+    env.RECORDER_MODE = 'missing';
+    expect(run().stderr).toContain('Missing SpiderMonkey tier-engagement trace');
+    env.RECORDER_MODE = 'mismatched';
+    expect(run().stderr).toContain('tier engagement mismatch');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
