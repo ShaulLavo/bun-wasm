@@ -1,7 +1,6 @@
 eval valid valid type p0 p100 p199
 eval source kept true
 constructor valid valid type p0 p100 p199
-constructor source kept true
 require valid valid type p0 p100 p199
 import valid valid type p0 p100 p199
 block 299

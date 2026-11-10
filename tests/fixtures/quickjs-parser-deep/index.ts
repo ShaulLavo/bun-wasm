@@ -4,12 +4,19 @@
 // switch, iterator or catch keeps a value slot per level at run time, so those bodies are only
 // compiled here and run at modest depth in stack-statement-nesting.
 //
-// The strict expectations apply where the guest reports QuickJS. Other engines keep their own
-// limits, so there each case only has to compile or refuse with a catchable error and continue.
-// A wasm trap prints nothing and fails the fixture on every engine.
+// The strict expectations apply where QuickJS's own parser compiles the source. Other engines
+// keep their own limits, so there each case only has to compile or refuse with a catchable
+// error and continue. A wasm trap prints nothing and fails the fixture on every engine.
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 
-const strict = "quickjs" in process.versions;
+// process.versions is the same on every engine, so the parser is recognised by the wording of
+// one of its own early errors.
+function quickjsParser(): boolean {
+  // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
+  try { (0, eval)("let let = 1"); } catch (error) { return (error as Error).message === "'let' is not a valid lexical identifier"; }
+  return false;
+}
+const strict = quickjsParser();
 const recordLimit = 10000;
 type Shape = { name: string; open: string; inner: string; close: string; perLevel: number; wrapper?: [string, string, number]; asynchronous?: boolean; depth?: number };
 
@@ -132,11 +139,33 @@ function refusal(): void {
   }
 }
 
+// A literal and a destructuring assignment start alike, so QuickJS looks ahead and then restores
+// its position one frame deeper than where it reads on. When that restore ran out of stack, the
+// literal was parsed from a stale token and the overflow became `SyntaxError: invalid property
+// name`. Each literal is parsed from several stack depths so the overflow lands on different
+// tokens. This runs only on QuickJS's parser: other engines do not share the defect, and JSC
+// traps on literals this deep.
+function literalOverflow(): void {
+  for (const [open, close] of strict ? [["({a:", "})"], ["[", "]"]] : []) {
+    const literal = open!.repeat(200000) + "0" + close!.repeat(200000);
+    // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
+    const parse = (remaining: number): unknown => (remaining === 0 ? (0, eval)(literal) : parse(remaining - 1));
+    for (let remaining = 0; remaining < 16; remaining++) {
+      let caught: unknown;
+      try { parse(remaining); } catch (error) { caught = error; }
+      if (!(caught instanceof RangeError)) throw new Error(`literal ${open} from depth ${remaining}: ${String(caught)}`);
+      recover();
+    }
+  }
+  console.log("literal overflow settled");
+}
+
 if (process.argv[2] === "compile") {
   deepCompilation();
   deepExecution();
   recordBoundaries();
   refusal();
+  literalOverflow();
   recover();
   console.log("continued");
 } else {

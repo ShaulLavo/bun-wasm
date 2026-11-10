@@ -1,10 +1,20 @@
 // Generated code nests statements far deeper than people write them: a compiled schema validator
 // opens one `if` block per property. Compiling that must fit the 32 KiB QuickJS stack budget a
 // browser off V8 passes (docs/stack-limits.md), and the compiled code must behave the same.
-// The child runs with that budget. Engines that ignore it, and native Bun, have room to spare.
+// Where QuickJS's own parser compiles the source, the child runs with that budget. JSC reads the
+// same variable and has its own parser limits, so other engines and native Bun keep the budget
+// they were started with and only have to produce the same output.
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 const fs: typeof import("node:fs") = require("node:fs");
 const path: typeof import("node:path") = require("node:path");
+
+// process.versions is the same on every engine, so the parser is recognised by the wording of
+// one of its own early errors.
+function quickjsParser(): boolean {
+  // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
+  try { (0, eval)("let let = 1"); } catch (error) { return (error as Error).message === "'let' is not a valid lexical identifier"; }
+  return false;
+}
 
 const properties = 200;
 const levels = 300;
@@ -51,9 +61,8 @@ async function validators(): Promise<void> {
   const evaluated = (0, eval)(`(${expression})`) as Validator;
   report("eval", evaluated);
   console.log("eval source kept", evaluated.toString() === expression);
-  const constructed = new Function("value", body) as Validator;
-  report("constructor", constructed);
-  console.log("constructor source kept", constructed.toString() === `function anonymous(value\n) {\n${body}\n}`);
+  // The constructor's own source text differs between engines, so only its behaviour is shared.
+  report("constructor", new Function("value", body) as Validator);
   fs.writeFileSync("validator.cjs", `module.exports = ${expression};\n`);
   report("require", require(path.join(process.cwd(), "validator.cjs")));
   fs.writeFileSync("validator.mjs", `export default ${expression};\n`);
@@ -120,7 +129,8 @@ async function main(): Promise<void> {
 if (process.argv[2] === "compile") {
   void main();
 } else {
-  const child = spawnSync(process.execPath, [__filename, "compile"], { env: { ...process.env, BUN_WASM_STACK_KIB: "32" }, encoding: "utf8" });
+  const env = quickjsParser() ? { ...process.env, BUN_WASM_STACK_KIB: "32" } : process.env;
+  const child = spawnSync(process.execPath, [__filename, "compile"], { env, encoding: "utf8" });
   process.stdout.write(child.stdout);
   process.stderr.write(child.stderr);
   if (child.status !== 0) throw new Error(`statement nesting child exited ${child.status}`);

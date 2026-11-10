@@ -30,6 +30,7 @@ record boundaries settled
 function reentry settled
 block refusal settled
 statement refusal settled
+literal overflow settled
 continued
 block settled
 if settled
@@ -63,4 +64,5 @@ record boundaries settled
 function reentry settled
 block refusal settled
 statement refusal settled
+literal overflow settled
 continued

@@ -49,18 +49,21 @@ claims each of them produced a wrong error in practice.
 
 This corrects upstream error propagation, not the WASI stack-guard port.
 `tests/fixtures/parser-error-preservation` is an original regression. It parses
-valid deep arrow, object-literal and array-literal syntax at several shallow
-invocation depths, requires RangeError, checks ordinary invalid syntax remains
-SyntaxError, and verifies successful evaluation after each overflow and after
-each syntax error. `scripts/check-quickjs-parser-stack.ts` compiles valid source
-that reaches every caller at about two thousand stack limits on the bare
-engine and accepts only a compile or a RangeError.
+valid deep arrow syntax at several shallow invocation depths, requires
+RangeError, checks ordinary invalid parameters remain SyntaxError, and verifies
+successful evaluation after each overflow and after the syntax error.
+`tests/fixtures/quickjs-parser-deep` does the same for deep object and array
+literals, the traced overwrite, where QuickJS's own parser compiles the source.
+Those cases stay off other engines: they do not share the defect, and JSC traps
+on literals 200,000 levels deep. `scripts/check-quickjs-parser-stack.ts` compiles
+valid source that reaches every caller at about two thousand stack limits on the
+bare engine and accepts only a compile or a RangeError.
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `quickjs.c`, callers of `js_parse_skip_parens_token` | Upstream bug | Propagate the failed token restoration before another token read can overwrite its exception. |
-| `tests/fixtures/parser-error-preservation` | Original adapter | Exercise error preservation and recovery through the guest entry point. |
+| `tests/fixtures/parser-error-preservation`, the literal cases of `tests/fixtures/quickjs-parser-deep` | Original adapter | Exercise error preservation and recovery through the guest entry point. |
 
 [Ledger scope and pinned revisions](scope.md).

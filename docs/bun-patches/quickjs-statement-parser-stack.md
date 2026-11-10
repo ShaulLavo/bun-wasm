@@ -109,13 +109,17 @@ during function creation, with or without this change.
 expected output, `quickjs-parser-stack.expected.txt`, is what the upstream
 recursive parser printed before this change.
 
-`tests/fixtures/stack-statement-nesting` runs on every engine at the 32 KiB
-budget: a 200-property validator through `eval`, the `Function` constructor,
-`require` and `import()`, every statement kind nested, completion values,
-label, `finally` and iterator-close order, declaration contexts and source
-positions. `tests/fixtures/quickjs-parser-deep` compiles about 4,900 levels of
-each statement family at 32 and 36 KiB and enforces the limit where the guest
-reports QuickJS.
+`tests/fixtures/stack-statement-nesting` runs on every engine with one expected
+output, at the 32 KiB budget where QuickJS's parser compiles the source: a
+200-property validator through `eval`, the `Function` constructor, `require`
+and `import()`, every statement kind nested, completion values, label,
+`finally` and iterator-close order, declaration contexts and source positions.
+`tests/fixtures/quickjs-parser-deep` compiles about 4,900 levels of each
+statement family at 32 and 36 KiB and enforces the limit on QuickJS. Both
+recognise QuickJS's parser by the wording of one of its early errors, because
+`process.versions` is the same on every engine. JSC reads the same budget
+variable and refuses 200 nested blocks at 32 KiB in its own parser, so other
+engines keep the budget they were started with.
 
 During development a native driver compiled the same inputs with the upstream
 parser and this one and compared the serialized bytecode, debug tables and
