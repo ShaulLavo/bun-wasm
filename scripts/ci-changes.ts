@@ -69,7 +69,7 @@ const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
@@ -82,7 +82,7 @@ const jscFiles = new Set([
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
