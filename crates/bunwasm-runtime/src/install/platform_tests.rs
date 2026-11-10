@@ -278,7 +278,15 @@ fn extract_platform_archives() {
             .collect();
         extracted.sort();
         println!("locked={locked}: extracted={extracted:?}, count={installed}");
-        assert_eq!(extracted, ["compatible", "neutral"]);
+        assert_eq!(
+            extracted,
+            [
+                ".compatible.bun-wasm-source",
+                ".neutral.bun-wasm-source",
+                "compatible",
+                "neutral"
+            ]
+        );
         assert_eq!(installed, 2);
         std::fs::remove_dir_all("node_modules").unwrap();
     }

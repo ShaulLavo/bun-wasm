@@ -1,5 +1,6 @@
 mod next_swc;
 mod selection;
+pub(super) mod tarball;
 mod wasm_packages;
 
 pub use selection::matches;
@@ -75,6 +76,7 @@ pub struct Package {
     pub tarball: String,
     pub local: Option<Local>,
     pub optional: bool,
+    pub explicit_tarball: bool,
 }
 
 impl Package {
@@ -190,6 +192,7 @@ pub struct Resolver {
     packuments: BTreeMap<String, Value>,
     responses: BTreeMap<String, Vec<u8>>,
     downloads: io::Downloads,
+    explicit_sources: BTreeSet<String>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -200,6 +203,7 @@ pub struct Resolver {
 impl Resolver {
     pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
+            explicit_sources: tarball::locked_sources(&locked, &Value::Null),
             packages: BTreeMap::new(),
             skipped: BTreeMap::new(),
             registry,
@@ -496,6 +500,7 @@ impl Resolver {
         if range.starts_with("file:")
             || range.starts_with("link:")
             || range.starts_with("workspace:")
+            || tarball::is_specifier(range)
             || self.responses.contains_key(name)
         {
             return None;
@@ -528,7 +533,7 @@ impl Resolver {
         range: &str,
         optional: bool,
     ) -> Result<Option<String>> {
-        if self.local_package(name, range)?.is_some() {
+        if tarball::is_specifier(range) || self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
         if self.member_update.as_ref().is_some_and(|update| {
@@ -625,6 +630,8 @@ impl Resolver {
                     .local
                     .as_ref()
                     .is_some_and(|local| local.path == target.path)
+            } else if tarball::is_specifier(range) {
+                tarball::matches(found, name, range)
             } else if let Some((name, range)) = &alias {
                 found.name == *name && matches(&found.version, range)
             } else {
@@ -678,7 +685,7 @@ impl Resolver {
         let result = self.package(name, range, chain, optional, lookup);
         let package = match result {
             Ok(package) => package,
-            Err(error) if optional => {
+            Err(error) if optional && !tarball::is_specifier(range) => {
                 eprintln!(
                     "warn: optional dependency {name}: {}",
                     self.registry.redact(&error)
@@ -705,6 +712,9 @@ impl Resolver {
             let (target, version) = spec(alias)?;
             return self.package(&target, &version, chain, optional, lookup);
         }
+        if tarball::is_specifier(range) {
+            return self.tarball_package(name, range, chain, optional);
+        }
         if let Some(local) = self.local_package(name, range)? {
             return Ok(Package {
                 name: local.meta["name"].as_str().unwrap_or(name).into(),
@@ -716,6 +726,7 @@ impl Resolver {
                 tarball: String::new(),
                 optional,
                 local: Some(local),
+                explicit_tarball: false,
             });
         }
         if matches!(lookup, LockLookup::Use)
@@ -756,6 +767,7 @@ impl Resolver {
             local: None,
             integrity,
             optional,
+            explicit_tarball: false,
         })
     }
 
@@ -881,6 +893,9 @@ impl Resolver {
             return None;
         }
         let source = row[1].as_str()?;
+        if self.explicit_sources.contains(source) {
+            return None;
+        }
         let tarball = if source.is_empty() {
             format!(
                 "{}/{resolved_name}/-/{}-{version}.tgz",
@@ -908,6 +923,7 @@ impl Resolver {
             local: None,
             integrity: row[3].as_str()?.into(),
             optional,
+            explicit_tarball: false,
         })
     }
 }
@@ -1103,7 +1119,7 @@ mod wasm_packages_tests;
 mod wasm_peer_graph_tests;
 
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "local_lookahead_tests.rs"]

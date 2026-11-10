@@ -588,7 +588,9 @@
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
     const development = options.development;
+    let developmentHtml = null;
     let websocket = options.websocket;
+    let baseWebsocketHandlers = websocket;
     let websocketHandlers = websocket;
     if (websocket && !["message", "open", "ping", "pong"].some((name) => typeof websocket[name] === "function")) throw new TypeError("websocket requires a message, open, ping or pong handler");
     if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
@@ -647,11 +649,14 @@
           routes = compileRoutes(next.routes);
           htmlServer.attach(server, routes, development);
         }
-        if (next.websocket) websocketHandlers = next.websocket;
+        if (next.websocket) baseWebsocketHandlers = next.websocket;
+        if (internal.hotServers && Object.prototype.hasOwnProperty.call(next, "development")) updateDevelopment(next.development);
+        websocketHandlers = developmentHtml ? developmentHtml.websocket(baseWebsocketHandlers) : baseWebsocketHandlers;
         websocket = htmlServer.websocket(routes, development, websocketHandlers);
         return server;
       },
       stop(closeActive = false) {
+        developmentHtml?.dispose();
         internal.hotServers?.close(server);
         if (!stopped) {
           stopped = true;
@@ -699,7 +704,36 @@
       },
     };
 
+    function updateDevelopment(enabled) {
+      if (enabled !== true || process.env.NODE_ENV === "production") {
+        developmentHtml?.dispose();
+        developmentHtml = null;
+        return;
+      }
+      if (developmentHtml) return;
+      developmentHtml = internal.hotServers.runControl(() => internal.require("dev_html").attach({ server, revisions: internal.hotServers.revisions(server) }));
+    }
+
+    function developmentRequest(request, conn, keepAlive) {
+      if (!developmentHtml || !request.target.startsWith("/_bun/wasm-dev/")) return null;
+      return internal.hotServers.runControl(() => {
+        const host = header(request.headers, "host") || `${displayHost}:${port}`;
+        const req = new Request(`http://${host}${request.target}`, { method: request.method, headers: request.headers });
+        requests.set(req, { conn });
+        try {
+          const response = developmentHtml.respond(req);
+          if (response) return internal.require("serve_request_lifetime").run(conn, () => writeResponse(conn, response, request.method, keepAlive && !stopped));
+          if (developmentHtml.upgrade(req, server)) return Promise.resolve(UPGRADED);
+          return internal.require("serve_request_lifetime").run(conn, () => writeResponse(conn, new Response("Not Found", { status: 404 }), request.method, keepAlive && !stopped));
+        } finally {
+          requests.delete(req);
+        }
+      });
+    }
+
     function handleRequest(request, conn, keepAlive) {
+      const control = developmentRequest(request, conn, keepAlive);
+      if (control) return control.then(result => result === UPGRADED ? result : result && !stopped);
       if (internal.hotServers) return internal.require("hot_request").run(internal.hotServers, server, conn,
         (snapshot, releaseOnAbort) => runRequest(request, conn, keepAlive, snapshot, releaseOnAbort));
       return runRequest(request, conn, keepAlive, null, null);
@@ -759,10 +793,12 @@
       }
       const responseKeepAlive = keepAlive && !stopped;
       try {
+        if (developmentHtml && snapshot?.development) res = await developmentHtml.decorate(req, res, snapshot.stamp);
         return await writeResponse(conn, res, request.method, responseKeepAlive);
       } catch (error) {
         const selectedError = selectError();
-        const fallback = selectedError ? await selectedError.call(server, error) : errorResponse(error);
+        let fallback = selectedError ? await selectedError.call(server, error) : errorResponse(error);
+        if (developmentHtml && snapshot?.development) fallback = await developmentHtml.decorate(req, fallback, snapshot.stamp);
         return writeResponse(conn, fallback, request.method, responseKeepAlive);
       }
     }

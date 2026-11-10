@@ -71,7 +71,7 @@ function text(status: number, body: string): Response {
 }
 
 function injectSocket(stream: ReadableStream<Uint8Array>, port: number): ReadableStream<Uint8Array> {
-  const script = `<script src="${SOCKET_SCRIPT_PATH}" data-bun-port="${port}" data-bun-prefix="${prefix}"></script>`;
+  const script = `<script src="${SOCKET_SCRIPT_PATH}" data-bun-wasm-socket="shim" data-bun-port="${port}" data-bun-prefix="${prefix}"></script>`;
   const reader = stream.getReader();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
