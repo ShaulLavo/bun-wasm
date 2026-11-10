@@ -158,6 +158,84 @@ show("mapped arguments across reused frame storage", () => {
   return [holders[0]!(), holders[200]!(), holders[400]!()].join(" ");
 });
 
+// Ordinary functions calling ordinary functions: every call opcode, with the caller's state
+// read again after the callee returns.
+// oxlint-disable-next-line no-eval -- Sloppy-mode argument mapping and tail positions need non-module source.
+const chain = (0, eval)(`(function () { var chain = {
+  count: function (n) { return n === 0 ? 0 : 1 + this.count(n - 1); },
+  tail: function (n, total) { "use strict"; return n === 0 ? total : chain.tail(n - 1, total + n); },
+  plainTail: function (n, total) { return n === 0 ? total : plainTail(n - 1, total + n); },
+  after: function (a, b) { var seen = this.write(a, b); return [a, b, seen, arguments.length, arguments[0], this === chain, new.target === undefined].join(); },
+  write: function (x, y) { x = "x!"; y = "y!"; arguments[0] = "mapped"; return x + y; },
+  padded: function (a, b, c) { return [a, b, c, arguments.length].join(); },
+  callPadded: function () { return [this.padded(), this.padded(1), this.padded(1, 2, 3, 4)].join(" | "); },
+  rest: function () { return (function (first, ...others) { return first + ":" + others.join("+"); })(1, 2, 3); },
+  defaults: function (a = this.count(3), b = a + this.count(2)) { return [a, b].join(); },
+  receiver: function () { "use strict"; return [typeof (function () { return this; })(), (function () { return this; }).call(7), typeof free()].join(); },
+  sloppyReceiver: function () { return [(function () { return this === globalThis; })(), typeof Object(free.call(5))].join(); },
+  build: function (n) { return n === 0 ? new Made(0) : new Made(this.build(n - 1).depth + 1); },
+  accessor: { get value() { return chain.count(4); }, set value(next) { chain.stored = chain.count(next); } },
+  mutual: function (n) { return n === 0 ? "even" : odd(n - 1); },
+  trace: function () { return one(); },
+}; function plainTail(n, total) { return n === 0 ? total : plainTail(n - 1, total + n); }
+function free() { return this; } function Made(depth) { this.depth = depth; }
+function odd(n) { return n === 0 ? "odd" : chain.mutual(n - 1); }
+function one() { return two(1); } function two(a) { return three(a, 2); }
+function three(a, b) { return String(new Error("inline").stack).split("\\n").slice(0, 5).map(function (line) { return line.trim().replace(/\\(.*[\\\\/]/, "("); }).join(" < "); }
+return chain; })()`);
+show("method chain", () => [chain.count(0), chain.count(1), chain.count(2500)].join());
+show("tail calls", () => [chain.tail(2500, 0), chain.plainTail(2500, 0)].join());
+show("caller state after an inline callee", () => chain.after("a", "b"));
+show("padded formals from an inline caller", () => chain.callPadded());
+show("rest from an inline caller", () => chain.rest());
+show("default parameters calling inline", () => [chain.defaults(), chain.defaults(10), chain.defaults(1, 2)].join(" | "));
+show("receivers of plain calls", () => [chain.receiver(), chain.sloppyReceiver()].join(" | "));
+show("constructors between inline frames", () => chain.build(40).depth);
+show("accessors between inline frames", () => { chain.accessor.value = 6; return [chain.accessor.value, chain.stored].join(); });
+show("mutual recursion", () => [chain.mutual(2500), chain.mutual(2501)].join());
+show("stack frames through inline calls", () => chain.trace());
+show("exception through deep inline frames", () => { const log: string[] = []; try { level(1500, log); } catch (error) { return [(error as Error).message, log.length, log[0], log[1500]].join(); } return "no throw"; });
+show("throwing callee leaves the caller's operands", () => {
+  const thrower = (value: number): number => { if (value > 2) throw new Error(`stop ${value}`); return value; };
+  const sum = (a: number, b: number, c: number): number => a + b + c;
+  let total = 0;
+  for (let i = 0; i < 4; i++) { try { total += sum(thrower(i), thrower(i + 1), thrower(i + 2)); } catch (error) { total += (error as Error).message.length * 100; } }
+  return total;
+});
+show("class called from an inline caller", () => {
+  class Local { tag = "local"; }
+  const viaCall = (): unknown => (Local as unknown as () => unknown)();
+  const holder = { Local, viaMethod(): unknown { return (this.Local as unknown as () => unknown)(); } };
+  const results: string[] = [];
+  for (const attempt of [viaCall, () => holder.viaMethod()]) { try { attempt(); results.push("returned"); } catch (error) { results.push(`${(error as Error).name}: ${(error as Error).message}`); } }
+  return results.join(" | ");
+});
+show("error realm of a foreign class called without new", () => {
+  const Foreign = otherRealm("(class Foreign {})") as unknown as () => unknown;
+  const foreignType = otherRealm("TypeError.prototype");
+  try { Foreign(); } catch (error) { return [error instanceof TypeError, Object.getPrototypeOf(error) === foreignType].join(); }
+  return "no throw";
+});
+show("foreign function between inline frames", () => {
+  const foreign = otherRealm("(function (callback, n) { return n === 0 ? callback(0) : callback(n) + 1; })") as (callback: (n: number) => number, n: number) => number;
+  const back = (n: number): number => (n === 0 ? 100 : foreign(back, n - 1));
+  return back(200);
+});
+show("generator driven through inline frames with collection", () => {
+  const g = counter(4);
+  const drive = (depth: number, sent: number): unknown => { if (depth === 0) { gc(); return g.next(sent).value; } return drive(depth - 1, sent); };
+  return [drive(50, 0), drive(700, 2), drive(5, 3), drive(1200, 4), drive(1, 5)].join();
+});
+show("closures made by inline callees are closed at return", () => {
+  const cell = (start: number): [() => number, () => void] => { let value = start; return [() => value, () => { value += 1; }]; };
+  const pairs: [() => number, () => void][] = [];
+  const fill = (depth: number): void => { pairs.push(cell(depth)); if (depth > 0) fill(depth - 1); };
+  fill(800);
+  for (const [, bump] of pairs) bump();
+  gc();
+  return [pairs.length, pairs[0]![0](), pairs[800]![0]()].join();
+});
+
 // Asynchronous functions.
 async function asynchronous(): Promise<void> {
   const log: string[] = [];

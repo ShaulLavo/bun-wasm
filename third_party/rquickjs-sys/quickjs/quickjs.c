@@ -3304,12 +3304,50 @@ typedef struct JSFrameChunk {
     size_t charge;  /* what the allocator holds for this chunk */
 } JSFrameChunk;
 
+/* How a record entered its inline callee, kept so the return releases the
+   right operand slots. */
+#define JS_FRAME_CALL_METHOD 1 /* the receiver sits below the function */
+#define JS_FRAME_CALL_TAIL   2 /* the result is this record's own result */
+
 /* The record of one ordinary bytecode call. Only js_frame_push creates one;
    native and coroutine JSStackFrame values are never cast to it. */
 typedef struct JSExecFrame {
     JSStackFrame frame;
     size_t allocation_size; /* bytes this record takes from its chunk */
+    /* The call this record executes; the function is frame.cur_func. These
+       are borrowed: the C caller, or the calling record's operand slots,
+       keep them alive until it returns. actual_argc and actual_argv are
+       what the caller passed, which frame.arg_count and frame.arg_buf are
+       not when formals were padded or copied. */
+    JSValueConst this_obj, new_target;
+    JSValueConst *actual_argv;
+    int actual_argc;
+    JSContext *caller_ctx; /* the realm that made the call */
+    /* The ordinary record whose dispatch loop entered this one, or NULL when
+       this record was entered from C and ends its interpreter activation. */
+    struct JSExecFrame *ordinary_caller;
+    /* Written by this record just before it enters an inline callee, and
+       read when that callee returns. Its pc is frame.cur_pc. Coroutine
+       frames are never inline callers, so their cur_sp is never used here. */
+    JSValue *saved_sp;
+    int call_argc;
+    uint8_t call_kind; /* JS_FRAME_CALL_* */
 } JSExecFrame;
+
+/* True for a callee the dispatch loop may enter without a C call: an
+   ordinary bytecode function. Generators and async functions have their
+   own classes; bound functions, proxies and native functions keep their
+   dispatcher. A class called without new still fails in its own bytecode. */
+static inline bool js_frame_inline_callee(JSValueConst func_obj)
+{
+    JSObject *p;
+
+    if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+        return false;
+    p = JS_VALUE_GET_OBJ(func_obj);
+    return p->class_id == JS_CLASS_BYTECODE_FUNCTION &&
+        p->u.func.function_bytecode->func_kind == JS_FUNC_NORMAL;
+}
 
 #define JS_FRAME_HEADER_SIZE \
     ((sizeof(JSExecFrame) + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1))
@@ -18528,6 +18566,9 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     JSExecFrame *owned = NULL;
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
+    /* the call being made; shared by the call opcodes and inline_call */
+    int call_argc, call_kind;
+    JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
 
@@ -18592,8 +18633,13 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     }
 
     /* bun-wasm: this activation's own C frame is checked against the native
-       budget. The call's storage is not on the C stack: js_frame_push checks
-       it against the frame-stack limit and fails before anything is linked. */
+       budget, once for every call the loop below then runs without another
+       C call. The fixed reservation stands for the frame storage this
+       function no longer takes from the C stack, so the budget keeps
+       covering the host stack one C entry costs. A call's storage is checked
+       by js_frame_push against the frame-stack limit instead, and fails
+       before anything is linked. */
+    js_reserve_wasm_frame(16);
     if (js_check_stack_overflow(rt, 0))
         return JS_ThrowStackOverflow(caller_ctx);
     owned = js_frame_push(caller_ctx,
@@ -18601,7 +18647,18 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                           b->var_ref_count);
     if (unlikely(!owned))
         return JS_EXCEPTION;
+    owned->ordinary_caller = NULL;
+
+    /* Entered from C above, and from inline_call below with the callee's
+       record pushed and func_obj, this_obj, new_target, argc, argv,
+       caller_ctx, flags, p, b and arg_allocated_size already the callee's. */
+ enter_frame:
     sf = &owned->frame;
+    owned->this_obj = this_obj;
+    owned->new_target = new_target;
+    owned->actual_argc = argc;
+    owned->actual_argv = argv;
+    owned->caller_ctx = caller_ctx;
 
     sf->is_strict_mode = b->is_strict_mode;
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
@@ -18649,9 +18706,6 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
 
  restart:
     for(;;) {
-        int call_argc;
-        JSValue *call_argv;
-
         SWITCH(pc) {
         CASE(OP_push_i32):
             *sp++ = js_int32(get_u32(pc));
@@ -19010,6 +19064,10 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
             has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -19047,6 +19105,11 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = JS_FRAME_CALL_METHOD |
+                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -21421,9 +21484,83 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf->prev_frame;
     /* bun-wasm: only an ordinary call owns a frame-stack record. It is
        unlinked and its values are freed before its storage can be reused. */
-    if (owned)
+    if (!owned)
+        return ret_val;
+    {
+        JSExecFrame *caller = owned->ordinary_caller;
+        int below;
+
         js_frame_pop(rt, owned);
-    return ret_val;
+        if (!caller)
+            return ret_val;
+        /* The call was entered by inline_call: continue the calling record
+           where JS_CallInternal would have returned to it. */
+        owned = caller;
+        sf = &owned->frame;
+        func_obj = sf->cur_func;
+        this_obj = owned->this_obj;
+        new_target = owned->new_target;
+        argc = owned->actual_argc;
+        argv = owned->actual_argv;
+        caller_ctx = owned->caller_ctx;
+        p = JS_VALUE_GET_OBJ(func_obj);
+        b = p->u.func.function_bytecode;
+        ctx = b->realm;
+        var_refs = p->u.func.var_refs;
+        local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
+        arg_buf = sf->arg_buf;
+        var_buf = sf->var_buf;
+        stack_buf = var_buf + b->var_count;
+        pc = sf->cur_pc;
+        sp = owned->saved_sp;
+        if (unlikely(JS_IsException(ret_val)))
+            goto exception;
+        if (owned->call_kind & JS_FRAME_CALL_TAIL)
+            goto done;
+        below = owned->call_kind & JS_FRAME_CALL_METHOD ? 2 : 1;
+        for(i = -below; i < owned->call_argc; i++)
+            JS_FreeValue(ctx, sp[i - owned->call_argc]);
+        sp -= owned->call_argc + below;
+        *sp++ = ret_val;
+        goto restart;
+    }
+
+    /* bun-wasm: an ordinary record calls an ordinary bytecode function
+       without a C call. The callee's record is pushed first, so a refusal
+       or an interrupt is thrown in the calling record with nothing changed.
+       The operands stay in the calling record until the callee returns. */
+ inline_call:
+    {
+        JSObject *callee_p = JS_VALUE_GET_OBJ(call_argv[-1]);
+        JSFunctionBytecode *callee_b = callee_p->u.func.function_bytecode;
+        JSExecFrame *callee;
+
+        if (unlikely(js_poll_interrupts(ctx)))
+            goto exception;
+        arg_allocated_size =
+            call_argc < callee_b->arg_count ? callee_b->arg_count : 0;
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + callee_b->var_count +
+                               callee_b->stack_size,
+                               callee_b->var_ref_count);
+        if (unlikely(!callee))
+            goto exception;
+        owned->saved_sp = sp;
+        owned->call_argc = call_argc;
+        owned->call_kind = call_kind;
+        callee->ordinary_caller = owned;
+        owned = callee;
+        caller_ctx = ctx;
+        func_obj = call_argv[-1];
+        this_obj = call_kind & JS_FRAME_CALL_METHOD ? call_argv[-2] : JS_UNDEFINED;
+        new_target = JS_UNDEFINED;
+        argc = call_argc;
+        argv = vc(call_argv);
+        flags = 0;
+        p = callee_p;
+        b = callee_b;
+        goto enter_frame;
+    }
 }
 
 JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
