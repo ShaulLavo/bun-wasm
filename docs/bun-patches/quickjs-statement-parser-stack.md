@@ -100,7 +100,11 @@ and no measured path is shallower than before
 `scripts/fixtures/quickjs-parser-stack.c` and checks the limit at its exact
 boundary for one-record, two-record, labelled and wrapped shapes and across
 nested functions, refusal and recovery at depth 200,000, release of the pool
-before execution, and every denied record-chunk allocation.
+before execution, and every denied record-chunk allocation. That fault sweep
+covers the record pool only, with the input shifted to all 16 positions in a
+chunk. It is not a sweep of every allocation in a compile: upstream aborts on
+`assert(cpool_idx >= 0)` in `js_create_function` when an allocation fails
+during function creation, with or without this change.
 `scripts/fixtures/quickjs-parser-stack.ts` holds statement semantics whose
 expected output, `quickjs-parser-stack.expected.txt`, is what the upstream
 recursive parser printed before this change.

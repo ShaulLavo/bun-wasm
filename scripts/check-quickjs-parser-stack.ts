@@ -1,7 +1,7 @@
 // Native contract for the iterative statement parser: builds the bare QuickJS engine with
 // scripts/fixtures/quickjs-parser-stack.c and checks record limits, statement semantics,
-// overflow error identity and allocation-failure cleanup. No bun-wasm runtime is involved; the
-// produced Wasm pair has its own guest fixtures.
+// overflow error identity and cleanup when a statement record allocation fails. No bun-wasm
+// runtime is involved; the produced Wasm pair has its own guest fixtures.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { join, resolve } from "node:path";
@@ -94,7 +94,9 @@ try {
 
   const faulted = run(binary, ["faults", "script", faults]);
   process.stdout.write(faulted.output);
-  passed = check("every failed allocation is reported, leaks nothing and leaves the engine usable", faulted.status === 0) && passed;
+  // Only the statement record pool's own allocations are denied. Other allocations of a compile
+  // are not covered: upstream aborts on an assertion when one fails during function creation.
+  passed = check("every denied statement record allocation is reported, leaks nothing and leaves the engine usable", faulted.status === 0) && passed;
   process.exitCode = passed ? 0 : 1;
 } finally {
   cleanup();
