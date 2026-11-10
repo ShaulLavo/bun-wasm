@@ -40,7 +40,7 @@ ${parser.replace("mod tool_args;", "")}
 `);
 
 test("real CLI parser carries hot mode independently from execArgv", () => {
-  execFileSync("rustc", ["--edition=2024", "--test", file, "-o", join(scratch, "args")]);
+  execFileSync("rustc", ["--edition=2024", "--test", file, "-o", join(scratch, "args")], { cwd: scratch });
   const result = spawnSync(join(scratch, "args"), [], { encoding: "utf8" });
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("test result: ok");

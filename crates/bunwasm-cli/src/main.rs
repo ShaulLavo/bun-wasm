@@ -736,7 +736,13 @@ fn parse_command_with_flags(
     let mut mode = mode;
     while let Some(arg) = rest.next() {
         if run_file && (arg == "-" || !arg.starts_with('-')) {
-            return run_command(Entry::File(arg), rest.collect(), conditions, exec_argv, mode);
+            return run_command(
+                Entry::File(arg),
+                rest.collect(),
+                conditions,
+                exec_argv,
+                mode,
+            );
         }
         if arg == "--conditions" {
             let Some(value) = rest.next() else {
@@ -764,13 +770,28 @@ fn parse_command_with_flags(
                     | "create"
                     | "init"
                     | "lint"
-                    | "fmt" | "add" | "a" | "ci" | "remove" | "rm" | "r" | "uninstall" | "pm" | "update" | "up" | "c"
+                    | "fmt"
+                    | "add"
+                    | "a"
+                    | "ci"
+                    | "remove"
+                    | "rm"
+                    | "r"
+                    | "uninstall"
+                    | "pm"
+                    | "update"
+                    | "up"
+                    | "c"
             )
         {
             return usage_error("--hot supports only file-based ESM server entries");
         }
         match arg.as_str() {
-            "--hot" => { mode = RunMode::Hot; exec_argv.push(arg); continue; }
+            "--hot" => {
+                mode = RunMode::Hot;
+                exec_argv.push(arg);
+                continue;
+            }
             "--watch" => return usage_error("--watch restart mode is not supported in bun-wasm"),
             "-v" | "--version" => {
                 println!("{}", bunwasm_runtime::BUN_VERSION);
@@ -790,7 +811,13 @@ fn parse_command_with_flags(
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
                 };
-                return run_command(Entry::Eval(code), rest.collect(), conditions, exec_argv, mode);
+                return run_command(
+                    Entry::Eval(code),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             "-p" | "--print" => {
                 let Some(code) = rest.next() else {
@@ -800,7 +827,13 @@ fn parse_command_with_flags(
                     "const __bunwasm_print = await (0, eval)({code:?}); \
                      console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
                 );
-                return run_command(Entry::Eval(wrapped), Vec::new(), conditions, exec_argv, mode);
+                return run_command(
+                    Entry::Eval(wrapped),
+                    Vec::new(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             "lint" | "fmt" => return Command::Lint,
             "test" => {
@@ -846,12 +879,20 @@ fn parse_command_with_flags(
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
-            "run" => return parse_command_with_flags(rest.collect(), true, conditions, exec_argv, mode),
+            "run" => {
+                return parse_command_with_flags(rest.collect(), true, conditions, exec_argv, mode);
+            }
             "--" => {
                 let Some(file) = rest.next() else {
                     return usage_error("bun run needs a file to run");
                 };
-                return run_command(Entry::File(file), rest.collect(), conditions, exec_argv, mode);
+                return run_command(
+                    Entry::File(file),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--smol" | "--no-install" => continue,
