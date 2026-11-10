@@ -752,19 +752,20 @@ for (const lateNotice of [false, true]) {
   }, 30_000);
 }
 
-test("development HTML rejects changed template contents before any safe heading write", async () => {
-  const template = '<template id="card"><div>Original</div></template>';
-  const html = counterHtml.replace("</body>", `${template}</body>`);
-  await pageFixture(async (page, server, errors) => {
-    server.setHtml(html.replace("Before", "Applied unsupported patch").replace("<div>Original</div>", '<div>New<span>Added node</span></div><script>window.templateRan = true;</script>'));
-    server.commit(2);
-    await until(async () => errors.length > 0 || await page.locator("h1").textContent() !== "Before");
-    expect(await page.locator("h1").textContent()).toBe("Before");
-    expect(await page.locator("#card").innerHTML()).toBe("<div>Original</div>");
-    expect(errors.some(error => error.includes("unsupported template"))).toBe(true);
-    await unchanged(page);
-  }, html);
-}, 30_000);
+for (const contents of ["<div>Original</div>", "<template><div>Original</div></template>"]) {
+  test(`development HTML rejects changed template contents before any safe heading write: ${contents}`, async () => {
+    const html = counterHtml.replace("</body>", `<template id="card">${contents}</template></body>`);
+    await pageFixture(async (page, server, errors) => {
+      server.setHtml(html.replace("Before", "Applied unsupported patch").replace("<div>Original</div>", '<div>New<span>Added node</span></div><script>window.templateRan = true;</script>'));
+      server.commit(2);
+      await until(async () => errors.length > 0 || await page.locator("h1").textContent() !== "Before");
+      expect(await page.locator("h1").textContent()).toBe("Before");
+      expect(await page.locator("#card").innerHTML()).toBe(contents);
+      expect(errors.some(error => error.includes("unsupported template"))).toBe(true);
+      await unchanged(page);
+    }, html);
+  }, 30_000);
+}
 
 test("development HTML preserves unchanged inert template contents while updating safe fields", async () => {
   const html = counterHtml.replace("</body>", '<template id="card"><div>Original</div></template></body>');
