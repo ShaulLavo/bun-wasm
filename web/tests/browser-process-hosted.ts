@@ -165,9 +165,11 @@ export async function runHostedProcess(engine: Engine, resultPath: string, port:
   assert.deepEqual(result.ledger[0], { kind: "indexeddb", name: processFilesystemName(result.run) });
   assert.deepEqual(result.storageRemaining, []);
   checkProcessResult(result.results[processCommandId]);
-  for (const item of Object.values(result.cleanup)) {
-    if (record(item)) assert.equal(item.status, "confirmed", JSON.stringify(result.cleanup));
+  for (const key of ["session", "launcher", "server", "storage", "scratch"] as const) {
+    assert.equal(result.cleanup[key].status, "confirmed", JSON.stringify(result.cleanup));
   }
+  assert.equal(result.cleanup.fixture.status, "not-created", JSON.stringify(result.cleanup));
+  assert.equal(result.cleanup.callbacks.status, "not-created", JSON.stringify(result.cleanup));
   if (control === "late-error") assert.equal(observations.lateError, true);
   return result;
 }

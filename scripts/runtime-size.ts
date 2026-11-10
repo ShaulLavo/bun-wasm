@@ -35,14 +35,14 @@ export function checkCoreBudget(gzipBytes: number): void {
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
 }
 
-/** Reservation/directory cells, signal and terminal turn control, and typed startup
+/** Reservation/directory cells, process observation, signal and terminal turn control, and typed startup
  * values are eager, not the supervisor, executable registry or worker service.
  * proc/command is only types and the inert CommandStdioError declaration, checked
  * by runtime-size.test.ts. Its bytes remain in the size totals. */
 export function processServiceInputs(inputs: readonly string[], runtime: RuntimePackage): string[] {
   return inputs.filter(path => {
     const match = /^(?:dist\/)?proc\/(.+)\.(?:ts|js)$/.exec(runtime.relativeInput(path) ?? "");
-    return match !== null && !["identity", "stub", "intrinsics", "intrinsics/core", "intrinsics/host", "errors", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "terminal-turn", "types", "command"].includes(match[1]!);
+    return match !== null && !["identity", "stub", "intrinsics", "intrinsics/core", "intrinsics/host", "errors", "control", "directory", "outcome", "observation", "start-errno", "start-failure", "wait-status", "signals", "terminal-turn", "types", "command"].includes(match[1]!);
   });
 }
 export function checkLazyProcessService(inputs: readonly string[], runtime: RuntimePackage): void {
