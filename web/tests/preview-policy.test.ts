@@ -83,7 +83,7 @@ for (const base of ["https://example.test/", "https://example.test/nested/app/"]
     expect(response?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
     expect(response?.headers.get("cross-origin-opener-policy")).toBe("same-origin");
     const prefix = new URL(`${base}__preview/`).pathname;
-    expect(await response?.text()).toBe(`<!doctype html><script src="${new URL(base).pathname}preview-websocket.js" data-bun-port="8123" data-bun-prefix="${prefix}"></script><html>preview</html>`);
+    expect(await response?.text()).toBe(`<!doctype html><script src="${new URL(base).pathname}preview-websocket.js" data-bun-wasm-socket="shim" data-bun-port="8123" data-bun-prefix="${prefix}"></script><html>preview</html>`);
     const script = await sw.fetch("preview-websocket.js");
     expect(script?.headers.get("content-type")).toBe("text/javascript");
     expect(await script?.text()).toBe("socket adapter");

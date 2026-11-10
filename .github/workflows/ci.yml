@@ -1845,9 +1845,9 @@ jobs:
           retention-days: 7
       - uses: ./.github/actions/browser-deps
         with:
-          browsers: chromium webkit
-      - name: Install Chromium and WebKit
-        run: bunx playwright install chromium webkit
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
       - name: Web host browser gates
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}

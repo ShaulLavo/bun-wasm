@@ -42,7 +42,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
     expect(installing).toBeGreaterThan(entries.findIndex(step => step.uses === "./.github/actions/browser-deps"));
     expect(JSON.stringify(entries)).not.toContain("playwright install --with-deps");
     expect(setup).toHaveLength(1);
-    const expected = id === "web" ? "chromium webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
+    const expected = id === "web" ? "chromium firefox webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
     expect(record(setup[0]?.with).browsers).toBe(expected);
   }
 });
@@ -138,7 +138,7 @@ function setupDependencies(directory: string, browsers: string[], failUpdate = f
   });
 }
 
-for (const browsers of [["chromium", "webkit"], ["chromium", "firefox"], ["firefox"], ["webkit"]]) {
+for (const browsers of [["chromium", "firefox", "webkit"], ["chromium", "webkit"], ["chromium", "firefox"], ["firefox"], ["webkit"]]) {
   test(`${browsers.join("+")} fills the same complete archive pool but installs only its packages`, () => {
     fixture(directory => {
       dependencyFixture(directory);
