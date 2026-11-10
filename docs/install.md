@@ -72,10 +72,42 @@ Lifecycle scripts are always skipped, including scripts on trusted dependencies
 and the root project. Packages with install hooks produce a `Blocked N
 postinstalls` message. No native executables run. Workspace members and local directory links use the
 hoisted graph. npm aliases select the target package without changing its files.
-Git and isolated-linker installs, registry authentication, patches and overrides
-are not implemented. Symlinks and hardlinks inside npm
+Git and isolated-linker installs and package patches are not implemented.
+Root string overrides can replace root and transitive dependency specifiers. Symlinks and hardlinks inside npm
 tarballs are rejected. Downloads and expanded packages are limited to 256 MiB;
 the graph is limited to 10,000 packages and 128 nesting levels.
+
+## Remote tarball dependencies
+
+A dependency or root string override can name an HTTP or HTTPS tarball directly:
+
+```json
+{
+  "dependencies": { "tool": "https://packages.example/releases/opaque.tgz" },
+  "overrides": { "transitive-tool": "https://packages.example/releases/another.tgz" }
+}
+```
+
+The archive's package.json supplies the version and dependency graph. Its name
+must match the requested package. An explicit npm alias such as
+`alias: "npm:actual@https://packages.example/releases/opaque.tgz"` permits a
+renamed install. Filenames do not determine package identity or version. The
+same safe extraction and platform checks apply as for registry packages.
+URL queries, fragments and embedded credentials are unsupported.
+
+The first resolution, including `--lockfile-only`, downloads the archive and
+records its observed SHA-512 digest in the ordinary bun.lock integrity slot.
+There is no expected digest before that first resolution. Compare the generated
+integrity with the publisher's expected value before committing the lockfile.
+Later installs verify the locked digest, including cache hits, `--force` and
+`bun update` for an unchanged URL. Changing a URL records a new source and
+reinstalls it even when its name and version stay the same. Frozen installs
+reject lock changes before installation or writes.
+
+Explicit URL resolution and installation failures are errors even when the
+replaced edge was optional. Ordinary unavailable registry optional dependencies
+still produce warnings. A URL override does not change an outer package's loader,
+platform fallback order, or an engine's WebAssembly capabilities.
 
 ## Workspaces and commands
 
