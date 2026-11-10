@@ -160,9 +160,10 @@ retain their exact reason instead of reporting successful disposal.
 The published runtime source reference is `ShaulLavo/waffle`,
 `packages/waffle/proc/{observation,worker-client}.ts` and
 `packages/waffle/browser/{worker,process-broker}.ts` at
-`0f7b66f7ef920aaa4486847b619e050f2e2f8643`, runtime 0.0.117 with host interface 2.
-The matching public program family is 0.0.19. Web, sandbox and the shell guest builder
-select reviewed, merged Bash source `1754fe78a9a3fd05725a34200c0e5e98731dcfb9`.
+`6e0608451a3f89c1fa0e4f17dacdc6edc5cbc900`, runtime 0.0.118 with host interface 2.
+The matching public program family is 0.0.20. Web, sandbox and the shell guest builder
+select reviewed, merged Bash source `1754fe78a9a3fd05725a34200c0e5e98731dcfb9`,
+which still pins program family 0.0.19. This mixed graph is incomplete.
 
 The original bundle gate in `scripts/runtime-size.ts` classifies the exact observation
 module as eager lifecycle control alongside outcome and directory cells. Its real
