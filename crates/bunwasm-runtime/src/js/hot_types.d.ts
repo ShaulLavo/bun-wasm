@@ -1,4 +1,38 @@
 declare namespace BunWasm {
+  type Getter = () => unknown;
+  type RecordBody = Generator<unknown, void, unknown>;
+  type ModuleRecord = {
+    r: string[];
+    i: [number, string][];
+    x: [string, number, string][];
+    s: number[];
+    /** Local exports: [export name, local binding]. */
+    e: [string, string][];
+    a: boolean;
+    f: (api: RegistrationApi) => RecordBody;
+  };
+  type RegistrationApi = {
+    l(getters: Record<string, Getter>): void;
+    n: object[];
+    ns(request: number): object;
+    readonly meta: object;
+    import(specifier: unknown, options?: unknown): Promise<object>;
+    ga(): unknown;
+    gt(): string;
+  };
+  type RecordSessionBindings = {
+    resolve(specifier: string, referrer: string): string;
+    resolveImport?(specifier: string, referrer: string, mode: BunWasm.ImportMode): string;
+    load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
+    initMeta(name: string, meta: object): void;
+    /** False once the process has exited: nothing new loads, links, evaluates or resumes. */
+    active?(): boolean;
+    /** Keeps the host's event loop alive while a loader-started dynamic import is pending. */
+    track?(operation: Promise<object>): Promise<object>;
+    /** Readies `name` and its static imports for `load`, for a host that evaluates records asynchronously. */
+    prepare?(name: string): Promise<void>;
+  };
+
   interface HotDiagnostic {
     path: string;
     original: string;
@@ -9,7 +43,7 @@ declare namespace BunWasm {
   }
   type HotSource = { kind: "builtin"; name: string } | {
     kind: "esm"; path: string; digest: string; identity: string; code: string; diagnostic: HotDiagnostic;
-  };
+  } | { kind: "json" | "text"; path: string; digest: string; identity: string; text: string };
   interface HotGraph {
     readonly id: number;
     readonly sources: Map<string, HotSource>;
@@ -85,6 +119,7 @@ declare namespace BunWasm {
     isBuiltinId(name: string): boolean;
     dirname(path: string): string;
     printError(error: unknown): void;
+    reportHotError(error: unknown): void;
     require(name: "hot_run"): { run(entry: string): void; dispose(): void };
     require(name: "hot_revisions"): () => HotRevisionController;
     require(name: "hot_serve"): (current: () => HotGraph | undefined) => HotServers;
@@ -94,10 +129,6 @@ declare namespace BunWasm {
     hotDisplayName?(name: string): string | undefined;
     hotFileRequire?(): void;
     builtin(name: "node:fs"): ShellFs;
-  }
-  interface AsyncHooks {
-    AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource };
-    AsyncLocalStorage: new<T>() => { getStore(): T | undefined; run<R>(store: T, callback: () => R): R };
   }
   interface ShellFs {
     statSync(path: string): { ino: number | bigint; dev: number | bigint; isDirectory(): boolean };

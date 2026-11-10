@@ -89,12 +89,17 @@
     return `${file}:${line}:${col}`;
   }
 
+  function callSiteName(file, site) {
+    if (typeof file === "string" && file.startsWith("bunwasm:hot:")) return file;
+    return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
+  }
+
   function formatCallSite(site, keepIdentity = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
     const hotName = typeof rawFile === "string" && rawFile.startsWith("bunwasm:hot:");
-    const file = hotName ? rawFile : internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
+    const file = callSiteName(rawFile, site);
     const name = site.getFunctionName();
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
@@ -856,6 +861,8 @@
     }
     printError(err);
   }
+
+  internal.reportHotError = printFatal;
 
   internal.handleUncaught = function handleUncaught(err) {
     if (listenerCount("uncaughtException") > 0) {

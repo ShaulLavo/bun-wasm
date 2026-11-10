@@ -40,7 +40,25 @@ impl State {
             identity_part(&path),
             identity_part(name)
         );
-        let (code, format, map) = self.hot_source(name, &path, &original).map_err(|error| {
+        let loader = Loader::from_path(&path);
+        if name != path
+            || loader == Loader::Json
+            || loader == Loader::Text && !path.ends_with(".html")
+        {
+            let kind = if name != path || loader == Loader::Text {
+                "text"
+            } else {
+                "json"
+            };
+            return Ok(Record::new()
+                .set("kind", kind)
+                .set("path", path)
+                .set("digest", digest)
+                .set("identity", identity)
+                .set("text", original.as_ref())
+                .into());
+        }
+        let (code, format, map) = self.hot_source(&path, &original).map_err(|error| {
             error
                 .prop("__bunwasmHotPath", path.clone())
                 .prop("__bunwasmHotDigest", digest.clone())
@@ -80,22 +98,9 @@ impl State {
 
     fn hot_source(
         &self,
-        name: &str,
         path: &str,
         raw: &str,
     ) -> Result<(String, Format, Option<String>), NativeError> {
-        if name != path
-            || matches!(Loader::from_path(path), Loader::Json | Loader::Text)
-                && !path.ends_with(".html")
-        {
-            let value = if name != path || Loader::from_path(path) == Loader::Text {
-                serde_json::Value::String(raw.to_owned())
-            } else {
-                serde_json::from_str(raw)
-                    .map_err(|error| NativeError::syntax_error(format!("{path}: {error}")))?
-            };
-            return Ok((format!("export default {value};"), Format::Esm, None));
-        }
         if path.ends_with(".html") {
             return Err(NativeError::type_error(
                 "--hot does not support HTMLBundle entries; import HTML with type: 'text'",

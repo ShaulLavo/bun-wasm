@@ -16,39 +16,11 @@
 // no native load or resolve, no module body, no resumed top-level await and no
 // fulfilment or rejection. The pending promises stay pending, and no module the
 // exit interrupted is marked evaluated.
-type Getter = () => unknown;
-type RecordBody = Generator<unknown, void, unknown>;
-type ModuleRecord = {
-  r: string[];
-  i: [number, string][];
-  x: [string, number, string][];
-  s: number[];
-  /** Local exports: [export name, local binding]. */
-  e: [string, string][];
-  a: boolean;
-  f: (api: RegistrationApi) => RecordBody;
-};
-type RegistrationApi = {
-  l(getters: Record<string, Getter>): void;
-  n: object[];
-  ns(request: number): object;
-  readonly meta: object;
-  import(specifier: unknown, options?: unknown): Promise<object>;
-  ga(): unknown;
-  gt(): string;
-};
-type RecordSessionBindings = {
-  resolve(specifier: string, referrer: string): string;
-  resolveImport?(specifier: string, referrer: string, mode: BunWasm.ImportMode): string;
-  load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
-  initMeta(name: string, meta: object): void;
-  /** False once the process has exited: nothing new loads, links, evaluates or resumes. */
-  active?(): boolean;
-  /** Keeps the host's event loop alive while a loader-started dynamic import is pending. */
-  track?(operation: Promise<object>): Promise<object>;
-  /** Readies `name` and its static imports for `load`, for a host that evaluates records asynchronously. */
-  prepare?(name: string): Promise<void>;
-};
+type Getter = BunWasm.Getter;
+type RecordBody = BunWasm.RecordBody;
+type ModuleRecord = BunWasm.ModuleRecord;
+type RegistrationApi = BunWasm.RegistrationApi;
+type RecordSessionBindings = BunWasm.RecordSessionBindings;
 (function (native: RecordSessionBindings, installHook?: boolean) {
   "use strict";
   type Status = "loaded" | "linked" | "evaluating" | "evaluating-async" | "evaluated";

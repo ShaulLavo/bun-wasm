@@ -2,11 +2,17 @@
   "use strict";
   type Graph = BunWasm.HotGraph;
   type Source = BunWasm.HotSource;
+  type Prepared = ReturnType<RecordSessionBindings["load"]>;
+  const parseJson = JSON.parse;
   const native = internal.native;
   const fs = internal.builtin("node:fs");
   const path = internal.require("path");
   const { AsyncLocalStorage } = internal.builtin("node:async_hooks");
   const association = new AsyncLocalStorage<Graph>();
+  const promiseThen = Promise.prototype.then;
+  const apply = Reflect.apply;
+  const pendingImports = new Map<Graph, number>();
+  const leasedGraphs = new Set<Graph>();
   const controllerContext = native.getAsyncContext();
   const servers = internal.require("hot_serve")(() => association.getStore());
   internal.hotServers = servers;
@@ -71,6 +77,8 @@
   function allInterests(): Set<string> {
     const interests = new Set(failed);
     if (entry) interests.add(entry);
+    for (const graph of pendingImports.keys()) for (const file of graph.interests) interests.add(file);
+    for (const graph of leasedGraphs) for (const file of graph.interests) interests.add(file);
     if (state.kind === "serving") for (const file of state.graph.interests) interests.add(file);
     if (state.kind === "updating") {
       for (const file of state.candidate.interests) interests.add(file);
@@ -97,7 +105,7 @@
   function fatal(error: unknown): void {
     if (state.kind === "closed") return;
     dispose();
-    internal.printError(error);
+    internal.reportHotError(error);
     globalThis.process.exitCode = 1;
   }
 
@@ -186,7 +194,16 @@
   function active(graph: Graph): boolean { return state.kind !== "closed" && graph.phase !== "cancelled"; }
 
   function prepare(graph: Graph, name: string): void {
-    if (!active(graph) || graph.sources.has(name)) return;
+    if (!active(graph)) return;
+    const errors = preparationErrors.get(graph)!;
+    const failure = errors.get(name);
+    if (failure) throw failure.value;
+    if (graph.sources.has(name)) return;
+    try { prepareSource(graph, name); }
+    catch (error) { errors.set(name, { value: error }); throw error; }
+  }
+
+  function prepareSource(graph: Graph, name: string): void {
     if (!internal.isBuiltinId(name)) interested(graph, native.modulePath(name), false);
     if (!active(graph)) return;
     let source: Source;
@@ -198,24 +215,35 @@
     graph.sources.set(name, source);
     if (source.kind === "builtin") return;
     graph.inputs.set(source.path, source.digest);
-    if (graph.phase !== "retired" || graph.leases > 0) diagnostics.set(source.identity, source.diagnostic);
-    const record = native.evalScript(source.code, source.identity, 1);
-    records.get(graph)!.set(name, record);
-    const requests: unknown = Reflect.get(record, "r");
-    if (!Array.isArray(requests) || !requests.every(request => typeof request === "string")) throw new TypeError("Invalid hot registration record");
-    for (const request of requests) prepare(graph, resolve(graph, request, name, "inferred"));
+    if (source.kind !== "esm") {
+      const value: unknown = source.kind === "json" ? json(source.path, source.text) : source.text;
+      records.get(graph)!.set(name, { namespace: value, default: value });
+      return;
+    }
+    if (graph.phase !== "retired" || graph.leases > 0 || pendingImports.has(graph)) diagnostics.set(source.identity, source.diagnostic);
+    const record = registration(native.evalScript(source.code, source.identity, 1));
+    records.get(graph)!.set(name, { record });
+    for (const request of record.r) prepare(graph, resolve(graph, request, name, "inferred"));
   }
 
-  const records = new WeakMap<Graph, Map<string, unknown>>();
+  const records = new WeakMap<Graph, Map<string, Prepared>>();
+  const preparationErrors = new WeakMap<Graph, Map<string, { value: unknown }>>();
 
-  function loaded(graph: Graph, name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown } {
+  function json(file: string, text: string): unknown {
+    try { return parseJson(text); }
+    catch (error) {
+      if (error instanceof SyntaxError) Object.defineProperty(error, "__bunwasmFormatted", { value: `SyntaxError: ${error.message}\n    at ${file}\n` });
+      throw error;
+    }
+  }
+
+  function loaded(graph: Graph, name: string): Prepared {
     const source = graph.sources.get(name);
     if (!source) throw new Error(`--hot source was not prepared: ${name}`);
     if (source.kind === "builtin") { const value = internal.builtin(source.name); return { namespace: value, default: value }; }
     const value = records.get(graph)!.get(name);
-    // Compiler output crosses the native data boundary once; the loader is the
-    // existing validator/linker for its complete registration contract.
-    return { record: registration(value) };
+    if (!value) throw new Error(`--hot registration was not prepared: ${name}`);
+    return value;
   }
 
   function registration(value: unknown): ModuleRecord {
@@ -237,10 +265,14 @@
     const graph: Graph = {
       id: ++revision, sources: new Map(), interests: new Set(), inputs: new Map(), phase: "candidate", leases: 0,
       releaseDiagnostics() {
+        if (pendingImports.has(graph) || graph.leases > 0) return;
+        leasedGraphs.delete(graph);
         for (const source of graph.sources.values()) if (source.kind === "esm") diagnostics.delete(source.identity);
+        inController(reconcile);
       },
     };
     records.set(graph, new Map());
+    preparationErrors.set(graph, new Map());
     return graph;
   }
 
@@ -251,6 +283,13 @@
       load: name => loaded(graph, name),
       initMeta(name, meta) { internal.initImportMeta(meta, name, name === entry); },
       active: () => active(graph),
+      track(operation) {
+        if (!active(graph)) return operation;
+        pendingImports.set(graph, (pendingImports.get(graph) ?? 0) + 1);
+        const finish = () => finishImport(graph);
+        apply(promiseThen, operation, [finish, finish]);
+        return operation;
+      },
       async prepare(name) {
         const previous = new Set(Array.from(graph.sources.values(), source => source.kind === "esm" ? source.path : ""));
         prepare(graph, name);
@@ -259,8 +298,18 @@
     });
   }
 
+  function finishImport(graph: Graph): void {
+    const count = pendingImports.get(graph);
+    if (count === undefined) return;
+    if (count > 1) { pendingImports.set(graph, count - 1); return; }
+    pendingImports.delete(graph);
+    if (graph.phase === "retired") graph.releaseDiagnostics();
+    inController(reconcile);
+  }
+
   function retire(graph: Graph): void {
     graph.phase = "retired";
+    if (graph.leases > 0) leasedGraphs.add(graph);
     if (graph.leases === 0) graph.releaseDiagnostics();
   }
 
@@ -278,9 +327,11 @@
 
   function cancel(graph: Graph): void {
     graph.phase = "cancelled";
+    pendingImports.delete(graph);
     servers.abort(graph);
     graph.releaseDiagnostics();
     records.delete(graph);
+    preparationErrors.delete(graph);
     graph.sources.clear();
   }
 
@@ -308,9 +359,9 @@
       inController(reconcile);
       saveObserved();
       servers.publish(graph);
-      try { internal.hotCommitted?.(graph.id, server); } catch (error) { internal.printError(error); }
+      try { internal.hotCommitted?.(graph.id, server); } catch (error) { internal.reportHotError(error); }
     } catch (error) {
-      if (active(graph)) internal.printError(error);
+      if (active(graph)) internal.reportHotError(error);
     } finally {
       finishAttempt(graph, previous);
     }
@@ -361,6 +412,8 @@
     failedInputs.clear();
     observed.clear();
     diagnostics.clear();
+    pendingImports.clear();
+    leasedGraphs.clear();
   }
 
   return {

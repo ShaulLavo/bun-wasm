@@ -107,6 +107,10 @@ declare namespace BunWasm {
     triggerAsyncId(): number;
     emitDestroy(): this;
   }
+  interface AsyncHooks {
+    AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource };
+    AsyncLocalStorage: new<T>() => { getStore(): T | undefined; run<R>(store: T, callback: () => R): R };
+  }
   interface Internal {
     builtin(name: "node:async_hooks"): AsyncHooks;
   }
