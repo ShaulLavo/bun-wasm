@@ -32,6 +32,7 @@ function setup() {
   };
   const manager = hotServe(internal)(() => owner);
   let binds = 0;
+  const bindContexts: unknown[] = [];
   let closes = 0;
   const reloads: unknown[] = [];
   const server = {
@@ -39,7 +40,7 @@ function setup() {
     reload(options: unknown) { reloads.push(options); return server; },
     stop() { closes++; return Promise.resolve(); },
   };
-  const create = () => { binds++; return server; };
+  const create = () => { bindContexts.push(context); binds++; return server; };
   const graph = (id: number) => ({ id, sources: new Map(), interests: new Set(), inputs: new Map(), phase: "candidate", leases: 0, releases: 0, releaseDiagnostics() { this.releases++; } });
   function begin(id: number, frame: string) {
     const generation = graph(id);
@@ -51,7 +52,7 @@ function setup() {
   const serve = (extra = {}) => manager.serve({ hostname: "LOCALHOST.", port: server.port, fetch: () => new Response("ok"), ...extra }, create);
   const run = hotRequest(internal).run;
   return { manager, begin, serve, run, create, server, notices, reloads, setOwner(value: unknown) { owner = value; },
-    get context() { return context; }, get binds() { return binds; }, get closes() { return closes; } };
+    bindContexts, get context() { return context; }, get binds() { return binds; }, get closes() { return closes; } };
 }
 
 test("same server and bind across commits; snapshots retain handler, missing error and registration frame", async () => {
@@ -68,6 +69,7 @@ test("same server and bind across commits; snapshots retain handler, missing err
   second.phase = "committed";
   const after = await app.manager.select(one);
   expect(app.binds).toBe(1);
+  expect(app.bindContexts).toEqual(["initial"]);
   expect(before.error).toBe(error);
   expect(after.error).toBeUndefined();
   expect(before.context).toBe("old ALS");

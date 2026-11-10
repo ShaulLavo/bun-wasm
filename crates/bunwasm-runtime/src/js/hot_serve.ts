@@ -9,6 +9,7 @@
   const normalize = internal.require("net_hostname");
   const createRevisions = internal.require("hot_revisions");
   const context = () => internal.native.getAsyncContext();
+  const controllerContext = context();
 
   return function createHotServers(current: () => Graph | undefined): BunWasm.HotServers {
     let state: State = { kind: "absent" };
@@ -37,7 +38,7 @@
       if (staged) return fail("supports only one Bun.serve call per evaluation");
       const requested = bind(options);
       if (state.kind === "absent") {
-        const server = create({ ...options, hostname: requested.hostname, port: requested.port });
+        const server = internal.runInContext(controllerContext, create, undefined, [{ ...options, hostname: requested.hostname, port: requested.port }]);
         state = { kind: "provisional", binding: { server, hostname: requested.hostname, port: requested.port, revisions: createRevisions() } };
       }
       const { binding } = state;
