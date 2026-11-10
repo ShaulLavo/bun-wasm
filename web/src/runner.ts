@@ -22,6 +22,7 @@ import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
 import { runtimeRelay } from "./net/relay.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
+import { pageFacts } from "./engine-stack-budget";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
@@ -188,6 +189,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       ...rootCommand(options),
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
+      page: pageFacts(),
       net: ring,
       lookupPort: lookupChannel?.port2,
       slots: slotsMode(),

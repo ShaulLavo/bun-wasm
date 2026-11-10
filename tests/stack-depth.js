@@ -1,6 +1,8 @@
 // Recursion probe for scripts/measure-stack.py and web/tests/browser-stack.mjs.
 // `bun run stack-depth.js <mode> <n>` nests one recursive path n levels deep and prints
 // "completed" or "caught <error name>", then "continued"; a wasm trap prints neither.
+// `chainCapacity <n>` also prints "capacities <JSON>": the deepest nesting each parser chain completes.
+// Every run first prints "settings <JSON>": the stack budget and parser reserve in its environment.
 const mode = process.argv[2];
 const n = +process.argv[3];
 const nest = (open, close) => open.repeat(n) + close.repeat(n);
@@ -61,9 +63,59 @@ actions.require = () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+// Parser chains, one source shape per recursion in an engine's parser (docs/stack-limits.md). Each
+// is a function body. "Compile" only constructs the function, which syntax-checks the body; "Call"
+// also runs it, which parses the body in full and generates its code. "16" adds one character
+// outside Latin-1, so the engine reads a 16-bit source.
+const chains = {
+  Assign: (depth) => 'var o = {};\n' + 'o.a = '.repeat(depth) + '0;',
+  Conditional: (depth) => 'var x = 0;\nreturn ' + 'x ? 0 : '.repeat(depth) + '0;',
+  Block: (depth) => '{'.repeat(depth) + '}'.repeat(depth),
+  Call: (depth) => 'var f = function (v) { return v; };\nreturn ' + 'f('.repeat(depth) + '0' + ')'.repeat(depth) + ';',
+  Function: (depth) => 'return ' + '(function () { return '.repeat(depth) + '0' + '; })'.repeat(depth) + ';',
+};
+const chainModes = {};
+function addChainMode(kind, pass, width) {
+  chainModes[`chain${kind}${pass}${width}`] = (depth = n) => {
+    const compiled = new Function((width === '16' ? '/* ☃ */' : '') + chains[kind](depth));
+    if (pass === 'Call') compiled();
+  };
+}
+for (const kind of Object.keys(chains)) {
+  for (const pass of ['Compile', 'Call']) ['8', '16'].forEach((width) => addChainMode(kind, pass, width));
+}
+Object.assign(actions, chainModes);
+function chainCompletes(attempt, depth) {
+  try { attempt(depth); return true; }
+  catch (error) {
+    if (error instanceof RangeError || error instanceof SyntaxError || error.name === 'InternalError') return false;
+    throw error;
+  }
+}
+function chainCapacity(attempt) {
+  if (chainCompletes(attempt, n)) return n;
+  let low = 0;
+  let high = n;
+  while (low + 1 < high) {
+    const middle = (low + high) >> 1;
+    if (chainCompletes(attempt, middle)) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+// Every chain's capacity from one guest: the parser's refusal is catchable, so the search runs in
+// process and prints one JSON line before the usual result. n is the deepest nesting tried.
+actions.chainCapacity = () => {
+  const capacities = {};
+  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
+  console.log('capacities', JSON.stringify(capacities));
+};
 actions.promise = async () => { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); await Promise.resolve().then(f); };
 actions.async = async () => { let d = 0; const f = async () => { if (++d < n) await f(); }; await f(); };
 (async () => {
+  // What this guest was given, so a measurement can record the settings that were in effect.
+  const { BUN_WASM_STACK_KIB: budget = null, BUN_WASM_JSC_PARSER_RESERVE: parserReserve = null } = process.env;
+  console.log('settings', JSON.stringify({ budget, parserReserve }));
   try { await actions[mode](); console.log('completed', mode, n); }
   catch (error) { console.log('caught', mode, error.name, n, error.message); }
   console.log('continued');

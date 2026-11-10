@@ -9,6 +9,7 @@ import type { Preview1SocketBinding } from "waffle/browser/preview1-network";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { normalize } from "waffle/core/path";
 import type { Engine, RunRequest } from "./bun-executor.js";
+import { pageFacts } from "./engine-stack-budget.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import { runtimeRelay } from "./net/relay.js";
 import { readOutcome } from "waffle/proc/outcome";
@@ -126,7 +127,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
-        trace: false, net: ring, lookupChannel: lookupChannel?.name,
+        trace: false, page: pageFacts(), net: ring, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
       },
       cleanup,

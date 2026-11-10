@@ -10,6 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
+import { qualifiedParserReserves, type PageFacts, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -799,12 +800,24 @@ const stackHosts = [
   { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
 ];
 
-function stackEnvironment(host: typeof stackHosts[number], engine: RunRequest["engine"], env: Record<string, string> = {}) {
+/** Runs with exactly these qualified parser reserves, whatever the shipped table holds. */
+function withQualifiedReserves<Result>(entries: QualifiedParserReserves, run: () => Result): Result {
+  const shipped = { ...qualifiedParserReserves };
+  const replace = (next: QualifiedParserReserves) => {
+    for (const host of Object.keys(qualifiedParserReserves)) Reflect.deleteProperty(qualifiedParserReserves, host);
+    Object.assign(qualifiedParserReserves, next);
+  };
+  replace(entries);
+  try { return run(); }
+  finally { replace(shipped); }
+}
+
+function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack">, engine: RunRequest["engine"], env: Record<string, string> = {}, page?: PageFacts) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: host.stack }));
   const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env,
+  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env, page,
     filesystem: connection.client, runtimeProcess, trace: false, net: null };
   try {
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: host.agent } });
@@ -818,7 +831,7 @@ function stackEnvironment(host: typeof stackHosts[number], engine: RunRequest["e
 }
 
 for (const host of stackHosts) {
-  test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => {
+  test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => withQualifiedReserves({}, () => {
     expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
     expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
     expect(stackEnvironment(host, "browser")).toEqual({});
@@ -826,8 +839,55 @@ for (const host of stackHosts) {
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
     expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
-  }));
+  })));
 }
+
+const budgetKey = "BUN_WASM_STACK_KIB", reserveKey = "BUN_WASM_JSC_PARSER_RESERVE";
+const linuxFirefox = stackHosts[0]!;
+const macSafari = { agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15", stack: geckoStack };
+const qualified: QualifiedParserReserves = { "firefox-linux": { bytes: "1024" }, "safari-macos": { bytes: "1056", minimumSafariMajor: 26 } };
+
+// The six rows of the executor contract in docs/stack-limits.md, on a host with a qualified value.
+const executorRows: { row: string; env: Record<string, string>; expected: Record<string, string> }[] = [
+  { row: "neither key", env: {}, expected: { [budgetKey]: "208", [reserveKey]: "1024" } },
+  { row: "budget only", env: { [budgetKey]: "260" }, expected: { [budgetKey]: "260", [reserveKey]: "1024" } },
+  { row: "reserve only", env: { [reserveKey]: "512" }, expected: { [budgetKey]: "208", [reserveKey]: "512" } },
+  { row: "both keys", env: { [budgetKey]: "260", [reserveKey]: "512" }, expected: { [budgetKey]: "260", [reserveKey]: "512" } },
+  { row: "an empty budget", env: { [budgetKey]: "" }, expected: { [budgetKey]: "", [reserveKey]: "1024" } },
+  { row: "an empty reserve", env: { [reserveKey]: "" }, expected: { [budgetKey]: "208", [reserveKey]: "" } },
+  { row: "an invalid reserve", env: { [reserveKey]: "1024kb" }, expected: { [budgetKey]: "208", [reserveKey]: "1024kb" } },
+];
+for (const { row, env, expected } of executorRows) {
+  test(`a JSC request with ${row} keeps each stack key independent`, controlled(() => withQualifiedReserves(qualified, () => {
+    expect(stackEnvironment(linuxFirefox, "jsc", env)).toEqual(expected);
+  })));
+}
+
+test("no engine but JSC ever receives the parser reserve", controlled(() => withQualifiedReserves(qualified, () => {
+  expect(stackEnvironment(linuxFirefox, "quickjs")).toEqual({});
+  expect(stackEnvironment(linuxFirefox, "browser")).toEqual({});
+  expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
+  expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
+  expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
+})));
+
+test("a host without a qualified value adds only its budget", controlled(() => withQualifiedReserves(qualified, () => {
+  for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
+  expect(stackEnvironment(macSafari, "jsc")).toEqual({ [budgetKey]: "192" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
+})));
+
+test("the page's zero-touch fact in the run request selects the macOS Safari value", controlled(() => withQualifiedReserves(qualified, () => {
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192", [reserveKey]: "1056" });
+  expect(stackEnvironment(macSafari, "jsc", { [budgetKey]: "240" }, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "240", [reserveKey]: "1056" });
+})));
+
+test("the shipped table gives Linux Firefox exactly its qualified value, and every other host none", controlled(() => {
+  const shipped = qualifiedParserReserves["firefox-linux"]?.bytes;
+  expect(stackEnvironment(linuxFirefox, "jsc")).toEqual(shipped === undefined ? { [budgetKey]: "208" } : { [budgetKey]: "208", [reserveKey]: shipped });
+  for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192" });
+}));
 
 let control: Awaited<ReturnType<typeof workerControlFixture>>;
 

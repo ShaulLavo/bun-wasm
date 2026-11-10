@@ -1,10 +1,50 @@
+// The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
+export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
+  ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
+/** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
+export const chainMaximum = 4096;
 const stackModes = [
   "plain", "getter", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
   "power", "ternary", "statement", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
   "async", "promise", "console",
-];
-const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"]);
-const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "regexpnc", "lookahead"]);
+].concat(chainModes);
+// Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
+const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"].concat(chainModes));
+const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "regexpnc", "lookahead"].concat(chainModes));
+
+function deepestAttempt(mode: string): number {
+  // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
+  if (mode === "bound") return 2000;
+  return mode.startsWith("chain") ? chainMaximum : 200000;
+}
+
+export interface GuestStackSettings { readonly budget: string | null; readonly parserReserve: string | null }
+
+/** The probe's `settings` line: the stack environment its guest was given. Null when it printed none, as after a trap. */
+export function guestStackSettings(output: string): GuestStackSettings | null {
+  const line = output.split(/\r?\n/).find(entry => entry.startsWith("settings "));
+  if (!line) return null;
+  const parsed: unknown = JSON.parse(line.slice("settings ".length));
+  if (!parsed || typeof parsed !== "object" || !("budget" in parsed) || !("parserReserve" in parsed)) throw new Error("Malformed guest stack settings");
+  const { budget, parserReserve } = parsed;
+  if ((budget !== null && typeof budget !== "string") || (parserReserve !== null && typeof parserReserve !== "string")) throw new Error("Malformed guest stack settings");
+  return { budget, parserReserve };
+}
+
+/** The `capacities` line a `chainCapacity` run prints: one whole number per parser chain. */
+export function chainCapacities(output: string): Record<string, number> {
+  const lines = output.split(/\r?\n/).filter(line => line.startsWith("capacities "));
+  if (lines.length !== 1) throw new Error(`Expected one capacities line, found ${lines.length}`);
+  const parsed: unknown = JSON.parse(lines[0]!.slice("capacities ".length));
+  if (!parsed || typeof parsed !== "object") throw new Error("Malformed chain capacities");
+  const capacities: Record<string, number> = {};
+  for (const [mode, value] of Object.entries(parsed)) {
+    if (!chainModes.includes(mode) || typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`Malformed chain capacity ${mode}`);
+    capacities[mode] = value;
+  }
+  if (Object.keys(capacities).length !== chainModes.length) throw new Error("Missing chain capacities");
+  return capacities;
+}
 
 type Failure = { depth: number; outcome: string };
 type Row = { host: string; mode: string; at_max: string; capacity?: number; beyond?: string; failures: Failure[] };
@@ -43,8 +83,7 @@ async function measurePath(attempt: Attempt, host: string, mode: string): Promis
     if (!acceptedStackOutcome(mode, outcome)) failures.push({ depth, outcome });
     return outcome;
   }
-  // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
-  let high = mode === "bound" ? 2000 : 200000;
+  let high = deepestAttempt(mode);
   const row: Row = { host, mode, at_max: await trial(high), failures };
   if (!searched.has(mode) || row.at_max === "completed") return row;
   let low = 0;

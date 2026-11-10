@@ -1354,19 +1354,47 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
  #include "config.h"
 +#include <wtf/StackBounds.h>
  #include "Parser.h"
-@@ -2103,2 +2104,3 @@
+@@ -89,2 +90,15 @@
+ std::atomic<unsigned> globalParseCount { 0 };
++
++#if OS(WASI)
++// bun-wasm: bytes that parseStatement and parseAssignmentExpression leave out of their 2048-byte
++// shadow-stack reservation. Zero-filled side data therefore means the full reservation, before
++// and without any initializer. Written at most once, before the first parse (helpers.cpp).
++static uint32_t wasmParserReserveDiscount;
++
++void setWasmParserReserve(unsigned bytes)
++{
++    RELEASE_ASSERT(bytes >= 512 && bytes <= 2048 && !(bytes % 16));
++    wasmParserReserveDiscount = 2048 - bytes;
++}
++#endif
+
+@@ -2103,2 +2117,3 @@
  {
-+    WASM_RESERVE_STACK(2048);
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
      DepthManager statementDepth(&m_statementDepth);
-@@ -4284,2 +4286,3 @@
+@@ -4284,2 +4299,3 @@
  {
-+    WASM_RESERVE_STACK(2048);
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
      ASSERT(!hasError());
-@@ -4446,2 +4449,4 @@
+@@ -4446,2 +4462,4 @@
  {
 +    WASM_RESERVE_STACK(2048);
 +    failIfStackOverflow();
      ASSERT(match(AWAIT));
+diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
+--- a/Source/JavaScriptCore/parser/Parser.h
++++ b/Source/JavaScriptCore/parser/Parser.h
+@@ -152,2 +152,8 @@
+ JS_EXPORT_PRIVATE extern std::atomic<unsigned> globalParseCount;
++
++#if OS(WASI)
++// bun-wasm: sets the shadow-stack bytes parseStatement and parseAssignmentExpression reserve.
++// Takes 512 through 2048 in multiples of 16. Call at most once, before the first parse.
++JS_EXPORT_PRIVATE void setWasmParserReserve(unsigned bytes);
++#endif
+
 diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
 --- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
 +++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp

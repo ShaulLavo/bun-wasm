@@ -4,9 +4,11 @@
 // context per attempt, so the wasm runs in its engine's first tier (docs/stack-limits.md).
 //   node tests/browser-stack.mjs [--measure [--cold]] [chromium] [webkit]
 //   ENGINES=quickjs node tests/browser-stack.mjs --measure webkit
+//   ENGINES=jsc STACK_KIB=260 JSC_PARSER_RESERVE=1024 node tests/browser-stack.mjs --measure --cold firefox
 import { readFileSync } from 'node:fs';
 import { firstVisit } from './first-visit.mjs';
-import { measureStackPaths, stackOutcome } from '../../scripts/stack-measurement.ts';
+import { guestStackSettings, measureStackPaths, stackOutcome } from '../../scripts/stack-measurement.ts';
+import { effectiveParserReserve } from '../src/engine-stack-budget.ts';
 import { playwright, ready, run, session, writeFile } from './playground.mjs';
 
 const s = session('bun-wasm-web-stack-');
@@ -31,10 +33,27 @@ async function fixtures(page, label) {
   }
 }
 
+// STACK_KIB and JSC_PARSER_RESERVE set the guest's BUN_WASM_STACK_KIB and BUN_WASM_JSC_PARSER_RESERVE
+// for every measured run. Without them the executor's host policy applies, as for a user.
+const requested = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };
+const settingsPrefix = (requested.budget === null ? '' : `BUN_WASM_STACK_KIB=${requested.budget} `)
+  + (requested.parserReserve === null ? '' : `BUN_WASM_JSC_PARSER_RESERVE=${requested.parserReserve} `);
+// Every distinct pair a measured guest reported: what the executor actually passed it.
+const observed = new Set();
+
 async function outcome(page, mode, n, nativeFirefox) {
   await writeFile(page, '/home/user/depth.js', probe);
-  const result = await run(page, `bun run depth.js ${mode} ${n}`, 180000);
+  const result = await run(page, `${settingsPrefix}bun run depth.js ${mode} ${n}`, 180000);
+  const settings = guestStackSettings(result.output ?? '');
+  if (settings) observed.add(JSON.stringify(settings));
   return stackOutcome(result, mode, n, nativeFirefox);
+}
+
+function reportSettings(label, engine) {
+  const guests = Array.from(observed, (entry) => JSON.parse(entry));
+  observed.clear();
+  const effective = engine === 'jsc' ? guests.map((guest) => effectiveParserReserve(guest.parserReserve ?? undefined)) : null;
+  console.log(JSON.stringify({ host: label, settings: { requested, guests, effectiveParserReserve: effective } }));
 }
 
 async function openPage(browser, name, url, engine) {
@@ -63,6 +82,7 @@ async function checkEngine(browser, name, url, engine) {
         cold ? coldAttempt(browser, name, url, engine, nativeFirefox) : (mode, n) => outcome(opened.page, mode, n, nativeFirefox),
         label, row => console.log(JSON.stringify(row)),
       );
+      reportSettings(label, engine);
       if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);
     }
     await fixtures(opened.page, label);

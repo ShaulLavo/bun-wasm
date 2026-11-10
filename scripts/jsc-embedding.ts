@@ -4,6 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
+import { nodeHost, parserReserveControls } from "./jsc-parser-reserve";
 import { parseCheck } from "./test-checks";
 
 const root = resolve(import.meta.dir, "..");
@@ -57,6 +58,9 @@ function testFixtures(artifact: string): void {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
     const stack = stackFixture();
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
+    // The parser reserve at every host budget, its rejected forms and each shipped value (docs/stack-limits.md).
+    for (const record of parserReserveControls(nodeHost(artifact))) console.log(JSON.stringify(record));
+    console.log("PASS JSC parser reserve tuples");
     for (const command of handshakeCommands(artifact)) runHandshake(command, scratch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
