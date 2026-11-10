@@ -2,16 +2,19 @@
 // Browser host. No mock: Chromium instantiates the group core and side through Waffle's worker.
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
-import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
-import { programKind, programProfile } from "../../src/engine-kind.ts";
+import { programKind, programProfile, sharedGroupPair } from "../../src/engine-kind.ts";
+import { stageFixtureTree } from "../../scripts/fixture-tree";
+import { oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcTree } from "../../scripts/real-oxc-consumer";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
 
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
 const fixtureSource = join(repository, "tests/fixtures/shared-wasm-memory");
+const oxcTree = process.env[oxcTreeVariable];
 
 let scratch: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -32,6 +35,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => 
 const deadline = setTimeout(() => { console.error("shared Wasm memory browser deadline"); void cleanup().finally(() => process.exit(1)); }, 300_000);
 
 async function prepareSite(program: string): Promise<string> {
+  const coreBytes = await Bun.file(program).bytes();
+  const core = new WebAssembly.Module(coreBytes);
+  const kind = programKind(core);
+  if (kind === "single") throw new Error("The shared Browser fixture requires a paired core");
+  const sideBytes = await Bun.file(join(dirname(program), programProfile(kind).side)).bytes();
+  assert.equal(sharedGroupPair(core, sideBytes), true, "The selected Browser host program must be a shared-group pair");
   const base = process.env.RUNNER_TEMP ?? (await stat("/work/tmp").then(() => "/work/tmp", () => originalTmp ?? "/tmp"));
   scratch = await mkdtemp(join(base, "bun-wasm-shared-memory-browser-"));
   process.env.TMPDIR = scratch;
@@ -39,16 +48,16 @@ async function prepareSite(program: string): Promise<string> {
   console.log(JSON.stringify({ resources: { scratch, listener: "ephemeral loopback port", downloads: "none", program } }));
   await buildBrowserEntries([join(web, "tests/shared-wasm-memory-browser-main.ts"), join(web, "tests/shared-wasm-agent/worker.ts"), join(web, "src/fs-worker.ts"), join(web, "src/notification-worker.ts")], out, { runtimeWorker: true });
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./shared-wasm-memory-browser-main.js"></script>');
-  await cp(fixtureSource, join(out, "fixture"), { recursive: true });
-  const names = (await readdir(fixtureSource)).filter(name => name.endsWith(".ts") || name.endsWith(".wasm"));
-  // The stack probe the parser reserve ownership entry runs in each group.
-  await copyFile(join(repository, "tests/stack-depth.js"), join(out, "fixture/stack-depth.js"));
-  await Bun.write(join(out, "fixture/index.json"), JSON.stringify(names.concat(["stack-depth.js"])));
+  if (oxcTree !== undefined) requireOxcTree(oxcTree);
+  const entries = await stageFixtureTree(oxcTree ?? fixtureSource, join(out, "fixture"));
+  if (oxcTree === undefined) {
+    await Bun.write(join(out, "fixture/stack-depth.js"), Bun.file(join(repository, "tests/stack-depth.js")));
+    entries.push({ kind: "file", path: "stack-depth.js" });
+  }
+  await Bun.write(join(out, "fixture-manifest.json"), JSON.stringify(entries));
   await mkdir(join(out, "program"));
-  await copyFile(program, join(out, "program/bun.wasm"));
-  const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
-  if (kind === "single") throw new Error("The shared Browser fixture requires a paired core");
-  await copyFile(join(dirname(program), programProfile(kind).side), join(out, "program/side.wasm"));
+  await Bun.write(join(out, "program/bun.wasm"), coreBytes);
+  await Bun.write(join(out, "program/side.wasm"), sideBytes);
   await Bun.write(join(out, "program/kind.json"), JSON.stringify(kind));
   return out;
 }
@@ -58,7 +67,7 @@ function serve(out: string): number {
     const url = new URL(request.url);
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
-    const path = resolve(out, `.${url.pathname === "/" ? "/index.html" : url.pathname}`);
+    const path = resolve(out, `.${url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname)}`);
     if (!path.startsWith(out + sep) || !await Bun.file(path).exists()) return new Response(null, { status: 404, headers });
     return new Response(Bun.file(path), { headers });
   } });
@@ -83,7 +92,7 @@ async function result(page: Page): Promise<Result> {
   const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => console.log(JSON.stringify({ progress })), () => {});
   const progress = setInterval(report, 20_000);
   try {
-    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: 240_000 });
+    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? 240_000 : 90_000 });
     return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
   } finally { clearInterval(progress); }
 }
@@ -94,7 +103,7 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   const page = await browser!.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
-  await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}`);
+  await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
   const value = await result(page);
   const host = await pageHost(page, name);
   console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
@@ -138,11 +147,21 @@ function assertDebt({ value }: EntryRun): void {
   assert.ok((value.budget ?? 0) > 0, "the failed member's backing stays charged");
 }
 
+function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.ok(entry === "index.ts" || entry === "direct.ts");
+  assert.equal(value.stdout, oxcOutputs[entry]);
+  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(value.groups, [], "the Oxc group is released after the supported stop");
+  assertRetired(value);
+}
+
 async function runBrowser(type: BrowserType, name: string, port: number, kind: string): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
   const override = process.env.SHARED_WASM_ENTRY;
-  const entries = override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY];
+  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY];
   const runs = [];
   for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
@@ -150,13 +169,19 @@ async function runBrowser(type: BrowserType, name: string, port: number, kind: s
   launching = undefined;
   if (process.env.SHARED_WASM_CONTROL) { console.log(`control ${process.env.SHARED_WASM_CONTROL} observed`); return; }
   for (const { entry, run } of runs) {
-    if (entry === DEBT_ENTRY) assertDebt(run);
+    if (oxcTree !== undefined) assertOxc(entry, run);
+    else if (entry === DEBT_ENTRY) assertDebt(run);
     else if (entry === OWNERSHIP_ENTRY) assertParserReserveOwnership(run, kind);
     else await assertClean(run);
   }
 }
 
 try {
+  if (oxcTree !== undefined) {
+    const env = { ...process.env };
+    delete env[oxcTreeVariable];
+    requireOxcEnvironment(env);
+  }
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   if (!program) throw new Error("Set BUN_WASM_PROFILE_PROGRAM to a matching shared-group core; a missing guest is a failure");
   const playwright = await import("playwright");
