@@ -30,28 +30,85 @@ fn stack_bounds() -> (usize, usize) {
     )
 }
 
-/// The host carves an 8 MiB stack for a group member and the core's entry frames sit above
-/// the side's. The native quota stays inside that stack with a megabyte to spare.
+/// The stack every host carves for a group member: the split core's linker stack size, ending
+/// on a page boundary (`STACK_BYTES` in `crates/bunwasm-host/src/linked_group.rs`).
 #[cfg(bun_wasm_shared_group)]
-const GROUP_STACK_BYTES: usize = 7 << 20;
+const MEMBER_STACK_BYTES: usize = 8 << 20;
+#[cfg(bun_wasm_shared_group)]
+const PAGE_BYTES: usize = 65_536;
 
 #[cfg(bun_wasm_shared_group)]
 thread_local! {
-    static STACK_ORIGIN: Cell<usize> = const { Cell::new(0) };
+    static STACK_TOP: Cell<usize> = const { Cell::new(0) };
+    static REGISTER_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Record the address of a local in the outermost side frame as the native stack base.
+/// A group side has no linker stack symbols, and the host binds the carved bounds for the core
+/// only. The host calls the side's initializers itself, before the core starts, so the stack
+/// pointer is still at the carved top there. `frame` is a local of that first frame: the top
+/// is the page boundary just above it.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn record_stack_top(frame: &[u8; 16]) {
+    let address = std::hint::black_box(frame.as_ptr()) as usize;
+    let top = (address & !(PAGE_BYTES - 1)) + PAGE_BYTES;
+    STACK_TOP.with(|cell| cell.set(top));
+    REGISTER_DEPTH.with(|cell| cell.set(top - address));
+}
+
+/// Check the engine's entry frame against the recorded stack, and keep how much of the stack
+/// the core's entry frames already use.
 #[cfg(bun_wasm_shared_group)]
 pub(crate) fn record_stack_origin(frame: &[u8; 16]) {
-    STACK_ORIGIN
-        .with(|origin| origin.set(std::hint::black_box(frame.as_ptr()) as usize + frame.len()));
+    let address = std::hint::black_box(frame.as_ptr()) as usize;
+    let (low, high) = stack_bounds();
+    assert!(
+        low < address && address < high,
+        "engine entry is outside the member stack"
+    );
+    ENTRY_DEPTH.with(|cell| cell.set(high - address));
 }
 
 #[cfg(bun_wasm_shared_group)]
 fn stack_bounds() -> (usize, usize) {
-    let high = STACK_ORIGIN.with(Cell::get);
-    assert!(high > GROUP_STACK_BYTES, "side entry recorded its stack");
-    (high - GROUP_STACK_BYTES, high)
+    let high = STACK_TOP.with(Cell::get);
+    assert!(
+        high > MEMBER_STACK_BYTES,
+        "side registration recorded the member stack"
+    );
+    (high - MEMBER_STACK_BYTES, high)
+}
+
+/// Bytes of member stack in use at side registration and at engine entry.
+#[cfg(bun_wasm_shared_group)]
+fn stack_depths() -> Option<(usize, usize)> {
+    Some((REGISTER_DEPTH.with(Cell::get), ENTRY_DEPTH.with(Cell::get)))
+}
+
+#[cfg(not(bun_wasm_shared_group))]
+fn stack_depths() -> Option<(usize, usize)> {
+    None
+}
+
+/// One line on stderr when the guest sets `BUN_WASM_SPIDERMONKEY_TRACE`: the stack bounds the
+/// engine ran with and what executed. A run with no portable-baseline entry ran every poll in
+/// the plain interpreter, because this library has no other execution tier.
+pub(crate) fn trace_run() {
+    if std::env::var_os("BUN_WASM_SPIDERMONKEY_TRACE").is_none() {
+        return;
+    }
+    let (low, high) = stack_bounds();
+    let mut polls = 0;
+    let mut entries = 0;
+    unsafe { sys::bsm_tier_counts(&mut polls, &mut entries) };
+    let depths = stack_depths().map_or(String::new(), |(register, entry)| {
+        format!(" register_depth={register} entry_depth={entry}")
+    });
+    let line = format!(
+        "bun-wasm spidermonkey: stack_low={low:#x} stack_high={high:#x} stack_bytes={}{depths} interrupt_polls={polls} portable_baseline_entries={entries}\n",
+        high - low
+    );
+    let _ = std::io::stderr().lock().write_all(line.as_bytes());
 }
 
 #[derive(Clone, Copy)]

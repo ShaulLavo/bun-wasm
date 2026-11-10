@@ -85,6 +85,42 @@ test("the group port leaves the split recipe alone and gates every library hunk"
   expect(readFileSync(resolve("scripts/build-engine-spidermonkey.sh"), "utf8")).toContain("SpiderMonkey is split-only");
 });
 
+test("a group side takes its stack from the top the host carved, with the split stack size", () => {
+  const adapter = readFileSync(resolve("crates/bunwasm-engine-spidermonkey/src/vm.rs"), "utf8");
+  const side = adapter.match(/const MEMBER_STACK_BYTES: usize = (\d+) << (\d+);/);
+  const host = readFileSync(resolve("crates/bunwasm-host/src/linked_group.rs"), "utf8").match(/const STACK_BYTES: u32 = (\d+) << (\d+);/);
+  const split = readFileSync(resolve("crates/bunwasm-cli/build.rs"), "utf8").match(/-zstack-size=(\d+)/);
+  expect(side && host && split).toBeTruthy();
+  const bytes = Number(side![1]) << Number(side![2]);
+  expect(bytes).toBe(Number(host![1]) << Number(host![2]));
+  expect(bytes).toBe(Number(split![1]));
+  // The top is the page boundary above a local of the host-called initializer, never a guess below the entry frame.
+  expect(adapter).toContain("let top = (address & !(PAGE_BYTES - 1)) + PAGE_BYTES;");
+  expect(adapter).toContain("(high - MEMBER_STACK_BYTES, high)");
+  expect(adapter).toContain('"engine entry is outside the member stack"');
+  const entry = readFileSync(resolve("crates/bunwasm-engine-spidermonkey/src/lib.rs"), "utf8");
+  const register = entry.slice(entry.indexOf("pub extern \"C\" fn spidermonkey_register()"), entry.indexOf("pub extern \"C\" fn spidermonkey_run("));
+  expect(register).toContain("vm::record_stack_top(&frame)");
+  expect(register.indexOf("vm::record_stack_top(&frame)")).toBeLessThan(register.indexOf("bun_core_bind_engine(spidermonkey_run)"));
+  // The host runs the side initializers itself after the core constructors return, before the core starts.
+  const loader = readFileSync(resolve("crates/bunwasm-host/src/linked.rs"), "utf8");
+  const initialize = loader.slice(loader.indexOf("pub fn initialize("), loader.indexOf("fn validate_profile("));
+  expect(initialize.indexOf('"__wasm_call_ctors"')).toBeLessThan(initialize.indexOf("program.initialize(&image, linker, store)"));
+  expect(loader).toContain("for name in self.kind.initializers().iter().copied() {");
+});
+
+test("the engine reports real portable-baseline entries, counted where the library enters that tier", () => {
+  const shim = readFileSync(resolve("crates/bunwasm-spidermonkey/cpp/engine.cpp"), "utf8");
+  expect(shim).toContain('extern "C" void bunsm_pbl_entry() { ++pblEntries; }');
+  const split = readFileSync(resolve("spidermonkey/spidermonkey-wasi.patch"), "utf8");
+  const portable = split.slice(split.indexOf("+++ w/js/src/vm/PortableBaselineInterpret.cpp"), split.indexOf("diff --git i/mfbt/Assertions.h"));
+  expect(portable.match(/^\+\s*bunsm_pbl_entry\(\);$/gm)).toHaveLength(1);
+  expect(split.slice(0, split.indexOf("+++ w/js/src/vm/PortableBaselineInterpret.cpp"))).not.toContain("bunsm_pbl_entry");
+  const adapter = readFileSync(resolve("crates/bunwasm-engine-spidermonkey/src/vm.rs"), "utf8");
+  const trace = adapter.slice(adapter.indexOf("pub(crate) fn trace_run()"));
+  expect(trace.indexOf('var_os("BUN_WASM_SPIDERMONKEY_TRACE").is_none()')).toBeLessThan(trace.indexOf("bsm_tier_counts"));
+});
+
 test("the adapter creates region views without pinning or detaching, and allows blocking waits only in a group", () => {
   const shim = readFileSync(resolve("crates/bunwasm-spidermonkey/cpp/engine.cpp"), "utf8");
   const start = shim.indexOf('extern "C" bool bsm_shared_region_buffer(');

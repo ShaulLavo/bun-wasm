@@ -57,6 +57,7 @@ uintptr_t stackBase = 0;
 bool interruptible = false;
 bool terminating = false;
 uint32_t checks = 0;
+uint64_t pblEntries = 0;
 
 [[noreturn]] void fatal(const char* message) {
   bunsm_host_fatal(message, strlen(message));
@@ -543,7 +544,13 @@ bool is_external_buffer(JS::HandleObject obj) {
 
 extern "C" void bunsm_vm_fatal(const char* text) { fatal(text); }
 extern "C" void* bunsm_stack_base() { return reinterpret_cast<void*>(stackBase); }
-extern "C" void bunsm_pbl_entry() {}
+// The library calls this at every portable-baseline interpreter entry and nowhere else.
+extern "C" void bunsm_pbl_entry() { ++pblEntries; }
+// Interrupt polls of both tiers (counted modulo 2^32), and portable-baseline entries.
+extern "C" void bsm_tier_counts(uint32_t* polls, uint64_t* entries) {
+  *polls = checks;
+  *entries = pblEntries;
+}
 extern "C" void bunsm_poll_interrupt(JSContext* cx, uint8_t) {
   if (terminating || !interruptible || ++checks % 10000 != 0 || !bunsm_host_interrupt()) return;
   terminating = true;

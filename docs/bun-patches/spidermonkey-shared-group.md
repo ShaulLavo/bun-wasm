@@ -61,8 +61,22 @@ split patch, recipe files and admitted split archive are not changed.
 
 ## Limits
 
-A group side has no linker stack symbols. Its native stack quota is 7 MiB below a local in the
-outermost side frame, inside the 8 MiB member stack the host carves.
+A group side has no linker stack symbols, and the host binds the carved stack bounds for the core
+only. The native loader calls the side's initializers itself, after the core's constructors
+return and before the core starts, so the stack pointer is still at the carved top there. The
+side records the page boundary above a local of `spidermonkey_register` as the top, and the
+bounds are that top and 8 MiB below it: the host's `STACK_BYTES` and the split core's linker
+stack size. The native quota and its 64 KiB gap are therefore the split build's. A test pins the
+three sizes and the loader's call order together. The engine refuses to start if its entry frame
+is outside those bounds. A host that entered the initializers with other frames on the stack
+would need its own bound source.
+
+`BUN_WASM_SPIDERMONKEY_TRACE` in the guest environment prints one line on stderr when the engine
+returns: the stack bounds, the stack in use at registration and at engine entry, the interrupt
+polls, and the portable-baseline entries. The library calls the entry hook once per
+portable-baseline interpreter entry and nowhere else, so a run with zero entries executed
+entirely in the plain interpreter. The count costs one increment per entry. A process that ends
+through `process.exit` prints nothing.
 
 The Rust standard library's errno reads are wrapped as in the QuickJS side (`group-errno.c`).
 SpiderMonkey's C++ reads the side's own errno, so a core libc failure it inspects reports zero.
