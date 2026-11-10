@@ -19,7 +19,7 @@ export type ImportInfo =
   | { readonly kind: "other"; readonly module: string; readonly name: string };
 
 /** A table's element type. `undefined` is a form this reader does not decode. */
-export type TableElement = ReferenceName | undefined;
+type TableElement = ReferenceName | undefined;
 
 export interface ModuleInfo {
   readonly imports: readonly ImportInfo[];

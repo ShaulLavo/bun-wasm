@@ -1,7 +1,7 @@
 # Shared nested Wasm, QuickJS and Browser host
 
-Classification: Original host adapters. `web/src/nested/host.ts`, `wire.ts`, `publication.ts`
-and `module-info.ts` are the Browser counterpart of the native service described in
+Classification: Original host adapters. `web/src/nested/host.ts`, `wire.ts`, `publication.ts`,
+`module-info.ts`, `function-type.ts` and `binary.ts` are the Browser counterpart of the native service described in
 [Shared nested Wasm, QuickJS and native host](shared-nested-native.md). No interpreter,
 compiler algorithm or upstream runtime implementation is copied into these files. The wire
 contract and regionizer are unchanged. One guest change belongs to this work: `spawn.ts` gains a
@@ -71,6 +71,34 @@ the outermost request, because a stack overflow leaves no room deeper down. A tr
 nested Wasm stays a catchable `RuntimeError`, and a pending JS exception keeps its exact
 engine-side value.
 
+## Exported tables
+
+The host answers `TableExport`, `TableLength`, `TableGet`, `TableSet` and `TableGrow` and the
+`Null` reply, as the native host does under [its record](shared-nested-native.md). No request,
+reply, import or owner entry is added. A table is the page engine's own `WebAssembly.Table`, so
+the instance's `call_indirect` and the guest's `WebAssembly.Table` are one table. It lives in the
+member's worker and takes no group region, hold or charge.
+
+- Identity. One table object is one handle, whichever export name or request reached it. A
+  function has one id whether an export or a table entry named it, so `table.get(i)` is the
+  function its export returns. Table and function handles are session-owned, and each kind is
+  bounded at 4,096.
+- Element type. `module-info.ts` reads each exported table's element type from the module bytes,
+  because the JS API does not reflect it. Only a `funcref` table gets a handle.
+- Entry types. A table can hold a function no export names: an unexported one, or an imported
+  callback. The JS API does not reflect a function's type, and the core needs it to call the
+  function. `function-type.ts` asks the engine: it instantiates a module that is one function
+  import of a candidate type, and a function of another type is a `LinkError`. Nothing is called,
+  and the answer is exact. Candidates are the signatures of the table's own module, since nested
+  tables are never imported and a function set from outside already has an id. The entry's name,
+  its index where it was defined, only says which signature to try first. One importer module is
+  compiled per signature and kept for the session.
+- Errors. An index at or past the length, and a refused grow, are a `RangeError` with the native
+  message. A null entry is `Null`. `TableSet` and `TableGrow` take a function id of this member or
+  null. An entry whose type has a reference parameter or result is refused, as an export is.
+- Limits. Growth is bounded by the table's declared maximum and the engine's own table limit.
+  The native Store sets no element limit either.
+
 Differences from the native host:
 
 - There is no Wasmtime Store, so the 40-instance ceiling and the admission closure that guards
@@ -87,8 +115,11 @@ Differences from the native host:
 - The JS API reads one value per import module and name. Two imports with the same name and
   different function types are refused with a `LinkError`.
 - f32 and f64 values cross JS numbers at this boundary, so NaN payload bits are not guaranteed.
-- Nested modules that export a table or global are refused at compile and at attachment, before
-  any start code runs.
+- Nested modules that export a global are refused at compile and at attachment, before any start
+  code runs, and `GlobalGet` and `GlobalSet` are refused. Exported tables are supported, above.
+- An imported callback read back from a table is the engine's wrapper for that import. V8 keeps
+  one wrapper when it is imported again into another instance. JavaScriptCore, as measured in Bun
+  1.4.4, makes a new one, so there the second instance's entry gets its own function id.
 - A Memory uses two owner regions, so the default 4,096-region policy allows 2,048 Memories in a
   group, half of native's. Publications are limited to 4,096, as on native.
 - Withdrawal is narrower than native's: only the incarnation that published may withdraw.
@@ -130,5 +161,8 @@ choose, the address ceiling and the backing budget, every refusal with the owner
 charge unchanged, growth at both bounds, and a published reservation's extents. The group fixture
 runs `reservation.ts` and `reservation-binding.ts` in their own guests on this host. The second
 is the memory descriptor of the published `@oxc-parser/binding-wasm32-wasi` 0.94.0 loader, 4,000
-initial and 65,536 maximum pages. It controls admission only. That package's module also exports
-its function table, which this host still refuses, so the package itself does not load here yet.
+initial and 65,536 maximum pages. It controls admission only.
+`web/tests/nested-host-table.test.ts` covers exported tables the same way, on modules assembled
+from the `.wat` files beside it (`wasm-tools parse`): identity, entry types, callbacks, every
+refusal, growth to both limits, the handle limit, and that a table takes nothing from the owner.
+The group fixture runs `table-controls.ts` on both hosts and `global-refusal.ts` on this one.

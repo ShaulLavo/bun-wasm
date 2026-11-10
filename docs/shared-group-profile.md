@@ -107,6 +107,8 @@ The page admits a group core as the first member of a new group. A `worker_threa
 its parent's group, and any other spawn starts its own. Members share WebAssembly objects by
 reference, as on the native host. The runtime that hosts it needs the `memoryGroups` policy above
 (`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's 1 GiB, and
-each Memory's reservation is committed in full when it is created. [The Browser nested host
-record](bun-patches/shared-nested-browser.md) lists how it differs from the native host.
+each Memory's reservation is committed in full when it is created. A shared-backend module may
+export its function tables on both hosts. One that exports a global loads on the native host only.
+[The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs from
+the native host.
 
