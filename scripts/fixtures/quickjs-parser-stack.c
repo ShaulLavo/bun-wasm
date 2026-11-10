@@ -362,6 +362,14 @@ static int mode_run(int argc, char **argv)
     return status;
 }
 
+static int sweep_exception_replaced(long size, const char *text)
+{
+    if (!strncmp(text, "RangeError: Maximum call stack size exceeded", 44))
+        return 0;
+    printf("replaced at %ld: %s\n", size, text);
+    return 1;
+}
+
 /* sweep MODE FILE LOW HIGH STEP: compiles valid input at each stack limit. A
    valid input may only compile or refuse with RangeError; anything else means
    a pending overflow was replaced. */
@@ -379,13 +387,11 @@ static int mode_sweep(char **argv)
         if (!JS_IsException(value)) {
             compiled++;
         } else {
+            int wrong;
             describe_exception(ctx, text, sizeof(text));
-            if (!strncmp(text, "RangeError: Maximum call stack size exceeded", 44)) {
-                refused++;
-            } else {
-                replaced++;
-                printf("replaced at %ld: %s\n", size, text);
-            }
+            wrong = sweep_exception_replaced(size, text);
+            replaced += wrong;
+            refused += !wrong;
         }
         JS_FreeValue(ctx, value);
         JS_SetMaxStackSize(rt, AMPLE_STACK);
@@ -459,6 +465,24 @@ static size_t find_chunk_size(JSContext *ctx)
     return matches == 1 ? found : 0;
 }
 
+static int deny_record_chunk(JSContext *ctx, const Source *source, long index)
+{
+    char description[4096];
+    int reported = 0;
+    JSValue value;
+    memory.calls = 0;
+    memory.fail_at = index;
+    value = compile(ctx, source, "faults.js");
+    memory.fail_at = -1;
+    if (JS_IsException(value)) {
+        describe_exception(ctx, description, sizeof(description));
+        reported = !strncmp(description, "InternalError: out of memory", 28);
+    }
+    JS_FreeValue(ctx, value);
+    check(recovers(ctx), "engine usable after a denied record chunk");
+    return reported;
+}
+
 /* faults MODE FILE: denies each record-pool allocation of one compile in
    turn, with the input shifted to every position inside a chunk so the
    denied push lands on every suspended statement kind. Each denial must
@@ -471,7 +495,6 @@ static int mode_faults(char **argv)
     JSContext *ctx = new_context(&rt, AMPLE_STACK);
     size_t chunk = find_chunk_size(ctx);
     long denied = 0, reported = 0;
-    char description[4096];
     int pad;
     check(chunk != 0, "record pool chunk size identified");
     for (pad = 0; chunk && pad < 16; pad++) {
@@ -492,17 +515,8 @@ static int mode_faults(char **argv)
         check(total >= 2, "fault input needs more than one record chunk");
         JS_FreeValue(ctx, value);
         for (index = 1; index <= total; index++) {
-            memory.calls = 0;
-            memory.fail_at = index;
-            value = compile(ctx, &shifted, "faults.js");
-            memory.fail_at = -1;
             denied++;
-            if (JS_IsException(value)) {
-                describe_exception(ctx, description, sizeof(description));
-                reported += !strncmp(description, "InternalError: out of memory", 28);
-            }
-            JS_FreeValue(ctx, value);
-            check(recovers(ctx), "engine usable after a denied record chunk");
+            reported += deny_record_chunk(ctx, &shifted, index);
         }
         memory.watch_size = 0;
         free(t.text);

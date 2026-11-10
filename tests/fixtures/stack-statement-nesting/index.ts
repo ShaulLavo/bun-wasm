@@ -8,12 +8,18 @@ const { spawnSync }: typeof import("node:child_process") = require("node:child_p
 const fs: typeof import("node:fs") = require("node:fs");
 const path: typeof import("node:path") = require("node:path");
 
-// process.versions is the same on every engine, so the parser is recognised by the wording of
-// one of its own early errors.
+// process.versions is shared by the engines. Recognise measured parser errors and fail
+// closed if that identity changes, rather than silently exempting a QuickJS regression.
 function quickjsParser(): boolean {
   // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
-  try { (0, eval)("let let = 1"); } catch (error) { return (error as Error).message === "'let' is not a valid lexical identifier"; }
-  return false;
+  try { (0, eval)("let let = 1"); } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    if (error.message === "'let' is not a valid lexical identifier") return true;
+    if (error.message === "Unexpected keyword 'let'. Cannot use 'let' as an identifier name for a LexicalDeclaration." ||
+        error.message === "let is disallowed as a lexically bound name") return false;
+    throw new Error("Unrecognized parser fingerprint", { cause: error });
+  }
+  throw new Error("Invalid lexical declaration was accepted");
 }
 
 const properties = 200;

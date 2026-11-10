@@ -9,12 +9,18 @@
 // error and continue. A wasm trap prints nothing and fails the fixture on every engine.
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 
-// process.versions is the same on every engine, so the parser is recognised by the wording of
-// one of its own early errors.
+// process.versions is shared by the engines. Recognise measured parser errors and fail
+// closed if that identity changes, rather than silently exempting a QuickJS regression.
 function quickjsParser(): boolean {
   // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
-  try { (0, eval)("let let = 1"); } catch (error) { return (error as Error).message === "'let' is not a valid lexical identifier"; }
-  return false;
+  try { (0, eval)("let let = 1"); } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    if (error.message === "'let' is not a valid lexical identifier") return true;
+    if (error.message === "Unexpected keyword 'let'. Cannot use 'let' as an identifier name for a LexicalDeclaration." ||
+        error.message === "let is disallowed as a lexically bound name") return false;
+    throw new Error("Unrecognized parser fingerprint", { cause: error });
+  }
+  throw new Error("Invalid lexical declaration was accepted");
 }
 const strict = quickjsParser();
 const recordLimit = 10000;
@@ -95,14 +101,17 @@ function deepCompilation(): void {
 }
 
 // Blocks and ifs keep no run-time state per level, so these also run to the innermost statement.
+function executeNested(source: string): string {
+  try { return String(new Function("x", "o", source)(1, [])); }
+  catch (error) {
+    if (strict) throw error;
+    return "refused";
+  }
+}
+
 function deepExecution(): void {
   for (const [name, open, close] of [["block", "{", "}"], ["braced if", "if(x){", "}"], ["if", "if(x)", ""]] as const) {
-    let result = "refused";
-    try {
-      result = String(new Function("x", "o", `${open.repeat(4900)}o.push("innermost");${close.repeat(4900)}return o.join();`)(1, []));
-    } catch (error) {
-      if (strict) throw error;
-    }
+    const result = executeNested(`${open.repeat(4900)}o.push("innermost");${close.repeat(4900)}return o.join();`);
     recover();
     if (strict && result !== "innermost") throw new Error(`${name} ran to ${result}`);
     console.log(name, "run settled");
@@ -145,17 +154,20 @@ function refusal(): void {
 // name`. Each literal is parsed from several stack depths so the overflow lands on different
 // tokens. This runs only on QuickJS's parser: other engines do not share the defect, and JSC
 // traps on literals this deep.
+function literalAttempt(literal: string, remaining: number, open: string): void {
+  // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
+  const parse = (depth: number): unknown => (depth === 0 ? (0, eval)(literal) : parse(depth - 1));
+  let caught: unknown;
+  try { parse(remaining); } catch (error) { caught = error; }
+  if (!(caught instanceof RangeError)) throw new Error(`literal ${open} from depth ${remaining}: ${String(caught)}`);
+  recover();
+}
+
 function literalOverflow(): void {
-  for (const [open, close] of strict ? [["({a:", "})"], ["[", "]"]] : []) {
-    const literal = open!.repeat(200000) + "0" + close!.repeat(200000);
-    // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
-    const parse = (remaining: number): unknown => (remaining === 0 ? (0, eval)(literal) : parse(remaining - 1));
-    for (let remaining = 0; remaining < 16; remaining++) {
-      let caught: unknown;
-      try { parse(remaining); } catch (error) { caught = error; }
-      if (!(caught instanceof RangeError)) throw new Error(`literal ${open} from depth ${remaining}: ${String(caught)}`);
-      recover();
-    }
+  const delimiters: [string, string][] = strict ? [["({a:", "})"], ["[", "]"]] : [];
+  for (const [open, close] of delimiters) {
+    const literal = open.repeat(200000) + "0" + close.repeat(200000);
+    for (let remaining = 0; remaining < 16; remaining++) literalAttempt(literal, remaining, open);
   }
   console.log("literal overflow settled");
 }
