@@ -91,8 +91,10 @@ member's worker and takes no group region, hold or charge.
   import of a candidate type, and a function of another type is a `LinkError`. Nothing is called,
   and the answer is exact. Candidates are the signatures of the table's own module, since nested
   tables are never imported and a function set from outside already has an id. The entry's name,
-  its index where it was defined, only says which signature to try first. One importer module is
-  compiled per signature and kept for the session.
+  its index where it was defined, only says which signature to try first. Each member keeps at
+  most 64 compiled importer modules in a FIFO cache. Eviction only causes recompilation; it does
+  not limit candidate discovery or reject a valid signature. A function with an existing id
+  bypasses type probing entirely.
 - Errors. An index at or past the length, and a refused grow, are a `RangeError` with the native
   message. A null entry is `Null`. `TableSet` and `TableGrow` take a function id of this member or
   null. An entry whose type has a reference parameter or result is refused, as an export is.

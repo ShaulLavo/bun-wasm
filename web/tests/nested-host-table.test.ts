@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { GroupOp } from "../node_modules/waffle/group/protocol.ts";
+import { section, unsigned, utf8Name } from "../src/nested/binary";
 import { readModuleInfo } from "../src/nested/module-info";
 import { BACKEND, BAD_FRAME, MAX_RESOURCES, PENDING_EXCEPTION, type Binding, type Reply, type WasmNumber } from "../src/nested/wire";
 import { count, counters, errorText, group, handle, type Member, type ReplyOf } from "./nested-host-owner";
@@ -122,7 +123,46 @@ describe("table identity", () => {
   });
 });
 
+function crowdedTable(): Uint8Array {
+  const count = 4100;
+  const codes = [0x7f, 0x7e, 0x7d, 0x7c];
+  const signatures = Array.from({ length: count }, (_, index) => [0x60, 1, 0x7f, 7].concat(
+    Array.from({ length: 7 }, (_, shift) => codes[(index >>> (shift * 2)) & 3]!),
+  ));
+  const types = unsigned(count + 1).concat(signatures.flat(), [0x60, 1, 0x7c, 1, 0x7c]);
+  const imports = [2].concat(utf8Name("env"), utf8Name("first"), [0, 0],
+    utf8Name("env"), utf8Name("callback"), [0], unsigned(count));
+  return Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0].concat(
+    section(1, types), section(2, imports), section(4, [1, 0x70, 0, 2]),
+    section(7, [1].concat(utf8Name("table"), [1, 0])), section(9, [1, 0, 0x41, 0, 0x0b, 2, 1, 0]),
+  ));
+}
+
 describe("table entries", () => {
+  test("signature probes have a bounded cache without refusing a late match or probing known functions", () => {
+    const member = group().join();
+    const module = handle(compile(member, crowdedTable()));
+    const instance = instantiate(member, module, [callback("first", FIRST), callback("callback", CALLBACK)]);
+    const nested = { member, module, instance, table: tableOf(member, instance, "table") };
+    let calls = 0;
+    member.dispatch = () => { calls++; return 0; };
+    const first = entry(nested, 0);
+    expect(first).toMatchObject({ Function: { params: ["f64"], results: ["f64"] } });
+    const cache = Reflect.get(Reflect.get(member.host, "functionTypes"), "importers");
+    expect(cache.size).toBeLessThanOrEqual(64);
+    // The earliest failed signature can be compiled again after eviction.
+    expect(entry(nested, 1)).toMatchObject({ Function: { params: ["i32"], results: Array(7).fill("i32") } });
+    expect(cache.size).toBeLessThanOrEqual(64);
+    const original = WebAssembly.Instance;
+    let probes = 0;
+    WebAssembly.Instance = new Proxy(original, { construct(target, args) { probes++; return Reflect.construct(target, args); } });
+    try { expect(entry(nested, 0)).toEqual(first); }
+    finally { WebAssembly.Instance = original; }
+    expect(probes).toBe(0);
+    expect(calls).toBe(0);
+    expect(member.host.snapshot()).toMatchObject({ modules: 1, instances: 1, tables: 1, functions: 2 });
+  });
+
   test("an entry is the function its export names, and an empty slot is Null", () => {
     const nested = start();
     const add = exported(nested.member, nested.instance, "add");

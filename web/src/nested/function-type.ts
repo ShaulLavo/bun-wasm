@@ -10,6 +10,7 @@ export type WasmFunction = (...args: unknown[]) => unknown;
 
 const CODES: Record<ValueName, number> = { i32: 0x7f, i64: 0x7e, f32: 0x7d, f64: 0x7c, v128: 0x7b, funcref: 0x70, externref: 0x6f };
 const IMPORT = utf8Name("f").concat(utf8Name("f"), [0, 0]);
+const MAX_IMPORTERS = 64;
 
 function signatureKey(type: FunctionType): string { return `${type.params.join()}>${type.results.join()}`; }
 
@@ -23,13 +24,22 @@ function importer(type: FunctionType): WebAssembly.Module {
   return compileSections(section(1, signature), section(2, [1].concat(IMPORT)));
 }
 
-/** One member's type checks. An importer is compiled once per signature and kept for the session. */
+/** One member's type checks, with a bounded FIFO of compiled signature importers. */
 export class FunctionTypes {
   private readonly importers = new Map<string, WebAssembly.Module>();
 
+  private cachedImporter(key: string, type: FunctionType): WebAssembly.Module {
+    const known = this.importers.get(key);
+    if (known) return known;
+    const module = importer(type);
+    const oldest = this.importers.keys().next().value;
+    if (this.importers.size >= MAX_IMPORTERS && oldest !== undefined) this.importers.delete(oldest);
+    this.importers.set(key, module);
+    return module;
+  }
+
   private links(fn: WasmFunction, key: string, type: FunctionType): boolean {
-    let module = this.importers.get(key);
-    if (!module) this.importers.set(key, module = importer(type));
+    const module = this.cachedImporter(key, type);
     try {
       new WebAssembly.Instance(module, { f: { f: fn } });
       return true;
