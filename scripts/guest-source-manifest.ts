@@ -193,7 +193,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
 }
 
 function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
-  const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts",
+  const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/rustc-cache.sh", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts",
     // The guest memory maximum: the core links at it and JSC's helpers size their heap from it.
     "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs", "crates/bunwasm-runtime/build/program_profile.rs"];
   if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts",
@@ -273,8 +273,8 @@ function rustCacheTool(repository: string): string {
   const wrapper = process.env.RUSTC_WRAPPER;
   if (!wrapper) return "";
   const sccache = Bun.which("sccache");
-  if (!sccache || realpathSync(wrapper) !== realpathSync(sccache)
-    || run([sccache, "--version"], repository) !== "sccache 0.19.0") throw new Error("Only sccache 0.19.0 is supported as RUSTC_WRAPPER for qualified guest receipts");
+  if (!sccache || ![realpathSync(sccache), realpathSync(join(repository, "scripts/rustc-cache.sh"))].includes(realpathSync(wrapper))
+    || run([sccache, "--version"], repository) !== "sccache 0.19.0") throw new Error("Only sccache 0.19.0 through scripts/rustc-cache.sh is supported as RUSTC_WRAPPER for qualified guest receipts");
   return realpathSync(sccache);
 }
 
@@ -311,7 +311,7 @@ export function guestToolEnvironment(repository: string): string {
     `export RUSTC=${quote(tools.rustc)}`,
     `export GUEST_CARGO=${quote(tools.cargo)}`,
     `export CARGO_TARGET_WASM32_WASIP1_LINKER=${quote(tools["rust-lld"])}`,
-    `export RUSTC_WRAPPER=${quote(rustCacheTool(repository))} RUSTC_WORKSPACE_WRAPPER=''`,
+    `export RUSTC_WRAPPER=${quote(rustCacheTool(repository) ? join(repository, "scripts/rustc-cache.sh") : "")} RUSTC_WORKSPACE_WRAPPER=''`,
     `export PATH=${quote(dirname(node))}:"$PATH"`,
   ].join("\n");
 }
