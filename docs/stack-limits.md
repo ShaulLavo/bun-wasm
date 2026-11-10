@@ -198,11 +198,14 @@ budget is raised above the host stack.
 This is why generated validators now compile: the webpack bundle Next 15.5.6
 ships nests 80 `if` blocks, and `next dev` passed that file at 36 KiB in a
 native run. It does not make Next start at 36 KiB. The same run then stopped
-with a `RangeError` while compiling TypeScript's own library, which Next loads
-to read `next.config.ts`. The deepest point of that parse is a tree of nested
-call and array expressions with no statement open, so it is expression
-nesting, which still recurses. This is a launcher measurement of the guest's
-own guard at the unchanged budget, not a Safari run.
+with a `RangeError` on TypeScript's own library, which Next loads to read
+`next.config.ts`. That file compiles. The refusal comes from the interpreter's
+check on entering a function: the library is one wrapper function with 5,278
+local variables, and its frame alone is 63,316 bytes, more than the whole
+budget, with under 3 KiB in use. Angular's `ng serve` fails at 36 KiB for a
+third reason, plain call depth: Ajv compiling schemas in JavaScript uses the
+whole budget. Neither is a parser limit. These are launcher measurements of
+the guest's own guard at the unchanged budget, not Safari runs.
 
 ### Native callable frames
 
