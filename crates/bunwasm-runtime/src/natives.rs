@@ -1159,7 +1159,13 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .map_err(NativeError::syntax_error)
     });
     let st = state.clone();
-    t.add("hotPrepare", move |a| st.prepare_hot(a.u32(0)?, a.str(1)?));
+    t.add("hotPrepare", move |a| {
+        let generation = a.num(0)?;
+        if generation.fract() != 0.0 || !(1.0..=f64::from(u32::MAX)).contains(&generation) {
+            return Err(NativeError::type_error("Invalid hot generation"));
+        }
+        st.prepare_hot(generation as u32, a.str(1)?)
+    });
     let st = state.clone();
     t.add("hotDigest", move |a| {
         st.hot_digest(a.str(0)?).map(Val::from)

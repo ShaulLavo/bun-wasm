@@ -2,6 +2,11 @@ import fs from "node:fs";
 import { createRequire, Module } from "node:module";
 import page from "./page.html" with { type: "text" };
 import { word } from "./dependency.ts";
+import { again } from "./reexport.ts";
+import settings from "./settings.json";
+
+await new Promise<void>(resolve => setTimeout(resolve, 5));
+if (page !== again || !Object.hasOwn(settings, "__proto__") || settings.__proto__ !== "data") throw new Error("hot text re-export or JSON identity");
 
 type FixtureState = {
   runs: number;

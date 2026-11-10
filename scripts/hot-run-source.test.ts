@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
-const names = ["esm_loader", "hot_serve", "hot_run", "hot_revisions"];
+const names = ["esm_loader", "hot_serve", "hot_run", "hot_revisions", "import_requests"];
 const sources = new Map(names.map(name => [name, execFileSync("node", ["--disable-warning=ExperimentalWarning", "-e",
   'process.stdout.write(require("node:module").stripTypeScriptTypes(require("node:fs").readFileSync(0,"utf8"), {mode:"strip"}))',
 ], { input: readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8"), encoding: "utf8" })]));
@@ -54,6 +54,7 @@ function harness(initial: Input, unsupported = false) {
   };
   Object.assign(context, globals);
   const native = {
+    engine: "host",
     getAsyncContext: () => undefined,
     randomBytes: (length: number) => new Uint8Array(length).fill(1),
     mapPosition: () => undefined,
@@ -82,6 +83,7 @@ function harness(initial: Input, unsupported = false) {
   };
   const internal = {
     native,
+    defineGlobal(name: string, value: unknown) { Object.defineProperty(context, name, { value, configurable: true }); },
     getSourceLine: () => undefined,
     mapPosition: native.mapPosition,
     isBuiltinId: () => false,
@@ -96,17 +98,20 @@ function harness(initial: Input, unsupported = false) {
     runInContext: (_frame: unknown, callback: () => unknown) => callback(),
     initImportMeta() {},
     printError: (error: unknown) => errors.push(error),
+    reportHotError: (error: unknown) => errors.push(error),
     hotCommitted: (id: number) => commits.push(id),
     realTimers: {
       setImmediate(callback: () => void) { tasks.add(callback); return callback; },
       clearImmediate(callback: () => void) { tasks.delete(callback); },
     },
   };
+  getFactory("import_requests")(internal);
   const runner = getFactory("hot_run")(internal);
   async function settle() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
   async function flush() { const batch = Array.from(tasks); tasks.clear(); for (const task of batch) task(); await settle(); }
   return { runner, inputs, watches, errors, commits, directories, tasks, process, settle, flush,
     get runs() { return runs; }, get bindings() { return bindings; }, get stops() { return stops; },
+    importBad: () => vm.runInContext("loadBad()", context),
     resume() { ready?.(); }, race(callback: () => void) { duringRead = callback; } };
 }
 
@@ -221,4 +226,19 @@ test("unsupported real-host watching is fatal once and owns no recovery loop", a
   expect(host.watches.size).toBe(0);
   expect(host.tasks.size).toBe(0);
   expect(host.bindings).toBe(0);
+});
+
+
+test("a failed dynamic preparation keeps the original rejection identity in its live session", async () => {
+  const host = harness({ body: 'globalThis.loadBad = () => api.import("./bad.mts");serve();' });
+  host.inputs.set("/app/bad.mts", { syntax: true, body: "bad dynamic module" });
+  try {
+    host.runner.run("/app/entry.mts");
+    await host.settle();
+    const first = await host.importBad().catch((error: unknown) => error);
+    const second = await host.importBad().catch((error: unknown) => error);
+    expect(first).toBeInstanceOf(SyntaxError);
+    expect(second).toBe(first);
+    expect(host.commits).toHaveLength(1);
+  } finally { host.runner.dispose(); }
 });

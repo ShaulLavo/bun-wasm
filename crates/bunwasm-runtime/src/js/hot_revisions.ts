@@ -20,16 +20,16 @@
     function notify(notice: Notice): void {
       // Snapshot recipients. An observer may unsubscribe or register another observer.
       const batch = Array.from(observers);
-      for (const [key, observer] of batch) if (observers.has(key)) deliver(key, observer, notice);
+      for (const [key, observer] of batch) if (observers.has(key)) deliver(key, observer, freeze(notice));
     }
 
     const source: BunWasm.HotCommittedRevisions = freeze({
       subscribe(observer: (notice: Notice) => void) {
         if (typeof observer !== "function") throw new TypeError("Expected a hot revision observer");
         const key = {};
-        if (closed) { deliver(key, observer, { kind: "closed" }); return () => {}; }
+        if (closed) { deliver(key, observer, freeze({ kind: "closed" })); return () => {}; }
         observers.set(key, observer);
-        if (current) deliver(key, observer, { kind: "committed", stamp: current });
+        if (current) deliver(key, observer, freeze({ kind: "committed", stamp: current }));
         return () => { observers.delete(key); };
       },
     });
