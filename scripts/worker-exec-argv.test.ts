@@ -9,14 +9,14 @@ const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.fa
 
 function workerModule(env: Record<string, string> = {}, execArgv: string[] = [], execPath = "bun") {
   const preloads: string[] = [];
-  const launches: { argv: string[]; env: Record<string, string> }[] = [];
+  const launches: { argv: string[]; env: Record<string, string>; worker: object }[] = [];
   const stop = new Error("captured spawn");
   const process = { env: { ...env }, execArgv, execPath, cwd: () => "/", noDeprecation: false };
   let port: unknown;
   const modules = {
     process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({ wait: () => null, prepare: () => ({ graph: {}, commit() {}, abort() {} }), decode: () => [null, [], port] }) },
-    spawn: { spawn(argv: string[], options: { env: Record<string, string> }) { launches.push({ argv, env: options.env }); throw stop; } },
+    spawn: { spawnWorker(argv: string[], options: { env: Record<string, string> }, worker: object) { expect(Object.hasOwn(options, "_worker")).toBe(false); launches.push({ argv, env: options.env, worker }); throw stop; } },
     worker_channel: { open: () => ({ send() {} }) },
   };
   const internal = {
@@ -33,6 +33,11 @@ function workerModule(env: Record<string, string> = {}, execArgv: string[] = [],
   }
   return { process, preloads, launches, implementation, internal, context, launch };
 }
+
+test("Worker launch metadata travels through the private third argument", () => {
+  const launch = workerModule().launch({ resourceLimits: { maxOldGenerationSizeMb: 32 } });
+  expect(launch.worker).toMatchObject({ memoryLimitMb: 32, resourceLimits: { maxOldGenerationSizeMb: 32 } });
+});
 
 const operandCases = [
   { execArgv: ["--require", "--conditions=not-a-condition"], conditions: [], preloads: ["--conditions=not-a-condition"] },

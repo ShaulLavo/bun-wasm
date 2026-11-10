@@ -52,7 +52,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
   "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
-  "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts",
+  "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts", "web/tests/shared-wasm-agent/worker.ts", "web/tests/shared-wasm-agent/lock.ts", "web/tests/shared-wasm-agent/observer.ts",
 ]);
 const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/"];
 export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {

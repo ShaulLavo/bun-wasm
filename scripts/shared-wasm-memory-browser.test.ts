@@ -10,6 +10,9 @@ import { programKind, programProfile, sharedGroupPair } from "../src/engine-kind
 const root = resolve(import.meta.dir, "..");
 
 test("the shared Wasm memory fixture passes in a real group guest on the Browser host", () => {
+  for (const name of ["SHARED_WASM_CONTROL", "SHARED_WASM_ENTRY"]) {
+    if (Object.hasOwn(process.env, name)) throw new Error(`Shared-group qualification refuses diagnostic override: ${name}`);
+  }
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   if (!program) throw new Error("Set BUN_WASM_PROFILE_PROGRAM to a matching shared-group guest");
   const core = new WebAssembly.Module(readFileSync(program));

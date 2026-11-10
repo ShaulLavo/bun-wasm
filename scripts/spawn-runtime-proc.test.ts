@@ -84,7 +84,7 @@ test("a failed spawn throws the errno and leaks no descriptors", () => {
 test("worker children get two bound control pipes announced through the environment", () => {
   const fake = service();
   const { module } = load(fake);
-  const child = module.spawn(["bun", "w"], { stdout: "pipe", stderr: "pipe", env: { K: "v" }, _worker: { memoryLimitMb: 64 } });
+  const child = module.spawnWorker(["bun", "w"], { stdout: "pipe", stderr: "pipe", env: { K: "v" } }, { memoryLimitMb: 64 });
   const request = fake.children.get(child.pid)!.request;
   const control = JSON.parse(request.env.BUNWASM_WORKER_CONTROL);
   const extra = request.fds.filter((binding: any) => binding.child > 2);
@@ -101,10 +101,21 @@ test("worker children get two bound control pipes announced through the environm
   expect(new TextDecoder().decode(fake.native.procRead(input, 16) as Uint8Array)).toBe("ok");
 });
 
+test("a forged public _worker option does not make a worker child", () => {
+  const fake = service();
+  const { module } = load(fake);
+  const child = module.spawn(["bun", "w"], { stdout: "pipe", stderr: "pipe", _worker: { memoryLimitMb: 64 } });
+  const request = fake.children.get(child.pid)!.request;
+  expect(request.worker).toBeUndefined();
+  expect(request.env.BUNWASM_WORKER_CONTROL).toBeUndefined();
+  expect(request.fds.map((binding: any) => binding.child)).toEqual([0, 1, 2]);
+  expect(child._workerChannel).toBeUndefined();
+});
+
 test("parent exit kills worker children without signalling ordinary subprocesses", () => {
   const fake = service();
   const { module, emitExit } = loadExit(fake);
-  const worker = module.spawn(["bun", "worker"], { stdout: "ignore", stderr: "ignore", _worker: {} });
+  const worker = module.spawnWorker(["bun", "worker"], { stdout: "ignore", stderr: "ignore" }, {});
   const ordinary = module.spawn(["bun", "ordinary"], { stdout: "ignore", stderr: "ignore" });
   const workerRecord = fake.children.get(worker.pid)!;
   const ordinaryRecord = fake.children.get(ordinary.pid)!;
@@ -115,7 +126,7 @@ test("parent exit kills worker children without signalling ordinary subprocesses
 });
 
 function exitWorker(fixture: ReturnType<typeof loadExit>) {
-  return fixture.module.spawn(["bun", "worker"], { stdout: "ignore", stderr: "ignore", _worker: {} }).unref();
+  return fixture.module.spawnWorker(["bun", "worker"], { stdout: "ignore", stderr: "ignore" }, {}).unref();
 }
 
 test("private parent exit finalization runs exactly once for unref workers", () => {

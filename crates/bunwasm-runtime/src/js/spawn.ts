@@ -50,7 +50,6 @@
     timeout?: number;
     maxBuffer?: number | string;
     onExit?: (child: unknown, exitCode: number | null, signalCode: string | number | null, error: unknown) => void;
-    _worker?: unknown;
     _ipc?: boolean;
     _ipcTarget?: BunWasm.NodeEmitter;
     [key: string]: unknown;
@@ -63,8 +62,10 @@
     stdin: StdioMode;
     stdout: StdioMode;
     stderr: StdioMode;
-    worker?: unknown;
+    worker?: WorkerSpawn;
   }
+  /** A guest thread started as a process. Only worker_threads, through spawnWorker, supplies one. */
+  type WorkerSpawn = object;
   type Input = { data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
   interface Spec { meta: SpawnMeta; options: SpawnOptions; input: Input }
   interface Started extends Spec {
@@ -182,7 +183,7 @@
     if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
   }
 
-  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean): Spec {
+  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, worker?: WorkerSpawn): Spec {
     if (!Array.isArray(cmd)) {
       options = (cmd || {}) as SpawnOptions;
       cmd = options.cmd;
@@ -209,7 +210,7 @@
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
-    if (options._worker) meta.worker = options._worker;
+    if (worker) meta.worker = worker;
     return { meta, options, input: prepareInput(input, sync) };
   }
 
@@ -258,8 +259,8 @@
   // Every descriptor the call creates is released again if the spawn fails. Child ends are
   // closed here once procSpawn has taken its own references, so the child sees EOF or EPIPE
   // as soon as the last parent copy goes.
-  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean): Started {
-    const spec = normalize(cmd, options, sync);
+  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, workerSpawn?: WorkerSpawn): Started {
+    const spec = normalize(cmd, options, sync, workerSpawn);
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
     if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
     checkCwd(spec.meta);
@@ -301,7 +302,7 @@
       });
       const { executable, argv, cwd } = spec.meta;
       let env = spec.meta.env;
-      if (spec.options._worker) {
+      if (spec.meta.worker) {
         // Control channels are two more ordinary bindings. Each child number is the parent's own
         // descriptor number for that end, so it cannot collide with another binding, and the child
         // learns both from its environment. Only listed descriptors reach a child: grandchildren
@@ -541,7 +542,16 @@
   }
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
-    const spec = start(cmd, options, false);
+    return run(cmd, options);
+  }
+
+  /** Internal only: public Bun.spawn and node:child_process options cannot reach this. */
+  function spawnWorker(cmd: unknown, options: SpawnOptions, worker: WorkerSpawn): Child {
+    return run(cmd, options, worker);
+  }
+
+  function run(cmd: unknown, options?: SpawnOptions, worker?: WorkerSpawn): Child {
+    const spec = start(cmd, options, false, worker);
     // The startup notification and onExit run in the frame current at spawn(); the exited Promise,
     // output streams and stdin callbacks keep their own frames.
     const frame = frames.capture();
@@ -744,7 +754,7 @@
       if (settled && !reaped) reaped = reapJob(spec.job);
       if (settled && states.every((state) => state.fd < 0)) {
         if (!reaped) reapLater(spec.job);
-        if (!spec.options._worker) close();
+        if (!spec.meta.worker) close();
         return true;
       }
       refreshRef();
@@ -807,7 +817,7 @@
     }
     registered = true;
     internal.addIoWaiter(waiter);
-    if (spec.options._worker) trackWorkerChild(child);
+    if (spec.meta.worker) trackWorkerChild(child);
     supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));
     if (spec.options.signal) {
@@ -1201,5 +1211,5 @@
     return { ChildProcess, spawn: nodeSpawn, spawnSync: nodeSpawnSync, exec, execSync, execFile, execFileSync, fork };
   }
 
-  return { spawn, spawnSync, nodeChildProcess, which };
+  return { spawn, spawnWorker, spawnSync, nodeChildProcess, which };
 })

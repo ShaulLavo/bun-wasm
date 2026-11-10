@@ -9,4 +9,14 @@ shared-wasm-memory engine roots: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Browser budget: pass
-shared-wasm-memory Browser worker refusals: pass
+shared-wasm-memory Browser table and global refusal: pass
+shared-wasm-memory worker refusals: pass
+shared-wasm-memory cross-worker: pass
+plain-sab: pass
+plain-sab guest: pass
+shared-buffer slice: pass
+shared-buffer alias: pass
+shared-buffer churn: pass
+shared-wasm-memory worker transport: pass
+shared-wasm-memory membership: pass
+shared-wasm-memory membership forgery: pass
