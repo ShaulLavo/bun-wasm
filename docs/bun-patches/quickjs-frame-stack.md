@@ -35,7 +35,7 @@ the C call would have returned.
 
 | Upstream code | Local form |
 | --- | --- |
-| `JSStackFrame sf_s` and the `alloca` of `JS_CallInternal` | `js_frame_push`, which returns a `JSExecFrame` record with the values behind it. `local_buf` is derived from the record. |
+| `JSStackFrame sf_s` and the `alloca` of `JS_CallInternal` | `js_frame_push`, which returns a `JSExecFrame` record with the values behind it, and `js_frame_push_chunk` when the current chunk has no room. `local_buf` is derived from the record. |
 | The return at the end of `JS_CallInternal` | `js_frame_pop`, after the frame is unlinked and its values are freed. A record entered inline reloads its caller and continues the loop. |
 | Entry code of `JS_CallInternal` after the stack check | The same statements under `enter_frame`, reached from C and from `inline_call`. |
 | `JS_CallInternal` at `OP_call0` to `OP_call3`, `OP_call`, `OP_tail_call`, `OP_call_method`, `OP_tail_call_method` | `inline_call` when the caller owns a record and `js_frame_inline_callee` accepts the callee. Otherwise the upstream call. |
@@ -72,6 +72,23 @@ with the rest of the frame after a tail call or an exception. A coroutine
 frame belongs to its own heap allocation, owns no record, and is never an
 inline caller, so its `cur_sp` keeps meaning "suspended at".
 
+## Cost per call
+
+Every call pushes and pops a record, so that step has to be cheap. The guest
+is built at `opt-level = "s"`, which does not inline small helpers by itself:
+with pushing, popping and the callee test left as calls, call-heavy loops ran
+14 to 23 percent slower than before this change. `js_frame_push`,
+`js_frame_pop`, `js_frame_record_size` and `js_frame_inline_callee` are
+therefore forced inline. What a chunk boundary, a refusal or an emptied chunk
+needs stays in `js_frame_push_chunk` and `js_frame_pop_chunk`, out of line.
+
+Measured in the produced guest on the native launcher, five paired rounds
+with about one percent of spread: calls between ordinary functions in a loop
+are within two percent of the engine before the change, in either direction.
+Plain recursion is 8 percent slower, and callbacks entered from native code
+(`map`, `reduce`) 12 percent: those pay for the record without saving a C
+call. That remainder is accepted here, not hidden.
+
 ## The frame limit
 
 `JS_SetMaxFrameStackSize` bounds the bytes the frame stack costs the
@@ -89,9 +106,9 @@ to make a lower value fit. Record sizes are computed with checked arithmetic.
 
 The default, and the setter's maximum, is 4 MiB. It was chosen from
 measurement: a plain recursive call costs about 121 bytes on wasm32, so 2 MiB
-holds 17,343 of them. That is more than the 13,786 the native launcher's
-4096 KiB budget allowed before this change, but fewer than the 20,685 the Node
-host's 6144 KiB allowed. 4 MiB keeps both
+held 17,343 of them. That is more than the 13,786 the native launcher's
+4096 KiB budget allowed before this change, but fewer than the 20,685 recorded
+for the Node host's 6144 KiB. 4 MiB holds 34,721, measured, which keeps both
 ([Stack limits](../stack-limits.md) has the measured depths).
 
 This is a deliberate resource bound. Before, the native budget bounded
@@ -119,9 +136,15 @@ the budget cover the host frames one C entry costs. Each entry now costs about
 native route got more host stack per guarded byte. With 16 bytes reserved the
 guard still allowed more `Reflect.construct` levels than the native launcher's
 host stack holds at its default budget, and that recursion trapped instead of
-throwing. 48 is the measured need on that route, the tightest, rounded up to
-the shadow stack's alignment. It is a fixed accounting compensation measured
-on wasmtime, not a browser safety result.
+throwing; the existing `tests/fixtures/stack-overflow` caught it. That route,
+the tightest, needed 28 to 32 bytes to match the build before. 48 is the next
+step of the shadow stack's 16-byte alignment and leaves it a little more room
+than it had: the guard now refuses `Reflect.construct` with about 15.2 MiB of
+the launcher's 16 MiB host stack in use, where the build before used 15.8. On
+every measured native route the depth at 32 and 36 KiB is at or above what it
+was, and the host stack in use at the refusal is lower
+([Stack limits](../stack-limits.md)). This is a fixed accounting compensation
+measured on wasmtime, not a browser safety result.
 
 ## Checks
 
