@@ -1,19 +1,23 @@
 #!/usr/bin/env node
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 
-const root = process.env.STACK_TEST_ROOT;
-if (!root) throw new Error("Missing STACK_TEST_ROOT");
+function fixtureRoot(): string {
+  const path = process.env.STACK_TEST_ROOT;
+  if (!path) throw new Error("Missing STACK_TEST_ROOT");
+  return path;
+}
+const root = fixtureRoot();
 const scenario = process.env.STACK_TEST_SCENARIO ?? "safe";
 let serial = 0;
 
 function resource(kind: string) {
-  const path = join(root!, `${kind}-${serial++}`);
+  const path = join(root, `${kind}-${serial++}`);
   mkdirSync(path);
   return async () => {
     rmSync(path, { recursive: true, force: true });
-    appendFileSync(join(root!, "cleanup.log"), `${kind}\n`);
+    appendFileSync(join(root, "cleanup.log"), `${kind}\n`);
   };
 }
 
@@ -21,23 +25,24 @@ export const playwright = { devices: {}, chromium: {}, webkit: {}, firefox: {} }
 export const firstVisit = async (_context: unknown, url: string) => ({ url, close: resource("visit") });
 export const ready = async () => {};
 export const writeFile = async () => {};
+function fakeContext() {
+  return { close: resource("context"), newPage: async () => ({ goto: async () => {} }) };
+}
+function fakeBrowser() {
+  return { close: resource("browser"), newContext: async () => fakeContext() };
+}
 export function session() {
   const cleanup = resource("session");
-  return {
-    serve: async () => "http://fake.invalid/",
-    cleanup,
-    launch: async () => ({
-      close: resource("browser"),
-      newContext: async () => ({
-        close: resource("context"),
-        newPage: async () => ({ goto: async () => {} }),
-      }),
-    }),
-  };
+  return { serve: async () => "http://fake.invalid/", cleanup, launch: async () => fakeBrowser() };
 }
 
 function attempt(mode: string, depth: number) {
+  if (process.env.STACK_TEST_OUTPUT !== undefined) {
+    const output = process.env.STACK_TEST_OUTPUT.replaceAll("{mode}", mode).replaceAll("{depth}", String(depth));
+    return { code: Number(process.env.STACK_TEST_STATUS ?? 0), output };
+  }
   if (scenario === "throw") throw new Error("fake provider failure");
+  if (scenario === "hidden-timeout" && mode === "plain" && depth === 100000) return { code: null, output: "timeout" };
   if (scenario === "timeout") return { code: null, output: "timeout" };
   if (scenario === "hidden" && mode === "plain" && (depth === 100000 || depth === 4)) return { code: 1, output: "wasm call stack exhausted" };
   if (scenario === "final" && mode === "plain") return { code: 1, output: "wasm call stack exhausted" };
@@ -59,8 +64,8 @@ export async function run(_page: unknown, command: string) {
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   const mode = process.argv.at(-2)!;
   const depth = Number(process.argv.at(-1));
-  writeFileSync(join(root, "launcher.pid"), String(process.pid));
-  if (scenario === "hang") await new Promise(() => setInterval(() => {}, 1000));
+  appendFileSync(join(root, "launcher.pid"), `${process.pid}\n`);
+  if (scenario === "hang" || (scenario === "hidden-timeout" && depth === 4)) await new Promise(() => setInterval(() => {}, 1000));
   const result = attempt(mode, depth);
   process.stdout.write(result.output);
   process.exitCode = result.code ?? 1;

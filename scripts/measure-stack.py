@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 MODES = ['plain', 'getter', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
@@ -20,29 +21,59 @@ MODES = ['plain', 'getter', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver'
 # Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
 MAX = {'bound': 2000}
 
+SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'regexpnc', 'lookahead'}
+
+
+def accepted(mode, outcome):
+    if outcome == 'completed':
+        return True
+    if mode == 'console':
+        return False
+    return outcome == 'caught:RangeError' or (outcome == 'caught:SyntaxError' and mode in SYNTAX_MODES)
+
 
 def run(command, mode, n):
-    result = subprocess.run(command + [mode, str(n)], text=True, capture_output=True, timeout=120)
-    match = re.search(r'^(completed|caught) \w+ (?:(\w+) )?\d+', result.stdout, re.M)
-    if result.returncode == 0 and match and 'continued' in result.stdout:
-        return 'completed' if match[1] == 'completed' else f'caught:{match[2]}'
-    output = (result.stderr + result.stdout).lower()
-    if 'call stack' in output or 'stack overflow' in output or 'stack exhausted' in output:
+    try:
+        result = subprocess.run(command + [mode, str(n)], text=True, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return 'timeout'
+    if result.returncode != 0:
         return 'trap'
-    raise RuntimeError(f'{mode} {n}: exit {result.returncode}\n{result.stdout[-1000:]}\n{result.stderr[-2000:]}')
+    lines = result.stdout.splitlines()
+    outcomes = [line for line in lines if re.match(r'^(completed|caught) ', line)]
+    if len(outcomes) != 1:
+        return 'invalid-output'
+    line = outcomes[0]
+    if 'continued' not in lines or lines.index('continued') <= lines.index(line):
+        return 'missing-continuation'
+    if line == f'completed {mode} {n}':
+        return 'completed'
+    caught = re.fullmatch(r'caught (\w+) (\w+) (\d+) (.*)', line)
+    if not caught or caught[1] != mode or int(caught[3]) != n:
+        return 'invalid-output'
+    outcome = f'caught:{caught[2]}'
+    return outcome if accepted(mode, outcome) else f'unexpected:{caught[2]}'
 
 
 def capacity(command, mode, high):
-    if run(command, mode, high) == 'completed':
-        return {'completed_at_max': high}
+    failures = []
+
+    def trial(depth):
+        outcome = run(command, mode, depth)
+        if not accepted(mode, outcome):
+            failures.append({'depth': depth, 'outcome': outcome})
+        return outcome
+
+    if trial(high) == 'completed':
+        return {'completed_at_max': high, 'failures': failures}
     low = 0
     while low + 1 < high:
         middle = (low + high) // 2
-        if run(command, mode, middle) == 'completed':
+        if trial(middle) == 'completed':
             low = middle
         else:
             high = middle
-    return {'capacity': low, 'beyond': run(command, mode, low + 1)}
+    return {'capacity': low, 'beyond': trial(low + 1), 'failures': failures}
 
 
 def main():
@@ -56,6 +87,11 @@ def main():
     parser.add_argument('--max', type=int, default=200000, help='deepest nesting tried')
     parser.add_argument('modes', nargs='*', default=MODES)
     args = parser.parse_args()
+    args.modes = list(dict.fromkeys(args.modes))
+    if args.max <= 0:
+        parser.error('--max must be positive')
+    if any(mode not in MODES for mode in args.modes):
+        parser.error('unknown stack mode')
     args.host = args.host or ('node' if args.engine == 'browser' else 'launcher')
     if args.engine == 'browser' and args.host != 'node':
         parser.error('--engine browser requires --host node')
@@ -76,7 +112,8 @@ def main():
     results = {mode: capacity(command, mode, min(args.max, MAX.get(mode, args.max))) for mode in args.modes}
     print(json.dumps({'engine': args.engine, 'wasm': wasm, 'host': args.host, 'stack_kib': args.stack_kib,
                       'budget_kib': args.budget_kib, 'results': results}))
+    return int(any(row['failures'] for row in results.values()))
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
