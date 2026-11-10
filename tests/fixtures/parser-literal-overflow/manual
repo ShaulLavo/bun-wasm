@@ -1,0 +1,1 @@
+Native Bun's JavaScriptCore has the parser retry defect this fixture guards, so it cannot regenerate expected.txt.

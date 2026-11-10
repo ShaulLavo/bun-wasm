@@ -1,0 +1,31 @@
+name: Save Rust dependency objects
+description: Seed dependency-keyed compiler objects on main without oversized snapshots
+inputs:
+  key:
+    description: Primary key from the Rust object restore
+    required: true
+  cache-hit:
+    description: Whether the dependency seed matched exactly
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: budget
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CACHE_PATH: ${{ runner.temp }}/sccache
+      run: |
+        if [[ ! -d "$CACHE_PATH" ]]; then exit 0; fi
+        bytes=$(du -sb "$CACHE_PATH" | cut -f1)
+        # A legacy restore may exceed the cap without starting sccache. Allow 12.5% directory overhead.
+        if (( bytes > 603979776 )); then
+          echo "::notice::Skip oversized Rust object seed ($bytes bytes)."
+          exit 0
+        fi
+        echo 'fits=true' >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/save@v4
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cache-hit != 'true' && steps.budget.outputs.fits == 'true'
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: ${{ inputs.key }}

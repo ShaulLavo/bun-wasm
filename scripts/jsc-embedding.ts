@@ -8,7 +8,7 @@ import { nodeHost, parserReserveControls } from "./jsc-parser-reserve";
 import { parseCheck } from "./test-checks";
 
 const root = resolve(import.meta.dir, "..");
-const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/jsc-embedding/growable-memory"];
+const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/fixtures/parser-literal-overflow", "tests/jsc-embedding/growable-memory"];
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 function git(...args: string[]): string {
