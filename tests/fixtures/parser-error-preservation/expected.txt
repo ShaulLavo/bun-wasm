@@ -1,3 +1,7 @@
 arrow overflow is RangeError
 invalid parameters are SyntaxError
 parser recovered
+object literal overflow is RangeError
+array literal overflow is RangeError
+invalid literals are SyntaxError
+parser recovered after literals
