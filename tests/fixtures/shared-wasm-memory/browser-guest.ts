@@ -7,6 +7,7 @@ await import('./engine-roots.ts');
 await import('./index.ts');
 await import('./mixed-backend.ts');
 await import('./browser-budget.ts');
+await import('./browser-reservation-control.ts');
 await import('./global-controls.ts');
 await import('./simd-controls.ts');
 await import('./link-controls.ts');
