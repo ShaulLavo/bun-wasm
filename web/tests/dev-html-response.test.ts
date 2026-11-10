@@ -177,3 +177,18 @@ test("unmarked application socket handlers and configured frame limits delegate 
     expect(calls).toEqual(["open", "message", "ping", "pong", "error", "close", "drain"]);
   } finally { f.adapter.dispose(); f.source.close(); }
 });
+
+test("unsupported policy reports once per route/revision without changing responses", async () => {
+  const f = await setup();
+  try {
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const response = f.response(html, { "content-type": "text/html", "content-security-policy": "default-src 'none'" });
+      expect(await f.adapter.decorate(f.request(), response, f.stamp)).toBe(response);
+    }
+    expect(f.errors).toHaveLength(1);
+    const next = f.source.stamp(2);
+    f.source.commit(next);
+    await f.adapter.decorate(f.request(), f.response(html, { "content-type": "text/html", "content-security-policy": "default-src 'none'" }), next);
+    expect(f.errors).toHaveLength(2);
+  } finally { f.adapter.dispose(); f.source.close(); }
+});

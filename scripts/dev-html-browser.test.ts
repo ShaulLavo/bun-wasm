@@ -6,8 +6,8 @@ type PageServer = Awaited<ReturnType<typeof developmentPageServer>>;
 const browsers: Browser[] = [];
 beforeAll(async () => {
   try {
-    browsers.push(await chromium.launch({ headless: true, ignoreDefaultArgs: ["--disable-back-forward-cache"] }));
-    browsers.push(await firefox.launch({ headless: true }));
+    browsers.push(await chromium.launch({ channel: "chromium", headless: true, ignoreDefaultArgs: ["--disable-back-forward-cache"] }));
+    browsers.push(await firefox.launch({ headless: true, firefoxUserPrefs: { "browser.sessionhistory.max_total_viewers": 10 } }));
   } catch (error) {
     await Promise.all(browsers.map(browser => browser.close()));
     throw error;
@@ -234,11 +234,28 @@ test("development HTML suspends an open socket before pagehide teardown and rest
 
 test("development HTML terminal disconnect prevents later commits, reads or duplicate subscriptions", async () => {
   await pageFixture(async (page, server, errors) => {
+    await page.evaluate(() => {
+      const Base = window.MessageChannel;
+      const closed: number[] = [];
+      Reflect.set(window, "disconnectChannels", closed);
+      window.MessageChannel = class extends Base {
+        constructor() {
+          super();
+          const index = closed.push(0) - 1;
+          for (const port of [this.port1, this.port2]) {
+            const close = port.close.bind(port);
+            port.close = () => { closed[index] = (closed[index] ?? 0) + 1; close(); };
+          }
+        }
+      };
+    });
     server.source.close();
     await until(() => errors.some(error => error.includes("disconnected")));
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
     await tick(page);
     expect(server.privateOpened).toBe(1);
+    expect(errors.filter(error => error.includes("disconnected"))).toHaveLength(1);
+    expect(await page.evaluate(() => Reflect.get(window, "disconnectChannels"))).toEqual([2]);
     expect(server.rawRequests).toBe(0);
     await unchanged(page);
   });
@@ -327,4 +344,152 @@ const Base = window.WebSocket; window.testSockets = []; window.WebSocket = class
     } catch (error) { console.error(messages, await page.evaluate(() => ({ ports: Reflect.get(window, "testPorts").length, marker: document.documentElement.getAttribute("data-bun-wasm-dev") }))); throw error; }
     finally { await page.close(); await server.close(); }
   }
+}, 30_000);
+
+test("development HTML records genuine nonpersisted lifecycle and conditionally checks browser-permitted bfcache", async () => {
+  const { previewSocketShim } = await import("../web/tests/fixtures/dev-html-browser");
+  const shim = await previewSocketShim() + `\nconst Base = window.WebSocket; window.testSockets = []; window.WebSocket = class extends Base { constructor(...args) { super(...args); window.testSockets.push(this); } };`;
+  const observations: unknown[] = [];
+  for (const browser of browsers) {
+    const server = await developmentPageServer(counterHtml, undefined, shim);
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5000);
+    const errors: string[] = [];
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    const bfcache: unknown[] = [];
+    const cdp = browser.browserType().name() === "chromium" ? await page.context().newCDPSession(page) : null;
+    if (cdp) { await cdp.send("Page.enable"); cdp.on("Page.backForwardCacheNotUsed", value => bfcache.push(value)); }
+    try {
+      await page.addInitScript(() => {
+        const id = crypto.randomUUID();
+        Reflect.set(window, "documentIdentity", id);
+        const events: { type: string; persisted: boolean; trusted: boolean; id: string }[] = [];
+        const record = (event: PageTransitionEvent) => {
+          events.push({ type: event.type, persisted: event.persisted, trusted: event.isTrusted, id });
+          const previous = JSON.parse(sessionStorage.getItem("devHtmlLifecycle") ?? "[]");
+          previous.push(events.at(-1));
+          sessionStorage.setItem("devHtmlLifecycle", JSON.stringify(previous));
+        };
+        window.addEventListener("pagehide", record, true);
+        window.addEventListener("pageshow", record, true);
+        const ports: MessagePort[] = [];
+        Reflect.set(window, "testPorts", ports);
+        Object.defineProperty(navigator, "serviceWorker", { value: { controller: { postMessage(_message: unknown, transferred: MessagePort[]) {
+          const port = transferred[0]!;
+          ports.push(port);
+          port.postMessage({ type: "accepted" });
+          port.onmessage = async event => {
+            if (event.data.type !== "data" || ports.length === 1) return;
+            const text = new TextDecoder().decode(event.data.chunk);
+            if (!text.startsWith("GET ")) return;
+            const key = /Sec-WebSocket-Key:\s*([^\r\n]+)/i.exec(text)?.[1];
+            const hash = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
+            const accept = btoa(String.fromCharCode(...new Uint8Array(hash)));
+            port.postMessage({ type: "data", chunk: new TextEncoder().encode(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`) });
+          };
+          port.start();
+        } } } });
+      });
+      await page.goto(server.url);
+      await page.waitForFunction(() => Reflect.get(window, "testPorts").length === 1);
+      await page.locator("#counter").click();
+      const original = await page.evaluate(() => Reflect.get(window, "documentIdentity"));
+      await page.goto(`${server.url}away`);
+      const hidden = await page.evaluate(() => JSON.parse(sessionStorage.getItem("devHtmlLifecycle") ?? "[]"));
+      expect(hidden.some((event: { type: string; trusted: boolean; id: string }) => event.type === "pagehide" && event.trusted && event.id === original)).toBe(true);
+      server.setHtml(counterHtml.replace("Before", "After native lifecycle"));
+      server.commit(2);
+      await page.goBack();
+      await page.waitForFunction(() => Reflect.get(window, "testPorts")?.length > 0);
+      const history: { type: string; persisted: boolean; trusted: boolean; id: string }[] = await page.evaluate(() => JSON.parse(sessionStorage.getItem("devHtmlLifecycle") ?? "[]"));
+      const restored = history.some(event => event.type === "pageshow" && event.persisted && event.id === original);
+      observations.push({ browser: browser.browserType().name(), restored, events: history, bfcache, errors });
+      if (!restored) {
+        expect(await page.evaluate(() => Reflect.get(window, "documentIdentity"))).not.toBe(original);
+        continue;
+      }
+      expect(await page.evaluate(() => Reflect.get(window, "documentIdentity"))).toBe(original);
+      await page.waitForFunction(() => Reflect.get(window, "testSockets")[1]?.readyState === 1);
+      await page.evaluate(stamp => {
+        const data = new TextEncoder().encode(JSON.stringify({ kind: "committed", stamp }));
+        const frame = new Uint8Array(data.length + 2);
+        frame[0] = 0x81; frame[1] = data.length; frame.set(data, 2);
+        Reflect.get(window, "testPorts")[1].postMessage({ type: "data", chunk: frame });
+      }, server.stamp);
+      await page.waitForFunction(() => document.querySelector("h1")?.textContent === "After native lifecycle");
+      expect(await page.evaluate(() => Reflect.get(window, "testSockets").length)).toBe(2);
+      expect(await page.locator("#value").textContent()).toBe("1");
+      await unchanged(page);
+      await page.locator("#counter").click();
+      expect(await page.locator("#value").textContent()).toBe("2");
+    } finally { await cdp?.detach(); await page.close(); await server.close(); }
+  }
+  if (process.env.DEV_HTML_EVIDENCE_DIR) await Bun.write(`${process.env.DEV_HTML_EVIDENCE_DIR}/native-lifecycle.json`, JSON.stringify(observations, null, 2));
+}, 30_000);
+
+test("development HTML ignores duplicate and old socket notices without a GET", async () => {
+  await pageFixture(async (page, server) => {
+    server.frame(JSON.stringify({ kind: "committed", stamp: server.stamp }));
+    await tick(page);
+    expect(server.rawRequests).toBe(0);
+    server.setHtml(counterHtml.replace("Before", "Revision three"));
+    server.commit(3);
+    await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Revision three");
+    server.frame(JSON.stringify({ kind: "committed", stamp: { ...server.stamp, revision: 2 } }));
+    server.frame(JSON.stringify({ kind: "committed", stamp: server.stamp }));
+    await tick(page);
+    expect(server.rawRequests).toBe(1);
+  });
+}, 30_000);
+
+for (const frame of ["{bad", JSON.stringify({ kind: "committed", stamp: { server: "foreign", revision: 100 } })]) {
+  test("development HTML rejects malformed or foreign socket frames without binding another server", async () => {
+    await pageFixture(async (page, server, errors) => {
+      server.frame(frame);
+      await until(() => errors.length > 0);
+      server.setHtml(counterHtml.replace("Before", "Must not apply"));
+      server.commit(2);
+      await tick(page);
+      expect(await page.locator("h1").textContent()).toBe("Before");
+      expect(server.rawRequests).toBe(0);
+      await unchanged(page);
+    });
+  }, 30_000);
+}
+
+test("development HTML rolls back earlier writes when a later DOM operation throws", async () => {
+  await pageFixture(async (page, server, errors) => {
+    await page.evaluate(() => {
+      const set = Element.prototype.setAttributeNS;
+      Element.prototype.setAttributeNS = function(namespace, name, value) {
+        if (name === "class" && value === "throw-once") { Element.prototype.setAttributeNS = set; throw new Error("test DOM failure"); }
+        return set.call(this, namespace, name, value);
+      };
+    });
+    server.setHtml(counterHtml.replace("<title>Counter", "<title>Changed title").replace("<h1>", '<h1 class="throw-once">').replace("Before", "Changed heading"));
+    server.commit(2);
+    await until(() => errors.some(error => error.includes("test DOM failure")));
+    expect(await page.title()).toBe("Counter");
+    expect(await page.locator("h1").textContent()).toBe("Before");
+    await unchanged(page);
+  });
+}, 30_000);
+
+test("development HTML keeps two documents subscribed independently and closes only their private sockets", async () => {
+  const server = await developmentPageServer();
+  const pages: Page[] = [];
+  try {
+    for (const browser of browsers) pages.push(await browser.newPage());
+    for (const page of pages) await page.goto(server.url);
+    await until(() => server.socketCount === pages.length);
+    server.setHtml(counterHtml.replace("Before", "Both documents"));
+    server.commit(2);
+    for (const page of pages) await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Both documents");
+    await pages[0]!.close();
+    await until(() => server.socketCount === pages.length - 1);
+    server.setHtml(counterHtml.replace("Before", "Remaining document"));
+    server.commit(3);
+    await pages[1]!.waitForFunction(() => document.querySelector("h1")?.textContent === "Remaining document");
+    await unchanged(pages[1]!);
+  } finally { for (const page of pages) await page.close(); await server.close(); }
 }, 30_000);

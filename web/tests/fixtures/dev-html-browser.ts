@@ -50,7 +50,7 @@ export async function developmentFixture() {
 }
 
 export const counterHtml = '<!doctype html><html><head><meta charset="utf-8"><title>Counter</title></head><body><h1>Before</h1><button id="counter" disabled>Count</button><output id="value">0</output><script type="module" src="/counter.ts"></script></body></html>';
-export const counterModule = `window.evaluations = (window.evaluations || 0) + 1;
+const counterModule = `window.evaluations = (window.evaluations || 0) + 1;
 const button = document.querySelector('#counter'); const value = document.querySelector('#value');
 button.addEventListener('click', () => { value.textContent = String(Number(value.textContent) + 1); }); button.disabled = false;
 window.original = { document, window, root: document.documentElement, head: document.head, body: document.body, button, value, url: location.href };`;
@@ -63,6 +63,7 @@ export async function developmentPageServer(initial = counterHtml, script = coun
   let html = initial;
   let rawRequests = 0;
   let privateOpened = 0;
+  const sockets = new Set<Bun.ServerWebSocket<undefined>>();
   let adapter: ReturnType<typeof fixture.adapt.attach>;
   let rawStatus = 200;
   let rawType = "text/html";
@@ -90,9 +91,9 @@ export async function developmentPageServer(initial = counterHtml, script = coun
       return await platformResponse(await adapter.decorate(request, response, captured));
     },
     websocket: {
-      open(socket) { privateOpened++; adapter.websocket(undefined).open(socket); },
+      open(socket) { sockets.add(socket); privateOpened++; adapter.websocket(undefined).open(socket); },
       message(socket, data) { adapter.websocket(undefined).message(socket, data); },
-      close(socket, code, reason) { adapter.websocket(undefined).close(socket, code, reason); },
+      close(socket, code, reason) { sockets.delete(socket); adapter.websocket(undefined).close(socket, code, reason); },
     },
   });
   adapter = fixture.adapt.attach({ server, revisions: source.source });
@@ -105,6 +106,8 @@ export async function developmentPageServer(initial = counterHtml, script = coun
     url: `http://127.0.0.1:${server.port}/`, source, adapter,
     get stamp() { return stamp; },
     get rawRequests() { return rawRequests; }, get privateOpened() { return privateOpened; },
+    get socketCount() { return sockets.size; },
+    frame(data: string) { for (const socket of sockets) socket.send(data); },
     setHtml(next: string) { html = next; },
     commit(revision: number) { stamp = source.stamp(revision); source.commit(stamp); },
     unannounced(revision: number) { stamp = source.stamp(revision); },

@@ -4,7 +4,7 @@ export type Config = { stamp: Stamp; paths: { client: string; events: string }; 
 type Baseline = { tree: Document; live: Map<Node, Node>; stamp: Stamp; policy: Policy };
 type Candidate = { tree: Document; stamp: Stamp; policy: Policy };
 type Job = { controller: AbortController; revision: number; candidate?: Candidate; staleRetry: boolean };
-type Active = { baseline: Baseline; desired: number; socket: WebSocket; job: Job | null; attempted: number };
+type Active = { baseline: Baseline; desired: number; socket: WebSocket; job: Job | null; attempted: number; disconnect: MessageChannel | null };
 type State =
   | { kind: "waiting"; active: Active }
   | { kind: "running"; active: Active }
@@ -206,7 +206,7 @@ function apply(baseline: Baseline, candidate: Candidate): Baseline {
   const patch = preflight(baseline, candidate);
   const applied: Change[] = [];
   try {
-    for (const change of patch.changes) { applied.push(change); write(change, change.after); }
+    for (const change of patch.changes) { write(change, change.after); applied.push(change); }
   } catch (error) {
     for (const change of applied.reverse()) write(change, change.before);
     throw error;
@@ -243,7 +243,7 @@ export async function readHtml(response: Response, signal: AbortSignal): Promise
   }
 }
 
-export function startDevelopmentHtml(document: Document, window: Window & typeof globalThis): (() => void) | undefined {
+function startDevelopmentHtml(document: Document, window: Window & typeof globalThis): (() => void) | undefined {
   const configNode = document.querySelector(`script[${marker}="config"]`);
   if (!configNode || document.documentElement.hasAttribute(marker)) return;
   document.documentElement.setAttribute(marker, "active");
@@ -252,8 +252,11 @@ export function startDevelopmentHtml(document: Document, window: Window & typeof
   try { config = parseConfig(JSON.parse(configNode.textContent ?? "")); }
   catch (error) { configNode.remove(); report(String(error)); return; }
   configNode.remove();
-  const tree = parse(config.html);
-  const baseline: Baseline = { tree, live: bind(tree, document), stamp: config.stamp, policy: config.policy };
+  let baseline: Baseline;
+  try {
+    const tree = parse(config.html);
+    baseline = { tree, live: bind(tree, document), stamp: config.stamp, policy: config.policy };
+  } catch (error) { report(String(error)); return; }
   const endpoint = config.paths.events;
   config.html = "";
   let state: State = { kind: "suspended", baseline };
@@ -263,6 +266,7 @@ export function startDevelopmentHtml(document: Document, window: Window & typeof
   function detach(current: Active): void {
     current.job?.controller.abort();
     current.job = null;
+    cancelDisconnect(current);
     current.socket.onmessage = null;
     current.socket.onclose = null;
     current.socket.onerror = null;
@@ -283,14 +287,33 @@ export function startDevelopmentHtml(document: Document, window: Window & typeof
     const url = new URL(endpoint, window.location.origin);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = new window.WebSocket(url);
-    const current: Active = { baseline, desired: baseline.stamp.revision, socket, job: null, attempted: baseline.stamp.revision };
+    const current: Active = { baseline, desired: baseline.stamp.revision, socket, job: null, attempted: baseline.stamp.revision, disconnect: null };
     state = document.readyState !== "complete" ? { kind: "waiting", active: current } : { kind: "running", active: current };
     socket.onmessage = event => notice(current, event.data);
-    // Window-target listeners can run in registration order, even with capture.
-    // Let pagehide suspend before the shim's synchronous error becomes terminal.
-    const disconnected = () => window.queueMicrotask(() => { if (active() === current) close("disconnected"); });
-    socket.onclose = disconnected;
-    socket.onerror = disconnected;
+    // Native event dispatch may checkpoint microtasks between Window listeners.
+    // A cancellable task lets pagehide finish before a shim failure is terminal.
+    socket.onclose = () => disconnected(current);
+    socket.onerror = () => disconnected(current);
+  }
+
+  function cancelDisconnect(current: Active): void {
+    const channel = current.disconnect;
+    current.disconnect = null;
+    if (!channel) return;
+    channel.port1.onmessage = null;
+    channel.port1.close();
+    channel.port2.close();
+  }
+
+  function disconnected(current: Active): void {
+    if (active() !== current || current.disconnect) return;
+    const channel = new window.MessageChannel();
+    current.disconnect = channel;
+    channel.port1.onmessage = () => {
+      cancelDisconnect(current);
+      if (active() === current) close("disconnected");
+    };
+    channel.port2.postMessage(null);
   }
 
   function notice(current: Active, data: unknown): void {
@@ -361,7 +384,9 @@ export function startDevelopmentHtml(document: Document, window: Window & typeof
   }
 
   function show(event: PageTransitionEvent): void {
-    if (event.persisted && state.kind === "suspended") connect(state.baseline);
+    if (!event.persisted || state.kind !== "suspended") return;
+    try { connect(state.baseline); }
+    catch (error) { close(String(error)); }
   }
 
   window.addEventListener("pagehide", hide, true);

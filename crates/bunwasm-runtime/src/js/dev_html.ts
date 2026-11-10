@@ -69,6 +69,7 @@
       if (name === "html") roots++;
       if (name === "meta" && /^(?:content-security-policy|refresh)$/i.test(token.getAttribute("http-equiv") ?? "")) unsupported = true;
       if (name === "meta" && token.getAttribute("charset") != null && !/^(?:utf-?8|us-ascii)$/i.test(token.getAttribute("charset") ?? "")) unsupported = true;
+      if (name === "meta" && /^content-type$/i.test(token.getAttribute("http-equiv") ?? "") && !htmlType(token.getAttribute("content") ?? null)) unsupported = true;
       if (name === "head") { heads++; token.prepend(injection, { html: true }); }
     } });
     const result = await rewriter.transform(html);
@@ -80,12 +81,24 @@
     let current: Stamp | null = null;
     let closed = false;
     let unsubscribe = () => {};
+    let warnedRevision = 0;
+    const warnedRoutes = new Set<string>();
     const stopObserving = revisions.subscribe(notice => {
       if (notice.kind === "closed") { dispose(); return; }
       current = notice.stamp;
     });
     unsubscribe = stopObserving;
     if (closed) unsubscribe();
+
+    function warn(request: Request, stamp: Stamp): void {
+      if (stamp.revision < warnedRevision) return;
+      if (stamp.revision > warnedRevision) { warnedRoutes.clear(); warnedRevision = stamp.revision; }
+      const url = new URL(request.url);
+      const route = url.pathname + url.search;
+      if (warnedRoutes.has(route) || warnedRoutes.size >= 64) return;
+      warnedRoutes.add(route);
+      internal.printError(new Error("Development HTML update skipped for unsupported document policy or runtime markers"));
+    }
 
     function paths(stamp: Stamp) {
       const root = `/_bun/wasm-dev/${encodeURIComponent(stamp.server)}`;
@@ -157,7 +170,9 @@
     }
 
     async function decorate(request: Request, response: Response, stamp: Stamp): Promise<Response> {
-      if (closed || !eligible(request, response)) return response;
+      if (closed) return response;
+      if (request.method === "GET" && response.status === 200 && (response.headers.has("content-security-policy") || response.headers.has("content-security-policy-report-only"))) warn(request, stamp);
+      if (!eligible(request, response)) return response;
       const body = bytes(response);
       if (!body || body.length > limit) return response;
       let html: string;
@@ -168,7 +183,8 @@
       const config = { stamp, paths: paths(stamp), html, policy };
       const injection = `<script type="application/json" ${marker}="config">${json(config)}</script><script defer ${marker}="client" src="${paths(stamp).client}"></script>`;
       const transformed = await transform(html, request.headers.get(rawHeader) === "1" ? "" : injection);
-      if (transformed === null || request.signal.aborted) return response;
+      if (transformed === null) { warn(request, stamp); return response; }
+      if (request.signal.aborted) return response;
       const raw = request.headers.get(rawHeader) === "1";
       const headers = responsePairs(response, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", [stampHeader]: JSON.stringify(stamp), [policyHeader]: JSON.stringify(policy) }, !raw);
       return new Response(raw ? body : transformed, { status: response.status, statusText: response.statusText, headers });
@@ -178,6 +194,7 @@
       if (closed) return;
       closed = true;
       current = null;
+      warnedRoutes.clear();
       unsubscribe();
       for (const socket of Array.from(clients.keys())) terminate(socket);
     }
