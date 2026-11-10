@@ -2007,6 +2007,9 @@ jobs:
         env:
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
+          # Whether the rust job built the JSC pair into that site: a JSC check fails on a
+          # selected producer's missing pair and has nothing to run for an unselected one.
+          BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
           TMPDIR: ${{ runner.temp }}
         run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts

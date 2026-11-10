@@ -33,6 +33,23 @@ test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tes
   expect(needsRust([path])).toBe(true);
 });
 
+test.each([
+  "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
+  "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
+  "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json", "tests/fixtures/parser-chain-stack/index.ts",
+  "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+])("JSC parser reserve input %s selects the JSC producer its browser check requires", path => {
+  expect(needsJsc([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
+  "tests/fixtures/shared-wasm-memory/parser-reserve-ownership.ts", "jsc/webkit-wasi.patch",
+])("parser reserve ownership input %s selects the shared-group producer", path => {
+  expect(needsSharedNative([path])).toBe(true);
+});
+
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
 test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumer bundling selects its launcher; page builds stay web-only: $paths", ({ paths }) => {
