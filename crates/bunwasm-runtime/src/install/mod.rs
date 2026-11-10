@@ -385,7 +385,11 @@ fn package_present(package: &Package) -> bool {
     if let Some(local) = &package.local {
         return local::physical(&package.path()).ok().as_deref() == Some(local.path.as_path());
     }
-    if package.explicit_tarball && package.source_chain.is_none() {
+    if fs::read(installed_source_path(&package.path()))
+        .ok()
+        .as_deref()
+        != Some(installed_source(package).as_slice())
+    {
         return false;
     }
     let Ok(bytes) = fs::read(package.path().join("package.json")) else {
@@ -395,6 +399,32 @@ fn package_present(package: &Package) -> bool {
         return false;
     };
     value["name"] == package.name && value["version"] == package.version
+}
+
+fn installed_source_path(path: &Path) -> std::path::PathBuf {
+    path.with_file_name(format!(
+        ".{}.bun-wasm-source",
+        path.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+fn installed_source(package: &Package) -> Vec<u8> {
+    json!([
+        package.name,
+        package.version,
+        package.tarball,
+        package.integrity
+    ])
+    .to_string()
+    .into_bytes()
+}
+
+fn forget_installed_source(path: &Path) -> Result<()> {
+    match fs::remove_file(installed_source_path(path)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn install_packages(resolver: &mut Resolver) -> Result<usize> {
@@ -461,6 +491,7 @@ fn install_package(
     downloads: &mut io::Downloads,
 ) -> Result<()> {
     if let Some(local) = &package.local {
+        forget_installed_source(&package.path())?;
         return local::link(&local.path, &package.path());
     }
     let bytes = downloads.fetch(
@@ -479,15 +510,20 @@ fn install_package(
         fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let result = io::extract(&bytes, &staging).and_then(|_| validate_package(&staging, package));
-    if let Err(error) = result {
+    let result = io::extract(&bytes, &staging)
+        .and_then(|_| validate_package(&staging, package))
+        .and_then(|()| {
+            forget_installed_source(&path)?;
+            if path.exists() {
+                fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            }
+            fs::rename(&staging, &path).map_err(|e| e.to_string())?;
+            io::write(&installed_source_path(&path), &installed_source(package))
+        });
+    if result.is_err() {
         let _ = fs::remove_dir_all(staging);
-        return Err(error);
     }
-    if path.exists() {
-        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-    }
-    fs::rename(staging, path).map_err(|e| e.to_string())
+    result
 }
 
 fn validate_package(staging: &Path, package: &Package) -> Result<()> {
@@ -510,6 +546,7 @@ fn prune(locked: &Value, resolver: &Resolver) -> Result<()> {
         }
         let chain = chain_from_lock(key, row)?;
         let path = resolve::path(&chain);
+        forget_installed_source(&path)?;
         if fs::symlink_metadata(&path).is_ok() {
             if fs::symlink_metadata(&path).is_ok_and(|m| m.is_symlink()) {
                 fs::remove_file(path)

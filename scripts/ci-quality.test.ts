@@ -95,6 +95,14 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
+test("runtime tarball checks consume the existing Browser program before native fixture discovery", () => {
+  const ready = rust.indexOf("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
+  expect(ready).toBeGreaterThan(0);
+  expect(ready).toBeLessThan(rust.indexOf("bun scripts/test-checks.ts native"));
+  expect(rust.match(/ln -s source-cache-browser\/bun-browser\.wasm dist\/bun-browser\.wasm/g)).toHaveLength(1);
+  expect(selectChecks("runtime")).toContain("scripts/install-tarballs.test.ts");
+});
+
 const originalCmakeOwners = ["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"];
 
 function expectOriginalCmakeOwners(paths: readonly string[]): void {

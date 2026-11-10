@@ -240,8 +240,19 @@ The existing four-element lock row keeps identity, explicit URL, dependency
 metadata and SRI. First resolution records an observed SHA-512 digest; locked
 resolution verifies the existing expected digest before inspecting package data.
 Refresh and update retain a same-source digest. URL changes invalidate an
-existing installed package even when its name and version match. Explicit URL
-failures are fatal rather than optional warnings. The source Rust regressions
+existing installed package even when its name and version match. A separate
+installer-owned sibling sidecar records the actual installed name, version,
+source URL and integrity. Its path follows the placement name, including aliases.
+Only successful archive extraction writes it. Lockfile-only resolution cannot
+change installed provenance. Reuse requires both matching provenance and package
+identity, so returning to a registry source or changing a URL through a
+lockfile-only operation cannot retain different installed files. Replacement,
+pruning and local linking clear the old record before changing the files.
+Explicit URL failures are fatal rather than optional warnings. The source Rust regressions
 cover HTTPS parsing, identity, aliases, overrides, cycles, archive safety,
 cache/lock replay and tamper. `scripts/install-tarballs.test.ts` adds a controlled
-loopback HTTP provider to the existing three-engine runtime gate.
+loopback HTTP provider. Its blocking runtime check selects QuickJS, JSC and
+Browser explicitly, consuming the already-built engine artifacts. CI stages the
+existing source-cache Browser fixture before that check; this is not the normal
+W1/default-profile Browser delivery. An explicit INSTALL_ENGINE limits local
+source controls without narrowing the normal CI default.
