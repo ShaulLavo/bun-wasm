@@ -7,11 +7,13 @@ import { spawn } from 'node:child_process';
 const RESERVE = 'BUN_WASM_JSC_PARSER_RESERVE';
 const probe = `${import.meta.dir}/stack-depth.js`;
 interface Case { readonly name: string; readonly parent: string; readonly child?: Record<string, string | null> }
+// Reduced values stay at 1024 and above, at the smallest browser budget: nesting no deeper than
+// every browser already parses at its own budget (docs/stack-limits.md).
 const cases: Case[] = [
-  { name: 'explicit', parent: '1024', child: { [RESERVE]: '512' } },
-  { name: 'default-child', parent: '512', child: { [RESERVE]: null } },
-  { name: 'inherited', parent: '1024' },
-  { name: 'same-value', parent: '2048', child: { [RESERVE]: '1024' } },
+  { name: 'explicit', parent: '1536', child: { [RESERVE]: '1024' } },
+  { name: 'default-child', parent: '1024', child: { [RESERVE]: null } },
+  { name: 'inherited', parent: '1536' },
+  { name: 'same-value', parent: '2048', child: { [RESERVE]: '1536' } },
 ];
 
 function group(entry: Case): Promise<{ code: number | null; output: string }> {

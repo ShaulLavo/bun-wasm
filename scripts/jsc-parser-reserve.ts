@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { effectiveParserReserve, jscStackBudgets, qualifiedParserReserves, type StackHost } from "../web/src/engine-stack-budget.ts";
+import { effectiveParserReserve, jscStackBudgets, qualifiedParserReserves, stackHosts } from "../web/src/engine-stack-budget.ts";
 import { chainCapacities, chainMaximum, chainModes, guestStackSettings, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
 
 const root = resolve(import.meta.dir, "..");
@@ -36,7 +36,7 @@ export function nodeHost(artifact: string): ProbeHost {
   return (settings, mode, depth) => probe("node", base.concat(guestOptions(settings)), mode, depth);
 }
 
-export function launcherHost(launcher: string, artifact: string): ProbeHost {
+function launcherHost(launcher: string, artifact: string): ProbeHost {
   return (settings, mode, depth) => probe(launcher, ["--wasm", artifact].concat(guestOptions(settings)), mode, depth);
 }
 
@@ -71,7 +71,10 @@ const sitesBelow = (left: CapacityRecord, right: CapacityRecord) => compare(left
 
 /** The distinct host budgets, and each family's shipped value at its budget. */
 function shippedSettings(): StackSettings[] {
-  return Object.entries(qualifiedParserReserves).map(([host, entry]) => ({ budgetKib: Number(jscStackBudgets[host as StackHost]), parserReserve: entry.bytes }));
+  return stackHosts.flatMap((host) => {
+    const entry = qualifiedParserReserves[host];
+    return entry ? [{ budgetKib: Number(jscStackBudgets[host]), parserReserve: entry.bytes }] : [];
+  });
 }
 
 /**

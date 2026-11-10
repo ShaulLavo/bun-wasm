@@ -77,8 +77,10 @@ async function executorContract(page: Page, host: PageHost): Promise<void> {
   assert.deepEqual(policy.settings, { budget: host.budget, parserReserve: host.reserve }, "neither key: the host's defaults");
   const budgetOnly = await measure(page, { [BUDGET]: fixed });
   assert.deepEqual(budgetOnly.settings, { budget: fixed, parserReserve: host.reserve }, "budget only: the reserve default is independent");
-  const reserveOnly = await measure(page, { [RESERVE]: "1024" });
-  assert.deepEqual(reserveOnly.settings, { budget: host.budget, parserReserve: "1024" }, "reserve only: the budget default is independent");
+  // A reduced reserve is tried only at the small fixed budget. At a host's own larger budget only
+  // its qualified value is known to be safe: 1024 at V8's 800 KiB runs V8 itself out of stack.
+  const reserveOnly = await measure(page, { [RESERVE]: "2048" });
+  assert.deepEqual(reserveOnly.settings, { budget: host.budget, parserReserve: "2048" }, "reserve only: the budget default is independent");
   const full = await measure(page, { [BUDGET]: fixed, [RESERVE]: "2048" });
   const half = await measure(page, { [BUDGET]: fixed, [RESERVE]: "1024" });
   assert.deepEqual(half.settings, { budget: fixed, parserReserve: "1024" }, "both keys: both explicit");
@@ -90,28 +92,29 @@ async function executorContract(page: Page, host: PageHost): Promise<void> {
   assert.deepEqual(rejected.capacities, full.capacities, "a rejected reserve is the guest's default");
   const explicit = await measure(page, { [BUDGET]: host.budget, [RESERVE]: host.reserve ?? "2048" });
   assert.deepEqual(policy.capacities, explicit.capacities, "the host policy behaves as its explicit pair");
-  if (host.reserve !== null) deeper((await measure(page, { [BUDGET]: host.budget, [RESERVE]: "2048" })).capacities, policy.capacities, "the host's qualified value");
+  if (host.reserve === null) assert.deepEqual(reserveOnly.capacities, policy.capacities, "an explicit 2048 is the default");
+  else deeper(reserveOnly.capacities, policy.capacities, "the host's qualified value");
   // An earlier instance's value leaves no trace in a later one.
   assert.deepEqual((await measure(page, { [BUDGET]: fixed, [RESERVE]: "2048" })).capacities, full.capacities, "a later instance at the first value");
 }
 
 async function concurrentInstances(page: Page): Promise<void> {
   await writeFile(page, "/home/user/instances.js", instances);
-  const output = (await run(page, `${prefix({ [BUDGET]: fixed })}bun run instances.js ${chainMaximum} 1024 2048 512`, 240_000)).output;
+  const output = (await run(page, `${prefix({ [BUDGET]: fixed })}bun run instances.js ${chainMaximum} 1024 2048 1536`, 240_000)).output;
   const line = output.split("\n").find(entry => entry.startsWith("instances "));
   assert.ok(line, `no instances line: ${output}`);
   const children: { code: number; output: string }[] = JSON.parse(line.slice("instances ".length));
-  const [half, full, quarter] = children.map((child) => {
+  const [half, full, middle] = children.map((child) => {
     const transcript = decodeURIComponent(child.output);
     assert.equal(stackOutcome({ code: child.code, output: transcript }, "chainCapacity", chainMaximum), "completed", transcript);
     return measured(transcript);
   });
-  assert.ok(half && full && quarter);
-  assert.deepEqual([half.settings.parserReserve, full.settings.parserReserve, quarter.settings.parserReserve], ["1024", "2048", "512"]);
-  deeper(full.capacities, half.capacities, "concurrent instances at 2048 and 1024");
-  deeper(half.capacities, quarter.capacities, "concurrent instances at 1024 and 512");
+  assert.ok(half && full && middle);
+  assert.deepEqual([half.settings.parserReserve, full.settings.parserReserve, middle.settings.parserReserve], ["1024", "2048", "1536"]);
+  deeper(full.capacities, middle.capacities, "concurrent instances at 2048 and 1536");
+  deeper(middle.capacities, half.capacities, "concurrent instances at 1536 and 1024");
   assert.deepEqual(half.capacities, (await measure(page, { [BUDGET]: fixed, [RESERVE]: "1024" })).capacities, "a concurrent instance matches one running alone");
-  console.log(JSON.stringify({ concurrent: { half, full, quarter } }));
+  console.log(JSON.stringify({ concurrent: { half, full, middle } }));
 }
 
 async function opened(browser: Browser, url: string, engine: string, check: (page: Page) => Promise<void>): Promise<void> {

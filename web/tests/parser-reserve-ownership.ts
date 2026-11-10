@@ -48,9 +48,9 @@ export function assertOwnership(stdout: string, kind: string, host: PageHost): v
   const cases = records(stdout);
   const explicit = named(cases, "explicit"), defaulted = named(cases, "default-child");
   const inherited = named(cases, "inherited"), sameValue = named(cases, "same-value");
-  assert.equal(explicit.child.settings.parserReserve, "512");
-  assert.equal(inherited.child.settings.parserReserve, "1024", "a child with no explicit value inherits its parent's");
-  assert.equal(sameValue.child.settings.parserReserve, "1024");
+  assert.equal(explicit.child.settings.parserReserve, "1024");
+  assert.equal(inherited.child.settings.parserReserve, "1536", "a child with no explicit value inherits its parent's");
+  assert.equal(sameValue.child.settings.parserReserve, "1536");
   assert.deepEqual(inherited.child.capacities, sameValue.child.capacities, "an inherited value behaves as the same explicit value");
   assert.deepEqual(inherited.before, explicit.before, "the same parent value in two groups");
   if (kind !== "jsc") {
@@ -60,8 +60,8 @@ export function assertOwnership(stdout: string, kind: string, host: PageHost): v
     return;
   }
   assert.equal(defaulted.child.settings.parserReserve, host.reserve, "a child without the key gets the host's default");
-  deeper(explicit.before, explicit.child.capacities, "a child at 512 under a parent at 1024");
-  deeper(defaulted.child.capacities, defaulted.before, "a default child under a parent at 512");
-  deeper(sameValue.before, sameValue.child.capacities, "a child at 1024 under a parent at 2048");
-  deeper(sameValue.before, explicit.before, "parents at 2048 and 1024");
+  deeper(explicit.before, explicit.child.capacities, "a child at 1024 under a parent at 1536");
+  deeper(defaulted.child.capacities, defaulted.before, "a default child under a parent at 1024");
+  deeper(sameValue.before, sameValue.child.capacities, "a child at 1536 under a parent at 2048");
+  deeper(sameValue.before, explicit.before, "parents at 2048 and 1536");
 }

@@ -1,7 +1,8 @@
 import type { Engine } from "../../src/engine-kind.js";
 
 /** The host families of docs/stack-limits.md. "firefox-desktop" is desktop Firefox off Linux. */
-export type StackHost = "v8" | "firefox-linux" | "firefox-desktop" | "safari-macos" | "other";
+export const stackHosts = ["v8", "firefox-linux", "firefox-desktop", "safari-macos", "other"] as const;
+export type StackHost = typeof stackHosts[number];
 
 /** What only the page can read. A worker has no touch points, and iPadOS Safari sends a Macintosh user agent. */
 export interface PageFacts { readonly maxTouchPoints: number }
@@ -13,14 +14,17 @@ export function pageFacts(): PageFacts | undefined {
 }
 
 /** A parser reserve that passed its own host family's qualification, never another family's. */
-export interface QualifiedParserReserve { readonly bytes: string; readonly minimumSafariMajor?: number }
+interface QualifiedParserReserve { readonly bytes: string; readonly minimumSafariMajor?: number }
 export type QualifiedParserReserves = { readonly [Host in StackHost]?: QualifiedParserReserve };
 
 /**
  * BUN_WASM_JSC_PARSER_RESERVE per host family (docs/stack-limits.md). A family without an entry
  * keeps the guest's 2048-byte default: no value is extended from one family to another.
  */
-export const qualifiedParserReserves: QualifiedParserReserves = {};
+export const qualifiedParserReserves: QualifiedParserReserves = {
+  // Firefox 157 on Linux: every recursion path at 208 and 260 KiB, warm and cold (docs/stack-limits.md).
+  "firefox-linux": { bytes: "960" },
+};
 
 const safariImpostors = /Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPR|Firefox|Mobile|iPhone|iPad|Android/;
 

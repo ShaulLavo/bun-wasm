@@ -55,6 +55,7 @@ fixed recovery marker instead of spawning a child test process.
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/webkit-wasi.patch`, unary and regexp accounting](#jsc-unary-and-regexp-accounting) | Port | Reserve shadow stack in unary bytecode generation and Yarr's recursive passes, and add the parser's stack check to `await` chains. |
 | [`jsc/webkit-wasi.patch`, regexp matching errors](#jsc-regexp-matching-errors) | Port | Preserve interpreter recursion failures and report the existing catchable error instead of an ordinary no-match result. |
+| [`jsc/webkit-wasi.patch`, parser reserve setting](#jsc-parser-reserve-setting) | Port | Let the statement and assignment parsers reserve a host-set number of shadow bytes, 2048 by default, while every other reservation stays constant. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -144,6 +145,47 @@ Shallow matching and a genuine non-match must still work after unwinding. This
 control complements the compile-depth sweep, which cannot detect a lost match.
 
 
+## JSC parser reserve setting
+
+The same pinned WebKit's `parser/Parser.cpp` and `parser/Parser.h` get a further WASI-only
+**Port**. `parseStatement` and `parseAssignmentExpression` no longer reserve a constant 2048
+shadow bytes: they reserve 2048 minus a parser-owned discount, through the unchanged
+`WASM_RESERVE_STACK` macro. The discount is one zero-initialized 32-bit variable in `Parser.cpp`,
+so zero-filled side data means the full 2048 before and without any initializer. `Parser.h`
+declares the one setter, `setWasmParserReserve`, which takes the reserve in bytes, requires 512
+through 2048 in multiples of 16 and stores the discount. The recursive path loads the variable and
+subtracts. It reads no environment, allocates nothing and initializes nothing lazily.
+
+Nothing else in the patch moves. The other 20 `WASM_RESERVE_STACK` sites keep their constants,
+including `parseAwaitExpression`. `StackBounds.cpp`, the hard and soft limits, the 128 KiB
+exception reserve, the regexp matching errors and every budget are unchanged, and no upstream
+algorithm changes. Non-WASI builds compile as before: the macro discards its argument there.
+
+A runtime-sized reservation still dies when its function returns, so error paths need no release.
+On the final side the default's capacities equal the constant version's (98, 105 and 353
+assignment targets at 192, 208 and 800 KiB), so the frame costs did not change.
+
+Original adapters, none of which retains an upstream implementation:
+
+- `crates/bunwasm-jsc/cpp/helpers.cpp` parses `BUN_WASM_JSC_PARSER_RESERVE` strictly and makes
+  the single setter call inside the existing `JSC::initialize` callback, once per side instance,
+  before that instance's only VM exists. An invalid or absent value makes no call.
+- `web/src/engine-stack-budget.ts` holds the host table and the qualified values.
+  `web/src/bun-executor.ts` adds the budget and the reserve independently, the reserve only for
+  JSC. The run request carries the page's touch-point fact.
+- `tests/stack-depth.js`, `scripts/stack-measurement.ts`, `scripts/measure-stack.py` and
+  `web/tests/browser-stack.mjs` gain the parser chains (five shapes, two parser passes, two source
+  widths), an `await`-chain control, the guest's reported settings and a parent-and-Worker mode.
+- `scripts/jsc-parser-reserve.ts` runs the gate's tuples and the file threshold search.
+  `web/tests/browser-jsc-parser-reserve.ts` and `web/tests/parser-reserve-ownership.ts` are the
+  browser harnesses, and `tests/fixtures/shared-wasm-memory/parser-reserve-ownership.ts` is the
+  group case's guest half.
+- `tests/fixtures/parser-chain-stack` is an original fixture. It copies no package: it generates
+  the 100-target chained export assignment that Babel's generated builders reduce to.
+
+[Stack limits](../stack-limits.md#jsc-parser-reserve) records the contract, the host table and the
+measurements.
+
 ## Stack measurement acceptance
 
 `scripts/stack-measurement.ts`, `scripts/measure-stack.py` and
@@ -159,7 +201,7 @@ separate `continued` line after its one result line. Completion is accepted on a
 paths. `RangeError` is accepted except on `console`, whose fixture swallows the
 overflow internally and must complete. `SyntaxError` is also accepted for source
 parsing and regexp construction modes (`parse`, `block`, `arrow`, `unary`, `power`,
-`ternary`, `statement`, `regexpnc` and `lookahead`). Browser-native Firefox may
+`ternary`, `statement`, `awaitchain`, `regexpnc`, `lookahead` and the 20 parser chains). Browser-native Firefox may
 report `InternalError` with the exact message `too much recursion` instead of
 `RangeError`. Other caught classes, malformed results, missing continuation,
 nonzero exits and timeouts fail measurement acceptance. This validates the

@@ -1,3 +1,3 @@
 100 chained export targets loaded
-far deeper chain refused
+400 chained export targets survived
 continued

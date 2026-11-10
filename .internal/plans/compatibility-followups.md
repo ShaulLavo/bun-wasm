@@ -229,7 +229,12 @@ measurements and reproducer. These paths still end in a wasm trap:
   `crates/bunwasm-glue/src/bun_native.rs` returns 0 on the main thread, so
   `StackCheck::is_safe_to_recurse` always succeeds. Give the main thread a
   shadow-stack bound and measure the transpiler's host-per-shadow ratio before
-  choosing it.
+  choosing it. Measured on November 10, 2026 on the JSC guest: a required `.cjs`
+  file that is one chained assignment (`exports.a0 = exports.a1 = … = void 0`)
+  recurses through `P::parse_expr_common` and `parse_suffix`, two host frames and
+  about 690 host bytes per target, and traps the native launcher's 16 MiB stack
+  near 24,000 targets. JSC's parser reserve (`docs/stack-limits.md`) does not
+  change this: the transpiler runs first and reads no engine setting.
 
 ## JSC subprocess disposal timing
 
