@@ -16,6 +16,12 @@ pub extern "C" fn spidermonkey_register() {
         42,
         "side constructors once"
     );
+    // The host calls this initializer itself, before the core starts: the stack pointer is
+    // still at the top of the stack it carved for this member.
+    #[cfg(bun_wasm_shared_group)]
+    let frame = [0u8; 16];
+    #[cfg(bun_wasm_shared_group)]
+    vm::record_stack_top(&frame);
     #[cfg(bun_wasm_shared_group)]
     unsafe {
         unsafe extern "C" {
@@ -33,11 +39,12 @@ pub extern "C" fn spidermonkey_run(session: u32) -> i32 {
         42,
         "side constructors once"
     );
-    // A group side has no linker stack symbols: the host carves the member stack. The
-    // outermost frame that can hold a value supplies the stack base instead.
+    // The engine's outermost frame must lie inside the stack recorded at registration.
     #[cfg(bun_wasm_shared_group)]
     let frame = [0u8; 16];
     #[cfg(bun_wasm_shared_group)]
     vm::record_stack_origin(&frame);
-    driver::run::<vm::SpiderMonkey>(session)
+    let code = driver::run::<vm::SpiderMonkey>(session);
+    vm::trace_run();
+    code
 }

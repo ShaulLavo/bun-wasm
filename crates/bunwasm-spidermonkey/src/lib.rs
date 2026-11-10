@@ -120,6 +120,7 @@ extern "C" {
     pub fn bsm_set_async_context(handle: Handle);
     pub fn bsm_gc();
     pub fn bsm_heap_info(used: *mut f64, total: *mut f64, external: *mut f64);
+    pub fn bsm_tier_counts(polls: *mut u32, entries: *mut u64);
     pub fn bsm_eval(source: *const c_char, len: usize, status: *mut u32) -> Handle;
     pub fn bsm_answer(handle: Handle) -> f64;
     pub fn bsm_poll_count(tier: u8) -> u32;

@@ -64,6 +64,7 @@ bsm_handle bsm_async_context(void);
 void bsm_set_async_context(bsm_handle);
 void bsm_gc(void);
 void bsm_heap_info(double*, double*, double*);
+void bsm_tier_counts(uint32_t*, uint64_t*);
 
 bool bunsm_host_call(uint32_t, bsm_handle, const bsm_handle*, size_t, bsm_handle*);
 void bunsm_host_drop(uint32_t);
