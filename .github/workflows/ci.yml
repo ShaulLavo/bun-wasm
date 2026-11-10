@@ -1844,19 +1844,20 @@ jobs:
         id: browser-cache
         with:
           path: ${{ runner.temp }}/browser-apt/*.deb
-          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-webkit-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
+          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-firefox-webkit-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
           # ci-browser-deps.ts verifies every archive's SHA256 and fetches only what is missing.
           restore-keys: |
+            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-firefox-webkit-
             browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-webkit-
       - name: Prefetch and install verified browser system packages
-        run: bun scripts/ci-browser-deps.ts chromium webkit
+        run: bun scripts/ci-browser-deps.ts chromium firefox webkit
       - uses: actions/cache/save@v4
         if: steps.browser-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}/browser-apt/*.deb
           key: ${{ steps.browser-cache.outputs.cache-primary-key }}
-      - name: Install Chromium and WebKit
-        run: bunx playwright install chromium webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
       - name: Web host browser gates
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
