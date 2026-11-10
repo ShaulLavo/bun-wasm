@@ -1,4 +1,4 @@
-// Shared-group browser-guest check: a real QuickJS group guest on the production Browser host.
+// Shared-group browser-guest check: the explicitly selected group guest on the production Browser host.
 // The shared PIC job passes its one group build in BUN_WASM_PROFILE_PROGRAM. A missing or
 // mismatched program fails this gate; it is never a passing skip.
 import { expect, test } from "bun:test";

@@ -33,6 +33,7 @@ type BrokerChild = { readonly worker?: Worker; readonly context?: { readonly req
 interface MemberWatch { sample(): void; settled(): Promise<void>; ended(): readonly MemoryGroupSnapshot[]; budget(): number; closeDelays(): Readonly<Record<string, number>>; }
 
 /** Every production worker's lock name, and the fixture tag once the page has matched it to a member. */
+const hostStacks: unknown[] = [];
 const agents = new WeakMap<Worker, { readonly id: string; tag?: string }>();
 
 /** Names each worker for its agent lock, and can refuse one member's native stop. */
@@ -44,6 +45,11 @@ function installAgentWorkers(): void {
       const id = `shared-wasm-agent-${next++}`;
       super(url, { ...options, name: id });
       agents.set(this, { id });
+      this.addEventListener("message", event => {
+        if (event.data?.type !== "spidermonkey-stack-proof") return;
+        hostStacks.push(event.data);
+        event.stopImmediatePropagation();
+      });
     }
     override terminate(): void {
       if (agents.get(this)?.tag?.startsWith(FAIL_STOP)) throw new Error("injected native terminate failure");
@@ -204,8 +210,9 @@ async function run() {
   for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
   const kind: unknown = await (await fetch("./program/kind.json")).json();
-  if (kind !== "quickjs" && kind !== "jsc") throw new Error("Invalid program kind");
+  if (kind !== "quickjs" && kind !== "jsc" && kind !== "spidermonkey") throw new Error("Invalid program kind");
   const module = await prepareProgram({ kind, core: await bytes("./program/bun.wasm"), side: await bytes("./program/side.wasm") });
+  const engineEnv: Record<string, string> = await (await fetch("./program/env.json")).json();
   const decoder = new TextDecoder();
   let stdout = "";
   let stderr = "";
@@ -213,7 +220,7 @@ async function run() {
   const job = startRun({
     runtime, module, engine: kind, moduleScope: false,
     args: ["run", `${FIXTURE}/${entry}`],
-    env: { PWD: FIXTURE, HOME: "/home/user", PATH: "/bin:/usr/bin", SHARED_WASM_PAGE_CONTROL: CONTROL },
+    env: { ...engineEnv, PWD: FIXTURE, HOME: "/home/user", PATH: "/bin:/usr/bin", SHARED_WASM_PAGE_CONTROL: CONTROL },
   }, {
     stdout(data) { stdout += decoder.decode(data, { stream: true }); },
     stderr(data) { stderr += decoder.decode(data, { stream: true }); },
@@ -243,7 +250,7 @@ async function run() {
   }
   members.sample();
   await members.settled();
-  return { ...result, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays() };
+  return { ...result, hostStacks, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays() };
 }
 
 void run().then(

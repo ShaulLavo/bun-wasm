@@ -3,7 +3,8 @@
 Classification: Port of upstream source, plus original build and engine adapters.
 
 This is an opt-in experimental engine profile, not a supported producer or release engine. It
-covers the native launcher only. The Browser host still refuses a SpiderMonkey group pair.
+covers the native launcher and an experimental Browser loader path. Browser admission checks
+the actual stack carve, but admission alone does not qualify a selected tier.
 
 ## Upstream
 
@@ -58,6 +59,19 @@ split patch, recipe files and admitted split archive are not changed.
   The nested bridge in `crates/bunwasm-engine-quickjs/src/nested_bridge.rs` is reused unchanged
   through its `NestedEngine` alias.
 - `crates/bunwasm-host/src/linked.rs`: the native loader admits a SpiderMonkey group pair.
+- `src/quickjs-program.ts`, `web/src/bun-executor.ts`: the Browser loader admits an explicitly
+  selected SpiderMonkey pair through the existing Waffle link plan. The executor checks the
+  broker's `memoryGroup.stackBytes` and the core's imported stack globals before linking. Both
+  must describe an exact, page-aligned 8 MiB carve within the imported memory, with the stack
+  pointer at its top. It checks the same globals before and after the top-level initializers.
+  A mismatch fails before the guest starts. This is an original adapter over Waffle 0.0.118,
+  not a change to Mozilla's stack quota or its 64 KiB gap.
+- `web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts`: test-only observation of real
+  core and side imports. It records carved bounds and verifies that both instances receive
+  the same stack-pointer Global. It never replaces imported values. The Browser driver
+  compares these host facts with the side's traced bounds and `register_depth=16`, checks
+  actual interpreter or portable-baseline counters, then tests catchable recursion and
+  recovery before the unchanged shared-memory and retained-debt assertions.
 
 ## Limits
 
@@ -70,6 +84,20 @@ stack size. The native quota and its 64 KiB gap are therefore the split build's.
 three sizes and the loader's call order together. The engine refuses to start if its entry frame
 is outside those bounds. A host that entered the initializers with other frames on the stack
 would need its own bound source.
+
+Waffle 0.0.118 preserves supplied Global objects through `Wasi.imports` and shares the core's
+`env.__stack_pointer` with the side. Its group worker returns from the core's memory stages
+before calling the executor's initializer. The executor then calls `group.initialize()` at
+JavaScript's top level. That runs the core constructors and each side initializer in order.
+The member protocol supplies `stackBytes`, but Waffle defaults it to 1 MiB. The Browser checks
+therefore use both that request and the actual imported bounds, rather than assuming the
+embedder selected Bun's policy.
+
+Browser qualification remains blocked for portable baseline on Chromium. Direct recursion catches
+`RangeError` and recovers in Chromium, but the unchanged shared-memory fixture can terminate
+with status 134 and `reentered core failed: Maximum call stack size exceeded`. The stack-carve
+check does not change the browser's native call-stack limit. No engine budget or native
+stack policy changes belong to this adapter.
 
 `BUN_WASM_SPIDERMONKEY_TRACE` in the guest environment prints one line on stderr when the engine
 returns: the stack bounds, the stack in use at registration and at engine entry, the interrupt
