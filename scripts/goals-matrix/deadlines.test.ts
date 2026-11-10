@@ -13,7 +13,7 @@ import type { Transport } from "./transport";
 import { markdown, saveReport } from "./report";
 import { completeAttempt, withPlayground } from "./test-fixture";
 
-const campaign = ["--asset-source=test", "--timeout-ms=90000"];
+const campaign = ["--asset-source=test", "--timeout-ms=90000", "--mac-lane=deadline-tests", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"];
 const override = "--install-timeout-ms=nuxt:110000";
 
 test("an explicit Nuxt install budget leaves the campaign phase timeout unchanged", () => {
