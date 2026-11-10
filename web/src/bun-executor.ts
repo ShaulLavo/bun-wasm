@@ -8,7 +8,7 @@ import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
-import { engineStackBudgets } from "./engine-stack-budget.js";
+import { engineStackBudgets, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -22,6 +22,8 @@ export type { Engine } from "../../src/engine-kind.js";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  /** Page observations unavailable on WorkerNavigator, also supplied for guest spawns. */
+  stackHost?: StackHost;
   memoryTelemetry?: MemoryTelemetryTransport;
   linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
@@ -77,7 +79,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
-  const stackKib = engineStackBudgets(new Error().stack ?? "", globalThis.navigator?.userAgent ?? "")?.[req.engine];
+  const stackKib = engineStackBudgets(new Error().stack ?? "", globalThis.navigator?.userAgent ?? "", req.stackHost)?.[req.engine];
   const baseEnv = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
   const generation = allocationBoundaryGeneration(req);
   const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };

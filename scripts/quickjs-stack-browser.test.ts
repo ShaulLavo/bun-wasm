@@ -23,7 +23,7 @@ test("QuickJS native-call capacity and cold recursion guards", async () => {
     const options = { cwd: resolve(import.meta.dir, "../web"), stdio: "inherit", env: { ...process.env, ROOT: site, QUICKJS_STACK_KIB: undefined } } as const;
     const browsers = selected === "webkit" ? ["webkit"] : ["firefox", "chromium"];
     execFileSync(process.execPath, args.concat(browsers), options);
-    const margin = selected === "webkit" ? "40" : "190";
+    const margin = selected === "webkit" ? "45" : "190";
     execFileSync(process.execPath, args.concat([selected === "webkit" ? "webkit" : "firefox"]), { ...options, env: { ...options.env, QUICKJS_STACK_KIB: margin } });
     assert.deepEqual(verifySite(out), before);
   } finally { if (scratch) rmSync(scratch, { recursive: true, force: true }); }

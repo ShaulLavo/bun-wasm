@@ -43,6 +43,8 @@ test.each([
   { name: "missing page observations", agent: desktopSafari, host: undefined },
   { name: "desktop-style iPad", agent: desktopSafari, host: { ...desktopHost, maxTouchPoints: 5 } },
   { name: "missing touch observation", agent: desktopSafari, host: { platform: "MacIntel", vendor: desktopHost.vendor } },
+  { name: "missing vendor", agent: desktopSafari, host: { platform: "MacIntel", maxTouchPoints: 0 } },
+  { name: "missing platform", agent: desktopSafari, host: { vendor: desktopHost.vendor, maxTouchPoints: 0 } },
   { name: "unknown platform", agent: desktopSafari, host: { ...desktopHost, platform: "" } },
   { name: "non-Apple vendor", agent: desktopSafari, host: { ...desktopHost, vendor: "Google Inc." } },
   { name: "iPhone", agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1", host: desktopHost },
