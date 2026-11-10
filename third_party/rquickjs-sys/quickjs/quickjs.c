@@ -3291,6 +3291,11 @@ void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size)
    come here. */
 #define JS_FRAME_CHUNK_PAYLOAD ((size_t)16 * 1024)
 #define JS_FRAME_ALIGN ((size_t)8)
+/* A bound on what a block costs beyond the bytes requested for it: the
+   arena's 8-byte block header, the backing allocator's own header and its
+   rounding to 16 bytes. Used to refuse before allocating, and as the charge
+   when the allocator cannot report a block's size. */
+#define JS_FRAME_BLOCK_BOUND ((size_t)32)
 
 typedef struct JSFrameChunk {
     struct JSFrameChunk *prev; /* the chunk below this one */
@@ -3336,12 +3341,13 @@ static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
     if (rt->frame_committed > rt->frame_limit)
         goto refuse;
     room = rt->frame_limit - rt->frame_committed;
-    /* the conservative charge of an allocation of 'total' bytes */
-    if (room < sizeof(*chunk) + MALLOC_OVERHEAD ||
-        size > room - sizeof(*chunk) - MALLOC_OVERHEAD)
+    /* refuse before allocating when even the smallest chunk for this frame
+       cannot fit the remaining budget under the conservative bound */
+    if (room < sizeof(*chunk) + JS_FRAME_BLOCK_BOUND ||
+        size > room - sizeof(*chunk) - JS_FRAME_BLOCK_BOUND)
         goto refuse;
     payload = size > JS_FRAME_CHUNK_PAYLOAD ? size : JS_FRAME_CHUNK_PAYLOAD;
-    if (payload > room - sizeof(*chunk) - MALLOC_OVERHEAD)
+    if (payload > room - sizeof(*chunk) - JS_FRAME_BLOCK_BOUND)
         payload = size;
     total = sizeof(*chunk) + payload;
     chunk = js_malloc_rt(rt, total);
@@ -3349,11 +3355,15 @@ static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
         JS_ThrowOutOfMemory(ctx);
         return NULL;
     }
-    /* the allocator may round up: charge what it really holds */
+    /* Charge what the backing allocator holds: the size it reports for the
+       whole block, which includes the arena's block header, plus its own
+       per-block overhead. glibc and wasi-libc both report sizes. An
+       allocator that cannot is charged the conservative bound. */
     charge = js_malloc_usable_size_rt(rt, chunk);
-    if (charge < total)
-        charge = total;
-    charge += MALLOC_OVERHEAD;
+    if (charge != 0)
+        charge += sizeof(JSMallocBlockHeader) + MALLOC_OVERHEAD;
+    else
+        charge = total + JS_FRAME_BLOCK_BOUND;
     if (charge > room) {
         js_free_rt(rt, chunk);
         goto refuse;
