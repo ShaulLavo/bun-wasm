@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { assertOwnership, type PageHost } from "../web/tests/parser-reserve-ownership.ts";
 import { expect, test } from "bun:test";
 import { effectiveParserReserve, jscParserReserve } from "../web/src/engine-stack-budget.ts";
@@ -141,5 +143,38 @@ test("ownership rejects a wrong host setting or a parent changed by its child", 
 for (const kind of ["quickjs", "browser"]) {
   test(`${kind} ownership ignores explicit JSC values and receives no host default`, () => {
     expect(() => assertOwnership(ownershipModel(firefoxReserve, kind), kind, firefoxPolicy)).not.toThrow();
+  });
+}
+
+// Ownership compares separate contexts, so no capacity sample may retain the initial loader call.
+for (const mode of ["chainCapacity", "chainWorker"]) {
+  test(`${mode} measures only after leaving the initial loader stack`, async () => {
+    const phases: boolean[] = [];
+    const output: string[] = [];
+    let insideLoader = true;
+    function compile(...source: string[]): unknown {
+      phases.push(insideLoader);
+      return Reflect.construct(Function, source);
+    }
+    class Worker {
+      readonly stdout = { on() {} };
+      on(event: string, listener: (code: number) => void) {
+        if (event === "exit") queueMicrotask(() => listener(0));
+        return this;
+      }
+    }
+    const source = readFileSync(new URL("../tests/stack-depth.js", import.meta.url), "utf8");
+    const completed: unknown = runInNewContext(source, {
+      Function: compile,
+      process: { argv: ["bun", "probe.js", mode, "1"], env: {} },
+      __filename: "probe.js",
+      require: () => ({ Worker }),
+      console: { log: (...values: unknown[]) => output.push(values.map(String).join(" ")) },
+    });
+    insideLoader = false;
+    await completed;
+    expect(output).toContain(`completed ${mode} 1`);
+    expect(phases).toHaveLength(mode === "chainWorker" ? 40 : 20);
+    expect(phases).toEqual(phases.map(() => false));
   });
 }

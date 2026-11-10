@@ -113,7 +113,8 @@ function chainCapacities() {
   for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
   return capacities;
 }
-actions.chainCapacity = () => { console.log('capacities', JSON.stringify(chainCapacities())); };
+// Leave the loader's synchronous calls before comparing capacities across contexts.
+actions.chainCapacity = async () => { await Promise.resolve(); console.log('capacities', JSON.stringify(chainCapacities())); };
 // A parent and a Worker of this file in one run: the parent's capacities before the child starts
 // and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
 // JSON object merged into the child's copy of the environment; a null value removes that key.
@@ -128,6 +129,7 @@ function workerEnvironment() {
 }
 actions.chainWorker = async () => {
   const { Worker } = require('node:worker_threads');
+  await Promise.resolve();
   const before = chainCapacities();
   const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
   let output = '';
