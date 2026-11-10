@@ -45,6 +45,15 @@ owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECK
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
 
+The native CI step sets `INSTALL_ENGINES` from its ordinary JSC producer selection.
+The tarball installer matrix runs QuickJS and Browser, adding JSC only when that
+producer is selected. Installer source, fixture, and helper changes select JSC.
+`INSTALL_ENGINES` accepts a nonempty comma-separated subset of `quickjs,jsc,browser`
+without whitespace, unknown names, or duplicates. It cannot be combined with
+`INSTALL_ENGINE` or `BUN_WASM`. Without the subset, the matrix still runs all three
+engines, or the singular `INSTALL_ENGINE` with its optional `BUN_WASM` override.
+A selected missing artifact fails the check. No file-existence filter changes selection.
+
 Package tests and Web's own test directory keep their existing narrow globs.
 Do not also register those files. Browser matrix jobs, deadlines, environment,
 engine selection, cache inputs, conditional gates and shared artifact producers
