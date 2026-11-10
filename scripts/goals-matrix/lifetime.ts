@@ -1,7 +1,10 @@
 import { bounded } from "./execute";
+export class CommandExitError extends Error {
+  constructor(message: string, readonly code: number) { super(message); }
+}
 export async function withSignals<T>(operation: (signal: AbortSignal) => Promise<T>, parent?: AbortSignal): Promise<T> {
   const controller = new AbortController();
-  const interrupt = () => controller.abort(new Error("Matrix interrupted"));
+  const interrupt = () => controller.abort(new CommandExitError("Matrix interrupted", 130));
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   parent?.addEventListener("abort", interrupt, { once: true });
   if (parent?.aborted) interrupt();
@@ -26,7 +29,7 @@ export async function ownedCommand(args: string[], signal?: AbortSignal, timeout
     const output = inherit ? Promise.resolve("") : new Response(child.stdout).text();
     const errors = new Response(child.stderr).text();
     const [code, text, error] = await bounded(() => Promise.all([child.exited, output, errors]), timeoutMs, signal);
-    if (!allowed.includes(code)) throw new Error(`${args[0]} exited ${code}: ${error.slice(-2000)} ${text.slice(-1000)}`);
+    if (!allowed.includes(code)) throw new CommandExitError(`${args[0]} exited ${code}: ${error.slice(-2000)} ${text.slice(-1000)}`, code);
     return text;
   } finally { signal?.removeEventListener("abort", interrupt); await reap(child); }
 }

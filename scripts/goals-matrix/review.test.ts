@@ -36,7 +36,7 @@ test("continuation identity changes when executed host or template bytes change"
 test("Chrome-only fleet needs no simulator and never visits the Mac", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-selection-"));
   try {
-    const result = await fleet(options([`--root=${root}`, `--output=${root}/report`, "--browsers=chrome", "--frameworks=nuxt", "--engines=browser", "--asset-source=test"]));
+    const result = await fleet(options([`--root=${root}`, `--output=${root}/report`, "--browsers=chrome", "--frameworks=nuxt", "--engines=browser", "--asset-source=test", "--mac-lane=fixture", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"]));
     const selected = result.cells.find(cell => cell.framework === "nuxt" && cell.browser === "chrome" && cell.engine === "browser");
     expect(selected?.status).toBe("not runnable yet");
     expect(result.cells.filter(cell => cell.browser !== "chrome").every(cell => cell.status === "pending")).toBe(true);
@@ -51,27 +51,27 @@ test("unavailable Mac records native discovery without running unselected Linux 
     await writeFile(join(root, "bin/mesh"), "#!/bin/sh\necho 'fixture Mac unavailable' >&2\nexit 75\n");
     await chmod(join(root, "bin/mesh"), 0o755);
     process.env.PATH = join(root, "bin") + ":" + previous;
-    const result = await fleet(options([`--root=${root}`, `--output=${root}/report`, "--browsers=safari", "--frameworks=nuxt", "--engines=browser", "--asset-source=test"]));
+    const result = await fleet(options([`--root=${root}`, `--output=${root}/report`, "--browsers=safari", "--frameworks=nuxt", "--engines=browser", "--asset-source=test", "--mac-lane=fixture", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"]));
     const selected = result.cells.find(cell => cell.framework === "nuxt" && cell.browser === "safari" && cell.engine === "browser");
     expect(selected).toMatchObject({ status: "not runnable yet", attempts: [], discovery: { error: expect.stringContaining("75") } });
     expect(result.cells.filter(cell => cell.browser !== "safari").every(cell => cell.status === "pending")).toBe(true);
   } finally { process.env.PATH = previous; await rm(root, { recursive: true, force: true }); }
 });
 
-test("SIGTERM during native lock setup reaps the setup child and releases the owned lock", async () => {
+test("SIGTERM during admitted native setup reaps its child without touching queue ownership", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-native-signal-"));
   let child: ReturnType<typeof Bun.spawn> | undefined;
   let setupPid = 0;
   try {
     await mkdir(join(root, ".agents/skills/machine-fleet/scripts"), { recursive: true });
-    await mkdir(join(root, "tmp"));
-    await writeFile(join(root, ".agents/skills/machine-fleet/scripts/availability.py"), "import os,time\np=os.environ['HOME']+'/called'\nif os.path.exists(p):\n open(os.environ['HOME']+'/second','w').write(str(os.getpid()))\n time.sleep(30)\nelse: open(p,'w').write('called')\n");
-    await writeFile(join(root, "child.ts"), `Object.defineProperty(process,'platform',{value:'darwin'}); const {withNativeDriver}=await import(${JSON.stringify(join(import.meta.dir, "native.ts"))}); await withNativeDriver(async()=>{}, {desktopSafari:true});`);
+    await mkdir(join(root, "tmp/.agent-mac-lock"), { recursive: true });
+    await writeFile(join(root, ".agents/skills/machine-fleet/scripts/availability.py"), "import os,time\nopen(os.environ['HOME']+'/second','w').write(str(os.getpid()))\ntime.sleep(30)\n");
+    await writeFile(join(root, "child.ts"), `import {mock} from 'bun:test'; mock.module(${JSON.stringify(join(import.meta.dir, "mac-queue.ts"))},()=>({requireNativeQueue:async()=>{}})); Object.defineProperty(process,'platform',{value:'darwin'}); const {withNativeDriver}=await import(${JSON.stringify(join(import.meta.dir, "native.ts"))}); await withNativeDriver(async()=>{}, {desktopSafari:true});`);
     child = Bun.spawn([process.execPath, join(root, "child.ts")], { env: { ...process.env, HOME: root }, stdout: "ignore", stderr: "ignore" });
     setupPid = await waitForPid(join(root, "second"));
     child.kill("SIGTERM");
     await child.exited;
-    await expect(access(join(root, "tmp/.agent-mac-lock"))).rejects.toThrow();
+    await access(join(root, "tmp/.agent-mac-lock"));
     expect(() => process.kill(setupPid, 0)).toThrow();
   } finally { await stopFixture(child, setupPid); await rm(root, { recursive: true, force: true }); }
 }, 10_000);
@@ -97,7 +97,7 @@ test("fleet SIGTERM during Mac discovery reaps its child and releases local owne
     await mkdir(join(root, "bin")); await mkdir(join(root, "site"));
     await writeFile(join(root, "bin/mesh"), `#!/usr/bin/env python3\nimport os,time\nopen('${root}/mesh-pid','w').write(str(os.getpid()))\ntime.sleep(30)\n`);
     await chmod(join(root, "bin/mesh"), 0o755);
-    const args = [`--root=${root}/site`, `--output=${root}/report`, "--browsers=safari", "--engines=browser", "--frameworks=nuxt", "--asset-source=test"];
+    const args = [`--root=${root}/site`, `--output=${root}/report`, "--browsers=safari", "--engines=browser", "--frameworks=nuxt", "--asset-source=test", "--mac-lane=fixture", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"];
     child = Bun.spawn([process.execPath, join(import.meta.dir, "fleet.ts")].concat(args), { env: { ...process.env, PATH: join(root, "bin") + ":" + process.env.PATH }, stdout: "ignore", stderr: "ignore" });
     meshPid = await waitForPid(join(root, "mesh-pid"));
     child.kill("SIGTERM"); await child.exited;
