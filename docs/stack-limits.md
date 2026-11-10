@@ -241,7 +241,11 @@ fixed reserve would cost working depth and needs its own design. Blocks and
 conditional expressions throw. The extra accounting can reduce native-path nesting
 capacities on other hosts. No new Darwin or iOS measurement is claimed.
 
-## Nested require
+## Historical nested require measurements
+
+This common-loader snapshot predates the native-call dispatcher split, parser
+exception preservation and measured desktop Safari policy described above. Its
+frame costs and safety conclusions are historical, not current limits.
 
 A CommonJS module that requires another keeps the loader's frames on the stack until
 the inner module finishes, so a chain of modules is a recursion path like the others.
@@ -269,20 +273,20 @@ Real packages at 32 KiB, each loaded alone from an empty stack:
 | `prompts` 2.4.2 (loaded by Astro 5.14.1) | 9 modules | `RangeError` | loads, with 7 spare levels |
 | `@angular/cli` 20.3.7 `src/utilities/config.js` (through `@angular-devkit/core` and rxjs) | 14 modules | `RangeError`, needs about 54 KiB | `RangeError`, needs 33 to 34 KiB |
 
-The Angular chain still does not fit in 32 KiB. It now fails twelve modules deep in
-rxjs while compiling the thirteenth. The native call into each module body is the
-largest cost left, and removing it needs a different wrapper shape on every engine.
-A larger budget is not the answer: 40 KiB is the measured ceiling for WebKit above.
+At this baseline, Angular failed twelve modules deep in rxjs while compiling the
+thirteenth. The native-call cost had not yet been reduced by the dispatcher split,
+and 40 KiB was the tested WebKit safety margin. The later native comparison and
+45 KiB desktop Safari safety controls above supersede those conclusions.
 
 JSC completes a 512-module chain at 192 KiB before and after, because its
 JavaScript-to-JavaScript calls stay on the C-loop stack. Its getter guard was live
 in the same run (34 levels). The browser-native engine ignores the budget.
 
 These are launcher measurements of the guest's own guard. They are not a Safari
-run, and they do not show that Astro or Angular start there: later phases of both
-have never run at 32 KiB. An overflow that lands in QuickJS's parser can also
-surface as a `SyntaxError` instead of a `RangeError`. The unchanged loader reported
-`SyntaxError: missing formal parameter` one level past its capacity at 40 KiB.
+run and do not show that Astro or Angular start there. The original parser also
+replaced a pending overflow with `SyntaxError: missing formal parameter` one level
+past the loader's capacity at 40 KiB. The parameter-lookahead correction above
+now preserves that overflow's `RangeError` and recovery.
 
 `tests/fixtures/require-chain-stack` holds the line: a child with
 `BUN_WASM_STACK_KIB=32` loads a 16-module chain, catches unbounded recursion inside
