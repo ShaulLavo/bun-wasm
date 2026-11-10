@@ -184,6 +184,7 @@ function preflight(baseline: Baseline, candidate: Candidate): { changes: Change[
 }
 
 function compareNode(before: Node, after: Node, baseline: Baseline, changes: Change[]): void {
+  if (before instanceof HTMLTemplateElement && after instanceof HTMLTemplateElement && before.innerHTML !== after.innerHTML) throw new Error("unsupported template content change");
   if (before instanceof DocumentType && after instanceof DocumentType) {
     if (before.name !== after.name || before.publicId !== after.publicId || before.systemId !== after.systemId) throw new Error("unsupported doctype change");
     return;
@@ -262,6 +263,7 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
   let state: State = { kind: "suspended", baseline };
 
   function active(): Active | null { return state.kind === "running" || state.kind === "waiting" ? state.active : null; }
+  function connected(current: Active): boolean { return active() === current && current.disconnect === null; }
 
   function detach(current: Active): void {
     current.job?.controller.abort();
@@ -309,6 +311,9 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
     if (active() !== current || current.disconnect) return;
     const channel = new window.MessageChannel();
     current.disconnect = channel;
+    const job = current.job;
+    current.job = null;
+    job?.controller.abort();
     channel.port1.onmessage = () => {
       cancelDisconnect(current);
       if (active() === current) close("disconnected");
@@ -317,7 +322,7 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
   }
 
   function notice(current: Active, data: unknown): void {
-    if (active() !== current) return;
+    if (!connected(current)) return;
     let stamp: Stamp;
     try { stamp = parseNotice(data); }
     catch (error) { close(String(error)); return; }
@@ -341,7 +346,7 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
   }
 
   function schedule(current: Active, staleRetry = false): void {
-    if (state.kind !== "running" || active() !== current || current.job || current.desired <= current.baseline.stamp.revision) return;
+    if (state.kind !== "running" || !connected(current) || current.job || current.desired <= current.baseline.stamp.revision) return;
     if (!staleRetry && current.attempted >= current.desired) return;
     current.attempted = current.desired;
     const job: Job = { revision: current.desired, controller: new AbortController(), staleRetry };
@@ -355,13 +360,13 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
       url.hash = "";
       const response = await window.fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", headers: { [rawHeader]: "1" }, signal: job.controller.signal });
       const html = await readHtml(response, job.controller.signal);
-      if (active() !== current || current.job !== job || job.controller.signal.aborted) return;
+      if (!connected(current) || current.job !== job || job.controller.signal.aborted) return;
       const stamp = parseStamp(JSON.parse(response.headers.get(stampHeader) ?? "null"));
       if (stamp.server !== current.baseline.stamp.server) throw new Error("server instance changed");
       job.candidate = { tree: authorTree(html), stamp, policy: parsePolicy(JSON.parse(response.headers.get(policyHeader) ?? "null")) };
       finish(current, job);
     } catch (error) {
-      if (active() !== current || current.job !== job || job.controller.signal.aborted) return;
+      if (!connected(current) || current.job !== job || job.controller.signal.aborted) return;
       job.controller.abort();
       current.job = null;
       report(String(error));
@@ -369,7 +374,7 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
   }
 
   function finish(current: Active, job: Job): void {
-    if (state.kind !== "running" || active() !== current || current.job !== job || job.controller.signal.aborted || !job.candidate) return;
+    if (state.kind !== "running" || !connected(current) || current.job !== job || job.controller.signal.aborted || !job.candidate) return;
     const candidate = job.candidate;
     if (candidate.stamp.revision > current.desired) return;
     current.job = null;

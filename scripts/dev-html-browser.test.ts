@@ -685,3 +685,94 @@ const server = Bun.serve({hostname:"127.0.0.1",port:5173,fetch(request) {
     else process.env.ROOT = previousRoot;
   }
 }, 300_000);
+
+for (const lateNotice of [false, true]) {
+  test(`development HTML blocks in-flight completion while disconnect is pending, late notice ${lateNotice}`, async () => {
+    for (const browser of browsers) {
+      const server = await developmentPageServer();
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+      try {
+        await page.addInitScript(deliverNotice => {
+          const NativeSocket = window.WebSocket;
+          window.WebSocket = new Proxy(NativeSocket, {
+            construct(Target, args) {
+              const socket: unknown = Reflect.construct(Target, args);
+              if (!(socket instanceof NativeSocket)) throw new Error("Missing actual socket");
+              Reflect.set(window, "disconnectWitness", socket);
+              return socket;
+            },
+          });
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const count: unknown = Reflect.get(window, "disconnectFetches");
+            Reflect.set(window, "disconnectFetches", typeof count === "number" ? count + 1 : 1);
+            const response = await originalFetch(input, init);
+            if (!response.headers.has("x-bun-wasm-dev-stamp")) return response;
+            return new Promise<Response>(resolve => {
+              Reflect.set(window, "releaseDisconnectedReply", () => {
+                const socket: unknown = Reflect.get(window, "disconnectWitness");
+                if (!(socket instanceof NativeSocket)) throw new Error("Missing actual socket");
+                if (deliverNotice) {
+                  const stamp: unknown = JSON.parse(response.headers.get("x-bun-wasm-dev-stamp") ?? "null");
+                  if (!stamp || typeof stamp !== "object" || !("server" in stamp) || typeof stamp.server !== "string") throw new Error("Missing server stamp");
+                  socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "committed", stamp: { server: stamp.server, revision: 3 } }) }));
+                }
+                resolve(response);
+              });
+            });
+          };
+        }, lateNotice);
+        await page.goto(server.url);
+        await until(() => server.privateOpened === 1);
+        server.setHtml(counterHtml.replace("Before", "Applied after disconnect"));
+        server.commit(2);
+        await page.waitForFunction(() => typeof Reflect.get(window, "releaseDisconnectedReply") === "function");
+        await page.evaluate(() => {
+          const socket: unknown = Reflect.get(window, "disconnectWitness");
+          if (!(socket instanceof WebSocket)) throw new Error("Missing actual socket");
+          socket.addEventListener("close", event => {
+            Reflect.set(window, "disconnectTrusted", event.isTrusted);
+            const release: unknown = Reflect.get(window, "releaseDisconnectedReply");
+            if (typeof release !== "function") throw new Error("Missing held response");
+            release();
+          }, { once: true });
+        });
+        server.source.close();
+        await until(() => errors.some(error => error.includes("disconnected")));
+        await tick(page);
+        expect(await page.locator("h1").textContent()).toBe("Before");
+        expect(server.rawRequests).toBe(1);
+        expect(await page.evaluate(() => Reflect.get(window, "disconnectFetches"))).toBe(1);
+        expect(await page.evaluate(() => Reflect.get(window, "disconnectTrusted"))).toBe(true);
+        await unchanged(page);
+      } finally { await page.close(); await server.close(); }
+    }
+  }, 30_000);
+}
+
+test("development HTML rejects changed template contents before any safe heading write", async () => {
+  const template = '<template id="card"><div>Original</div></template>';
+  const html = counterHtml.replace("</body>", `${template}</body>`);
+  await pageFixture(async (page, server, errors) => {
+    server.setHtml(html.replace("Before", "Applied unsupported patch").replace("<div>Original</div>", '<div>New<span>Added node</span></div><script>window.templateRan = true;</script>'));
+    server.commit(2);
+    await until(async () => errors.length > 0 || await page.locator("h1").textContent() !== "Before");
+    expect(await page.locator("h1").textContent()).toBe("Before");
+    expect(await page.locator("#card").innerHTML()).toBe("<div>Original</div>");
+    expect(errors.some(error => error.includes("unsupported template"))).toBe(true);
+    await unchanged(page);
+  }, html);
+}, 30_000);
+
+test("development HTML preserves unchanged inert template contents while updating safe fields", async () => {
+  const html = counterHtml.replace("</body>", '<template id="card"><div>Original</div></template></body>');
+  await pageFixture(async (page, server) => {
+    server.setHtml(html.replace("Before", "Safe heading"));
+    server.commit(2);
+    await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Safe heading");
+    expect(await page.locator("#card").innerHTML()).toBe("<div>Original</div>");
+    await unchanged(page);
+  }, html);
+}, 30_000);
