@@ -7,7 +7,7 @@
 //   ENGINES=jsc STACK_KIB=260 JSC_PARSER_RESERVE=1024 node tests/browser-stack.mjs --measure --cold firefox
 import { readFileSync } from 'node:fs';
 import { firstVisit } from './first-visit.mjs';
-import { guestStackSettings, measureStackPaths, stackOutcome } from '../../scripts/stack-measurement.ts';
+import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix } from '../../scripts/stack-measurement.ts';
 import { effectiveParserReserve } from '../src/engine-stack-budget.ts';
 import { playwright, ready, run, session, writeFile } from './playground.mjs';
 
@@ -20,12 +20,13 @@ const browsers = args.filter((name) => !name.startsWith('--'));
 if (!browsers.length) browsers.push('chromium', 'webkit');
 const probe = readFileSync(new URL('../../tests/stack-depth.js', import.meta.url), 'utf8');
 
-async function fixtures(page, label) {
-  for (const name of ['stack-overflow', 'stack-overflow-console']) {
+const fixtureNames = ['stack-overflow', 'stack-overflow-console'];
+async function fixtures(page, label, names = fixtureNames) {
+  for (const name of names) {
     const base = new URL(`../../tests/fixtures/${name}/`, import.meta.url);
     await writeFile(page, `/home/user/${name}.js`, readFileSync(new URL('index.js', base), 'utf8'));
     const expected = readFileSync(new URL('expected.txt', base), 'utf8').trim();
-    const result = await run(page, `bun run ${name}.js`);
+    const result = await run(page, `${settingsPrefix}bun run ${name}.js`);
     if (result.code !== 0 || result.output.trim() !== expected) {
       throw new Error(`${label} ${name}: exit ${result.code}\n${result.output}`);
     }
@@ -36,17 +37,16 @@ async function fixtures(page, label) {
 // STACK_KIB and JSC_PARSER_RESERVE set the guest's BUN_WASM_STACK_KIB and BUN_WASM_JSC_PARSER_RESERVE
 // for every measured run. Without them the executor's host policy applies, as for a user.
 const requested = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };
-const settingsPrefix = (requested.budget === null ? '' : `BUN_WASM_STACK_KIB=${requested.budget} `)
-  + (requested.parserReserve === null ? '' : `BUN_WASM_JSC_PARSER_RESERVE=${requested.parserReserve} `);
+const settingsPrefix = stackEnvironmentPrefix(requested);
 // Every distinct pair a measured guest reported: what the executor actually passed it.
 const observed = new Set();
 
 async function outcome(page, mode, n, nativeFirefox) {
   await writeFile(page, '/home/user/depth.js', probe);
   const result = await run(page, `${settingsPrefix}bun run depth.js ${mode} ${n}`, 180000);
-  const settings = guestStackSettings(result.output ?? '');
-  if (settings) observed.add(JSON.stringify(settings));
-  return stackOutcome(result, mode, n, nativeFirefox);
+  const observation = observeStackOutcome({ result, mode, depth: n, requested, nativeFirefox });
+  if (observation.settings) observed.add(JSON.stringify(observation.settings));
+  return observation.outcome;
 }
 
 function reportSettings(label, engine) {
@@ -72,6 +72,13 @@ function coldAttempt(browser, name, url, engine, nativeFirefox) {
   };
 }
 
+async function coldFixtures(browser, name, url, engine, label) {
+  for (const fixture of fixtureNames) {
+    const once = await openPage(browser, name, url, engine);
+    try { await fixtures(once.page, label, [fixture]); } finally { await once.close(); }
+  }
+}
+
 async function checkEngine(browser, name, url, engine) {
   const label = `${name}/${engine}`;
   const opened = await openPage(browser, name, url, engine);
@@ -85,7 +92,7 @@ async function checkEngine(browser, name, url, engine) {
       reportSettings(label, engine);
       if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);
     }
-    await fixtures(opened.page, label);
+    await (cold ? coldFixtures(browser, name, url, engine, label) : fixtures(opened.page, label));
   } finally { await opened.close(); }
 }
 

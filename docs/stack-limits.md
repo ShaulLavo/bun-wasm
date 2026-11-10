@@ -230,7 +230,7 @@ capacities on other hosts. No new Darwin or iOS measurement is claimed.
 
 ## JSC parser reserve
 
-The JSC parser's guard refuses real files that the host could parse. `parseStatement` and
+JSC's parser accounting refuses some real package files at the existing browser budgets. `parseStatement` and
 `parseAssignmentExpression` each reserve 2048 shadow bytes per call, and one assignment level
 really uses about 390. A chain of assignment targets, as generated CommonJS exports have
 (`exports.A = exports.B = … = void 0`), therefore stops near 100 targets at a browser's budget.
@@ -284,8 +284,8 @@ a reduced value. A qualified Safari value would also require at least the measur
 version. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify nothing.
 
 The executor adds each key only when the request lacks it, independently of the other: an explicit
-or empty budget never suppresses the reserve default, and the reverse. Only JSC is ever handed the
-reserve.
+or empty budget never suppresses the reserve default, and the reverse. Only JSC receives an
+automatic parser reserve. Explicit caller environment values remain unchanged.
 
 ### Measurements
 
@@ -322,7 +322,7 @@ So the candidate is 960 for desktop Firefox on Linux. The same rule gives 832 fo
 hosts, which is recorded here and not shipped: no Safari or device run tested it.
 
 Firefox 157.0 on Linux at 960, through the repaired sweep: 26 recursion paths and 20 parser
-chains, each chain searched so that interior depths run too, plus both overflow fixtures. At the
+chains, each chain searched so that interior depths run too. At the
 host's 208 KiB and at 260 KiB, warm in one page and cold in a fresh browser context per attempt,
 every attempted depth completed or threw its expected catchable error and the guest continued.
 Chained assignments reach 191 targets in the full parse and 220 in the compile pass at 208 KiB.
@@ -333,8 +333,9 @@ reviver (4,500), flattening (329), unary chains (253), both regexp shapes (119),
 bound functions, `join`, `toString` reentry, async and plain recursion. Source shapes that pass
 through the two functions rose, as intended: nested blocks 100 to 171, conditional chains 105 to
 191. An `await` chain rose by exactly two levels at every budget from 192 to 800 KiB (118 to 120
-at 208): the one statement and one assignment frame above the chain reserve less, and the
-per-level cost of `parseAwaitExpression` is unchanged.
+at 208). This fixed offset is consistent with smaller enclosing parser frames. The number of
+those frames is not established by the measurement. The recursive charge and per-level cost of
+`parseAwaitExpression` are unchanged.
 
 Chromium 156 on Linux at the default reserve is unchanged: all 46 paths at 800 and at 1000 KiB,
 warm and cold, with getters at 142 and chained assignments at 353.
@@ -347,10 +348,16 @@ in the full parse, where the default stops them at 330 and 315, and the guest di
 check tries reduced values only at 192 KiB, where the nesting stays below what every browser
 already parses at its own budget.
 
-Ownership was run on a shared-group JSC pair in Chromium and Firefox, through the executor, at
-192 KiB. A parent at 1536 kept 125 targets before and after a Worker child at 1024 reached 171
-in the same memory group. A child without the key under a parent at 1024 got the default's 99.
-A child with no explicit value inherited its parent's 1536 and matched it.
+The explicit-value ownership control ran on a shared-group JSC pair in Chromium and Firefox,
+through the executor, at 192 KiB. A parent at 1536 kept 125 targets before and after a Worker
+child at 1024 reached 171 in the same memory group. The permanent control separates an explicit
+guest default of 2048 from an absent key that receives the host's policy. Firefox's host default
+is 960, so that child parses deeper than a 1024 parent. A child without an explicit environment
+inherits its parent's value. Each case measures the parent again after its child exits.
+
+The two original overflow fixtures receive the same literal tuple as the sweep. A cold run
+opens a new browser context for each fixture too. A completed probe is rejected if an explicit
+requested setting is missing or differs from what the guest reports.
 
 This lowers one guard on one measured host family. It is not a claim that any framework now runs
 there: later phases can fail for other reasons. Files loaded through `require` also pass Bun's own

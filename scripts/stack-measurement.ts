@@ -22,6 +22,18 @@ function deepestAttempt(mode: string): number {
 
 export interface GuestStackSettings { readonly budget: string | null; readonly parserReserve: string | null }
 
+
+function stackEnvironmentValue(key: string, value: string | null): string {
+  if (value === null) return "";
+  return `${key}='${value.replaceAll("'", "'\\''")}' `;
+}
+
+/** Preserve each explicit override literally, including empty strings and whitespace. */
+export function stackEnvironmentPrefix(settings: GuestStackSettings): string {
+  return stackEnvironmentValue("BUN_WASM_STACK_KIB", settings.budget)
+    + stackEnvironmentValue("BUN_WASM_JSC_PARSER_RESERVE", settings.parserReserve);
+}
+
 /** The probe's `settings` line: the stack environment its guest was given. Null when it printed none, as after a trap. */
 export function guestStackSettings(output: string): GuestStackSettings | null {
   const line = output.split(/\r?\n/).find(entry => entry.startsWith("settings "));
@@ -106,6 +118,21 @@ export function stackOutcome(
   const outcome = `caught:${caught[2]}`;
   if (caught[2] === "InternalError" && (!nativeFirefox || caught[4] !== "too much recursion")) return `unexpected:${caught[2]}`;
   return acceptedStackOutcome(mode, outcome) ? outcome : `unexpected:${caught[2]}`;
+}
+
+
+/** An explicitly requested tuple must match what the guest actually received. */
+export function observeStackOutcome({ result, mode, depth, requested, nativeFirefox = false }: {
+  result: Parameters<typeof stackOutcome>[0]; mode: string; depth: number;
+  requested: GuestStackSettings; nativeFirefox?: boolean;
+}): { outcome: string; settings: GuestStackSettings | null } {
+  const settings = guestStackSettings(result.output);
+  const outcome = stackOutcome(result, mode, depth, nativeFirefox);
+  if (!acceptedStackOutcome(mode, outcome)) return { outcome, settings };
+  for (const key of ["budget", "parserReserve"] as const) {
+    if (requested[key] !== null && requested[key] !== settings?.[key]) return { outcome: "settings-mismatch", settings };
+  }
+  return { outcome, settings };
 }
 
 async function measurePath(attempt: Attempt, host: string, mode: string): Promise<Row> {

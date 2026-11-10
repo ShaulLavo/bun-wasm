@@ -12,6 +12,7 @@ interface Case { readonly name: string; readonly parent: string; readonly child?
 const cases: Case[] = [
   { name: 'explicit', parent: '1536', child: { [RESERVE]: '1024' } },
   { name: 'default-child', parent: '1024', child: { [RESERVE]: null } },
+  { name: 'guest-default', parent: '1024', child: { [RESERVE]: '2048' } },
   { name: 'inherited', parent: '1536' },
   { name: 'same-value', parent: '2048', child: { [RESERVE]: '1536' } },
 ];

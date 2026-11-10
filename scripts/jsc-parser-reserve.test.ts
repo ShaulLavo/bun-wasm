@@ -1,5 +1,6 @@
+import { assertOwnership, type PageHost } from "../web/tests/parser-reserve-ownership.ts";
 import { expect, test } from "bun:test";
-import { effectiveParserReserve } from "../web/src/engine-stack-budget.ts";
+import { effectiveParserReserve, jscParserReserve } from "../web/src/engine-stack-budget.ts";
 import { capacitiesAt, fileThreshold, parserReserveControls, type ProbeHost, type StackSettings } from "./jsc-parser-reserve.ts";
 import { chainCapacities, chainMaximum, chainModes, chainOwnership, guestStackSettings, reserveSiteChains } from "./stack-measurement.ts";
 
@@ -97,3 +98,48 @@ test("no grid value, or a value that loads above one that does not, gives no thr
   const gap = fileThreshold(settings => settings.parserReserve !== "576", 192, ["next.js"]);
   expect(gap).toMatchObject({ threshold: null, monotonic: false });
 });
+
+
+function ownershipModel(hostReserve: string | null, kind = "jsc", fault: "none" | "host" | "budget" | "parent" = "none"): string {
+  const capacity = (reserve: string | null) => Object.fromEntries(chainModes.map(mode => [mode,
+    kind === "jsc" ? Math.floor(350000 / (effectiveParserReserve(reserve ?? undefined) + 100)) : 100]));
+  const entries = [
+    { name: "explicit", parent: "1536", child: "1024" },
+    { name: "default-child", parent: "1024", child: fault === "host" ? "1024" : kind === "jsc" ? hostReserve : null },
+    { name: "guest-default", parent: "1024", child: "2048" },
+    { name: "inherited", parent: "1536", child: "1536" },
+    { name: "same-value", parent: "2048", child: "1536" },
+  ];
+  return entries.map(entry => {
+    const childOutput = `settings ${JSON.stringify({ budget: fault === "budget" ? "208" : "192", parserReserve: entry.child })}\ncapacities ${JSON.stringify(capacity(entry.child))}\ncompleted chainCapacity 4096\ncontinued\n`;
+    const record = { before: capacity(entry.parent), child: { code: 0, output: encodeURIComponent(childOutput) },
+      after: capacity(fault === "parent" ? "512" : entry.parent) };
+    const output = `ownership ${JSON.stringify(record)}\n`;
+    return `ownership-case ${JSON.stringify({ name: entry.name, code: 0, output: encodeURIComponent(output) })}`;
+  }).join("\n");
+}
+
+const firefoxReserve = jscParserReserve("", "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0") ?? null;
+const firefoxPolicy: PageHost = { name: "firefox-linux", budget: "208", reserve: firefoxReserve };
+const defaultPolicy: PageHost = { name: "v8", budget: "800", reserve: null };
+
+test("ownership handles the shipped Firefox host default separately from the guest default", () => {
+  expect(firefoxPolicy.reserve).toBe("960");
+  expect(() => assertOwnership(ownershipModel(firefoxReserve), "jsc", firefoxPolicy)).not.toThrow();
+});
+
+test("ownership retains the guest-default reversal on an unmodified host policy", () => {
+  expect(() => assertOwnership(ownershipModel(null), "jsc", defaultPolicy)).not.toThrow();
+});
+
+test("ownership rejects a wrong host setting or a parent changed by its child", () => {
+  expect(() => assertOwnership(ownershipModel(firefoxReserve, "jsc", "host"), "jsc", firefoxPolicy)).toThrow();
+  expect(() => assertOwnership(ownershipModel(firefoxReserve, "jsc", "budget"), "jsc", firefoxPolicy)).toThrow();
+  expect(() => assertOwnership(ownershipModel(firefoxReserve, "jsc", "parent"), "jsc", firefoxPolicy)).toThrow();
+});
+
+for (const kind of ["quickjs", "browser"]) {
+  test(`${kind} ownership ignores explicit JSC values and receives no host default`, () => {
+    expect(() => assertOwnership(ownershipModel(firefoxReserve, kind), kind, firefoxPolicy)).not.toThrow();
+  });
+}

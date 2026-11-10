@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
 import { chainOwnership, reserveSiteChains, type ChainOwnership } from "../../scripts/stack-measurement.ts";
-import { jscParserReserve, jscStackBudgets, stackHost, type PageFacts } from "../src/engine-stack-budget.ts";
+import { effectiveParserReserve, jscParserReserve, jscStackBudgets, stackHost, type PageFacts } from "../src/engine-stack-budget.ts";
 
 export const OWNERSHIP_ENTRY = "parser-reserve-ownership.ts";
 const DEPTH = 4096;
@@ -28,7 +28,9 @@ function records(stdout: string): Map<string, ChainOwnership> {
   for (const line of stdout.split("\n").filter(entry => entry.startsWith("ownership-case "))) {
     const record: { name: string; code: number | null; output: string } = JSON.parse(line.slice("ownership-case ".length));
     assert.equal(record.code, 0, `${record.name}: the parent exited ${record.code}`);
-    cases.set(record.name, chainOwnership(decodeURIComponent(record.output), DEPTH));
+    const measured = chainOwnership(decodeURIComponent(record.output), DEPTH);
+    assert.equal(measured.child.settings.budget, "192", `${record.name}: the child kept the fixed group budget`);
+    cases.set(record.name, measured);
   }
   return cases;
 }
@@ -48,6 +50,9 @@ export function assertOwnership(stdout: string, kind: string, host: PageHost): v
   const cases = records(stdout);
   const explicit = named(cases, "explicit"), defaulted = named(cases, "default-child");
   const inherited = named(cases, "inherited"), sameValue = named(cases, "same-value");
+  const guestDefault = named(cases, "guest-default");
+  assert.equal(guestDefault.child.settings.parserReserve, "2048", "the guest-default reversal is explicit on every host");
+  assert.deepEqual(guestDefault.before, defaulted.before, "both default controls start under a 1024 parent");
   assert.equal(explicit.child.settings.parserReserve, "1024");
   assert.equal(inherited.child.settings.parserReserve, "1536", "a child with no explicit value inherits its parent's");
   assert.equal(sameValue.child.settings.parserReserve, "1536");
@@ -61,7 +66,11 @@ export function assertOwnership(stdout: string, kind: string, host: PageHost): v
   }
   assert.equal(defaulted.child.settings.parserReserve, host.reserve, "a child without the key gets the host's default");
   deeper(explicit.before, explicit.child.capacities, "a child at 1024 under a parent at 1536");
-  deeper(defaulted.child.capacities, defaulted.before, "a default child under a parent at 1024");
+  deeper(guestDefault.child.capacities, guestDefault.before, "a guest-default child under a parent at 1024");
+  const hostDefault = effectiveParserReserve(host.reserve ?? undefined);
+  if (hostDefault < 1024) deeper(defaulted.before, defaulted.child.capacities, "the host default is smaller than the parent's reserve");
+  if (hostDefault > 1024) deeper(defaulted.child.capacities, defaulted.before, "the host default is larger than the parent's reserve");
+  if (hostDefault === 1024) assert.deepEqual(defaulted.child.capacities, defaulted.before, "the host default equals the parent's reserve");
   deeper(sameValue.before, sameValue.child.capacities, "a child at 1536 under a parent at 2048");
   deeper(sameValue.before, explicit.before, "parents at 2048 and 1536");
 }
