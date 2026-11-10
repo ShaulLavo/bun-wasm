@@ -21,4 +21,5 @@ shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Instance exports: pass
 shared-wasm-memory reservation: pass
 shared-wasm-memory reservation capacity: pass
+shared-wasm-memory binding descriptor: pass
 shared-wasm-memory Store budget: pass
