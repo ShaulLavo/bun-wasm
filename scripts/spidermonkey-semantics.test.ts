@@ -83,7 +83,15 @@ test("native promise reactions validate primitives and bypass public promise hoo
   expect(reaction).not.toContain("JS_GetProperty");
 });
 
-function compileCommonjsControl(root: string): string {
+async function buildControl(command: string[], output: string): Promise<string> {
+  const build = Bun.spawn(command, { stdout: "ignore", stderr: "pipe" });
+  const [stderr, exitCode] = await Promise.all([new Response(build.stderr).text(), build.exited]);
+  expect(stderr).toBe("");
+  expect(exitCode).toBe(0);
+  return output;
+}
+
+async function compileCommonjsControl(root: string): Promise<string> {
   const input = join(root, "lines.cpp");
   const output = join(root, "lines");
   writeFileSync(input, String.raw`#include <cassert>
@@ -116,13 +124,10 @@ int main() {
   assert(body.empty());
 }
 `);
-  const build = Bun.spawnSync(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", input, "-o", output]);
-  expect(build.stderr.toString()).toBe("");
-  expect(build.exitCode).toBe(0);
-  return output;
+  return buildControl(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", input, "-o", output], output);
 }
 
-function compileFinalizerControl(root: string): string {
+async function compileFinalizerControl(root: string): Promise<string> {
   const source = `use std::{cell::RefCell, collections::HashMap, rc::Rc};
 thread_local! {
     static NATIVES: RefCell<HashMap<u32, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
@@ -146,25 +151,24 @@ fn main() {
   const input = join(root, "finalizer.rs");
   const output = join(root, "finalizer");
   writeFileSync(input, source);
-  const build = Bun.spawnSync(["rustup", "run", "stable", "rustc", "--edition=2024", input, "-o", output]);
-  expect(build.stderr.toString()).toBe("");
-  expect(build.exitCode).toBe(0);
-  return output;
+  return buildControl(["rustup", "run", "stable", "rustc", "--edition=2024", input, "-o", output], output);
 }
 
 // Compiler startup belongs to module setup, not either five-second runtime test.
-function compileControls() {
+async function compileControls() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
   try {
-    return {
-      commonjs: readFileSync(compileCommonjsControl(root)),
-      finalizer: readFileSync(compileFinalizerControl(root)),
-    };
+    const [commonjs, finalizer] = await Promise.allSettled([
+      compileCommonjsControl(root), compileFinalizerControl(root),
+    ]);
+    if (commonjs.status === "rejected") throw commonjs.reason;
+    if (finalizer.status === "rejected") throw finalizer.reason;
+    return { commonjs: readFileSync(commonjs.value), finalizer: readFileSync(finalizer.value) };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
-const controls = compileControls();
+const controls = await compileControls();
 
 function runControl(executable: Uint8Array) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));

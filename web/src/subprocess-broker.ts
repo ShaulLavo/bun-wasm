@@ -66,7 +66,7 @@ export class SubprocessBroker {
     return this.service ??= await this.runtime.processes();
   }
   ready(): Promise<RuntimeSupervisor> { return this.processService().then(service => service.ready()); }
-  /** A single-use root worker from the runtime's precreated pool; the run terminates it. */
+  /** A single-use root worker from the page's service; the run owns its termination. */
   async takeWorker(workerUrl: string): Promise<Worker> { return (await this.runtime.processes()).takeWorker(workerUrl); }
   /** Resolves when `pid` has confirmed its exit, as its parent would observe it. */
   async wait(pid: number): Promise<ProcessExit> {
@@ -103,10 +103,10 @@ export class SubprocessBroker {
     return this.rootGroup;
   }
   rootStopped(): void {
-    if (!this.root || this.runtime.disposed) return;
+    if (!this.root) return;
     // A group root's lease reclaims its memory and also settles the root ticket.
     if (this.rootGroup) this.rootGroup.stopped();
-    else this.service?.rootStopped(this.root.pid);
+    else if (!this.runtime.disposed) this.service?.rootStopped(this.root.pid);
     this.rootGroup = undefined;
     this.releaseRoot();
   }
@@ -145,6 +145,7 @@ export class SubprocessBroker {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (!this.options.stopRoot) this.releaseRoot();
   }
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
 }

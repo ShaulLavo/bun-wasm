@@ -77,6 +77,22 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 
 `scripts/test.sh --update` regenerates a fixture's `expected.txt` with native Bun. Review the diff before you commit it. To add a fixture, create `tests/fixtures/<name>/` with an `index.ts` and an `expected.txt`. The header of `scripts/test.sh` documents the optional files.
 
+## Update the Waffle release closure
+
+Update the runtime, relay, and base-family pins in the root, Web, and sandbox
+manifests together. Set the root `waffleHostInterface` to the released interface.
+Run `.github/scripts/update-waffle-records.sh` to refresh archive hashes, sizes,
+tagged source revisions, native source files, and program provenance.
+The updater refuses mixed interfaces or native files that differ from the runtime
+archive. It validates the original program commit and base source identity formats.
+Validation or staging failures keep `scripts/waffle-release-inputs.json` unchanged.
+The completed record replaces the old file through an atomic sibling rename.
+
+Regenerate the lockfiles with Bun, then verify frozen installs in all three scopes.
+Run the normal quality, package, and Web gates. Use the shared-group CI checks for
+both existing engine producers and their Chromium consumers. Keep these gates
+blocking while a matching program family or reviewed Bash source is unpublished.
+
 ## Change Bun's source
 
 `vendor/bun` is git-ignored and `scripts/sync-bun.sh` re-creates it. Make changes there as commits on the `wasm` branch, never as loose edits, because the sync script refuses a checkout with local changes.
