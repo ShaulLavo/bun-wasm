@@ -34,9 +34,9 @@ async function pageFixture(body: (page: Page, server: PageServer, errors: string
   }
 }
 
-async function until(check: () => boolean): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 5000;
-  while (!check()) {
+  while (!await check()) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for test observation");
     await new Promise(resolve => setTimeout(resolve, 10));
   }
@@ -322,12 +322,21 @@ const Base = window.WebSocket; window.testSockets = []; window.WebSocket = class
       await page.goto(server.url);
       await page.waitForFunction(() => Reflect.get(window, "testPorts").length === 1);
       await page.locator("#counter").click();
+      await page.evaluate(() => {
+        const socket = Reflect.get(window, "testSockets")[0];
+        Reflect.set(window, "oldDevMessage", socket.onmessage);
+        Reflect.set(window, "oldDevError", socket.onerror);
+      });
       await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
       server.setHtml(counterHtml.replace("Before", "After pending handshake"));
       server.commit(2);
       await page.evaluate(() => { window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })); window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })); });
       await page.waitForFunction(() => Reflect.get(window, "testPorts").length === 2);
       await page.waitForFunction(() => Reflect.get(window, "testSockets")[1]?.readyState === 1);
+      await page.evaluate(() => {
+        Reflect.get(window, "oldDevMessage")(new MessageEvent("message", { data: "old malformed frame" }));
+        Reflect.get(window, "oldDevError")(new Event("error"));
+      });
       await page.evaluate(async stamp => {
         const port: MessagePort = Reflect.get(window, "testPorts")[1];
         const data = new TextEncoder().encode(JSON.stringify({ kind: "committed", stamp }));
@@ -493,3 +502,139 @@ test("development HTML keeps two documents subscribed independently and closes o
     await unchanged(pages[1]!);
   } finally { for (const page of pages) await page.close(); await server.close(); }
 }, 30_000);
+
+const integratedSite = process.env.BUN_WASM_DEV_HTML_SITE;
+test.skipIf(!integratedSite)("actual Waffle filesystem commit updates the same running HTML document", async () => {
+  if (!integratedSite) throw new Error("Provide the matching current-source development site");
+  const { verifySite } = await import("./browser-guest-site");
+  const { ready, session, terminalText, writeFile } = await import("../web/tests/playground.mjs");
+  const { stopForeground } = await import("../web/tests/foreground");
+  const { resolve, join } = await import("node:path");
+  const directory = resolve(integratedSite);
+  const before = verifySite(directory);
+  const previousRoot = process.env.ROOT;
+  const task = session("bun-wasm-dev-html-actual-");
+  let app: Page | undefined;
+  let preview: Page | undefined;
+  const evidence: unknown[] = [];
+  try {
+    process.env.ROOT = join(directory, "site");
+    const url = await task.serve();
+    const browser = await task.launch(chromium);
+    app = await browser.newPage();
+    await app.goto(`${url}?engine=browser&prompt=off&mode=memory`);
+    expect(await ready(app)).toContain("ready");
+    const html = await Bun.file(new URL("../sandbox/template-hono/src/page.html", import.meta.url)).text();
+    const counter = new Bun.Transpiler({ loader: "ts" }).transformSync(await Bun.file(new URL("../sandbox/template-hono/counter.ts", import.meta.url)).text());
+    const entry = `import html from "./page.html" with {type:"text"};
+const state = globalThis.actualHtmlServer ??= {runs:0, server:null};
+const run = ++state.runs;
+const server = Bun.serve({hostname:"127.0.0.1",port:5173,fetch(request) {
+  if (new URL(request.url).pathname === "/counter.ts") return new Response(${JSON.stringify(counter)},{headers:{"content-type":"text/javascript"}});
+  return new Response(html,{headers:{"content-type":"text/html","x-dev-pid":String(process.pid),"x-dev-run":String(run),"x-dev-same-server":String(server===state.server)}});
+}}); state.server ??= server;`;
+    await writeFile(app, "/home/user/page.html", html);
+    await writeFile(app, "/home/user/server.ts", entry);
+    await app.evaluate(() => {
+      const value: unknown = Reflect.get(globalThis, "playground");
+      if (!value || typeof value !== "object" || !("shell" in value)) throw new Error("Missing shell");
+      const shell = value.shell;
+      if (!shell || typeof shell !== "object" || !("submit" in shell) || typeof shell.submit !== "function") throw new Error("Missing shell submit");
+      void shell.submit("bun --hot run server.ts");
+    });
+    const listening = await app.waitForFunction(() => {
+      const value: unknown = Reflect.get(globalThis, "playground");
+      if (!value || typeof value !== "object" || !("previews" in value)) return null;
+      const previews = value.previews;
+      if (!previews || typeof previews !== "object" || !("serves" in previews) || typeof previews.serves !== "function" || !("url" in previews) || typeof previews.url !== "function") return null;
+      if (!previews.serves(5173)) return null;
+      const url = previews.url.bind(previews);
+      return Promise.resolve(Reflect.get(previews, "ready")).then(state => state === "ready" ? url(5173) : null);
+    }, undefined, { timeout: 60_000 });
+    const previewUrl: unknown = await listening.jsonValue();
+    await listening.dispose();
+    if (typeof previewUrl !== "string") throw new Error("Missing actual listener URL");
+    preview = await app.context().newPage();
+    await preview.addInitScript(() => {
+      const observed: { kind: string; value: unknown; time: number }[] = [];
+      Reflect.set(window, "actualDevEvents", observed);
+      const define = Object.defineProperty;
+      Object.defineProperty = function(target, key, descriptor) {
+        if (target === window && key === "WebSocket" && typeof descriptor.value === "function") {
+          const Socket = descriptor.value;
+          descriptor = { ...descriptor, value: class extends Socket {
+            constructor(...args: unknown[]) {
+              super(...args);
+              this.addEventListener("message", (event: MessageEvent) => observed.push({ kind: "notice", value: event.data, time: performance.now() }));
+            }
+          } };
+        }
+        return define(target, key, descriptor);
+      };
+      const fetch = window.fetch;
+      window.fetch = Object.assign(async function(input: RequestInfo | URL, init?: RequestInit) {
+        if (new Headers(init?.headers).get("x-bun-wasm-dev-raw") === "1") observed.push({ kind: "GET", value: String(input), time: performance.now() });
+        const response = await fetch(input, init);
+        const stamp = response.headers.get("x-bun-wasm-dev-stamp");
+        if (stamp) observed.push({ kind: "response", value: { stamp, pid: response.headers.get("x-dev-pid"), run: response.headers.get("x-dev-run"), same: response.headers.get("x-dev-same-server") }, time: performance.now() });
+        return response;
+      }, fetch);
+    });
+    const initial = await preview.goto(previewUrl);
+    if (!initial) throw new Error("Missing initial preview response");
+    const initialHeaders = await initial.allHeaders();
+    const pid = initialHeaders["x-dev-pid"];
+    expect(pid).toBeTruthy();
+    expect(initialHeaders["x-dev-same-server"]).toBe("true");
+    await preview.waitForFunction(() => !document.querySelector<HTMLButtonElement>("#increment")?.disabled);
+    await preview.evaluate(() => {
+      Reflect.set(window, "actualIdentity", { document, window, root: document.documentElement, head: document.head, body: document.body, button: document.querySelector("#increment"), output: document.querySelector("#count"), url: location.href });
+      new MutationObserver(() => {
+        Reflect.get(window, "actualDevEvents").push({ kind: "DOM", value: document.querySelector("#message")?.textContent, time: performance.now() });
+      }).observe(document.querySelector("#message")!, { subtree: true, childList: true, characterData: true });
+    });
+    await preview.locator("#increment").click();
+    expect(await preview.locator("#count").evaluate(node => Reflect.get(node, "value"))).toBe("1");
+    let navigations = 0;
+    preview.on("framenavigated", () => { navigations++; });
+    await writeFile(app, "/home/user/page.html", html.replace("Hello from hono", "Actual Waffle update"));
+    await preview.waitForFunction(() => document.querySelector("#message")?.textContent === "Actual Waffle update", undefined, { timeout: 30_000 });
+    expect(await preview.locator("#count").evaluate(node => Reflect.get(node, "value"))).toBe("1");
+    expect(await preview.evaluate(() => {
+      const old = Reflect.get(window, "actualIdentity");
+      return old.document === document && old.window === window && old.root === document.documentElement && old.head === document.head && old.body === document.body && old.button === document.querySelector("#increment") && old.output === document.querySelector("#count") && old.url === location.href;
+    })).toBe(true);
+    await preview.locator("#increment").click();
+    expect(await preview.locator("#count").evaluate(node => Reflect.get(node, "value"))).toBe("2");
+    const events: { kind: string; value: unknown; time: number }[] = await preview.evaluate(() => Reflect.get(window, "actualDevEvents"));
+    const get = events.findIndex(event => event.kind === "GET");
+    const notice = events.findIndex(event => event.kind === "notice");
+    const response = events.findIndex(event => event.kind === "response");
+    const dom = events.findIndex(event => event.kind === "DOM");
+    expect(notice).toBeGreaterThanOrEqual(0);
+    expect(get).toBeGreaterThan(notice);
+    expect(response).toBeGreaterThan(get);
+    expect(dom).toBeGreaterThan(response);
+    expect(JSON.stringify(events[response]?.value)).toContain(`"pid":"${pid}"`);
+    expect(JSON.stringify(events[response]?.value)).toContain('"same":"true"');
+    expect(navigations).toBe(0);
+    await writeFile(app, "/home/user/server.ts", "const invalid = ;");
+    const terminal = app;
+    await until(async () => (await terminalText(terminal)).includes("SyntaxError"));
+    expect(await preview.locator("#message").textContent()).toBe("Actual Waffle update");
+    await writeFile(app, "/home/user/page.html", html.replace("Hello from hono", "Repaired Waffle update"));
+    await writeFile(app, "/home/user/server.ts", entry);
+    await preview.waitForFunction(() => document.querySelector("#message")?.textContent === "Repaired Waffle update", undefined, { timeout: 30_000 });
+    expect(await preview.locator("#count").evaluate(node => Reflect.get(node, "value"))).toBe("2");
+    evidence.push({ pid, initialHeaders, events, repairedEvents: await preview.evaluate(() => Reflect.get(window, "actualDevEvents")), terminal: await terminalText(app) });
+    expect(verifySite(directory)).toEqual(before);
+  } finally {
+    if (process.env.DEV_HTML_EVIDENCE_DIR) await Bun.write(`${process.env.DEV_HTML_EVIDENCE_DIR}/actual-waffle.json`, JSON.stringify(evidence, null, 2));
+    if (app) await stopForeground(app).catch(() => {});
+    await preview?.close();
+    await app?.close();
+    await task.cleanup();
+    if (previousRoot === undefined) delete process.env.ROOT;
+    else process.env.ROOT = previousRoot;
+  }
+}, 300_000);
