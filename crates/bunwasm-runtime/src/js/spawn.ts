@@ -66,7 +66,7 @@
   }
   /** A guest thread started as a process. Only worker_threads, through spawnWorker, supplies one. */
   type WorkerSpawn = object;
-  type Input ={ data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
+  type Input = { data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
   interface Spec { meta: SpawnMeta; options: SpawnOptions; input: Input }
   interface Started extends Spec {
     pid: number;

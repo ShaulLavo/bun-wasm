@@ -7,7 +7,7 @@ import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
 import { runtimeRelay } from "../src/net/relay";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
-interface Launch { workerUrl: string; request: Record<string, any>; network?: { connection: Record<string, unknown>; dispose(): void }; cleanup?(): void | Promise<void>; executableName?(name: string): string }
+interface Launch { workerUrl: string; memoryGroup?: unknown; request: Record<string, any>; network?: { connection: Record<string, unknown>; dispose(): void }; cleanup?(): void | Promise<void>; executableName?(name: string): string }
 const activeCleanups: Array<() => void | Promise<void>> = [];
 function service(launches: Launch[]): ProcessService {
   return { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
@@ -68,6 +68,23 @@ for (const [workerUrl, expected] of [
   await preview1Launcher({ workerUrl })(context, service(launches));
   expect(launches[0]!.workerUrl).toBe(expected);
   expect(launches[0]!.request).toMatchObject({ module, args: ["bun", "-e", "0"], env: { A: "1", PWD: "/work" } });
+});
+
+// A group core is relocatable: one `dylink.0` custom section. Only the typed worker field of the
+// spawn request joins the parent's group; environment markers never do.
+const groupCore = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 9, 8, 100, 121, 108, 105, 110, 107, 46, 48]));
+const workerMarkers = { BUNWASM_WORKER_CONTROL: "{}", BUNWASM_WORKER_INIT: "{}" };
+for (const { name, core, request, expected } of [
+  { name: "a split core", core: module, request: {}, expected: undefined },
+  { name: "a split core started as a guest thread", core: module, request: { worker: {} }, expected: undefined },
+  { name: "a group core", core: groupCore, request: {}, expected: "new" },
+  { name: "a group core started as a guest thread", core: groupCore, request: { worker: { memoryLimitMb: 64 } }, expected: "inherit" },
+  { name: "a group core with forged worker environment markers", core: groupCore, request: { env: workerMarkers }, expected: "new" },
+]) test(`${name} launches with memory group ${String(expected)}`, async () => {
+  const launches: Launch[] = [];
+  const spawned = { ...context, module: core, request: { ...context.request, ...request } };
+  await bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(spawned, service(launches));
+  expect(launches[0]!.memoryGroup).toBe(expected);
 });
 
 test("launchers do not add hidden executable rewriting", async () => {
