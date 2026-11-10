@@ -43,9 +43,8 @@ thread_local! {
 /// Record the address of a local in the outermost side frame as the native stack base.
 #[cfg(bun_wasm_shared_group)]
 pub(crate) fn record_stack_origin(frame: &[u8; 16]) {
-    STACK_ORIGIN.with(|origin| {
-        origin.set(std::hint::black_box(frame.as_ptr()) as usize + frame.len())
-    });
+    STACK_ORIGIN
+        .with(|origin| origin.set(std::hint::black_box(frame.as_ptr()) as usize + frame.len()));
 }
 
 #[cfg(bun_wasm_shared_group)]

@@ -167,8 +167,26 @@ index 12f13f3ca..83ff122f5 100644
  }
  
  // ES2021 draft rev bd868f20b8c574ad6689fba014b62a1dba819e56
+diff --git i/js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h w/js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h
+index a6909e560..9d1ae40cb 100644
+--- i/js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h
++++ w/js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h
+@@ -88,6 +88,13 @@
+ #  endif
+ #endif
+ 
++#if defined(BUN_WASM_SHARED_GROUP) && defined(__wasm32__)
++// bun-wasm memory group: the library is built with wasm atomics, which have
++// native lock-free 64-bit operations. BigInt64Array Atomics need them.
++#  define HAS_64BIT_ATOMICS
++#  define HAS_64BIT_LOCKFREE
++#endif
++
+ // The default implementation tactic for gcc/clang is to use the newer __atomic
+ // intrinsics added for use in C++11 <atomic>.  Where that isn't available, we
+ // use GCC's older __sync functions instead.
 diff --git i/js/src/vm/SharedArrayObject.cpp w/js/src/vm/SharedArrayObject.cpp
-index b27860a87..33e555f1c 100644
+index b27860a87..f80b5cd9d 100644
 --- i/js/src/vm/SharedArrayObject.cpp
 +++ w/js/src/vm/SharedArrayObject.cpp
 @@ -14,6 +14,9 @@
@@ -232,8 +250,8 @@ index b27860a87..33e555f1c 100644
    MOZ_ASSERT_IF(isGrowable, length <= maxLength);
  
 +#ifdef BUN_WASM_SHARED_GROUP
-+  // A growable buffer keeps engine-owned storage: its reservation is not a
-+  // region another member could attach.
++  // The constructor refuses a growable buffer in a memory group, so only
++  // fixed-length storage is ever requested from JavaScript.
 +  if (!isGrowable) {
 +    if (length > UINT32_MAX) {
 +      return nullptr;
@@ -283,7 +301,20 @@ index b27860a87..33e555f1c 100644
        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                  JSMSG_SAME_SHARED_ARRAY_BUFFER_RETURNED);
        return false;
-@@ -693,6 +768,15 @@ FixedLengthSharedArrayBufferObject* SharedArrayBufferObject::New(
+@@ -670,6 +745,12 @@ bool SharedArrayBufferObject::class_constructor(JSContext* cx, unsigned argc,
+   }
+ 
+   if (maxByteLength) {
++#ifdef BUN_WASM_SHARED_GROUP
++    // Members of a memory group could not share a growable buffer's length.
++    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                              JSMSG_SHARED_ARRAY_BAD_LENGTH);
++    return false;
++#endif
+     // 25.2.2.1, remaining steps.
+     auto* bufobj = NewGrowable(cx, byteLength, *maxByteLength, proto);
+     if (!bufobj) {
+@@ -693,6 +774,15 @@ FixedLengthSharedArrayBufferObject* SharedArrayBufferObject::New(
    bool isGrowable = false;
    size_t maxLength = length;
    auto* buffer = SharedArrayRawBuffer::Allocate(isGrowable, length, maxLength);
@@ -299,7 +330,7 @@ index b27860a87..33e555f1c 100644
    if (!buffer) {
      js::ReportOutOfMemory(cx);
      return nullptr;
-@@ -778,8 +862,7 @@ SharedArrayBufferType* SharedArrayBufferObject::NewWith(
+@@ -778,8 +868,7 @@ SharedArrayBufferType* SharedArrayBufferObject::NewWith(
  bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
                                                size_t length) {
    MOZ_ASSERT(!isInitialized());
@@ -309,7 +340,7 @@ index b27860a87..33e555f1c 100644
                                 MemoryUse::SharedArrayRawBuffer)) {
      return false;
    }
-@@ -792,7 +875,7 @@ bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
+@@ -792,7 +881,7 @@ bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
  
  void SharedArrayBufferObject::dropRawBuffer() {
    size_t length = byteLengthOrMaxByteLength();
@@ -318,7 +349,7 @@ index b27860a87..33e555f1c 100644
    zoneFromAnyThread()->removeSharedMemory(rawBufferObject(), size,
                                            MemoryUse::SharedArrayRawBuffer);
    rawBufferObject()->dropReference();
-@@ -1041,6 +1124,32 @@ JS_PUBLIC_API JSObject* JS::NewSharedArrayBuffer(JSContext* cx, size_t nbytes) {
+@@ -1041,6 +1130,32 @@ JS_PUBLIC_API JSObject* JS::NewSharedArrayBuffer(JSContext* cx, size_t nbytes) {
                                        /* proto = */ nullptr);
  }
  

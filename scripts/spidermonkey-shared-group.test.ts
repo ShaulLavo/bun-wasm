@@ -75,7 +75,7 @@ test("the group port leaves the split recipe alone and gates every library hunk"
   const patch = readFileSync(resolve("spidermonkey/spidermonkey-shared-group.patch"), "utf8");
   const split = readFileSync(resolve("spidermonkey/spidermonkey-wasi.patch"), "utf8");
   const files = (source: string) => Array.from(source.matchAll(/^diff --git \S+ \S\/(\S+)$/gm), match => match[1]);
-  expect(files(patch)).toEqual(["js/public/SharedArrayBuffer.h", "js/src/builtin/AtomicsObject.cpp", "js/src/vm/SharedArrayObject.cpp", "js/src/vm/SharedArrayObject.h"]);
+  expect(files(patch)).toEqual(["js/public/SharedArrayBuffer.h", "js/src/builtin/AtomicsObject.cpp", "js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h", "js/src/vm/SharedArrayObject.cpp", "js/src/vm/SharedArrayObject.h"]);
   expect(files(split).filter(file => files(patch).includes(file))).toEqual([]);
   const opened = patch.split("\n").filter(line => /^\+#\s*if(?:n?def)? /.test(line));
   expect(opened.length).toBeGreaterThan(0);

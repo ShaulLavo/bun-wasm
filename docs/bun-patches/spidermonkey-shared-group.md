@@ -24,8 +24,9 @@ split patch, recipe files and admitted split archive are not changed.
   `WebAssembly.Memory` region and frees only itself. An owned header holds the region of one
   fixed-length `new SharedArrayBuffer()` from the core's `bun_shared_buffer_alloc`, and queues
   `bun_shared_buffer_release` when its last reference drops. A refused allocation runs one full
-  collection, which finalizes dead buffers in the foreground, and tries once more. Growable
-  buffers keep engine-owned storage. A borrowed header charges the zone only its own size.
+  collection, which finalizes dead buffers in the foreground, and tries once more. The
+  constructor refuses a growable buffer with RangeError, because members could not share its
+  length. A borrowed header charges the zone only its own size.
 - Same files, `slice`: a species result over the source's own storage is detected by comparing
   storage pointers, because region views are distinct headers over one base.
 - `js/public/SharedArrayBuffer.h`: `JS::NewSharedArrayBufferOverGroupRegion` creates the borrowed
@@ -37,6 +38,10 @@ split patch, recipe files and admitted split archive are not changed.
   original queue could only spin. Timeout, status and cancellation mapping match the QuickJS and
   JSC adapters, and a cancelled member traps. `Atomics.waitAsync` throws rather than keep a
   per-buffer queue no other member can reach.
+- `js/src/jit/shared/AtomicOperations-feeling-lucky-gcc.h`: the portable header leaves 64-bit
+  atomics off on 32-bit targets without a JIT, and a `BigInt64Array` operation then crashes the
+  engine. An atomics build has native lock-free 64-bit operations, so the group build turns
+  them on.
 
 ## Original adapters
 
