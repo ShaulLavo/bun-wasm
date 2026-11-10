@@ -37906,13 +37906,13 @@ static __exception int js_parse_function_decl2(JSParseState *s,
         fd->defined_arg_count = 1;
     } else if (func_type != JS_PARSE_FUNC_CLASS_STATIC_INIT) {
         if (s->token.val == '(') {
-            int skip_bits;
+            int skip_bits, skip_token;
             /* if there is an '=' inside the parameter list, we
                consider there is a parameter expression inside */
-            js_parse_skip_parens_token(s, &skip_bits, false);
+            skip_token = js_parse_skip_parens_token(s, &skip_bits, false);
             if (skip_bits & SKIP_HAS_ASSIGNMENT)
                 fd->has_parameter_expressions = true;
-            if (next_token(s))
+            if (skip_token == -1 || next_token(s))
                 goto fail;
         } else {
             if (js_parse_expect(s, '('))

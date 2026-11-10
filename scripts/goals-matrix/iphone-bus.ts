@@ -1,7 +1,7 @@
 import { installIphoneObserver } from "./iphone-browser";
 
 type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string };
-type Pending = { id: number; source: string; deadline: number; delivered: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+type Pending = { id: number; source: string; deadline: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 type Role = "host" | "preview";
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected iPhone observer object");
@@ -10,18 +10,21 @@ function object(value: unknown): Record<string, unknown> {
 export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
   private readonly pending = new Map<Role, Pending>();
+  private readonly issued = new Set<Role>();
   private sequence = 0;
   constructor(readonly path: string) {}
   configure(role: Role, url: string): void {
     this.cancel(role);
+    this.issued.delete(role);
     this.pages.set(role, { url, nonce: crypto.randomUUID(), visible: false });
   }
   state(role: Role): Page | null { return this.pages.get(role) ?? null; }
   script(url: string, endpoint: string): string | undefined {
     const entry = Array.from(this.pages).find(([, page]) => page.url === url);
     if (!entry) return;
-    const [role, page] = entry;
-    if (page.timeOrigin !== undefined) throw new Error("Unexpected iPhone document replacement");
+    const [role, previous] = entry;
+    const page = (this.issued.has(role) || previous.timeOrigin !== undefined) ? this.reload(role, previous) : previous;
+    this.issued.add(role);
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
     return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)});`;
   }
@@ -32,14 +35,23 @@ export class IphoneBus {
     if (closing === undefined) throw new Error("iPhone observer needs closing body HTML");
     return html.slice(0, closing) + `<script>${source.replace(/<\/script/gi, "<\\/script")}</script>` + html.slice(closing);
   }
-  execute(role: Role, source: string, timeoutMs: number): Promise<unknown> {
+  private reload(role: Role, previous: Page): Page {
+    if (role !== "preview") throw new Error("Unexpected iPhone document replacement");
+    const pending = this.pending.get(role);
+    if (pending?.observation) pending.delivered = false;
+    else this.cancel(role, new Error("iPhone preview document replaced"));
+    const page = { url: previous.url, nonce: crypto.randomUUID(), visible: false };
+    this.pages.set(role, page);
+    return page;
+  }
+  execute(role: Role, source: string, timeoutMs: number, observation = false): Promise<unknown> {
     if (this.pending.has(role)) throw new Error("iPhone observer command already pending");
     const page = this.pages.get(role);
-    if (!page?.timeOrigin) throw new Error("iPhone observer document not ready");
+    if (!page || (page.timeOrigin === undefined && !(role === "preview" && observation))) throw new Error("iPhone observer document not ready");
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.cancel(role), timeoutMs);
-      this.pending.set(role, { id, source, deadline: Date.now() + timeoutMs, delivered: false, resolve, reject, timer });
+      this.pending.set(role, { id, source, deadline: Date.now() + timeoutMs, delivered: false, observation, resolve, reject, timer });
     });
   }
   private accept(role: Role, value: Record<string, unknown>, origin: string | null): Page {
@@ -71,13 +83,13 @@ export class IphoneBus {
     if (row.ok === false) { pending.reject(new Error(String(row.error))); return; }
     pending.resolve(row.value);
   }
-  cancel(role: Role): void {
+  cancel(role: Role, reason = new Error("iPhone observer command expired or closed")): void {
     const pending = this.pending.get(role);
     if (!pending) return;
     clearTimeout(pending.timer); this.pending.delete(role);
-    pending.reject(new Error("iPhone observer command expired or closed"));
+    pending.reject(reason);
   }
-  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); }
+  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); }
   async handle(request: Request, productOrigin: string): Promise<Response> {
     const route = new URL(request.url).pathname.slice(this.path.length + 1);
     const headers = { "access-control-allow-origin": request.headers.get("origin") ?? "null", "access-control-allow-headers": "content-type", "access-control-allow-methods": "POST, GET", "cache-control": "no-store", "vary": "Origin" };
@@ -105,7 +117,10 @@ export class IphoneBus {
       if (url.protocol !== "http:" || !(url.hostname === "127.0.0.1" || url.hostname.endsWith(".localhost"))) throw new Error("iPhone page must be loopback HTTP");
       this.configure(role, url.href); return url.href;
     }
-    if (action === "execute" && typeof row.source === "string" && typeof row.timeoutMs === "number" && Number.isSafeInteger(row.timeoutMs) && row.timeoutMs > 0 && row.timeoutMs <= 900_000) return this.execute(role, row.source, row.timeoutMs);
+    if (action === "execute" && typeof row.source === "string" && typeof row.timeoutMs === "number" && Number.isSafeInteger(row.timeoutMs) && row.timeoutMs > 0 && row.timeoutMs <= 900_000) {
+      if (row.observation !== undefined && typeof row.observation !== "boolean") throw new Error("Invalid iPhone observation mode");
+      return this.execute(role, row.source, row.timeoutMs, row.observation === true);
+    }
     throw new Error("Unknown iPhone observer operation");
   }
 }

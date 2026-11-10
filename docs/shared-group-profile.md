@@ -103,8 +103,10 @@ one at any size.
 
 ## Processes on the Browser host
 
-The page admits a group core as the first member of a new group, and a spawned group core
-starts its own group. The runtime that hosts it needs the `memoryGroups` policy above.
-[The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs
-from the native host.
+The page admits a group core as the first member of a new group. A `worker_threads` Worker joins
+its parent's group, and any other spawn starts its own. Members share WebAssembly objects by
+reference, as on the native host. The runtime that hosts it needs the `memoryGroups` policy above
+(`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's 1 GiB, and
+the host still commits each Memory's declared maximum. [The Browser nested host
+record](bun-patches/shared-nested-browser.md) lists how it differs from the native host.
 

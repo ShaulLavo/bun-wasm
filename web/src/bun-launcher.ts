@@ -45,6 +45,11 @@ export function siblingWorkerUrl(workerUrl: string, name: string): string {
   return new URL(`./${name}`, new URL(workerUrl, base())).href;
 }
 
+function sharedGroupLaunch(module: WebAssembly.Module, worker: unknown): "new" | "inherit" | undefined {
+  if (!isSharedGroupCore(module)) return undefined;
+  return worker ? "inherit" : "new";
+}
+
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return (context, service) => launchBunProcess(engine, options, context, service);
 }
@@ -115,8 +120,9 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,
-      // A group core starts its own group, as on the native host; it has no other way to link.
-      memoryGroup: isSharedGroupCore(module) ? "new" : undefined,
+      // A group core has no other way to link. A guest thread joins its parent's group; every
+      // other process starts its own, as on the native host. Only the typed spawn request decides.
+      memoryGroup: sharedGroupLaunch(module, context.request.worker),
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
