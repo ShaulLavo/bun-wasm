@@ -21,7 +21,7 @@ test.each([
   "scripts/check-quickjs-parser-stack.ts", "scripts/fixtures/quickjs-parser-stack.c", "scripts/fixtures/quickjs-parser-stack.ts",
   "scripts/fixtures/quickjs-parser-stack.expected.txt",
   "scripts/check-quickjs-frame-stack.ts", "scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-frame-stack.ts",
-  "scripts/fixtures/quickjs-frame-stack.expected.txt",
+  "scripts/fixtures/quickjs-frame-stack.expected.txt", "scripts/quickjs-native-check.ts",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });

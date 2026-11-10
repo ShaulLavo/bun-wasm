@@ -211,7 +211,7 @@ static void install(JSContext *ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, print, "print", 1));
-    JS_SetPropertyStr(ctx, global, "gc", JS_NewCFunction(ctx, collect, "gc", 0));
+    JS_SetPropertyStr(ctx, global, "collectGarbage",JS_NewCFunction(ctx, collect, "collectGarbage", 0));
     JS_SetPropertyStr(ctx, global, "callWith", JS_NewCFunction(ctx, call_with, "callWith", 2));
     JS_SetPropertyStr(ctx, global, "otherRealm", JS_NewCFunction(ctx, other_realm, "otherRealm", 1));
     JS_SetPropertyStr(ctx, global, "frameUsage", JS_NewCFunction(ctx, frame_usage, "frameUsage", 0));

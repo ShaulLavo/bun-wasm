@@ -2,20 +2,14 @@
 // scripts/fixtures/quickjs-frame-stack.c against the bare QuickJS engine and checks the
 // frame-limit boundaries, physical accounting, denied chunk allocations and call semantics.
 // No bun-wasm runtime is involved; the produced Wasm pair has its own guest fixtures.
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
-import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import { join } from "node:path";
+import { nativeCheck } from "./quickjs-native-check.ts";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
-const engine = resolve(process.argv[2] ?? join(root, "third_party/rquickjs-sys/quickjs"));
-const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-quickjs-frames-"));
-function cleanup(): void { rmSync(scratch, { recursive: true, force: true }); }
-process.once("SIGTERM", () => { cleanup(); process.exit(143); });
-process.once("SIGINT", () => { cleanup(); process.exit(130); });
+const { root, engine, scratch, cleanup } = nativeCheck("bun-wasm-quickjs-frames-", process.argv[2]);
 
 function run(command: string, args: string[]): { status: number; output: string } {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });

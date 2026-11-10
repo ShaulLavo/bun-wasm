@@ -341,8 +341,10 @@ typedef struct JSValueLink {
 
 /* bun-wasm: how many bytes the frame stack of ordinary bytecode calls may
    cost the allocator, and the largest value JS_SetMaxFrameStackSize accepts
-   (docs/stack-limits.md). */
-#define JS_FRAME_STACK_LIMIT_DEFAULT ((size_t)2 * 1024 * 1024)
+   (docs/stack-limits.md). A plain recursive call costs about 121 bytes on
+   wasm32, so the default holds about 34,000 of them: more than the 20,685
+   the largest native budget allowed before these frames left the C stack. */
+#define JS_FRAME_STACK_LIMIT_DEFAULT ((size_t)4 * 1024 * 1024)
 #define JS_FRAME_STACK_LIMIT_MAX ((size_t)4 * 1024 * 1024)
 
 struct JSRuntime {
