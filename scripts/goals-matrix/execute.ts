@@ -1,4 +1,5 @@
 import { cleanupTimeoutMs } from "./deadlines";
+import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import type { Transport } from "./transport";
@@ -15,6 +16,7 @@ export interface Execution {
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
 }
+type FailureLog = { text: string; diagnostic: string; saved: boolean };
 export async function bounded<T>(operation: () => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
@@ -45,6 +47,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
   let creation: Promise<Transport> | undefined;
   let closing = false;
   let capabilities: Record<string, unknown> = {};
+  let failureLog: FailureLog | undefined;
   try {
     await phase(results, "startup", options.timeoutMs, async () => {
       creation = options.createTransport().then(async owned => {
@@ -60,14 +63,14 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
     if (!transport) throw new Error("Transport not created");
     await lifecycle(transport, options, results);
   } catch {
-    if (transport) await captureFailure(transport, options, results);
+    if (transport) failureLog = await captureFailure(transport, options, results);
   }
   finally {
     closing = true;
     await phase(results, "cleanup", cleanupTimeoutMs, async () => {
       const pending = creation;
       if (!transport && pending) await bounded(() => pending.catch(() => undefined), 10_000);
-      return cleanup(transport, options);
+      return cleanup(transport, options, results, failureLog);
     }).catch(() => {});
   }
   return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
@@ -97,23 +100,68 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
   });
 }
 
-async function captureFailure(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
+async function captureFailure(transport: Transport, options: Execution, results: PhaseResult[]): Promise<FailureLog | undefined> {
+  let text = "";
+  let diagnostic = "";
+  const deadline = Date.now() + 2000;
   try {
-    const text = await bounded(() => terminal(transport), 2000);
-    await options.saveLog(text);
-    const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
-    const failed = results.find(result => result.status === "fail");
-    if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
-  } catch { }
+    await bounded(async () => {
+      text = await terminal(transport);
+      if (options.framework.id !== "angular" || Date.now() >= deadline) return;
+      const path = namedAngularDiagnostic(text);
+      if (!path) return;
+      diagnostic = `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
+      diagnostic = await angularDiagnostic(transport, path, deadline);
+    }, 2000);
+  } catch { if (!text) return; }
+  const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
+  const failed = results.find(result => result.status === "fail");
+  if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
+  text += diagnostic;
+  try {
+    await bounded(() => options.saveLog(text), 2000);
+    return { text, diagnostic, saved: true };
+  } catch { return { text, diagnostic, saved: false }; }
 }
 
-async function cleanup(transport: Transport | undefined, options: Execution): Promise<unknown> {
+async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<unknown> {
   if (!transport) return { transportCreated: false };
+  const ownedCleanup = transport.cleanup?.bind(transport);
+  if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup);
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport)); }, 8_000); }
+  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? "")); }, 8_000); }
   catch (error) { errors.push(error); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return { browserClosed: true, foregroundStopped: true, previewClosed: true };
+}
+
+async function cleanupOwned(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, close: NonNullable<Transport["cleanup"]>): Promise<unknown> {
+  const errors: unknown[] = [];
+  try { await bounded(() => saveFinalLog(transport, options, results, failureLog), 4_000); }
+  catch (error) { errors.push(error); }
+  let evidence: unknown;
+  try { evidence = await bounded(() => close(10_000), 10_000); }
+  catch (error) { errors.push(error); }
+  if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
+  return evidence;
+}
+
+async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<void> {
+  let output: string;
+  try { output = await bounded(() => terminal(transport), 2_000) + (failureLog?.diagnostic ?? ""); }
+  catch (error) {
+    if (failureLog?.saved) return;
+    const transcript = completedTranscript(results);
+    output = failureLog?.text ?? `Final terminal observation unavailable: ${String(error)}\n\n${transcript ?? "No completed command transcript was available."}`;
+  }
+  await bounded(() => options.saveLog(output), 2_000);
+}
+
+function completedTranscript(results: readonly PhaseResult[]): string | undefined {
+  const phase = results.findLast(result => result.status === "pass" && (result.phase === "build" || result.phase === "install"));
+  if (phase?.status !== "pass") return;
+  const evidence = phase.evidence;
+  if (evidence && typeof evidence === "object" && "output" in evidence && typeof evidence.output === "string") return evidence.output;
 }

@@ -88,6 +88,10 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     async useHost() { role = "host"; },
     async usePreview() { role = "preview"; },
     async closePreview() { await present(null); },
+    async cleanup(timeoutMs) {
+      await (closing ??= close(timeoutMs));
+      return { browserClosed: true, foregroundStopped: true, previewClosed: true };
+    },
     async nativeClick(button, clicked, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
       const remaining = () => { const left = deadline - Date.now(); if (left <= 0) throw new Error("iPhone click deadline expired"); return left; };

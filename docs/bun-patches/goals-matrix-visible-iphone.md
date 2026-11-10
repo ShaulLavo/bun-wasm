@@ -37,3 +37,25 @@ their existing matrix deadlines.
 Native cleanup shares one deadline and abort signal across all actions, reaps any
 active command before proceeding, and cannot start later input after expiry.
 Failed iPhone cleanup stops the campaign before another cell starts.
+
+Native tab cleanup uses the documented agent-device batch JSON command to pair
+each All Tabs or Close input with its resulting snapshot. It makes three CLI
+round trips instead of five, under the same shared 10-second deadline. Each
+request contains at most one input because cancellation does not prove native
+work stopped. Close must belong to the unique task-title node in the native
+snapshot hierarchy. The final snapshot must show that title gone, exactly one
+fewer tab, and the other visible tab titles preserved.
+
+Native cleanup closes the unique owned Safari tab without evaluating through the
+application observer. A phase timeout can leave an observation pending, so asking
+that same observer to remove the preview or stop the shell cannot establish
+cleanup. Closing the owner tab ends its dedicated guest workers and embedded
+preview. A fresh native accessibility snapshot must confirm the task title is
+absent before cleanup passes. Other transports keep their existing scripted
+cleanup. The native close still shares the original ten-second inner allowance.
+
+The executor saves a final terminal log before native teardown. Its observation
+is bounded separately, and a stalled observer produces a labelled diagnostic log
+with the last completed command transcript when available. A log failure cannot
+skip resource teardown. Log capture and native close remain within the existing
+twenty-second outer cleanup bound.
