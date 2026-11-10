@@ -538,7 +538,12 @@ pub fn integrity(bytes: &[u8], sri: &str) -> Result<()> {
     Err(format!("Integrity check failed ({algorithm})"))
 }
 
-pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+type ArchiveEntry<'a> = tar::Entry<'a, std::io::Take<flate2::read::GzDecoder<&'a [u8]>>>;
+
+fn visit_archive(
+    bytes: &[u8],
+    mut visit: impl FnMut(&mut ArchiveEntry<'_>, &Path) -> Result<()>,
+) -> Result<()> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder.take(LIMIT as u64 + 1));
     let entries = archive
@@ -551,36 +556,60 @@ pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
         if total > LIMIT as u64 {
             return Err("Extracted package exceeds 256 MiB".into());
         }
-        extract_entry(&mut entry, destination)?;
+        let tail = archive_path(&entry)?;
+        if !tail.as_os_str().is_empty() {
+            visit(&mut entry, &tail)?;
+        }
     }
     Ok(())
 }
 
-fn extract_entry<R: Read>(entry: &mut tar::Entry<'_, R>, destination: &Path) -> Result<()> {
+fn archive_path<R: Read>(entry: &tar::Entry<'_, R>) -> Result<PathBuf> {
     let path = entry.path().map_err(|e| e.to_string())?.into_owned();
     let mut parts = path.components();
     if !matches!(parts.next(), Some(Component::Normal(_))) {
         return Err("Unsafe tarball path".into());
     }
     let tail: PathBuf = parts.collect();
-    if tail.as_os_str().is_empty() {
-        return Ok(());
-    }
     if !tail.components().all(|p| matches!(p, Component::Normal(_))) {
         return Err("Unsafe tarball path".into());
     }
-    let target = destination.join(tail);
     let kind = entry.header().entry_type();
-    if kind.is_dir() {
-        return fs::create_dir_all(target).map_err(|e| e.to_string());
-    }
-    if !kind.is_file() {
+    if !kind.is_file() && !kind.is_dir() {
         return Err(format!("Unsupported tarball entry: {}", path.display()));
     }
-    fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
-    let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
-    std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
-    out.flush().map_err(|e| e.to_string())
+    Ok(tail)
+}
+
+pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
+    let mut manifest = None;
+    visit_archive(bytes, |entry, path| {
+        if path != Path::new("package.json") {
+            return Ok(());
+        }
+        if manifest.is_some() || !entry.header().entry_type().is_file() {
+            return Err("Tarball needs one regular package.json".into());
+        }
+        manifest = Some(
+            serde_json::from_reader(entry)
+                .map_err(|e| format!("Invalid tarball package.json: {e}"))?,
+        );
+        Ok(())
+    })?;
+    manifest.ok_or_else(|| "Tarball has no package.json".into())
+}
+
+pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+    visit_archive(bytes, |entry, path| {
+        let target = destination.join(path);
+        if entry.header().entry_type().is_dir() {
+            return fs::create_dir_all(target).map_err(|e| e.to_string());
+        }
+        fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
+        std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -610,5 +639,64 @@ mod tests {
             assert!(!cacheable(&bytes, false, &registry));
         }
         assert!(!cacheable(b"{", false, &registry));
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    fn archive(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
+        let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(compressor);
+        for (path, kind, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(*kind);
+            header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+            header.set_cksum();
+            archive.append(&header, *bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn tarball_manifest_uses_extraction_safety_checks() {
+        let manifest = b"{\"name\":\"tool\",\"version\":\"1.2.3\"}";
+        let valid = (
+            "package/package.json",
+            tar::EntryType::Regular,
+            manifest.as_slice(),
+        );
+        let bytes = archive(&[valid]);
+        assert_eq!(archive_manifest(&bytes).unwrap()["name"], "tool");
+        assert!(
+            archive_manifest(&archive(&[]))
+                .unwrap_err()
+                .contains("no package.json")
+        );
+        assert!(
+            archive_manifest(&archive(&[valid, valid]))
+                .unwrap_err()
+                .contains("one regular package.json")
+        );
+        let link = ("package/escape", tar::EntryType::Symlink, b"".as_slice());
+        assert!(
+            archive_manifest(&archive(&[valid, link]))
+                .unwrap_err()
+                .contains("Unsupported tarball entry")
+        );
+        let traversal = (
+            "package/../../outside",
+            tar::EntryType::Regular,
+            b"escape".as_slice(),
+        );
+        assert!(
+            archive_manifest(&archive(&[valid, traversal]))
+                .unwrap_err()
+                .contains("Unsafe tarball path")
+        );
+        assert!(archive_manifest(b"not a gzip archive").is_err());
     }
 }

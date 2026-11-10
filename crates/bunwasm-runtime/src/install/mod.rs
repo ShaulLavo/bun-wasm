@@ -150,6 +150,7 @@ fn execute(
             unlock(
                 &mut resolution_lock,
                 &opts,
+                &manifest,
                 member.as_ref().and_then(|_| manifest["name"].as_str()),
             );
         }
@@ -349,7 +350,7 @@ fn finalize_additions(
         let Some(package) = command_package(resolver, &name, member) else {
             continue;
         };
-        let range = if opts.exact {
+        let range = if opts.exact && !resolve::tarball::is_specifier(&range) {
             package.version.clone()
         } else if range == "latest" {
             format!("^{}", package.version)
@@ -384,6 +385,9 @@ fn package_present(package: &Package) -> bool {
     if let Some(local) = &package.local {
         return local::physical(&package.path()).ok().as_deref() == Some(local.path.as_path());
     }
+    if package.explicit_tarball && package.source_chain.is_none() {
+        return false;
+    }
     let Ok(bytes) = fs::read(package.path().join("package.json")) else {
         return false;
     };
@@ -410,7 +414,7 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
             &resolver.registry,
             &mut downloads,
         ) {
-            if !package.optional {
+            if !package.optional || package.explicit_tarball {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
             eprintln!(
@@ -441,7 +445,12 @@ fn prefetch_packages<'a>(
         if package.local.is_some() || package_present(package) {
             continue;
         }
-        downloads.prefetch(&package.tarball, true, resolver.refresh, &resolver.registry);
+        downloads.prefetch(
+            &package.tarball,
+            true,
+            resolver.refresh && !package.explicit_tarball,
+            &resolver.registry,
+        );
     }
 }
 
@@ -454,7 +463,12 @@ fn install_package(
     if let Some(local) = &package.local {
         return local::link(&local.path, &package.path());
     }
-    let bytes = downloads.fetch(&package.tarball, true, refresh, registry)?;
+    let bytes = downloads.fetch(
+        &package.tarball,
+        true,
+        refresh && !package.explicit_tarball,
+        registry,
+    )?;
     io::integrity(&bytes, &package.integrity)?;
     let path = package.path();
     let staging = path.with_file_name(format!(
@@ -572,7 +586,11 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
             .filter(|row| row[0] == format!("{}@{}", package.name, package.version))
             .and_then(|row| row[1].as_str())
             .unwrap_or(&package.tarball);
-        let tarball = migration::transport(&package.name, &package.version, tarball)?;
+        let tarball = if package.explicit_tarball {
+            package.tarball.clone()
+        } else {
+            migration::transport(&package.name, &package.version, tarball)?
+        };
         let row = if let Some(local) = &package.local {
             let path = local::relative(&local.path, &std::env::current_dir().unwrap());
             let path = if !local.workspace
@@ -880,14 +898,20 @@ fn selected(name: &str, opts: &Options) -> bool {
             .any(|input| resolve::spec(input).is_ok_and(|(n, _)| n == name))
 }
 
-fn unlock(locked: &mut Value, opts: &Options, workspace: Option<&str>) {
+fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
     if workspace.is_some() {
         return;
     }
+    let sources = resolve::tarball::locked_sources(locked, manifest);
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, _| !selected(key, opts));
+    packages.retain(|key, row| {
+        !selected(key, opts)
+            || row[1]
+                .as_str()
+                .is_some_and(|source| sources.contains(source))
+    });
 }
 
 fn finalize_updates(
