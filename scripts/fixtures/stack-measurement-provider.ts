@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 
@@ -44,13 +44,13 @@ function attempt(mode: string, depth: number) {
   if (scenario === "throw") throw new Error("fake provider failure");
   if (scenario === "hidden-timeout" && mode === "plain" && depth === 100000) return { code: null, output: "timeout" };
   if (scenario === "timeout") return { code: null, output: "timeout" };
-  if (scenario === "hidden" && mode === "plain" && (depth === 100000 || depth === 4)) return { code: 1, output: "wasm call stack exhausted" };
+  if (scenario === "hidden" && (mode === "plain" || mode === "require") && (depth === 100000 || depth === 4)) return { code: 1, output: "wasm call stack exhausted" };
   if (scenario === "final" && mode === "plain") return { code: 1, output: "wasm call stack exhausted" };
   if (scenario === "missing") return { code: 0, output: `completed ${mode} ${depth}\n` };
   if (scenario === "duplicate-continuation") return { code: 0, output: `completed ${mode} ${depth}\ncontinued\ncontinued\n` };
   if (scenario === "wrong-depth") return { code: 0, output: `completed ${mode} ${depth + 1}\ncontinued\n` };
   const caught = scenario === "unexpected" ? "TypeError" : "RangeError";
-  if (scenario === "unexpected" || (mode === "plain" && depth > 2)) return { code: 0, output: `caught ${mode} ${caught} ${depth} stack overflow\ncontinued\n` };
+  if (scenario === "unexpected" || ((mode === "plain" || mode === "require") && depth > 2)) return { code: 0, output: `caught ${mode} ${caught} ${depth} stack overflow\ncontinued\n` };
   return { code: 0, output: `completed ${mode} ${depth}\ncontinued\n` };
 }
 
@@ -62,10 +62,27 @@ export async function run(_page: unknown, command: string) {
   return { code: 0, output: readFileSync(new URL(`../../tests/fixtures/${fixture[1]}/expected.txt`, import.meta.url), "utf8") };
 }
 
+function recordRequire(depth: number) {
+  const scratchMapping = process.argv.find(argument => argument.endsWith("::/stack-depth-scratch"));
+  if (!scratchMapping) throw new Error("Missing require scratch preopen");
+  const scratch = scratchMapping.slice(0, -"::/stack-depth-scratch".length);
+  const scratchAlive = existsSync(scratch);
+  appendFileSync(join(scratch, "attempts"), `${depth}\n`);
+  const leafMapping = process.argv.find(argument => argument.endsWith("::/stack-depth-leaf"));
+  const leafValue = process.argv.find(argument => argument.startsWith("STACK_DEPTH_LEAF="))?.slice("STACK_DEPTH_LEAF=".length);
+  const leafRoot = leafMapping?.slice(0, -"::/stack-depth-leaf".length);
+  const leafSource = leafRoot && leafValue ? readFileSync(join(leafRoot, leafValue.slice("/stack-depth-leaf/".length)), "utf8") : null;
+  appendFileSync(join(root, "require-attempts.jsonl"), JSON.stringify({
+    depth, scratch, scratchAlive, scratchValue: process.argv.find(argument => argument.startsWith("STACK_DEPTH_DIR="))?.slice("STACK_DEPTH_DIR=".length),
+    leafValue, leafSource,
+  }) + "\n");
+}
+
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   const mode = process.argv.at(-2)!;
   const depth = Number(process.argv.at(-1));
   appendFileSync(join(root, "launcher.pid"), `${process.pid}\n`);
+  if (mode === "require") recordRequire(depth);
   if (scenario === "hang" || (scenario === "hidden-timeout" && depth === 4)) await new Promise(() => setInterval(() => {}, 1000));
   const result = attempt(mode, depth);
   process.stdout.write(result.output);

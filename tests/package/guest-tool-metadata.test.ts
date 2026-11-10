@@ -38,7 +38,7 @@ test("qualified guests retain the pinned cache wrapper and fingerprint its execu
     fixture.env.RUSTC_WRAPPER = wrapper;
     const environment = receiptCli(fixture, "environment");
     expect(environment.exitCode, environment.stderr.toString()).toBe(0);
-    expect(environment.stdout.toString()).toContain(`export RUSTC_WRAPPER='${wrapper}'`);
+    expect(environment.stdout.toString()).toContain(`export RUSTC_WRAPPER='${join(fixture.root, "scripts/rustc-cache.sh")}'`);
     const inputs = receiptCli(fixture, "inputs", "browser");
     expect(inputs.exitCode, inputs.stderr.toString()).toBe(0);
     expect(JSON.parse(inputs.stdout.toString()).sourceManifest.tools).toContainEqual({
@@ -47,7 +47,7 @@ test("qualified guests retain the pinned cache wrapper and fingerprint its execu
     await writeFile(wrapper, "#!/bin/sh\nprintf 'sccache 0.18.0\\n'\n");
     const unsupported = receiptCli(fixture, "environment");
     expect(unsupported.exitCode).not.toBe(0);
-    expect(unsupported.stderr.toString()).toContain("Only sccache 0.19.0 is supported");
+    expect(unsupported.stderr.toString()).toContain("Only sccache 0.19.0 through scripts/rustc-cache.sh is supported");
   });
 });
 
