@@ -9,7 +9,7 @@ import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../sc
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
-export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "ci-release-download.ts", "src/program-profile.ts"];
+export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "ci-release-download.ts", "rustc-cache.sh", "src/program-profile.ts"];
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint8Array): GuestBuildReceipt {
