@@ -339,6 +339,12 @@ typedef struct JSValueLink {
     JSValueConst value;
 } JSValueLink;
 
+/* bun-wasm: how many bytes the frame stack of ordinary bytecode calls may
+   cost the allocator, and the largest value JS_SetMaxFrameStackSize accepts
+   (docs/stack-limits.md). */
+#define JS_FRAME_STACK_LIMIT_DEFAULT ((size_t)2 * 1024 * 1024)
+#define JS_FRAME_STACK_LIMIT_MAX ((size_t)4 * 1024 * 1024)
+
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
@@ -381,6 +387,16 @@ struct JSRuntime {
     uintptr_t stack_size; /* in bytes, 0 if no limit */
     uintptr_t stack_top;
     uintptr_t stack_limit; /* lower stack limit */
+
+    /* bun-wasm: ordinary bytecode frames live in this runtime-owned frame
+       stack, not on the C stack (docs/bun-patches/quickjs-frame-stack.md).
+       frame_committed counts every byte the chunks cost the allocator,
+       including headers, unused tails and the spare; frame_limit bounds it. */
+    struct JSFrameChunk *frame_chunk; /* chunk holding the newest frame */
+    struct JSFrameChunk *frame_spare; /* at most one emptied small chunk */
+    size_t frame_live;      /* bytes of live frames */
+    size_t frame_committed; /* bytes charged for all chunks */
+    size_t frame_limit;     /* refusal threshold for frame_committed */
 
     JSValue current_exception;
     /* true if inside an out of memory error, to avoid recursing */
@@ -1455,6 +1471,7 @@ static JSProperty *add_property(JSContext *ctx,
 static void free_property(JSRuntime *rt, JSProperty *pr, int prop_flags);
 static int JS_ToBigInt64Free(JSContext *ctx, int64_t *pres, JSValue val);
 static JSValue JS_ThrowStackOverflow(JSContext *ctx);
+static void js_frame_free_all(JSRuntime *rt);
 static JSValue JS_ThrowTypeErrorRevokedProxy(JSContext *ctx);
 static JSValue js_proxy_getPrototypeOf(JSContext *ctx, JSValueConst obj);
 static int js_proxy_setPrototypeOf(JSContext *ctx, JSValueConst obj,
@@ -2492,6 +2509,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->js_class_id_alloc = JS_CLASS_INIT_COUNT;
 
     rt->stack_size = JS_DEFAULT_STACK_SIZE;
+    rt->frame_limit = JS_FRAME_STACK_LIMIT_DEFAULT;
 
     JS_UpdateStackTop(rt);
 
@@ -2831,6 +2849,7 @@ void JS_FreeRuntime(JSRuntime *rt)
             JS_FreeAtomRT(rt, cl->class_name);
         }
     }
+    js_frame_free_all(rt);
     js_free_rt(rt, rt->class_array);
 
 #ifdef ENABLE_DUMPS // JS_DUMP_ATOM_LEAKS
@@ -3257,6 +3276,204 @@ void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size)
 {
     rt->stack_size = stack_size;
     update_stack_limit(rt);
+}
+
+/* bun-wasm: the frame stack (docs/bun-patches/quickjs-frame-stack.md).
+
+   An ordinary bytecode call keeps its JSStackFrame, copied arguments,
+   locals, operand slots and closure-slot table in one record here instead
+   of on the C stack. That storage adds no native call frame, so it is
+   bounded by its own byte limit and not by the native stack budget.
+
+   Chunks never move while a frame in them is live: closures and the frame
+   list hold addresses into them. Frames are pushed and popped in strict
+   stack order. Coroutine frames keep their own heap allocation and never
+   come here. */
+#define JS_FRAME_CHUNK_PAYLOAD ((size_t)16 * 1024)
+#define JS_FRAME_ALIGN ((size_t)8)
+
+typedef struct JSFrameChunk {
+    struct JSFrameChunk *prev; /* the chunk below this one */
+    size_t payload; /* bytes available after this header */
+    size_t top;     /* bytes of payload in use */
+    size_t charge;  /* what the allocator holds for this chunk */
+} JSFrameChunk;
+
+/* The record of one ordinary bytecode call. Only js_frame_push creates one;
+   native and coroutine JSStackFrame values are never cast to it. */
+typedef struct JSExecFrame {
+    JSStackFrame frame;
+    size_t allocation_size; /* bytes this record takes from its chunk */
+} JSExecFrame;
+
+#define JS_FRAME_HEADER_SIZE \
+    ((sizeof(JSExecFrame) + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1))
+
+static void js_frame_free_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    rt->frame_committed -= chunk->charge;
+    js_free_rt(rt, chunk);
+}
+
+/* A new chunk whose payload holds 'size' bytes, or NULL with a pending
+   RangeError when the limit refuses it or the allocator's error when memory
+   is exhausted. Nothing is linked or counted unless it succeeds. */
+static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_spare;
+    size_t payload, total, charge, room;
+
+    if (chunk && chunk->payload >= size) {
+        rt->frame_spare = NULL;
+        goto link;
+    }
+    /* the spare cannot serve this frame: do not pay for both */
+    if (chunk) {
+        rt->frame_spare = NULL;
+        js_frame_free_chunk(rt, chunk);
+    }
+    if (rt->frame_committed > rt->frame_limit)
+        goto refuse;
+    room = rt->frame_limit - rt->frame_committed;
+    /* the conservative charge of an allocation of 'total' bytes */
+    if (room < sizeof(*chunk) + MALLOC_OVERHEAD ||
+        size > room - sizeof(*chunk) - MALLOC_OVERHEAD)
+        goto refuse;
+    payload = size > JS_FRAME_CHUNK_PAYLOAD ? size : JS_FRAME_CHUNK_PAYLOAD;
+    if (payload > room - sizeof(*chunk) - MALLOC_OVERHEAD)
+        payload = size;
+    total = sizeof(*chunk) + payload;
+    chunk = js_malloc_rt(rt, total);
+    if (!chunk) {
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    /* the allocator may round up: charge what it really holds */
+    charge = js_malloc_usable_size_rt(rt, chunk);
+    if (charge < total)
+        charge = total;
+    charge += MALLOC_OVERHEAD;
+    if (charge > room) {
+        js_free_rt(rt, chunk);
+        goto refuse;
+    }
+    chunk->payload = payload;
+    chunk->charge = charge;
+    rt->frame_committed += charge;
+ link:
+    chunk->top = 0;
+    chunk->prev = rt->frame_chunk;
+    rt->frame_chunk = chunk;
+    return chunk;
+ refuse:
+    JS_ThrowStackOverflow(ctx);
+    return NULL;
+}
+
+/* Bytes of one ordinary record: header, 'slots' values, then the closure
+   slots, rounded so the next record is aligned. The counts are 16-bit
+   bytecode fields, so the sum cannot overflow; a zero return says it would. */
+static size_t js_frame_record_size(size_t slots, size_t var_refs)
+{
+    size_t size = JS_FRAME_HEADER_SIZE;
+
+    if (slots > (SIZE_MAX - size) / sizeof(JSValue))
+        return 0;
+    size += slots * sizeof(JSValue);
+    if (var_refs > (SIZE_MAX - size - JS_FRAME_ALIGN) / sizeof(JSVarRef *))
+        return 0;
+    size += var_refs * sizeof(JSVarRef *);
+    return (size + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1);
+}
+
+/* The record for one ordinary call, uninitialised and not yet linked into
+   the frame list. NULL with a pending exception on refusal. */
+static JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = js_frame_record_size(slots, var_refs);
+    JSExecFrame *frame;
+
+    if (unlikely(size == 0)) {
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+    if (unlikely(!chunk || chunk->payload - chunk->top < size)) {
+        chunk = js_frame_new_chunk(ctx, size);
+        if (!chunk)
+            return NULL;
+    }
+    frame = (JSExecFrame *)((uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top += size;
+    rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
+/* Releases the newest record. Its values are already freed and it is no
+   longer in the frame list. */
+static void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
+{
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = frame->allocation_size;
+
+    assert((uint8_t *)frame + size == (uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top -= size;
+    rt->frame_live -= size;
+    if (likely(chunk->top != 0))
+        return;
+    /* keep one emptied small chunk, so a call at a chunk boundary does not
+       allocate and free on every iteration */
+    rt->frame_chunk = chunk->prev;
+    if (!rt->frame_spare && chunk->payload <= JS_FRAME_CHUNK_PAYLOAD)
+        rt->frame_spare = chunk;
+    else
+        js_frame_free_chunk(rt, chunk);
+}
+
+static void js_frame_free_all(JSRuntime *rt)
+{
+    JSFrameChunk *chunk, *prev;
+
+    assert(rt->frame_live == 0);
+    for (chunk = rt->frame_chunk; chunk; chunk = prev) {
+        prev = chunk->prev;
+        js_frame_free_chunk(rt, chunk);
+    }
+    rt->frame_chunk = NULL;
+    if (rt->frame_spare)
+        js_frame_free_chunk(rt, rt->frame_spare);
+    rt->frame_spare = NULL;
+}
+
+/* Sets how many bytes the frame stack may cost the allocator. Zero is a
+   real limit: no ordinary call fits. Returns -1 and changes nothing when the
+   value is above the supported range or below what live frames already
+   hold; an idle spare is released to make a lower value fit. */
+int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes)
+{
+    size_t spare = rt->frame_spare ? rt->frame_spare->charge : 0;
+
+    if (bytes > JS_FRAME_STACK_LIMIT_MAX)
+        return -1;
+    if (bytes < rt->frame_committed - spare)
+        return -1;
+    if (bytes < rt->frame_committed) {
+        js_frame_free_chunk(rt, rt->frame_spare);
+        rt->frame_spare = NULL;
+    }
+    rt->frame_limit = bytes;
+    return 0;
+}
+
+void JS_GetFrameStackUsage(JSRuntime *rt, size_t *plive, size_t *pcommitted,
+                           size_t *plimit)
+{
+    *plive = rt->frame_live;
+    *pcommitted = rt->frame_committed;
+    *plimit = rt->frame_limit;
 }
 
 void JS_UpdateStackTop(JSRuntime *rt)
@@ -18295,12 +18512,14 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     JSContext *ctx;
     JSObject *p;
     JSFunctionBytecode *b;
-    JSStackFrame sf_s, *sf = &sf_s;
+    JSStackFrame *sf;
+    /* the frame-stack record of an ordinary call; NULL while resuming a
+       coroutine, whose frame belongs to its own heap allocation */
+    JSExecFrame *owned = NULL;
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
-    size_t alloca_size;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_STEP
 #define DUMP_BYTECODE_OR_DONT(pc) \
@@ -18362,11 +18581,17 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         arg_allocated_size = 0;
     }
 
-    alloca_size = sizeof(JSValue) * (arg_allocated_size + b->var_count +
-                                     b->stack_size) +
-        sizeof(JSVarRef *) * b->var_ref_count;
-    if (js_check_stack_overflow(rt, alloca_size))
+    /* bun-wasm: this activation's own C frame is checked against the native
+       budget. The call's storage is not on the C stack: js_frame_push checks
+       it against the frame-stack limit and fails before anything is linked. */
+    if (js_check_stack_overflow(rt, 0))
         return JS_ThrowStackOverflow(caller_ctx);
+    owned = js_frame_push(caller_ctx,
+                          (size_t)arg_allocated_size + b->var_count + b->stack_size,
+                          b->var_ref_count);
+    if (unlikely(!owned))
+        return JS_EXCEPTION;
+    sf = &owned->frame;
 
     sf->is_strict_mode = b->is_strict_mode;
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
@@ -18375,7 +18600,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_func = unsafe_unconst(func_obj);
     var_refs = p->u.func.var_refs;
 
-    local_buf = alloca(alloca_size);
+    local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
     if (unlikely(arg_allocated_size)) {
         int n = min_int(argc, b->arg_count);
         arg_buf = local_buf;
@@ -21184,6 +21409,10 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     rt->current_stack_frame = sf->prev_frame;
+    /* bun-wasm: only an ordinary call owns a frame-stack record. It is
+       unlinked and its values are freed before its storage can be reused. */
+    if (owned)
+        js_frame_pop(rt, owned);
     return ret_val;
 }
 

@@ -517,6 +517,14 @@ JS_EXTERN size_t JS_GetGCThreshold(JSRuntime *rt);
 JS_EXTERN void JS_SetGCThreshold(JSRuntime *rt, size_t gc_threshold);
 /* use 0 to disable maximum stack size check */
 JS_EXTERN void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size);
+/* bun-wasm: ordinary bytecode frames live in a runtime-owned frame stack.
+   The limit bounds the bytes that stack costs the allocator, chunk headers,
+   unused tails and the spare chunk included. Zero is a valid limit. Returns
+   -1 and changes nothing for a value above the supported range or below
+   what live frames already hold. */
+JS_EXTERN int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes);
+JS_EXTERN void JS_GetFrameStackUsage(JSRuntime *rt, size_t *plive,
+                                     size_t *pcommitted, size_t *plimit);
 /* should be called when changing thread to update the stack top value
    used to check stack overflow. */
 JS_EXTERN void JS_UpdateStackTop(JSRuntime *rt);
