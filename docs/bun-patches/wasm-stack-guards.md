@@ -142,3 +142,35 @@ catchable `SyntaxError` when `matchAll` compiles a regexp during deep reentry.
 Wrong matching results still throw an ordinary `Error`, which is not accepted.
 Shallow matching and a genuine non-match must still work after unwinding. This
 control complements the compile-depth sweep, which cannot detect a lost match.
+
+
+## Stack measurement acceptance
+
+`scripts/stack-measurement.ts`, `scripts/measure-stack.py` and
+`web/tests/browser-stack.mjs` are original measurement adapters. They retain every
+failed attempted depth in each row's `failures` list, including binary-search
+trials. A later caught boundary cannot erase an earlier trap. Both commands
+return nonzero for any failed trial. The browser command closes its contexts,
+browser and session before exiting. Python's subprocess timeout kills and reaps
+the attempted launcher before recording the timeout.
+
+A valid result identifies the requested mode and depth, exits zero and prints a
+separate `continued` line after its one result line. Completion is accepted on all
+paths. `RangeError` is accepted except on `console`, whose fixture swallows the
+overflow internally and must complete. `SyntaxError` is also accepted for source
+parsing and regexp construction modes (`parse`, `block`, `arrow`, `unary`, `power`,
+`ternary`, `statement`, `regexpnc` and `lookahead`). Browser-native Firefox may
+report `InternalError` with the exact message `too much recursion` instead of
+`RangeError`. Other caught classes, malformed results, missing continuation,
+nonzero exits and timeouts fail measurement acceptance. This validates the
+existing probe protocol, not matching correctness or a new stack policy.
+
+`checks/web-stack-measurement.json` registers executable controls using fake
+launchers and browser providers. They run the real command entry points without
+building a guest or launching a browser, including hidden intermediate traps,
+final trap flags, transcript validation, timeout reaping and cleanup.
+
+The measurement transcript requires one result and exactly one later standalone
+`continued` marker. Duplicate continuation markers fail both real command paths.
+Measurement test scratch follows the host temporary-directory API, including
+normal CI where this workstation's `/work` path does not exist.

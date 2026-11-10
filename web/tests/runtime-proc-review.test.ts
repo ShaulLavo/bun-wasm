@@ -160,6 +160,7 @@ test("explicit disposal confirms a selected ordinary child exit only after its f
     const worker = state.workers[0]!, shared = workerProcessState(worker.request!.runtimeProcess!);
     const record = (await state.broker.ready()).get(pid)!;
     claimOutcome(shared.signals.outcome, { kind: "exited", code: 23 });
+    state.broker.dispose();
     void state.runtime.dispose();
     await pause();
     expect(controlLoad(shared.confirmed, 0)).toBe(0);
