@@ -3340,6 +3340,9 @@ typedef struct JSExecFrame {
    ordinary bytecode function. Generators and async functions have their
    own classes; bound functions, proxies and native functions keep their
    dispatcher. A class called without new still fails in its own bytecode. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
 static inline bool js_frame_inline_callee(JSValueConst func_obj)
 {
     JSObject *p;
@@ -3421,10 +3424,20 @@ static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
     return NULL;
 }
 
+/* Every call pushes and pops a record, so the step that only moves the top
+   of the current chunk is inlined at any optimization level: the guest is
+   built for size, which would otherwise leave each step a call. What a
+   chunk boundary, a refusal or an emptied chunk needs stays out of line. */
+#if defined(__GNUC__) || defined(__clang__)
+#define js_frame_inline static inline __attribute__((always_inline))
+#else
+#define js_frame_inline static inline
+#endif
+
 /* Bytes of one ordinary record: header, 'slots' values, then the closure
    slots, rounded so the next record is aligned. The counts are 16-bit
    bytecode fields, so the sum cannot overflow; a zero return says it would. */
-static size_t js_frame_record_size(size_t slots, size_t var_refs)
+js_frame_inline size_t js_frame_record_size(size_t slots, size_t var_refs)
 {
     size_t size = JS_FRAME_HEADER_SIZE;
 
@@ -3437,24 +3450,38 @@ static size_t js_frame_record_size(size_t slots, size_t var_refs)
     return (size + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1);
 }
 
+/* The record of 'size' bytes when the current chunk has no room for it, or
+   'size' is the zero js_frame_record_size returns for an impossible record. */
+static no_inline JSExecFrame *js_frame_push_chunk(JSContext *ctx, size_t size)
+{
+    JSFrameChunk *chunk;
+    JSExecFrame *frame;
+
+    if (size == 0) {
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+    chunk = js_frame_new_chunk(ctx, size);
+    if (!chunk)
+        return NULL;
+    frame = (JSExecFrame *)(chunk + 1);
+    chunk->top = size;
+    ctx->rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
 /* The record for one ordinary call, uninitialised and not yet linked into
    the frame list. NULL with a pending exception on refusal. */
-static JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
+js_frame_inline JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
 {
     JSRuntime *rt = ctx->rt;
     JSFrameChunk *chunk = rt->frame_chunk;
     size_t size = js_frame_record_size(slots, var_refs);
     JSExecFrame *frame;
 
-    if (unlikely(size == 0)) {
-        JS_ThrowStackOverflow(ctx);
-        return NULL;
-    }
-    if (unlikely(!chunk || chunk->payload - chunk->top < size)) {
-        chunk = js_frame_new_chunk(ctx, size);
-        if (!chunk)
-            return NULL;
-    }
+    if (unlikely(size == 0 || !chunk || chunk->payload - chunk->top < size))
+        return js_frame_push_chunk(ctx, size);
     frame = (JSExecFrame *)((uint8_t *)(chunk + 1) + chunk->top);
     chunk->top += size;
     rt->frame_live += size;
@@ -3462,9 +3489,21 @@ static JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
     return frame;
 }
 
+/* Unlinks the newest chunk once its last record has left. One emptied small
+   chunk is kept, so a call at a chunk boundary does not allocate and free
+   on every iteration. */
+static no_inline void js_frame_pop_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    rt->frame_chunk = chunk->prev;
+    if (!rt->frame_spare && chunk->payload <= JS_FRAME_CHUNK_PAYLOAD)
+        rt->frame_spare = chunk;
+    else
+        js_frame_free_chunk(rt, chunk);
+}
+
 /* Releases the newest record. Its values are already freed and it is no
    longer in the frame list. */
-static void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
+js_frame_inline void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
 {
     JSFrameChunk *chunk = rt->frame_chunk;
     size_t size = frame->allocation_size;
@@ -3472,15 +3511,8 @@ static void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
     assert((uint8_t *)frame + size == (uint8_t *)(chunk + 1) + chunk->top);
     chunk->top -= size;
     rt->frame_live -= size;
-    if (likely(chunk->top != 0))
-        return;
-    /* keep one emptied small chunk, so a call at a chunk boundary does not
-       allocate and free on every iteration */
-    rt->frame_chunk = chunk->prev;
-    if (!rt->frame_spare && chunk->payload <= JS_FRAME_CHUNK_PAYLOAD)
-        rt->frame_spare = chunk;
-    else
-        js_frame_free_chunk(rt, chunk);
+    if (unlikely(chunk->top == 0))
+        js_frame_pop_chunk(rt, chunk);
 }
 
 static void js_frame_free_all(JSRuntime *rt)
