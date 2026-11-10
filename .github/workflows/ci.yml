@@ -1810,6 +1810,28 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Witness the image Rust toolchain (temporary)
+        working-directory: ${{ runner.temp }}
+        timeout-minutes: 2
+        run: |
+          printf 'RUSTUP_TOOLCHAIN=%s RUSTUP_HOME=%s CARGO_HOME=%s TMPDIR=%s\n' "${RUSTUP_TOOLCHAIN-<unset>}" "${RUSTUP_HOME-<unset>}" "${CARGO_HOME-<unset>}" "${TMPDIR-<unset>}"
+          command -v rustc
+          readlink -f "$(command -v rustc)"
+          rustup_home=$(rustup show home)
+          echo 'Compiler library residency before any version query'
+          test -n "$(find "$rustup_home/toolchains" -maxdepth 3 -name 'librustc_driver-*.so' -print -quit)"
+          find "$rustup_home/toolchains" -maxdepth 3 -name 'librustc_driver-*.so' -exec fincore --bytes --output FILE,SIZE,RES,PAGES {} +
+          echo 'First bare rustc version query'
+          time -p rustc -V
+          echo 'Second bare rustc version query'
+          time -p rustc -V
+          rustup --version
+          rustup show active-toolchain
+          real=$(rustup which rustc)
+          echo "$real"
+          findmnt -no SOURCE,FSTYPE -T "$real"
+          echo 'Active compiler library residency after version queries'
+          fincore --bytes --output FILE,SIZE,RES,PAGES "$(dirname "$real")/../lib"/librustc_driver-*.so
       - name: Web host unit, CLI shim, type and bundle gates
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
