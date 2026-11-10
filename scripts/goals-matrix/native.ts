@@ -1,14 +1,15 @@
-import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { allocateSafariDriverPort, ownSafariDriver, stopSafariDriver } from "../../web/tests/engine-interruption-safari";
 import { until } from "./playground";
 import { withSignals, ownedCommand } from "./lifetime";
+import { requireNativeQueue } from "./mac-queue";
 import { prepareDesktopSafari, stopDesktopSafari, type DesktopSafari } from "./native-safari";
-async function checkAvailability(signal: AbortSignal, ownerOnly = false): Promise<void> {
-  await ownedCommand(["python3", join(homedir(), ".agents/skills/machine-fleet/scripts/availability.py"), "check"].concat(ownerOnly ? ["--owner-only"] : []), signal, 15_000);
+async function checkAvailability(signal: AbortSignal): Promise<void> {
+  await ownedCommand(["python3", join(homedir(), ".agents/skills/machine-fleet/scripts/availability.py"), "check", "--owner-only"], signal, 15_000);
 }
-type NativeResources = { safari: DesktopSafari; safariStopped: boolean; lock: string; locked: boolean; stopped: boolean; port: number; driver?: ReturnType<typeof Bun.spawn>; owned?: ReturnType<typeof ownSafariDriver> };
+type NativeResources = { safari: DesktopSafari; safariStopped: boolean; stopped: boolean; port: number; driver?: ReturnType<typeof Bun.spawn>; owned?: ReturnType<typeof ownSafariDriver> };
 type NativeOptions = { desktopSafari: boolean; cleanupFile?: string };
 export async function withNativeDriver<T>(operation: (endpoint: string, signal: AbortSignal) => Promise<T>, config: NativeOptions): Promise<T> {
   if (process.platform !== "darwin") throw new Error("Native Safari driver must run on the discovered Mac");
@@ -17,12 +18,10 @@ export async function withNativeDriver<T>(operation: (endpoint: string, signal: 
   return withSignals(signal => runNative(operation, uid, signal, config));
 }
 async function runNative<T>(operation: (endpoint: string, signal: AbortSignal) => Promise<T>, uid: number, signal: AbortSignal, config: NativeOptions): Promise<T> {
-  const state: NativeResources = { safari: { launch: { kind: "none" } }, safariStopped: true, lock: join(homedir(), "tmp/.agent-mac-lock"), locked: false, stopped: true, port: 0 };
+  const state: NativeResources = { safari: { launch: { kind: "none" } }, safariStopped: true, stopped: true, port: 0 };
   try {
+    await requireNativeQueue();
     await checkAvailability(signal);
-    signal.throwIfAborted(); await mkdir(state.lock); state.locked = true;
-    await writeFile(join(state.lock, "owner"), `pid=${process.pid} task=bun-wasm-goals-matrix\n`);
-    await checkAvailability(signal, true);
     const consoleState = await ownedCommand(["ioreg", "-n", "Root", "-d1"], signal);
     if (/CGSSessionScreenIsLocked[^\n]*Yes/.test(consoleState)) throw new Error("Desktop Safari requires an unlocked Mac console");
     if (config.desktopSafari) {
@@ -53,8 +52,7 @@ async function cleanupNative(state: NativeResources, cleanupFile?: string): Prom
     await stopNativeDriver(state);
     await stopDesktopSafari(state.safari); state.safariStopped = true;
   } finally {
-    if (state.locked && state.stopped && state.safariStopped) { await rm(join(state.lock, "owner"), { force: true }); await rmdir(state.lock); state.locked = false; }
-    if (cleanupFile) await receipt(cleanupFile, { safariPids: state.safari.launch.kind === "owned" ? [state.safari.launch.application.pid] : [], safariLaunch: state.safari.launch.kind, safariExited: state.safariStopped, driverPid: state.driver?.pid ?? null, port: state.port, driverExited: state.stopped, lockRemoved: !state.locked, simulatorChanged: false, at: new Date().toISOString() });
+    if (cleanupFile) await receipt(cleanupFile, { safariPids: state.safari.launch.kind === "owned" ? [state.safari.launch.application.pid] : [], safariLaunch: state.safari.launch.kind, safariExited: state.safariStopped, driverPid: state.driver?.pid ?? null, port: state.port, driverExited: state.stopped, admissionOwner: "installed-mac-queue", simulatorChanged: false, at: new Date().toISOString() });
   }
 }
 async function receipt(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); await writeFile(path, JSON.stringify(value, null, 2)); }

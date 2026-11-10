@@ -1,0 +1,55 @@
+name: Verified browser system dependencies
+description: Reuse one main-seeded apt archive pool for every browser set
+inputs:
+  browsers:
+    description: Space-separated Playwright browsers whose system packages to install
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Use Ubuntu HTTPS archives for browser dependencies
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+        if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+          sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
+    - name: Identify browser setup cache inputs
+      id: browser-image
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      working-directory: ${{ github.workspace }}/web
+      run: |
+        source /etc/os-release
+        echo "image=$ID-$VERSION_ID-${ImageVersion:?}" >> "$GITHUB_OUTPUT"
+        playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
+        [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
+        echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: browser-cache
+      with:
+        path: ${{ runner.temp }}/browser-apt/*.deb
+        key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-all-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
+    # Search the exact main key before any PR-scoped prefix can shadow it.
+    - uses: actions/cache/restore@v4
+      if: steps.browser-cache.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/browser-apt/*.deb
+        key: ${{ steps.browser-cache.outputs.cache-primary-key }}
+        # Restore only candidate bytes. Fresh signed indexes and SHA256 checks decide reuse.
+        restore-keys: |
+          browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-
+    - name: Prefetch and install verified browser system packages
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      working-directory: ${{ github.workspace }}/web
+      env:
+        CI_BROWSERS: ${{ inputs.browsers }}
+      run: |
+        read -r -a browsers <<< "$CI_BROWSERS"
+        bun scripts/ci-browser-deps.ts "${browsers[@]}"
+    - uses: actions/cache/save@v4
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browser-cache.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/browser-apt/*.deb
+        key: ${{ steps.browser-cache.outputs.cache-primary-key }}

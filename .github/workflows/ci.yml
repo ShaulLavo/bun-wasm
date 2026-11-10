@@ -1843,40 +1843,9 @@ jobs:
           path: ${{ runner.temp }}/c1-webkit-failures
           if-no-files-found: ignore
           retention-days: 7
-      - name: Use Ubuntu HTTPS archives for browser dependencies
-        run: |
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
-      # The apt list comes from `playwright install-deps`, so key on Playwright's version,
-      # not the whole lock: a Waffle pin move must not refetch ~60 debs serially.
-      - name: Identify browser setup cache inputs
-        id: browser-image
-        run: |
-          source /etc/os-release
-          echo "image=boat-$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
-          playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
-          [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
-          echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: browser-cache
+      - uses: ./.github/actions/browser-deps
         with:
-          path: ${{ runner.temp }}/browser-apt/*.deb
-          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-firefox-webkit-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
-          # ci-browser-deps.ts verifies every archive's SHA256 and fetches only what is missing.
-          restore-keys: |
-            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-firefox-webkit-
-            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-webkit-
-      - name: Prefetch and install verified browser system packages
-        run: bun scripts/ci-browser-deps.ts chromium firefox webkit
-      - uses: actions/cache/save@v4
-        if: steps.browser-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/browser-apt/*.deb
-          key: ${{ steps.browser-cache.outputs.cache-primary-key }}
+          browsers: chromium firefox webkit
       - name: Install Chromium, Firefox and WebKit
         run: bunx playwright install chromium firefox webkit
       - name: Web host browser gates
@@ -1941,39 +1910,9 @@ jobs:
           name: process-bundles
           path: ${{ runner.temp }}/process-bundles
       - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --linker=isolated
-      - name: Use Ubuntu HTTPS archives for browser dependencies
-        run: |
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
-      # The apt list comes from `playwright install-deps`, so key on Playwright's version,
-      # not the whole lock: a Waffle pin move must not refetch ~60 debs serially.
-      - name: Identify browser setup cache inputs
-        id: browser-image
-        run: |
-          source /etc/os-release
-          echo "image=boat-$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
-          playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
-          [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
-          echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: browser-cache
+      - uses: ./.github/actions/browser-deps
         with:
-          path: ${{ runner.temp }}/browser-apt/*.deb
-          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-quickjs-stack-v1-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
-          # ci-browser-deps.ts verifies every archive's SHA256 and fetches only what is missing.
-          restore-keys: |
-            browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-quickjs-stack-v1-
-      - name: Prefetch and install verified browser system packages
-        run: bun scripts/ci-browser-deps.ts ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
-      - uses: actions/cache/save@v4
-        if: steps.browser-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/browser-apt/*.deb
-          key: ${{ steps.browser-cache.outputs.cache-primary-key }}
+          browsers: ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
       - name: Install browser
         run: bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
