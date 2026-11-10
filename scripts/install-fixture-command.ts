@@ -9,8 +9,12 @@ export type InstallFixtureTarget = { engine: "quickjs" | "jsc" | "browser"; wasm
 export function installFixtureTargets(environment: NodeJS.ProcessEnv = process.env, directory = root): InstallFixtureTarget[] {
   const engines: InstallFixtureTarget["engine"][] = ["quickjs", "jsc", "browser"];
   const selected = environment.INSTALL_ENGINE;
+  const subset = environment.INSTALL_ENGINES;
+  if (subset !== undefined && (selected !== undefined || environment.BUN_WASM !== undefined)) throw new Error("INSTALL_ENGINES cannot be combined with INSTALL_ENGINE or BUN_WASM");
+  const requested = subset?.split(",");
+  if (requested && (requested.some(value => !engines.some(engine => engine === value)) || new Set(requested).size !== requested.length)) throw new Error(`Invalid INSTALL_ENGINES: ${subset}`);
   if (selected && !engines.some(engine => engine === selected)) throw new Error(`Unknown install engine: ${selected}`);
-  return engines.filter(engine => !selected || engine === selected).map(engine => ({
+  return engines.filter(engine => requested ? requested.includes(engine) : !selected || engine === selected).map(engine => ({
     engine,
     wasm: selected && environment.BUN_WASM ? resolve(environment.BUN_WASM) : join(directory, "dist", engine === "quickjs" ? "bun.wasm" : `bun-${engine}.wasm`),
   }));
