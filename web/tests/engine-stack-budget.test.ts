@@ -31,3 +31,31 @@ test.each([
 ])("$host keeps both conservative stack budgets", ({ agent }) => {
   expect(engineStackBudgets(geckoStack, agent)).toEqual({ quickjs: "32", jsc: "192" });
 });
+
+const desktopSafari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
+const desktopHost = { platform: "MacIntel", vendor: "Apple Computer, Inc.", maxTouchPoints: 0 };
+
+test("positively observed desktop Safari selects only the measured QuickJS headroom", () => {
+  expect(engineStackBudgets(geckoStack, desktopSafari, desktopHost)).toEqual({ quickjs: "36", jsc: "192" });
+});
+
+test.each([
+  { name: "missing page observations", agent: desktopSafari, host: undefined },
+  { name: "desktop-style iPad", agent: desktopSafari, host: { ...desktopHost, maxTouchPoints: 5 } },
+  { name: "missing touch observation", agent: desktopSafari, host: { platform: "MacIntel", vendor: desktopHost.vendor } },
+  { name: "unknown platform", agent: desktopSafari, host: { ...desktopHost, platform: "" } },
+  { name: "non-Apple vendor", agent: desktopSafari, host: { ...desktopHost, vendor: "Google Inc." } },
+  { name: "iPhone", agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1", host: desktopHost },
+  { name: "iPad", agent: "Mozilla/5.0 (iPad; CPU OS 26_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1", host: desktopHost },
+  { name: "unknown WebKit", agent: "Mozilla/5.0 AppleWebKit/605.1.15 Safari/605.1.15", host: desktopHost },
+  { name: "Safari-lookalike with Chrome", agent: desktopSafari + " Chrome/157.0", host: desktopHost },
+  { name: "Safari-lookalike with Firefox iOS", agent: desktopSafari + " FxiOS/157.0", host: desktopHost },
+  { name: "Safari-lookalike with Edge", agent: desktopSafari + " Edg/157.0", host: desktopHost },
+])("$name retains conservative budgets", ({ agent, host }) => {
+  expect(engineStackBudgets(geckoStack, agent, host)).toEqual({ quickjs: "32", jsc: "192" });
+});
+
+test("page observations do not change V8 or Firefox choices", () => {
+  expect(engineStackBudgets("Error\n    at worker.js:1:1", desktopSafari, desktopHost)).toEqual({ jsc: "800" });
+  expect(engineStackBudgets(geckoStack, firefox, desktopHost)).toEqual({ jsc: "208" });
+});
