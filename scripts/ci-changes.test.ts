@@ -393,3 +393,15 @@ for (const path of [
     expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
   });
 }
+
+for (const path of [
+  "spidermonkey/common.sh", "spidermonkey/fetch-spidermonkey.sh", "spidermonkey/build-shared-group.sh",
+  "spidermonkey/shared-group.ts", "spidermonkey/spidermonkey-shared-group.patch", "spidermonkey/irregexp-icu/allocator.cpp",
+  "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the existing blocking shared native gate for %s`, event => {
+    const output = sharedBrowserSelection(path, event);
+    expect(output).toStartWith("rust=true\n");
+    expect(output).toEndWith("shared_native=true");
+  });
+}

@@ -1722,7 +1722,7 @@ jobs:
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_TARGET_DIR }}/shared-native
-          key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
+          key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts', 'spidermonkey/**', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
           restore-keys: |
             shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-
       - name: Prepare the shared native source dependencies
@@ -1795,6 +1795,112 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program-jsc/
           if-no-files-found: error
           retention-days: 1
+      - name: Install the SpiderMonkey producer tools
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-cbindgen-cache
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Prepare pinned cbindgen
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          CBINDGEN_CACHE_HIT: ${{ steps.shared-cbindgen-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
+            CARGO_TARGET_DIR="$CARGO_TARGET_DIR/shared-native/cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
+          fi
+          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
+      - name: Save pinned cbindgen
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-cbindgen-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: ${{ steps.shared-cbindgen-cache.outputs.cache-primary-key }}
+      - name: Identify shared SpiderMonkey native inputs
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-spidermonkey-inputs
+        run: |
+          source env.sh
+          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/shared" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
+          inputs=$({
+            printf 'profile=shared-group\n'
+            sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a" "$WASI_SDK_PATH/bin/clang++" "$CARGO_HOME/bin/cbindgen"
+            /usr/bin/clang --version
+            /usr/bin/clang++ --version
+            rustc -vV
+            llvm-readobj --version
+            python3 --version
+            autoconf2.13 --version
+          } | sha256sum | cut -d' ' -f1)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-spidermonkey-cache
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: spidermonkey-shared-group-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-spidermonkey-inputs.outputs.hash }}-${{ hashFiles('spidermonkey/**', 'crates/bunwasm-spidermonkey/**', 'Cargo.lock', 'rust-toolchain.toml', 'env.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml') }}
+      - name: Produce or verify the shared SpiderMonkey library once
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          source env.sh
+          source_tree="$SPIDERMONKEY_BUILD_DIR/firefox"
+          if [[ ! -d "$source_tree/.git" ]]; then
+            git init -q "$source_tree"
+            git -C "$source_tree" remote add origin https://github.com/mozilla-firefox/firefox.git
+          fi
+          # Fetch's sparse closure needs lazy blobs on a fresh runner, not only a retained tree.
+          git -C "$source_tree" config remote.origin.promisor true
+          git -C "$source_tree" config remote.origin.partialclonefilter blob:none
+          # The recipe stages fresh headers; only its incremental objects and patched source persist.
+          rm -rf -- "$SPIDERMONKEY_BUILD_DIR/native"
+          bash spidermonkey/build-shared-group.sh
+      - name: Produce the shared SpiderMonkey profile once
+        id: shared-spidermonkey-producer
+        if: needs.quality.outputs.shared-native == 'true'
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source env.sh
+          bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey
+      - name: Retain the matched shared SpiderMonkey program for qualification
+        if: ${{ always() && steps.shared-spidermonkey-producer.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-spidermonkey-program
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/program-spidermonkey/
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/spidermonkey/inputs.json
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/spidermonkey/engine-link.map
+            ${{ env.SPIDERMONKEY_BUILD_DIR }}/receipt/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Consume the shared SpiderMonkey native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Save the verified shared SpiderMonkey source and native work
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-spidermonkey-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: ${{ steps.shared-spidermonkey-cache.outputs.cache-primary-key }}
+      - name: Shared SpiderMonkey cache result
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "shared SpiderMonkey exact cache hit=${{ steps.shared-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.shared-spidermonkey-cache.outputs.cache-matched-key }}"
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
