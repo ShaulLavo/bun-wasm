@@ -73,7 +73,7 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
     }
     await until(() => response("before", "1"), () => output);
     rmSync(join(scratch, "page.html"));
-    await until(() => output.includes("ENOENT"), () => output);
+    await until(() => (output.includes("ENOENT") || output.includes("Cannot find module './page.html'")), () => output);
     expect(await response("before", "1")).toBe(true);
     writeFileSync(join(scratch, "page.html"), "after!");
     await until(() => response("after!", "2"), () => output);

@@ -587,6 +587,7 @@
     if (typeof options.fetch !== "function" && !options.routes) {
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
+    const development = options.development;
     let websocket = options.websocket;
     let websocketHandlers = websocket;
     if (websocket && !["message", "open", "ping", "pong"].some((name) => typeof websocket[name] === "function")) throw new TypeError("websocket requires a message, open, ping or pong handler");
@@ -600,7 +601,7 @@
     let fetchHandler = options.fetch;
     let errorHandler = options.error;
     let routes = compileRoutes(options.routes);
-    websocket = htmlServer.websocket(routes, options.development, websocket);
+    websocket = htmlServer.websocket(routes, development, websocket);
     let pending = 0;
     let stopped = false;
     const connections = new Set();
@@ -621,7 +622,7 @@
     const server = {
       port,
       hostname: displayHost,
-      development: htmlServer.developmentEnabled(options.development),
+      development: htmlServer.developmentEnabled(development),
       id: "",
       get url() {
         return new URL(`http://${displayHost}:${port}/`);
@@ -644,10 +645,10 @@
         if (next.routes) {
           htmlServer.dispose(server);
           routes = compileRoutes(next.routes);
-          htmlServer.attach(server, routes, options.development);
+          htmlServer.attach(server, routes, development);
         }
         if (next.websocket) websocketHandlers = next.websocket;
-        websocket = htmlServer.websocket(routes, options.development, websocketHandlers);
+        websocket = htmlServer.websocket(routes, development, websocketHandlers);
         return server;
       },
       stop(closeActive = false) {
@@ -779,7 +780,7 @@
     // run, as under Bun. Started outside any frame, it keeps each turn's own frame.
     const context = native.getAsyncContext();
     if (context !== undefined) accepting = internal.require("net_listener").inContext(context, accepting);
-    htmlServer.attach(server, routes, options.development);
+    htmlServer.attach(server, routes, development);
     return server;
   }
 
