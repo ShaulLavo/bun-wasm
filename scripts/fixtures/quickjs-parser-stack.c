@@ -15,10 +15,16 @@
 #define AMPLE_STACK ((size_t)448 << 20)
 #define RECORD_LIMIT 10000
 
-typedef struct { long live; long live_bytes; long calls; long fail_at; long denied; } Allocator;
+/* watch_size 0 counts every allocation; otherwise only allocations of that
+   exact size are counted and can be denied. */
+typedef struct { long live; long live_bytes; long calls; long fail_at; long denied; size_t watch_size; } Allocator;
 typedef struct { int argc; char **argv; int status; } Job;
+typedef struct { size_t size; long count; } SizeCount;
 
-static Allocator memory = { 0, 0, 0, -1, 0 };
+#define HISTOGRAM_SIZES 8192
+static Allocator memory = { 0, 0, 0, -1, 0, 0 };
+static SizeCount histogram[HISTOGRAM_SIZES];
+static int histogram_on;
 static int checks, failures;
 static long probed_bytes;
 
@@ -31,8 +37,38 @@ static void check(int ok, const char *label)
     fprintf(stderr, "FAIL: %s\n", label);
 }
 
-static int deny(Allocator *a)
+static void record_size(size_t size)
 {
+    size_t slot = size % HISTOGRAM_SIZES;
+    int probes;
+    for (probes = 0; probes < HISTOGRAM_SIZES; probes++, slot = (slot + 1) % HISTOGRAM_SIZES) {
+        if (histogram[slot].count && histogram[slot].size != size)
+            continue;
+        histogram[slot].size = size;
+        histogram[slot].count++;
+        return;
+    }
+}
+
+static long recorded(size_t size)
+{
+    size_t slot = size % HISTOGRAM_SIZES;
+    int probes;
+    for (probes = 0; probes < HISTOGRAM_SIZES; probes++, slot = (slot + 1) % HISTOGRAM_SIZES) {
+        if (!histogram[slot].count)
+            return 0;
+        if (histogram[slot].size == size)
+            return histogram[slot].count;
+    }
+    return 0;
+}
+
+static int deny(Allocator *a, size_t size)
+{
+    if (histogram_on)
+        record_size(size);
+    if (a->watch_size && size != a->watch_size)
+        return 0;
     a->calls++;
     if (a->fail_at < 0 || a->calls != a->fail_at)
         return 0;
@@ -44,7 +80,7 @@ static void *allocate(void *opaque, size_t size)
 {
     Allocator *a = opaque;
     void *p;
-    if (deny(a))
+    if (deny(a, size))
         return NULL;
     p = malloc(size);
     if (!p)
@@ -82,7 +118,7 @@ static void *resize(void *opaque, void *p, size_t size)
         release(opaque, p);
         return NULL;
     }
-    if (deny(a))
+    if (deny(a, size))
         return NULL;
     a->live_bytes -= (long)malloc_usable_size(p);
     q = realloc(p, size);
@@ -361,44 +397,121 @@ static int mode_sweep(char **argv)
         JS_FreeValue(ctx, again);
         free_context(rt, ctx);
     }
+    free(source.text);
     printf("sweep compiled %ld refused %ld replaced %ld live %ld\n", compiled, refused, replaced, memory.live);
     return replaced != 0 || memory.live != 0;
 }
 
-/* faults MODE FILE: fails each allocation of one compile in turn. Every failure
-   must surface as an exception, leave the engine usable and leak nothing. */
+static int recovers(JSContext *ctx);
+
+typedef struct { char *text; size_t len, cap; } Text;
+
+static void put(Text *t, const char *piece, int count)
+{
+    size_t piece_len = strlen(piece);
+    int i;
+    if (t->len + piece_len * (size_t)count + 1 > t->cap) {
+        t->cap = (t->len + piece_len * (size_t)count + 1) * 2;
+        t->text = realloc(t->text, t->cap);
+    }
+    for (i = 0; i < count; i++) {
+        memcpy(t->text + t->len, piece, piece_len);
+        t->len += piece_len;
+    }
+    t->text[t->len] = 0;
+}
+
+static long count_size(JSContext *ctx, size_t size, int depth)
+{
+    Text t = { NULL, 0, 0 };
+    JSValue value;
+    put(&t, "{", depth);
+    put(&t, ";", 1);
+    put(&t, "}", depth);
+    memset(histogram, 0, sizeof(histogram));
+    histogram_on = 1;
+    value = JS_Eval(ctx, t.text, t.len, "size.js", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    histogram_on = 0;
+    JS_FreeValue(ctx, value);
+    free(t.text);
+    return recorded(size);
+}
+
+/* The record pool grows by one chunk of 16 records at a time. Its chunk is
+   the one allocation size requested once for 1 nested block, twice for 17
+   and three times for 33. Returns 0 unless exactly one size fits. */
+static size_t find_chunk_size(JSContext *ctx)
+{
+    static SizeCount deep[HISTOGRAM_SIZES];
+    size_t found = 0;
+    int matches = 0, i;
+    count_size(ctx, 0, 33);
+    memcpy(deep, histogram, sizeof(deep));
+    for (i = 0; i < HISTOGRAM_SIZES; i++) {
+        size_t size = deep[i].size;
+        if (deep[i].count != 3)
+            continue;
+        if (count_size(ctx, size, 17) != 2 || count_size(ctx, size, 1) != 1 || count_size(ctx, size, 0) != 0)
+            continue;
+        found = size;
+        matches++;
+    }
+    return matches == 1 ? found : 0;
+}
+
+/* faults MODE FILE: denies each record-pool allocation of one compile in
+   turn, with the input shifted to every position inside a chunk so the
+   denied push lands on every suspended statement kind. Each denial must
+   surface as an error, leave the engine usable and leak nothing. Failures
+   of other allocations belong to upstream paths this check does not own. */
 static int mode_faults(char **argv)
 {
     Source source = load_source(argv[0], argv[1]);
     JSRuntime *rt;
     JSContext *ctx = new_context(&rt, AMPLE_STACK);
-    long index, total, failed = 0;
-    JSValue value, again;
-    memory.calls = 0;
-    value = compile(ctx, &source, "faults.js");
-    total = memory.calls;
-    check(!JS_IsException(value), "fault input compiles without faults");
-    JS_FreeValue(ctx, value);
-    for (index = 1; index <= total; index++) {
+    size_t chunk = find_chunk_size(ctx);
+    long denied = 0, reported = 0;
+    char description[4096];
+    int pad;
+    check(chunk != 0, "record pool chunk size identified");
+    for (pad = 0; chunk && pad < 16; pad++) {
+        Text t = { NULL, 0, 0 };
+        Source shifted = source;
+        long index, total;
+        JSValue value;
+        put(&t, "{", pad);
+        put(&t, source.text, 1);
+        put(&t, "}", pad);
+        shifted.text = t.text;
+        shifted.len = t.len;
+        memory.watch_size = chunk;
         memory.calls = 0;
-        memory.denied = 0;
-        memory.fail_at = index;
-        value = compile(ctx, &source, "faults.js");
-        memory.fail_at = -1;
-        if (JS_IsException(value)) {
-            failed++;
-            JS_FreeValue(ctx, JS_GetException(ctx));
-        } else {
-            check(!memory.denied || index > 0, "compile tolerated a denied allocation");
-        }
+        value = compile(ctx, &shifted, "faults.js");
+        total = memory.calls;
+        check(!JS_IsException(value), "fault input compiles without faults");
+        check(total >= 2, "fault input needs more than one record chunk");
         JS_FreeValue(ctx, value);
-        again = JS_Eval(ctx, "21 * 2", 6, "recover.js", JS_EVAL_TYPE_GLOBAL);
-        check(JS_VALUE_GET_TAG(again) == JS_TAG_INT && JS_VALUE_GET_INT(again) == 42, "engine usable after allocation fault");
-        JS_FreeValue(ctx, again);
+        for (index = 1; index <= total; index++) {
+            memory.calls = 0;
+            memory.fail_at = index;
+            value = compile(ctx, &shifted, "faults.js");
+            memory.fail_at = -1;
+            denied++;
+            if (JS_IsException(value)) {
+                describe_exception(ctx, description, sizeof(description));
+                reported += !strncmp(description, "InternalError: out of memory", 28);
+            }
+            JS_FreeValue(ctx, value);
+            check(recovers(ctx), "engine usable after a denied record chunk");
+        }
+        memory.watch_size = 0;
+        free(t.text);
     }
+    check(denied > 0 && reported == denied, "every denied record chunk is reported as out of memory");
     free_context(rt, ctx);
+    free(source.text);
     check(memory.live == 0, "no allocation leaked across faults");
-    printf("faults allocations %ld failed %ld live %ld checks %d failures %d\n", total, failed, memory.live, checks, failures);
+    printf("faults chunk bytes %zu denied %ld reported %ld live %ld checks %d failures %d\n", chunk, denied, reported, memory.live, checks, failures);
     return failures != 0;
 }
 
@@ -422,23 +535,6 @@ static int mode_time(char **argv)
         free_context(rt, ctx);
     }
     return 0;
-}
-
-typedef struct { char *text; size_t len, cap; } Text;
-
-static void put(Text *t, const char *piece, int count)
-{
-    size_t piece_len = strlen(piece);
-    int i;
-    if (t->len + piece_len * (size_t)count + 1 > t->cap) {
-        t->cap = (t->len + piece_len * (size_t)count + 1) * 2;
-        t->text = realloc(t->text, t->cap);
-    }
-    for (i = 0; i < count; i++) {
-        memcpy(t->text + t->len, piece, piece_len);
-        t->len += piece_len;
-    }
-    t->text[t->len] = 0;
 }
 
 /* Like put, but a "%d" in the piece becomes the level number: labels must differ. */
