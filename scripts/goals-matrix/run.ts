@@ -12,6 +12,7 @@ import { createSafariTransport } from "./safari-transport";
 import { assetIdentity } from "./assets";
 import { withNativeDriver } from "./native";
 import { withSignals } from "./lifetime";
+import { nativeQueueMember, requireNativeQueue, runQueuedNative, type NativeAdmission } from "./mac-queue";
 import { checkReactStartup, reactStartupURL } from "./react-startup";
 import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
@@ -20,6 +21,7 @@ import { appendFile } from "node:fs/promises";
 
 export interface Options {
   signal?: AbortSignal;
+  nativeAdmission?: NativeAdmission;
   reactStartupUrl?: string;
   root: string; output: string; timeoutMs: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
@@ -35,7 +37,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command"];
+    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -49,6 +51,7 @@ export function options(args: readonly string[]): Options {
     validateIphoneControl(iphoneControlUrl, iphoneAgentCommand);
   }
   return {
+    nativeAdmission: nativeAdmissionOptions(values),
     reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
     root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
     browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
@@ -56,6 +59,15 @@ export function options(args: readonly string[]): Options {
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
     deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"), iphoneControlUrl, iphoneAgentCommand,
   };
+}
+function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | undefined {
+  if (!Array.from(values.keys()).some(key => key.startsWith("mac-"))) return undefined;
+  const seconds = (name: string, fallback: number) => {
+    const value = Number(values.get(name) ?? fallback);
+    if (!Number.isSafeInteger(value) || value < 1 || value > 604800) throw new Error(`${name} must be 1 through 604800 whole seconds`);
+    return value;
+  };
+  return { lane: values.get("mac-lane") ?? "", thread: values.get("mac-thread") ?? "", expectedSeconds: seconds("mac-expected-seconds", 600), waitSeconds: seconds("mac-wait-seconds", 3600), timeoutSeconds: seconds("mac-timeout-seconds", 900) };
 }
 async function nativeTransport(box: Cell, config: Options): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
@@ -117,7 +129,11 @@ async function availablePort(): Promise<number> {
   }
   finally { await server.stop(true); }
 }
+function nativeCampaign(config: Options): boolean {
+  return process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari");
+}
 export async function run(config: Options): Promise<Report> {
+  if (nativeCampaign(config)) await requireNativeQueue();
   return withSignals(async signal => {
     await mkdir(config.output, { recursive: true });
     const lock = join(config.output, ".goals-matrix-lock");
@@ -183,12 +199,16 @@ export async function unavailableReport(config: Options, error: unknown, current
 }
 if (import.meta.main) {
   const config = options(process.argv.slice(2));
-  const automaticNative = process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari") && !config.safariEndpoint && !config.iphoneEndpoint && !config.iphoneControlUrl;
-  const report = automaticNative
-    ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json") }).catch(async error => {
-      if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
-      return unavailableReport(config, error);
-    })
-    : await run(config);
-  process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
+  const automaticNative = nativeCampaign(config) && !config.safariEndpoint && !config.iphoneEndpoint && !config.iphoneControlUrl;
+  if (nativeCampaign(config) && !await nativeQueueMember()) {
+    process.exitCode = await runQueuedNative(config, [process.execPath, process.argv[1] ?? ""].concat(process.argv.slice(2)), `bun-wasm goals ${config.output}`);
+  } else {
+    const report = automaticNative
+      ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json") }).catch(async error => {
+        if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
+        return unavailableReport(config, error);
+      })
+      : await run(config);
+    process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
+  }
 }

@@ -14,7 +14,8 @@ test("native startup prepares Safari after console admission and before starting
   expect(driver).toBeGreaterThan(prelaunch);
   const cleanup = source.slice(source.indexOf("async function cleanupNative"));
   expect(cleanup.indexOf("await stopNativeDriver(")).toBeLessThan(cleanup.indexOf("await stopDesktopSafari("));
-  expect(cleanup).toContain("state.stopped && state.safariStopped");
+  expect(cleanup).toContain('admissionOwner: "installed-mac-queue"');
+  expect(cleanup).not.toContain("lockRemoved");
   expect(source).toContain("if (config.desktopSafari)");
   const caller = await readFile(new URL("./run.ts", import.meta.url), "utf8");
   expect(caller).toContain('desktopSafari: config.browsers.includes("safari")');
@@ -151,10 +152,10 @@ test("a child that exits before attribution keeps cleanup unproved", async () =>
   expect(f.calls.filter(call => call.startsWith("SIG"))).toEqual([]);
 });
 
-test("unproved driver shutdown preserves the dependent app and lock", async () => {
+test("unproved driver shutdown preserves the dependent app and leaves queue ownership alone", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-driver-order-"));
   try {
-    await mkdir(join(root, "tmp"));
+    await mkdir(join(root, "tmp/.agent-mac-lock"), { recursive: true });
     const script = join(root, "control.ts");
     await writeFile(script, driverFailureControl(root));
     const child = Bun.spawn([process.execPath, script], { env: { ...process.env, HOME: root }, stdout: "pipe", stderr: "pipe" });
@@ -174,6 +175,7 @@ const events = [];
 const original = await import(source + "/../../web/tests/engine-interruption-safari.ts");
 const driver = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {stdout:"ignore",stderr:"ignore"});
 const spawn = spyOn(Bun, "spawn").mockReturnValue(driver);
+mock.module(source + "/mac-queue.ts", () => ({requireNativeQueue: async () => {}}));
 mock.module(source + "/lifetime.ts", () => ({ownedCommand: async () => "", withSignals: async operation => operation(new AbortController().signal)}));
 mock.module(source + "/playground.ts", () => ({until: async () => true}));
 mock.module(source + "/../../web/tests/engine-interruption-safari.ts", () => ({...original, allocateSafariDriverPort: async () => 12345, stopSafariDriver: async () => {throw new Error("driver shutdown unproved");}}));
@@ -184,7 +186,7 @@ try {
   await expect(withNativeDriver(async () => {}, {desktopSafari:true,cleanupFile:root+"/receipt.json"})).rejects.toThrow("driver shutdown unproved");
   expect(events).toEqual([]);
   expect((await stat(root+"/tmp/.agent-mac-lock")).isDirectory()).toBe(true);
-  expect(JSON.parse(await readFile(root+"/receipt.json","utf8"))).toMatchObject({driverExited:false,safariExited:false,lockRemoved:false});
+  expect(JSON.parse(await readFile(root+"/receipt.json","utf8"))).toMatchObject({driverExited:false,safariExited:false,admissionOwner:"installed-mac-queue"});
 } finally {spawn.mockRestore(); if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL"); await driver.exited;}
 `;
 }
