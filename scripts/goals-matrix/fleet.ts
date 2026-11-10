@@ -54,6 +54,16 @@ async function verifyRemoteStopped(remote: string): Promise<void> {
   for (const ticket of tickets) {
     if (!ticket || typeof ticket !== "object" || !("task" in ticket) || typeof ticket.task !== "string" || ticket.task === `bun-wasm goals ${remote}`) throw new Error("Remote queue shutdown is unproved; retaining staging");
   }
+  await verifyNativeStopped(remote);
+}
+async function verifyNativeStopped(remote: string): Promise<void> {
+  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; printf '{"workloadStarted":%s,"cleanup":%s}\n' "$started" "$cleanup"`;
+  const proof: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
+  if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
+  if (proof.cleanup === null && !proof.workloadStarted) return;
+  const cleanup = proof.cleanup;
+  if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
+    || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
 }
 export async function removeStaging(remote: string, started: boolean, config: Options): Promise<void> {
   if (started) await verifyRemoteStopped(remote);

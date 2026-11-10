@@ -39,7 +39,7 @@ export async function runQueuedNative(config: Options, command: string[], task: 
   }, config.signal);
 }
 export function nativeQueueScript(config: Options, remote: string, home: string, args: string[]): string {
-  const workload = `set -eu; cd ${quote(remote)}; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; exec bun run.js ${args.map(quote).join(" ")}`;
+  const workload = `set -eu; cd ${quote(remote)}; printf started > queue-workload-started; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; exec bun run.js ${args.map(quote).join(" ")}`;
   const command = queuedNativeCommand(config, ["/bin/zsh", "-lc", workload], `bun-wasm goals ${remote}`, home);
   // The shell waits for cancellation too. Only the installed supervisor can release admission.
   return `cd ${quote(remote)} || exit; queue_pid=; trap 'if [ -n "$queue_pid" ]; then kill -TERM "$queue_pid" 2>/dev/null; fi' HUP INT TERM; ${command.map(quote).join(" ")} & queue_pid=$!; wait "$queue_pid"; code=$?; trap '' HUP INT TERM; if kill -0 "$queue_pid" 2>/dev/null; then wait "$queue_pid"; code=$?; fi; printf '%s\\n' "$code" > queue-exit; exit "$code"`;

@@ -151,6 +151,30 @@ installedTest("remote staging requires a settled invocation, never just a missin
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 })), 15000);
 
+test.each([
+  { name: "missing", cleanup: null, accepted: false },
+  { name: "failed driver", cleanup: { driverExited: false, safariExited: true, admissionOwner: "installed-mac-queue" }, accepted: false },
+  { name: "failed Safari", cleanup: { driverExited: true, safariExited: false, admissionOwner: "installed-mac-queue" }, accepted: false },
+  { name: "failed native resources", cleanup: { driverExited: false, safariExited: false, admissionOwner: "installed-mac-queue" }, accepted: false },
+  { name: "unproved admission", cleanup: { driverExited: true, safariExited: true, admissionOwner: "legacy" }, accepted: false },
+  { name: "proved", cleanup: { driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }, accepted: true },
+])("settled queue keeps native teardown independent: $name", ({ cleanup, accepted }) => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report"));
+  await writeFile(join(f.remote, "queue-exit"), "1\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  if (cleanup) await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify(cleanup));
+  const request = { ...config(), output: f.home };
+  if (accepted) {
+    await removeStaging(f.remote, true, request);
+    expect(await Bun.file(join(f.remote, "queue-exit")).exists()).toBe(false);
+    expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: true, consumersStopped: true });
+    return;
+  }
+  await expect(removeStaging(f.remote, true, request)).rejects.toThrow("native shutdown is unproved");
+  expect(await Bun.file(join(f.remote, "queue-exit")).exists()).toBe(true);
+  expect(await Bun.file(join(f.home, "fleet-cleanup.json")).exists()).toBe(false);
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
 installedTest.each([false, true])("native teardown completes inside admission after operation failure %j", fail => fixture(async f => {
   const control = join(f.remote, "native-control.ts");
   await writeFile(control, nativeControl(f, fail));

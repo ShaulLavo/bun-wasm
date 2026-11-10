@@ -31,13 +31,18 @@ Use its returned pinned command for native Safari app actions. The fleet runner
 stages a generated runner and the static build to a unique Mac task directory,
 checks the owner reservation, and runs the whole native workload through the
 installed Mac FIFO queue. Supply your lane and actual T3 thread ID, copied
-unchanged including any opaque prefix. The queue owns admission and lock release. The workload owns its SafariDriver and server.
+unchanged including any opaque prefix. The queue owns admission and lock release.
+The workload owns its SafariDriver and server.
 The default queue estimate is 600 seconds, wait budget is 3600 seconds, and workload
 limit is 900 seconds. Set `--mac-expected-seconds`, `--mac-wait-seconds`, and
 `--mac-timeout-seconds` for a different bounded campaign. These limits do not change
 framework phase deadlines. The dependency install runs inside admission too.
 Direct automatic native `run.ts` invocations use the same installed CLI. Native
 resource helpers reject callers outside its supervised process group.
+Queue release does not prove that external native consumers stopped. After the
+workload starts, staging removal also requires successful native driver and Safari
+teardown. Missing or failed cleanup evidence retains staging for recovery.
+Cancellation before workload admission is checked separately.
 It never boots, erases, or shuts down a simulator. Close the task device session
 afterward and restore only its task-owned boot state through T3.
 
