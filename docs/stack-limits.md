@@ -200,13 +200,33 @@ recovery after all five native exceptions. The same fixture passes on a 1 MiB
 Node Worker stack at 800 KiB and a 21 MiB Worker stack at the unchanged 6144 KiB
 Node policy. These are stack controls, not an Angular application qualification.
 
-Remaining gaps are visible in the original browser-stack probe. Unary operator
-chains and the noncapturing-group and lookahead regexp cases still trap at
-200,000 levels in Chrome. Blocks and conditional expressions now throw instead.
-This is not a claim that every parser or regexp shape is safe. The extra accounting
-can reduce native-path nesting capacities on other hosts. Firefox's original two
-stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
-iOS measurement is claimed.
+Unary operators and regular expressions had guards that never fired, because each
+level spends almost no shadow stack. Unary bytecode generation and every Yarr
+recursive compile pass now reserve 1024 bytes per level, the Yarr interpreter 2048,
+and `await` chains, which had no parser check, reserve 2048 and check. In Google
+Chrome 157 on Linux the original browser-stack probe shows no trap on any of its 25
+paths, warm or in fresh contexts, and getter capacity stays at 142. The fixture also
+passes at the default budget, 800 KiB and 1000 KiB, and on a 1 MiB Node Worker stack.
+
+The trade is depth. On a 1 MiB wasmtime stack at 800 KiB, regexp groups completed
+to 2,000 levels and trapped by 3,000 before; they now complete to 300 and throw a
+catchable error from 400. Unary chains completed to 5,000 and trapped by 10,000;
+they now complete to 700 and throw from 1,000, and `await` chains complete to 400
+and throw by 700.
+
+These depth measurements start with a shallow matching stack. A pattern compiled
+there can still exhaust the interpreter during native callback reentry. On WASI,
+that matching failure now keeps its error result and throws the existing
+`RangeError` instead of silently returning `null` or `false`. The fixture checks
+successful `exec`, `test`, `replace` and `matchAll` results during reentry, then
+checks matching and a genuine non-match after unwinding.
+
+This is not a claim that every shape is safe. Long left-deep chains (`x+x+…`,
+`x&&x&&…`, `x.a.a…`, `x()()…`) still trap at 200,000 levels on wasmtime. They
+recurse in bytecode generation too, but generated code can really be that long, so a
+fixed reserve would cost working depth and needs its own design. Blocks and
+conditional expressions throw. The extra accounting can reduce native-path nesting
+capacities on other hosts. No new Darwin or iOS measurement is claimed.
 
 ## Browser-native engine
 
