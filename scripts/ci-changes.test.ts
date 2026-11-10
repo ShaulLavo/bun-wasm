@@ -382,3 +382,18 @@ test("shared engine bridge and errno adapter inputs retain their JSC and shared 
     expect(needsSharedNative([path])).toBe(true);
   }
 });
+
+for (const path of [
+  "crates/bunwasm-runtime/src/install/resolve/tarball.rs", "tests/install/registry.mjs",
+  "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts",
+  "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
+  "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
+  "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json",
+  "checks/quality-install-fixture-command.json",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects all installer producers for %s`, event => {
+    const content = path.startsWith("checks/") ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") : "changed installer input\n";
+    expect(needsJsc([path])).toBe(true);
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
+}
