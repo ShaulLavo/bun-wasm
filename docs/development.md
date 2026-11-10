@@ -31,10 +31,14 @@ sccache when it is installed. The wrapper also works inside the heavy runner:
 bun /work/heavy-runner/current/run.js --class build bun-host -- bash scripts/with-build-cache.sh cargo build -j 2 -p bunwasm-host
 ```
 
-Each checkout defaults to its own `target/`. Rust dependencies and CMake C/C++
-objects share the disk object cache (`/work/cache/sccache` on the maintainer's
-mounted data drive, or sccache's native default elsewhere). Each invocation owns
+Set `CARGO_TARGET_DIR` to a checkout-owned path before running the wrapper.
+Rust dependencies and CMake C/C++ objects share the disk object cache
+(`/work/cache/sccache` on the maintainer's mounted data drive, or sccache's native
+default elsewhere). Each invocation owns
 and stops a private sccache server; local crates keep Cargo's incremental builds.
+Rust `staticlib` packaging runs directly through rustc because the pinned cache
+does not hash all transitive native inputs. Other Rust crate types still use the
+cache. See [the cache contract and regression](bun-patches/rust-compiler-cache.md).
 Set `SCCACHE_DIR` to choose another cache or `BUILD_CACHE=0` to bypass it.
 
 Run each command from the repository root.
