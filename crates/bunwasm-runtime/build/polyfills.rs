@@ -71,17 +71,25 @@ pub fn embed(manifest: &Path, out: &Path) {
         &manifest.join("../../web/src/native-direct-stream.ts"),
         out,
     );
+    generate(
+        &mut table,
+        "dev_html_client",
+        &manifest.join("../../scripts/generate-dev-html-client.ts"),
+        &manifest.join("../../web/src/dev-html-client.ts"),
+        out,
+    );
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
 }
 
-/// Adds runtime module `name`, written by a Node generator script from `input`.
+/// Adds runtime module `name`, written by a source generator script from `input`.
 fn generate(table: &mut String, name: &str, generator: &Path, input: &Path, out: &Path) {
     println!("cargo:rerun-if-changed={}", input.display());
     println!("cargo:rerun-if-changed={}", generator.display());
     let destination = out.join(format!("{name}.js"));
     eprintln!("runtime-js phase={name} source={}", input.display());
-    let output = Command::new("node")
+    let runner = if name == "dev_html_client" { "bun" } else { "node" };
+    let output = Command::new(runner)
         .arg(generator)
         .arg(input)
         .arg(&destination)
