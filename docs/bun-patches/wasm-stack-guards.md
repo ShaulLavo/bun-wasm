@@ -155,3 +155,8 @@ existing probe protocol, not matching correctness or a new stack policy.
 launchers and browser providers. They run the real command entry points without
 building a guest or launching a browser, including hidden intermediate traps,
 final trap flags, transcript validation, timeout reaping and cleanup.
+
+The measurement transcript requires one result and exactly one later standalone
+`continued` marker. Duplicate continuation markers fail both real command paths.
+Measurement test scratch follows the host temporary-directory API, including
+normal CI where this workstation's `/work` path does not exist.

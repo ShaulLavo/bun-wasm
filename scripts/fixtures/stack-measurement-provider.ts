@@ -47,6 +47,7 @@ function attempt(mode: string, depth: number) {
   if (scenario === "hidden" && mode === "plain" && (depth === 100000 || depth === 4)) return { code: 1, output: "wasm call stack exhausted" };
   if (scenario === "final" && mode === "plain") return { code: 1, output: "wasm call stack exhausted" };
   if (scenario === "missing") return { code: 0, output: `completed ${mode} ${depth}\n` };
+  if (scenario === "duplicate-continuation") return { code: 0, output: `completed ${mode} ${depth}\ncontinued\ncontinued\n` };
   if (scenario === "wrong-depth") return { code: 0, output: `completed ${mode} ${depth + 1}\ncontinued\n` };
   const caught = scenario === "unexpected" ? "TypeError" : "RangeError";
   if (scenario === "unexpected" || (mode === "plain" && depth > 2)) return { code: 0, output: `caught ${mode} ${caught} ${depth} stack overflow\ncontinued\n` };

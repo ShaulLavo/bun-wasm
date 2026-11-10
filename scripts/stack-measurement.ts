@@ -26,6 +26,7 @@ export function stackOutcome(
   const outcomes = lines.filter(line => /^(?:completed|caught) /.test(line));
   if (outcomes.length !== 1) return "invalid-output";
   const line = outcomes[0]!;
+  if (lines.filter(entry => entry === "continued").length > 1) return "invalid-output";
   if (lines.indexOf("continued") <= lines.indexOf(line)) return "missing-continuation";
   if (line === `completed ${mode} ${depth}`) return "completed";
   const caught = /^caught (\w+) (\w+) (\d+) (.*)$/.exec(line);

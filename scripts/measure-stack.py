@@ -44,6 +44,8 @@ def run(command, mode, n):
     if len(outcomes) != 1:
         return 'invalid-output'
     line = outcomes[0]
+    if lines.count('continued') > 1:
+        return 'invalid-output'
     if 'continued' not in lines or lines.index('continued') <= lines.index(line):
         return 'missing-continuation'
     if line == f'completed {mode} {n}':

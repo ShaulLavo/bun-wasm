@@ -46,18 +46,21 @@ async function openPage(browser, name, url, engine) {
   return { page, close: async () => { await visit.close(); await context.close(); } };
 }
 
+function coldAttempt(browser, name, url, engine, nativeFirefox) {
+  return async (mode, depth) => {
+    const once = await openPage(browser, name, url, engine);
+    try { return await outcome(once.page, mode, depth, nativeFirefox); } finally { await once.close(); }
+  };
+}
+
 async function checkEngine(browser, name, url, engine) {
   const label = `${name}/${engine}`;
   const opened = await openPage(browser, name, url, engine);
   try {
     if (measure) {
       const nativeFirefox = engine === 'browser' && name === 'firefox';
-      const fresh = async (mode, n) => {
-        const once = await openPage(browser, name, url, engine);
-        try { return await outcome(once.page, mode, n, nativeFirefox); } finally { await once.close(); }
-      };
       const failed = await measureStackPaths(
-        cold ? fresh : (mode, n) => outcome(opened.page, mode, n, nativeFirefox),
+        cold ? coldAttempt(browser, name, url, engine, nativeFirefox) : (mode, n) => outcome(opened.page, mode, n, nativeFirefox),
         label, row => console.log(JSON.stringify(row)),
       );
       if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);

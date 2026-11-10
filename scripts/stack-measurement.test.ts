@@ -1,12 +1,16 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { acceptedStackOutcome, stackOutcome } from "./stack-measurement.ts";
 
 let scratchToClean: string | undefined;
 afterAll(() => { if (scratchToClean) rmSync(scratchToClean, { recursive: true, force: true }); });
-const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-stack-measurement-"));
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stack-measurement-"));
 scratchToClean = scratch;
+test("measurement scratch follows the host temporary directory", () => {
+  expect(dirname(scratch)).toBe(tmpdir());
+});
 const root = resolve(import.meta.dir, "..");
 const provider = new URL("./fixtures/stack-measurement-provider.ts", import.meta.url).pathname;
 
@@ -34,7 +38,7 @@ for (const kind of ["browser", "python"] as const) {
     expect(run.stdout).toContain("capacity");
     expect(run.stdout).toContain("caught:RangeError");
   });
-  for (const scenario of ["hidden", "hidden-timeout", "final", "missing", "unexpected", "wrong-depth"]) {
+  for (const scenario of ["hidden", "hidden-timeout", "final", "missing", "unexpected", "wrong-depth", "duplicate-continuation"]) {
     test(`${kind} rejects ${scenario} after cleanup`, () => {
       const run = command(kind, scenario, { cold: true });
       if (kind === "browser") {
@@ -80,6 +84,7 @@ const transcripts = [
   { label: "partial continuation", output: "completed {mode} {depth}\nnot-continued\n", mode: "plain", expected: "missing-continuation" },
   { label: "early continuation", output: "continued\ncompleted {mode} {depth}\n", mode: "plain", expected: "missing-continuation" },
   { label: "duplicate results", output: "completed {mode} {depth}\ncaught {mode} TypeError {depth} bad\ncontinued\n", mode: "plain", expected: "invalid-output" },
+  { label: "duplicate continuation", output: "completed {mode} {depth}\ncontinued\ncontinued\n", mode: "plain", expected: "invalid-output" },
   { label: "wrong mode", output: "completed other {depth}\ncontinued\n", mode: "plain", expected: "invalid-output" },
   { label: "missing result", output: "continued\n", mode: "plain", expected: "invalid-output" },
   { label: "trap despite markers", output: "completed {mode} {depth}\ncontinued\n", mode: "plain", code: 1, expected: "trap" },
