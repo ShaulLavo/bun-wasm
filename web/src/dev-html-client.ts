@@ -324,7 +324,10 @@ function startDevelopmentHtml(document: Document, window: Window & typeof global
     if (stamp.server !== current.baseline.stamp.server) { close("server instance changed"); return; }
     if (stamp.revision <= current.desired) return;
     current.desired = stamp.revision;
-    if (current.job?.candidate && current.job.candidate.stamp.revision <= current.desired) { finish(current, current.job); return; }
+    if (current.job?.candidate) {
+      if (current.job.candidate.stamp.revision <= current.desired) finish(current, current.job);
+      return;
+    }
     current.job?.controller.abort();
     current.job = null;
     schedule(current);

@@ -126,11 +126,15 @@ test("development HTML holds an unannounced newer response until its real notice
   await pageFixture(async (page, server) => {
     server.commit(2);
     server.setHtml(counterHtml.replace("Before", "Future"));
-    server.unannounced(3);
+    server.unannounced(5);
     await until(() => server.rawRequests === 1);
     await tick(page);
     expect(await page.locator("h1").textContent()).toBe("Before");
     server.commit(3);
+    await tick(page);
+    expect(server.rawRequests).toBe(1);
+    expect(await page.locator("h1").textContent()).toBe("Before");
+    server.commit(5);
     await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Future");
     expect(server.rawRequests).toBe(1);
   });

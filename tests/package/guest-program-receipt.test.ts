@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt, type ProgramBuildReceipt } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { fixtureGit, withReceiptFixture } from "./guest-receipt-fixture";
 import { quickjsPair } from "./quickjs-plan-fixture";
 import { appendCustomSection, ENGINE_SECTION } from "../../src/engine-kind.ts";
-import { hash } from "../../scripts/guest-source-manifest.ts";
+import { captureSourceManifest, hash } from "../../scripts/guest-source-manifest.ts";
 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} reusable side retains origin across a core-only change`, async () => {
   await withReceiptFixture(async options => {
@@ -173,5 +173,43 @@ test("JSC compiler search-path permission failures remain fatal", async () => {
     await chmod(closed, 0);
     try { await expect(captureProgramInputs({ ...options, build: "jsc" }, "jsc")).rejects.toMatchObject({ code: "EACCES" }); }
     finally { await chmod(closed, 0o700); }
+  });
+});
+
+
+test("development HTML source identities bind the generator and browser payload in guest and common-core receipts", async () => {
+  await withReceiptFixture(async options => {
+    const paths = ["scripts/generate-dev-html-client.ts", "web/src/dev-html-client.ts"];
+    for (const path of paths) {
+      await mkdir(dirname(join(options.repository, path)), { recursive: true });
+      await writeFile(join(options.repository, path), await readFile(new URL(`../../${path}`, import.meta.url)));
+    }
+    fixtureGit(options.repository, "add", "scripts", "web");
+    fixtureGit(options.repository, "commit", "-m", "stage actual development HTML inputs");
+    const guest = () => captureSourceManifest(options);
+    const core = () => captureProgramInputs(options, "core", { features: ["engine-split"] });
+    const repositoryIdentity = async () => hash(JSON.stringify((await guest()).groups.find(group => group.name === "repository")?.files));
+    const firstGuest = await guest();
+    const firstCore = await core();
+    for (const path of paths) {
+      expect(firstGuest.groups.find(group => group.name === "repository")?.files.some(file => file.path === path)).toBe(true);
+      expect(JSON.stringify(firstCore.content)).toContain(`"path":"${path}"`);
+    }
+    const side = await captureProgramInputs({ ...options, build: "quickjs" }, "quickjs");
+    let previousGuest = await repositoryIdentity();
+    let previousCore = firstCore.contentSha256;
+    for (const path of paths) {
+      const target = join(options.repository, path);
+      await writeFile(target, (await readFile(target, "utf8")) + "\n// Isolated receipt regression mutation.\n");
+      fixtureGit(options.repository, "add", path);
+      fixtureGit(options.repository, "commit", "-m", "change only the development HTML input");
+      const nextGuest = await repositoryIdentity();
+      const nextCore = (await core()).contentSha256;
+      expect(nextGuest).not.toBe(previousGuest);
+      expect(nextCore).not.toBe(previousCore);
+      expect((await captureProgramInputs({ ...options, build: "quickjs" }, "quickjs")).contentSha256).toBe(side.contentSha256);
+      previousGuest = nextGuest;
+      previousCore = nextCore;
+    }
   });
 });

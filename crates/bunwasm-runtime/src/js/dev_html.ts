@@ -149,7 +149,7 @@
         if (disposed) return;
         if (notice.kind === "closed") { terminate(socket); return; }
         const payload = JSON.stringify(notice);
-        if (socket.bufferedAmount + encoder.encode(payload).length > 4096) { terminate(socket); return; }
+        if (socket.bufferedAmount + encoder.encode(payload).length + 14 > 4096) { terminate(socket); return; }
         try { socket.send(payload); }
         catch { terminate(socket); }
       });
