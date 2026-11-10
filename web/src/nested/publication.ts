@@ -35,19 +35,22 @@ export function readDescriptor(buffer: ArrayBufferLike, out: number): Publicatio
   };
 }
 
-export interface ValidatedMemory { readonly maximum: number; readonly cells: Int32Array; }
+/** `maximum` is the declared limit. `reserved` is the owner's extent in pages, which may be less. */
+export interface ValidatedMemory { readonly maximum: number; readonly reserved: number; readonly cells: Int32Array; }
 
 /** Runs on the owner's values before any view is built over them. */
 export function validateMemory(value: PublicationDescriptor, buffer: ArrayBufferLike): ValidatedMemory {
   const maximum = value.meta;
   if (maximum > MAX_GROUP_PAGES) throw new RangeError("published memory maximum exceeds wasm32");
   if (value.companion === 0 || value.companionLength !== CELL_BYTES || value.companionAddress % CELL_ALIGN !== 0) throw new RangeError("published memory page cell extent");
-  if (value.primaryAddress % PAGE_BYTES !== 0 || value.primaryLength !== Math.max(maximum, 1) * PAGE_BYTES) throw new RangeError("published memory reservation extent");
+  // Whole pages, at least the identity page, and never more than the declared maximum allows.
+  const reserved = value.primaryLength / PAGE_BYTES;
+  if (value.primaryAddress % PAGE_BYTES !== 0 || !Number.isInteger(reserved) || reserved < 1 || reserved > Math.max(maximum, 1)) throw new RangeError("published memory reservation extent");
   if (value.primaryAddress + value.primaryLength > buffer.byteLength || value.companionAddress + CELL_BYTES > buffer.byteLength) throw new RangeError("published memory outside group");
   const cells = new Int32Array(buffer, value.companionAddress, CELL_WORDS);
   if (Atomics.load(cells, 1) !== 0 || Atomics.load(cells, 2) !== 0 || Atomics.load(cells, 3) !== 0) throw new RangeError("published memory reserved cell words");
-  if (Atomics.load(cells, CELL_PAGES) >>> 0 > maximum) throw new RangeError("published memory page count");
-  return { maximum, cells };
+  if (Atomics.load(cells, CELL_PAGES) >>> 0 > Math.min(maximum, reserved)) throw new RangeError("published memory page count");
+  return { maximum, reserved, cells };
 }
 
 export interface ValidatedModule { readonly description: string; readonly code: Uint8Array<ArrayBuffer>; }
