@@ -56,6 +56,7 @@ declare namespace BunWasm {
   type HotFetch = (this: HotServer, request: Request, server: HotServer) => Response | Promise<Response>;
   type HotError = (this: HotServer, error: unknown) => Response | Promise<Response>;
   interface HotServeOptions {
+    development?: boolean | { hmr?: boolean };
     hostname?: string;
     port?: number | string;
     fetch?: HotFetch;
@@ -67,6 +68,7 @@ declare namespace BunWasm {
   }
   interface HotServer {
     readonly port: number;
+    upgrade(request: Request, options?: { data?: unknown }): boolean;
     reload(options: HotServeOptions): HotServer;
     stop(closeActive?: boolean): Promise<void>;
   }
@@ -81,6 +83,7 @@ declare namespace BunWasm {
   }
   interface HotSnapshot {
     readonly stamp: HotCommittedStamp;
+    readonly development: boolean;
     readonly fetch: HotFetch;
     readonly error: HotError | undefined;
     readonly context: unknown;
@@ -93,9 +96,17 @@ declare namespace BunWasm {
     abort(graph: HotGraph): void;
     select(server: HotServer): Promise<HotSnapshot>;
     release(snapshot: HotSnapshot): void;
+    runControl<T>(callback: () => T): T;
     revisions(server: HotServer): HotCommittedRevisions;
     close(server: HotServer): void;
     publish(graph: HotGraph): void;
+    dispose(): void;
+  }
+  interface DevelopmentHtml {
+    respond(request: Request): Response | null;
+    upgrade(request: Request, server?: Pick<HotServer, "port" | "upgrade">): boolean;
+    websocket(handlers: WebSocketHandlers | undefined): WebSocketHandlers;
+    decorate(request: Request, response: Response, stamp: HotCommittedStamp): Promise<Response>;
     dispose(): void;
   }
   interface HotRecordSession {
@@ -120,6 +131,7 @@ declare namespace BunWasm {
     dirname(path: string): string;
     printError(error: unknown): void;
     reportHotError(error: unknown): void;
+    require(name: "dev_html"): { attach(options: { server: Pick<HotServer, "port" | "upgrade">; revisions: HotCommittedRevisions }): DevelopmentHtml };
     require(name: "hot_run"): { run(entry: string): void; dispose(): void };
     require(name: "hot_revisions"): () => HotRevisionController;
     require(name: "hot_serve"): (current: () => HotGraph | undefined) => HotServers;
