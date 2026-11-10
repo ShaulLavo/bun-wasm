@@ -11,7 +11,7 @@ const { spawnSync }: typeof import("node:child_process") = require("node:child_p
 
 const strict = "quickjs" in process.versions;
 const recordLimit = 10000;
-type Shape = { name: string; open: string; inner: string; close: string; perLevel: number; wrapper?: [string, string, number]; asynchronous?: boolean };
+type Shape = { name: string; open: string; inner: string; close: string; perLevel: number; wrapper?: [string, string, number]; asynchronous?: boolean; depth?: number };
 
 // perLevel is how many statement records one repeated level keeps suspended: a statement that
 // contains a statement holds one, and a braced body adds one for its block. A label directly on
@@ -38,7 +38,9 @@ const shapes: Shape[] = [
   { name: "try catch", open: "try{", inner: ";", close: "}catch(e){}", perLevel: 2 },
   { name: "catch body", open: "try{}catch(e){", inner: ";", close: "}", perLevel: 2 },
   { name: "finally body", open: "try{}finally{", inner: ";", close: "}", perLevel: 2 },
-  { name: "with", open: "with(o){", inner: ";", close: "}", perLevel: 2 },
+  // Every name inside a `with` compiles to one lookup per enclosing `with`, so the bytecode
+  // grows with the square of the depth. That is a memory limit of the form, not of the parser.
+  { name: "with", open: "with(o){", inner: ";", close: "}", perLevel: 2, depth: 300 },
   { name: "using", open: "{using r=o;", inner: ";", close: "}", perLevel: 1 },
   { name: "await using", open: "{await using r=o;", inner: ";", close: "}", perLevel: 1, asynchronous: true },
   { name: "block in loop", open: "{", inner: ";", close: "}", perLevel: 1, wrapper: ["while(x){", "}", 2] },
@@ -79,7 +81,7 @@ function expectOutcome(what: string, outcome: Outcome, expected: Outcome): void 
 function deepCompilation(): void {
   for (const shape of shapes) {
     const wrapperRecords = shape.wrapper?.[2] ?? 0;
-    const depth = Math.min(4900, Math.floor((recordLimit - 200 - wrapperRecords) / shape.perLevel));
+    const depth = shape.depth ?? Math.min(4900, Math.floor((recordLimit - 200 - wrapperRecords) / shape.perLevel));
     expectOutcome(`${shape.name} at ${depth} levels`, compile(body(shape, depth), shape.asynchronous), "compiled");
     console.log(shape.name, "settled");
   }
@@ -102,7 +104,7 @@ function deepExecution(): void {
 
 // The limit counts suspended records, so each shape reaches it at a different depth.
 function recordBoundaries(): void {
-  for (const shape of shapes) {
+  for (const shape of shapes.filter(candidate => candidate.depth === undefined)) {
     const wrapperRecords = shape.wrapper?.[2] ?? 0;
     const accepted = Math.floor((recordLimit - wrapperRecords) / shape.perLevel);
     expectOutcome(`${shape.name} one below the limit`, compile(body(shape, accepted - 1), shape.asynchronous), "compiled");
