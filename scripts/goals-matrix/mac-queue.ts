@@ -8,7 +8,7 @@ export function quote(value: string): string { return `'${value.replaceAll("'", 
 export function admission(config: Options): NativeAdmission {
   const value = config.nativeAdmission;
   if (!value?.lane.trim()) throw new Error("Native campaigns require --mac-lane");
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.thread)) throw new Error("Native campaigns require the actual T3 UUID in --mac-thread");
+  if (!value.thread.trim() || /[\r\n\0]/.test(value.thread) || Buffer.byteLength(value.thread) > 1024) throw new Error("Native campaigns require a nonempty, single-line T3 thread ID in --mac-thread");
   return value;
 }
 export function queuedNativeCommand(config: Options, command: string[], task: string, home = homedir()): string[] {

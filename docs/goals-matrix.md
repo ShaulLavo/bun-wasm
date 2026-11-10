@@ -23,15 +23,15 @@ source env.sh
 bun /work/heavy-runner/current/run.js --class browser goals-matrix -- \
   bun scripts/goals-matrix/fleet.ts --asset-source=/absolute/delivery-manifest.json \
   --device-udid=CLAIMED_SIMULATOR_UDID \
-  --mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-UUID
+  --mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-ID
 ```
 
 Use T3 `device_list` and `device_open` to claim an unclaimed iPhone simulator first.
 Use its returned pinned command for native Safari app actions. The fleet runner
 stages a generated runner and the static build to a unique Mac task directory,
 checks the owner reservation, and runs the whole native workload through the
-installed Mac FIFO queue. Supply your lane and actual T3 thread UUID. The queue
-owns admission and lock release. The workload owns its SafariDriver and server.
+installed Mac FIFO queue. Supply your lane and actual T3 thread ID, copied
+unchanged including any opaque prefix. The queue owns admission and lock release. The workload owns its SafariDriver and server.
 The default queue estimate is 600 seconds, wait budget is 3600 seconds, and workload
 limit is 900 seconds. Set `--mac-expected-seconds`, `--mac-wait-seconds`, and
 `--mac-timeout-seconds` for a different bounded campaign. These limits do not change
@@ -90,7 +90,7 @@ and `GOALS_IPHONE_TOKEN` set to a random 64-character hexadecimal test token:
 
 ```sh
 ~/.bun/bin/bun ~/.agents/skills/machine-fleet/scripts/mac-queue.ts run \
-  --lane YOUR-LANE --thread YOUR-T3-THREAD-UUID --task "Visible iPhone campaign" \
+  --lane YOUR-LANE --thread YOUR-T3-THREAD-ID --task "Visible iPhone campaign" \
   --expected-seconds 600 --wait-seconds 3600 --timeout-seconds 900 -- \
   ~/.bun/bin/bun /absolute/iphone-mac.js /absolute/iphone-server.js /absolute/cleanup.json
 ```
@@ -151,7 +151,7 @@ bun /work/heavy-runner/current/run.js --class browser goals-install-policy -- \
 	--output=/absolute/new-campaign --browsers=chrome,safari --engines=browser \
 	--frameworks=nuxt,astro,react-router,solidstart,tanstack-start,angular \
 	--timeout-ms=90000 --install-timeout-ms=nuxt:110000 \
-	--mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-UUID
+	--mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-ID
 ```
 
 The same options work with `run.ts` and explicit native WebDriver endpoints.

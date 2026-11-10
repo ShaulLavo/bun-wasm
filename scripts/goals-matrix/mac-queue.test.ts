@@ -9,20 +9,36 @@ import { admission, queuedNativeCommand, nativeQueueScript, quote } from "./mac-
 
 const installedQueue = join(homedir(), ".agents/skills/machine-fleet/scripts/mac-queue.ts");
 const installedTest = test.skipIf(!existsSync(installedQueue));
-const identity = ["--mac-lane=quickjs-safari", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"];
+const threadId = "thread:delegated-task:command%3Amcp%3A74cab812-b487-4145-b97f-591b6205c99a%3Adelegate-task%3Ac4657b58-42ba-4a3a-bd50-5e343f76b641";
+const identity = ["--mac-lane=quickjs-safari", `--mac-thread=${threadId}`];
 const config = () => options(["--asset-source=packet's identity", "--browsers=safari", "--engines=quickjs", "--frameworks=next,nuxt,astro", "--timeout-ms=90000"].concat(identity));
 
 test("native admission requires explicit lane and actual T3 thread identity", () => {
   expect(() => queuedNativeCommand(options(["--asset-source=test"]), ["bun", "run.js"], "task")).toThrow("lane");
-  expect(() => admission(options(["--asset-source=test", "--mac-lane=lane", "--mac-thread=placeholder"]))).toThrow("T3 UUID");
-  expect(admission(config())).toEqual({ lane: "quickjs-safari", thread: "0d4397e9-4028-43c4-8183-4d9dfb64821f", expectedSeconds: 600, waitSeconds: 3600, timeoutSeconds: 900 });
+  expect(() => admission(options(["--asset-source=test", "--mac-lane=lane", "--mac-thread="]))).toThrow("T3 thread ID");
+  expect(admission(config())).toEqual({ lane: "quickjs-safari", thread: threadId, expectedSeconds: 600, waitSeconds: 3600, timeoutSeconds: 900 });
+});
+test.each([
+  "mcp:0d4397e9-4028-43c4-8183-4d9dfb64821f",
+  "thread:delegated-task:command%3Amcp%3A74cab812-b487-4145-b97f-591b6205c99a%3Adelegate-task%3Ac4657b58-42ba-4a3a-bd50-5e343f76b641",
+])("opaque T3 thread identity is forwarded unchanged: %s", thread => {
+  const request = options(["--asset-source=test", "--mac-lane=quickjs-safari", `--mac-thread=${thread}`]);
+  expect(admission(request).thread).toBe(thread);
+  const command = queuedNativeCommand(request, ["bun", "run.js"], "task");
+  expect(command[command.indexOf("--thread") + 1]).toBe(thread);
+  expect(options(nativeRunnerArgs(request, "/Users/fixture/task")).nativeAdmission?.thread).toBe(thread);
+});
+test.each(["", "   ", "line\nbreak", "line\rbreak", "null\0byte", "x".repeat(1025)])("rejects malformed queue thread text %j", thread => {
+  const original = config();
+  expect(() => admission({ ...original, nativeAdmission: { ...admission(original), thread } })).toThrow("T3 thread ID");
+  expect(() => admission(options(["--asset-source=test", "--mac-lane=lane", `--mac-thread=${thread}`]))).toThrow();
 });
 test.each(["0", "-1", "1.5", "NaN", "604801"])("rejects invalid queue limits %s without changing phase budgets", value => {
   expect(() => options(["--asset-source=test", `--mac-timeout-seconds=${value}`])).toThrow();
 });
 test("installed command keeps argv and metadata distinct and never bundles the queue", () => {
   const command = queuedNativeCommand(config(), ["bun", "space ' and $HOME", "--frameworks=next,nuxt,astro"], "nine-cell job", "/Users/fixture home");
-  expect(command).toEqual(["/Users/fixture home/.bun/bin/bun", "/Users/fixture home/.agents/skills/machine-fleet/scripts/mac-queue.ts", "run", "--lane", "quickjs-safari", "--thread", "0d4397e9-4028-43c4-8183-4d9dfb64821f", "--task", "nine-cell job", "--expected-seconds", "600", "--wait-seconds", "3600", "--timeout-seconds", "900", "--", "bun", "space ' and $HOME", "--frameworks=next,nuxt,astro"]);
+  expect(command).toEqual(["/Users/fixture home/.bun/bin/bun", "/Users/fixture home/.agents/skills/machine-fleet/scripts/mac-queue.ts", "run", "--lane", "quickjs-safari", "--thread", threadId, "--task", "nine-cell job", "--expected-seconds", "600", "--wait-seconds", "3600", "--timeout-seconds", "900", "--", "bun", "space ' and $HOME", "--frameworks=next,nuxt,astro"]);
   const forwarded = options(nativeRunnerArgs(config(), "/Users/fixture home/task's dir"));
   expect(forwarded).toMatchObject({ timeoutMs: 90000, installTimeouts: {}, frameworks: ["next", "nuxt", "astro"], browsers: ["safari"], engines: ["quickjs"], nativeAdmission: admission(config()) });
 });
