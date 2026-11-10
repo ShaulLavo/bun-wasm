@@ -36,7 +36,7 @@ async function prepareSite(program: string): Promise<string> {
   process.env.TMPDIR = scratch;
   const out = join(scratch, "site");
   console.log(JSON.stringify({ resources: { scratch, listener: "ephemeral loopback port", downloads: "none", program } }));
-  await buildBrowserEntries([join(web, "tests/shared-wasm-memory-browser-main.ts"), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts"), join(web, "src/notification-worker.ts")], out, { runtimeWorker: true });
+  await buildBrowserEntries([join(web, "tests/shared-wasm-memory-browser-main.ts"), join(web, "tests/shared-wasm-agent/worker.ts"), join(web, "src/fs-worker.ts"), join(web, "src/notification-worker.ts")], out, { runtimeWorker: true });
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./shared-wasm-memory-browser-main.js"></script>');
   await cp(fixtureSource, join(out, "fixture"), { recursive: true });
   const names = (await readdir(fixtureSource)).filter(name => name.endsWith(".ts") || name.endsWith(".wasm"));
@@ -62,34 +62,82 @@ function serve(out: string): number {
   return server.port!;
 }
 
-type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly { members: number; retained: number; regions: number; holds: number; pins: number; watches: number }[] };
+type OwnerCounters = { members: number; retained: number; regions: number; holds: number; pins: number; watches: number; published: number };
+type Result = { done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly OwnerCounters[]; ended?: readonly OwnerCounters[]; budget?: number; agentCloseDelays?: Readonly<Record<string, number>> };
+const DEBT_ENTRY = "failed-stop.ts";
+
+/** Every owner this run created has ended and holds nothing; the page budget is back to zero. */
+function assertRetired(value: Result): void {
+  assert.ok((value.ended?.length ?? 0) > 0, "the run never observed a group owner");
+  for (const { members, retained, regions, holds, pins, watches, published } of value.ended!) {
+    assert.deepEqual({ members, retained, regions, holds, pins, watches, published }, { members: 0, retained: 0, regions: 0, holds: 0, pins: 0, watches: 0, published: 0 });
+  }
+  assert.equal(value.budget, 0, "the page budget is released with the last group");
+}
 
 async function result(page: Page): Promise<Result> {
-  await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: 240_000 });
-  return page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
+  // A blocked guest cannot explain itself, so the page reports what it has seen so far.
+  const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => console.log(JSON.stringify({ progress })), () => {});
+  const progress = setInterval(report, 20_000);
+  try {
+    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: 240_000 });
+    return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
+  } finally { clearInterval(progress); }
+}
+
+interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; }
+
+async function runEntry(name: string, port: number, entry: string): Promise<EntryRun> {
+  const page = await browser!.newPage();
+  const pageErrors: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}`);
+  const value = await result(page);
+  console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, ...value, pageErrors }));
+  await page.close();
+  return { value, pageErrors };
+}
+
+async function assertClean({ value, pageErrors }: EntryRun): Promise<void> {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.equal(value.stdout, await readFile(join(fixtureSource, "expected-browser.txt"), "utf8"));
+  assert.deepEqual(pageErrors, []);
+  assert.ok((value.peak?.regions ?? 0) > 0, "the owner never saw a real nested region");
+  assert.ok((value.peak?.committedBytes ?? 0) > 0, "the owner never charged group backing");
+  assert.deepEqual(value.groups, [], "members, regions, holds and pins are released after the supported stop");
+  assertRetired(value);
+}
+
+/** A failed native stop keeps its member, publication and charge: the group cannot end. */
+function assertDebt({ value }: EntryRun): void {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.equal(value.stdout, "shared-wasm-memory failed stop: pass\n");
+  assert.equal(value.groups?.length, 1, "the group with debt stays live");
+  const [group] = value.groups!;
+  assert.equal(group!.retained, 1);
+  assert.equal(group!.members, 0);
+  assert.ok(group!.published > 0, "the failed member's publication is kept");
+  assert.ok(group!.regions > 0, "the failed member's regions are kept");
+  assert.ok((value.budget ?? 0) > 0, "the failed member's backing stays charged");
 }
 
 async function runBrowser(type: BrowserType, name: string, port: number): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
-  const page = await browser.newPage();
-  const consoleErrors: string[] = [];
-  page.on("pageerror", error => consoleErrors.push(error.message));
-  const entry = process.env.SHARED_WASM_ENTRY ?? "browser-guest.ts";
-  await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}`);
-  const value = await result(page);
-  console.log(JSON.stringify({ browser: name, version: browser.version(), ...value, pageErrors: consoleErrors }));
+  const override = process.env.SHARED_WASM_ENTRY;
+  const entries = override ? [override] : ["browser-guest.ts", DEBT_ENTRY];
+  const runs = [];
+  for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
   browser = undefined;
   launching = undefined;
   if (process.env.SHARED_WASM_CONTROL) { console.log(`control ${process.env.SHARED_WASM_CONTROL} observed`); return; }
-  assert.equal(value.thrown, undefined, String(value.thrown));
-  assert.equal(value.code, 0, value.stderr ?? String(value.error));
-  assert.equal(value.stdout, await readFile(join(fixtureSource, "expected-browser.txt"), "utf8"));
-  assert.deepEqual(consoleErrors, []);
-  assert.ok((value.peak?.regions ?? 0) > 0, "the owner never saw a real nested region");
-  assert.ok((value.peak?.committedBytes ?? 0) > 0, "the owner never charged group backing");
-  assert.deepEqual(value.groups, [], "members, regions, holds and pins are released after physical stop");
+  for (const { entry, run } of runs) {
+    if (entry === DEBT_ENTRY) assertDebt(run);
+    else await assertClean(run);
+  }
 }
 
 try {
