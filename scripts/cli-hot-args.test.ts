@@ -1,5 +1,4 @@
 import { afterAll, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,8 +45,11 @@ fn main() {
 `);
 
 test("real CLI parser carries hot mode independently from execArgv", () => {
-  execFileSync("rustc", ["--edition=2024", file, "-o", join(scratch, "args")], { cwd: scratch });
-  const result = spawnSync(join(scratch, "args"), [], { encoding: "utf8" });
-  expect(result.status).toBe(0);
-  expect(result.stdout).toContain("hot CLI parser controls pass");
+  const compiled = Bun.spawnSync(["rustc", "--edition=2024", file, "-o", join(scratch, "args")], {
+    cwd: scratch, stdin: "ignore", stdout: "pipe", stderr: "inherit",
+  });
+  expect(compiled.exitCode).toBe(0);
+  const result = Bun.spawnSync([join(scratch, "args")], { cwd: scratch, stdin: "ignore", stdout: "pipe", stderr: "inherit" });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain("hot CLI parser controls pass");
 });
