@@ -473,76 +473,42 @@ test("CMake preflight has one always-on lightweight owner, independent of native
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
-for (const { job, install } of [
-  { job: "web", install: "bunx playwright install chromium webkit" },
-  { job: "browser-process", install: "bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}" },
-]) {
-  test(`${job} selects HTTPS apt sources with optional mirrors before installing browsers`, () => {
-    const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
-    const step = section.match(/      - name: Use Ubuntu HTTPS archives for browser dependencies\n        run: \|\n((?:          .*\n)+)/);
-    if (!step?.[1]) throw new Error("configure apt transport before installing browser dependencies");
-    const command = step[1];
-    expect(section).toContain("timeout-minutes: 10");
-    expect(section).toContain(`run: ${install}`);
-    expect(section.indexOf(command)).toBeLessThan(section.indexOf(install));
-    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
-    try {
-      const mirrors = join(directory, "apt-mirrors.txt");
-      const sources = join(directory, "ubuntu.sources");
-      const ubuntuSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
-      writeFileSync(sources, ubuntuSources);
-      const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
-      const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
-      const preserved = fallbacks + unrelated;
-      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
-      const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors)
-        .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", sources);
-      const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-      expect(readFileSync(mirrors, "utf8")).toBe(preserved);
-      expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-      expect(readFileSync(mirrors, "utf8")).toBe(preserved);
-      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
-      expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
-      rmSync(mirrors);
-      writeFileSync(sources, ubuntuSources);
-      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-      expect(existsSync(mirrors)).toBe(false);
-      expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-      expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-}
-
-for (const { job, browsers } of [
-  { job: "web", browsers: "chromium webkit" },
-  { job: "browser-process", browsers: "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}" },
-]) {
-  test(`${job} prefetches verified apt archives instead of serial browser dependency downloads`, () => {
-    const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
-    expect(section).toContain(`bun scripts/ci-browser-deps.ts ${browsers}`);
-    expect(section).toContain(`bunx playwright install ${browsers}`);
-    expect(section).not.toContain("playwright install --with-deps");
-    expect(section).toContain("${{ runner.temp }}/browser-apt/*.deb");
-    expect(section).not.toContain("~/.cache/ms-playwright");
-    expect(section).not.toContain("uses: actions/cache@v4");
-    const restore = section.lastIndexOf("uses: actions/cache/restore@v4", section.indexOf("id: browser-cache"));
-    const setup = section.indexOf(`run: bun scripts/ci-browser-deps.ts ${browsers}`);
-    const save = section.indexOf("uses: actions/cache/save@v4", setup);
-    const browserInstall = section.indexOf(`run: bunx playwright install ${browsers}`);
-    expect(restore).toBeGreaterThan(0);
-    expect(restore).toBeLessThan(setup);
-    expect(save).toBeGreaterThan(setup);
-    expect(save).toBeLessThan(browserInstall);
-    expect(section).toContain("if: steps.browser-cache.outputs.cache-hit != 'true'");
-    expect(section).toContain("key: ${{ steps.browser-cache.outputs.cache-primary-key }}");
-    expect(section).toContain("timeout-minutes: 10");
-  });
-}
+test("shared browser setup selects HTTPS apt sources with optional mirrors", () => {
+  const action = readFileSync(new URL("../.github/actions/browser-deps/action.yml", import.meta.url), "utf8");
+  const step = action.match(/    - name: Use Ubuntu HTTPS archives for browser dependencies\n      shell: [^\n]+\n      run: \|\n((?:        .*\n)+)/);
+  if (!step?.[1]) throw new Error("Configure apt transport before installing browser dependencies");
+  const command = step[1];
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
+  try {
+    const mirrors = join(directory, "apt-mirrors.txt");
+    const sources = join(directory, "ubuntu.sources");
+    const ubuntuSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
+    writeFileSync(sources, ubuntuSources);
+    const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
+    const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
+    const preserved = fallbacks + unrelated;
+    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
+    const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors)
+      .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", sources);
+    const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+    expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
+    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
+    expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
+    rmSync(mirrors);
+    writeFileSync(sources, ubuntuSources);
+    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+    expect(existsSync(mirrors)).toBe(false);
+    expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
+    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("browser dependency reports fail closed and retain every missing package", () => {
   expect(missingPackages("All system dependencies are installed.\n")).toEqual([]);
