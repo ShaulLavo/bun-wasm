@@ -26,4 +26,3 @@ export async function installFixture(directory: string, base: string, args: stri
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
 }
-
