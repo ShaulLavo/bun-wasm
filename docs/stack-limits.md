@@ -143,6 +143,70 @@ React Router's ordinary CommonJS dependency loading. Firefox on Android remains 
 still uses WebKit and keeps it too. Unknown Firefox platforms also keep the
 smaller budget.
 
+### Statement nesting
+
+QuickJS no longer parses nested statements by recursion
+([statement parser](bun-patches/quickjs-statement-parser-stack.md)). A statement
+that contains statements keeps its state in a parser-owned heap record, so a
+nested block, `if`, loop, `switch`, `try` or labelled statement adds no call
+frames. The two statement rows in the sizing table above and in the tables
+under Measurements describe the recursive parser this replaced: they have no
+per-level cost now. The driver still reserves 96 bytes once per entry, because
+functions inside expressions re-enter it.
+
+The parser stops at 10,000 records suspended at once in one parse and throws the
+same catchable `RangeError`. That counts records, not source statements: a
+statement holding a statement keeps one record and a braced body adds one, so
+a braced `if` nests 5,000 deep and an unbraced one 10,000. The bound is the
+same on every host. It is higher than any browser budget allowed and lower than
+the native launcher's old 17,456 blocks at 4096 KiB. It bounds record storage,
+about 1.1 MB at the limit, and nothing else: compiling deep code still costs
+memory for scopes and bytecode, and running it still needs the interpreter's
+stack for forms that keep a value per level, such as nested `switch`.
+
+Measured on November 10, 2026 on the native launcher with the host Wasm stack
+cut to 512 KiB, comparing the QuickJS side from main's CI with this change.
+Each number is the deepest nesting that completed; one level more threw
+`RangeError`.
+
+| Path | 32 KiB before | 32 KiB after | 36 KiB before | 36 KiB after |
+| --- | ---: | ---: | ---: | ---: |
+| Plain calls | 100 | 100 | 113 | 113 |
+| Nested array literals | 30 | 30 | 35 | 35 |
+| Nested arrows | 23 | 24 | 27 | 28 |
+| Unary chain, `**` chain | 292 | 292 | 334 | 335 |
+| Conditional chain | 175 | 175 | 200 | 201 |
+| Nested blocks | 121 | 10,001 | 138 | 10,001 |
+| `if` chain | 147 | 10,000 | 168 | 10,000 |
+| Function expressions | 11 | 12 | 13 | 14 |
+| Function declarations nested directly | 423 | 425 | 487 | 489 |
+| Functions nested through `if` blocks | 38 | 103 | 44 | 119 |
+| Functions nested through `for` bodies | 39 | 106 | 45 | 122 |
+| Functions nested through `try` | 55 | 106 | 63 | 122 |
+| Functions nested through `switch` | 59 | 103 | 68 | 119 |
+| Arrow in a call argument | 19 | 20 | 22 | 23 |
+| Class methods | 80 | 80 | 92 | 93 |
+
+Blocks read 10,001 because an empty innermost block needs no record. No path
+that still recurses is shallower than before. With the same 512 KiB host stack,
+about 4,900 nested levels of every statement kind compile at both budgets
+(`tests/fixtures/quickjs-parser-deep`), which the recursive parser would have
+needed several megabytes of host stack for. The control for that host limit:
+plain recursion is caught at depth 102 at 32 KiB, and traps when the guest
+budget is raised above the host stack.
+
+This is why generated validators now compile: the webpack bundle Next 15.5.6
+ships nests 80 `if` blocks, and `next dev` passed that file at 36 KiB in a
+native run. It does not make Next start at 36 KiB. The same run then stopped
+with a `RangeError` on TypeScript's own library, which Next loads to read
+`next.config.ts`. That file compiles. The refusal comes from the interpreter's
+check on entering a function: the library is one wrapper function with 5,278
+local variables, and its frame alone is 63,316 bytes, more than the whole
+budget, with under 3 KiB in use. Angular's `ng serve` fails at 36 KiB for a
+third reason, plain call depth: Ajv compiling schemas in JavaScript uses the
+whole budget. Neither is a parser limit. These are launcher measurements of
+the guest's own guard at the unchanged budget, not Safari runs.
+
 ### Native callable frames
 
 QuickJS dispatches native callable classes before entering the bytecode

@@ -5,7 +5,13 @@ import { readFileSync } from "node:fs";
 const budget = process.env.QUICKJS_STACK_KIB;
 const commands: string[] = [];
 const inputs: { mode: string; depth: number }[] = [];
-const fixtures = ["stack-overflow", "stack-overflow-console", "parser-error-preservation"];
+const fixtures = [
+  { name: "stack-overflow", entry: "index.js" },
+  { name: "stack-overflow-console", entry: "index.js" },
+  { name: "parser-error-preservation", entry: "index.ts" },
+  { name: "stack-statement-nesting", entry: "index.ts" },
+];
+const visitedFixtures: string[] = [];
 const files = new Map<string, string>();
 let opened = 0;
 let closed = 0;
@@ -50,14 +56,15 @@ mock.module("../../web/tests/playground.mjs", () => ({
       return { code: 0, output: `${output}\ncontinued\n` };
     }
     if (command.endsWith("bun run control.ts")) return nativeFixture();
-    const selected = fixtures.find(name => files.get(`/home/user/index.${name === "parser-error-preservation" ? "ts" : "js"}`) === fixtureSource(name));
+    const selected = fixtures.find(fixture => files.get(`/home/user/${fixture.entry}`) === fixtureSource(fixture));
     assert.ok(selected, "the original fixture source must be written");
-    return { code: 0, output: readFileSync(new URL(`../../tests/fixtures/${selected}/expected.txt`, import.meta.url), "utf8") };
+    visitedFixtures.push(selected.name);
+    return { code: 0, output: readFileSync(new URL(`../../tests/fixtures/${selected.name}/expected.txt`, import.meta.url), "utf8") };
   },
 }));
 
-function fixtureSource(name: string): string {
-  return readFileSync(new URL(`../../tests/fixtures/${name}/index.${name === "parser-error-preservation" ? "ts" : "js"}`, import.meta.url), "utf8");
+function fixtureSource(fixture: (typeof fixtures)[number]): string {
+  return readFileSync(new URL(`../../tests/fixtures/${fixture.name}/${fixture.entry}`, import.meta.url), "utf8");
 }
 
 function nativeFixture() {
@@ -68,11 +75,13 @@ function nativeFixture() {
 
 process.argv = [process.execPath, "browser-quickjs-stack.ts", "webkit"];
 await import("../../web/tests/browser-quickjs-stack.ts");
-assert.equal(opened, budget ? 29 : 30);
+const originalModes = "plain getter proxy json jsonplain jsonparse reviver parse block arrow unary power ternary statement regexpnc lookahead proxychain isarray bound join flat tostring async promise console".split(" ");
+const expectedCases = originalModes.length + fixtures.length + 1;
+assert.deepEqual(visitedFixtures, fixtures.map(fixture => fixture.name));
+assert.equal(opened, expectedCases + (budget ? 0 : 1));
 assert.equal(closed, opened);
 assert.equal(cleanups, 1);
-const originalModes = "plain getter proxy json jsonplain jsonparse reviver parse block arrow unary power ternary statement regexpnc lookahead proxychain isarray bound join flat tostring async promise console".split(" ");
 assert.deepEqual(inputs, originalModes.map(mode => ({ mode, depth: mode === "bound" ? 2000 : 200000 })));
 assert.equal(commands.filter(command => command.startsWith("BUN_WASM_STACK_KIB=32 ")).length, budget ? 0 : 1);
-assert.equal(commands.filter(command => command.startsWith(`BUN_WASM_STACK_KIB=${budget} `)).length, budget ? 29 : 0);
+assert.equal(commands.filter(command => command.startsWith(`BUN_WASM_STACK_KIB=${budget} `)).length, budget ? expectedCases : 0);
 console.log("POLICY_CONTROL_RESULT", JSON.stringify({ opened, closed, budget: budget ?? "policy", probes: inputs.length }));

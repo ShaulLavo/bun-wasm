@@ -60,8 +60,13 @@ test("no consumer keeps its own capacity number", () => {
   // shared sysroot's synthetic C proof member and the allocator telemetry test's C object.
   expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
-  expect(tracked("536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES")
-    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([]);
+  const capacity = /536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES/;
+  const parserOracle = "scripts/fixtures/quickjs-parser-stack.c";
+  // The standalone parser oracle sets a native pthread stack, not a guest memory ceiling.
+  expect(tracked(capacity.source)
+    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([parserOracle]);
+  expect(read(parserOracle).split("\n").filter(line => capacity.test(line)))
+    .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
 });
 
 test("shell consumers read the maximum through the validating reader", () => {

@@ -51,3 +51,8 @@ fn async_context_native_contracts() {
 fn memory_telemetry_native_contracts() {
     native_contracts("scripts/check-quickjs-memory-telemetry.ts");
 }
+
+#[test]
+fn parser_stack_native_contracts() {
+    native_contracts("scripts/check-quickjs-parser-stack.ts");
+}
