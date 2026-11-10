@@ -10,7 +10,7 @@ runs:
         echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
         if [[ "$fingerprint" != "$CI_RELEASE_CACHE_INITIAL" ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
     - uses: actions/cache/save@v4
-      if: steps.inventory.outputs.changed == 'true'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.inventory.outputs.changed == 'true'
       with:
         path: ${{ env.CI_RELEASE_CACHE }}
         key: ${{ env.CI_RELEASE_CACHE_KEY }}-${{ steps.inventory.outputs.fingerprint }}
