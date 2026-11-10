@@ -63,7 +63,7 @@ test("every JSC stamp and sysroot job installs the pinned tools before identifyi
     expect((restore.with as Step).path).toBe(paths);
     expect((restore.with as Step).key).toBe("build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}");
     expect(save.uses).toBe("actions/cache/save@v4");
-    expect(save.if).toBe("steps.build-tools-cache.outputs.cache-hit != 'true'");
+    expect(save.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'");
     expect((save.with as Step).path).toBe(paths);
     expect(steps[install]!.run).toBe("bun scripts/ci-build-tools.ts");
     const users = steps.flatMap((step, index) => /jsc\/common\.sh|build-wasi-sysroot\.ts|ci-native-handoff\.ts|cargo |id: host-tools/.test(String(step.run ?? "")) || step.id === "host-tools" ? [index] : []);

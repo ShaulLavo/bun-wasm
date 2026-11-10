@@ -69,7 +69,7 @@ async function nativeCapacity(browser: Browser, url: string, calibration = false
 async function fixture(browser: Browser, url: string, name: string): Promise<void> {
   await opened(browser, url, async page => {
     const directory = new URL(`../../tests/fixtures/${name}/`, import.meta.url);
-    const entry = name === "parser-error-preservation" ? "index.ts" : "index.js";
+    const entry = name === "parser-error-preservation" || name === "stack-statement-nesting" ? "index.ts" : "index.js";
     await writeFile(page, `/home/user/${entry}`, readFileSync(new URL(entry, directory), "utf8"));
     const env = budget ? `BUN_WASM_STACK_KIB=${budget} ` : "";
     const result = await run(page, `${env}bun run ${entry}`, 90_000);
@@ -97,7 +97,7 @@ async function checkBrowser(name: string, url: string): Promise<void> {
     if (name === "webkit" && !budget) await nativeCapacity(browser, url, true);
     await nativeCapacity(browser, url);
     console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} native calls and recovery`);
-    const fixtures = name === "webkit" ? ["stack-overflow", "stack-overflow-console", "parser-error-preservation"] : [];
+    const fixtures = name === "webkit" ? ["stack-overflow", "stack-overflow-console", "parser-error-preservation", "stack-statement-nesting"] : [];
     for (const fixtureName of fixtures) await fixture(browser, url, fixtureName);
     for (const mode of modes) {
       await overflow(browser, url, mode);

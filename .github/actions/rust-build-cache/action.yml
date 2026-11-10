@@ -1,16 +1,26 @@
 name: Rust object cache
 description: Restore compiler objects independently of Cargo build artifacts
+outputs:
+  cache-hit:
+    description: Whether the dependency seed matched exactly
+    value: ${{ steps.objects.outputs.cache-hit }}
+  cache-primary-key:
+    description: Dependency seed key shared by restores and main-only saves
+    value: ${{ steps.objects.outputs.cache-primary-key }}
 runs:
   using: composite
   steps:
     - shell: bash
-      run: echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
-    - uses: actions/cache@v4
+      run: |
+        echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"
+    - uses: actions/cache/restore@v4
       id: objects
       with:
         path: ${{ runner.temp }}/sccache
-        key: rust-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+        key: rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
         restore-keys: |
+          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
           rust-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-
           rust-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
     - name: Install pinned sccache through the authenticated release API

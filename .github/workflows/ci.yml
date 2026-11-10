@@ -72,7 +72,7 @@ jobs:
           (cd sandbox && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
           (cd site && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
       - name: Publish the completed dependency cache before consumer jobs
-        if: steps.bun-dependencies.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .ci-bun-cache
@@ -149,7 +149,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -188,7 +188,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -201,7 +201,7 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
@@ -229,7 +229,7 @@ jobs:
           source env.sh
           time bun scripts/build-wasi-sysroot.ts
       - name: Save the verified sysroot cache
-        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
@@ -387,6 +387,7 @@ jobs:
           bun-version: 1.4.4
           node-version: '26'
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -401,7 +402,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
-        if: steps.rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -431,7 +432,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -470,7 +471,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -483,12 +484,12 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -514,6 +515,12 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasm-tools-bin"
           mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - name: Save completed wasm-tools setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         id: wasmtime-cache
         with:
@@ -543,7 +550,7 @@ jobs:
           mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
-        if: steps.wasmtime-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -780,6 +787,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+      - uses: ./.github/actions/save-rust-build-cache
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   rust:
@@ -826,6 +837,7 @@ jobs:
           bun-version: 1.4.4
           node-version: '26'
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -840,7 +852,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
-        if: steps.rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -866,7 +878,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -905,7 +917,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -918,12 +930,12 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -949,6 +961,12 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasm-tools-bin"
           mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - name: Save completed wasm-tools setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         id: wasmtime-cache
         with:
@@ -978,7 +996,7 @@ jobs:
           mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
-        if: steps.wasmtime-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -1300,6 +1318,10 @@ jobs:
             ${{ runner.temp }}/jsc-prebuild.log
           if-no-files-found: error
           retention-days: 1
+      - uses: ./.github/actions/save-rust-build-cache
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   package:
@@ -1713,6 +1735,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
         if: needs.quality.outputs.shared-native == 'true'
       - uses: actions/cache/restore@v4
         if: needs.quality.outputs.shared-native == 'true'
@@ -1913,6 +1936,11 @@ jobs:
       - name: Shared profile cache result
         if: needs.quality.outputs.shared-native == 'true'
         run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
+      - uses: ./.github/actions/save-rust-build-cache
+        if: needs.quality.outputs.shared-native == 'true'
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   web:
@@ -1952,7 +1980,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed Web compiler setup
-        if: steps.web-rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.web-rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
