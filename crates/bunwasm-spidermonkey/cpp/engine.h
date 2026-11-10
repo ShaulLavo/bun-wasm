@@ -51,6 +51,10 @@ bsm_handle bsm_promise_result(bsm_handle);
 bool bsm_promise_then(bsm_handle, bsm_handle, bsm_handle, bsm_handle*);
 bsm_handle bsm_external_buffer(uint8_t*, size_t);
 bool bsm_detach_external(bsm_handle);
+#if defined(BUN_WASM_SHARED_GROUP)
+bool bsm_shared_region_buffer(uint8_t*, size_t, bsm_handle*);
+uint8_t* bsm_shared_buffer_data(bsm_handle);
+#endif
 bool bsm_is_detachable_buffer(bsm_handle);
 void bsm_detach_buffer(bsm_handle);
 bool bsm_is_proxy(bsm_handle);

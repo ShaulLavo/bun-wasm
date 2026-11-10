@@ -27,6 +27,7 @@
 #include "js/Promise.h"
 #include "js/Realm.h"
 #include "js/ScriptPrivate.h"
+#include "js/SharedArrayBuffer.h"
 #include "js/SavedFrameAPI.h"
 #include "js/Symbol.h"
 #include "js/SourceText.h"
@@ -560,6 +561,10 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_WARMUP_THRESHOLD, 0);
   require(config->stack_high > config->stack_low + 65536, "invalid stack bounds");
   JS_SetNativeStackQuota(context, config->stack_high - config->stack_low - 65536);
+#if defined(BUN_WASM_SHARED_GROUP)
+  // The group futex parks a member safely, so its JS may block in Atomics.wait.
+  JS_SetFutexCanWait(context);
+#endif
   require(JS::InitSelfHostedCode(context), "self-hosted initialization failed");
   JS::RealmOptions options;
   options.creationOptions().setSharedMemoryAndAtomicsEnabled(true);
@@ -888,6 +893,25 @@ extern "C" bool bsm_detach_external(bsm_handle handle) {
   require(JS::DetachArrayBuffer(context, obj), "external buffer detach failed");
   return true;
 }
+#if defined(BUN_WASM_SHARED_GROUP)
+// A real SharedArrayBuffer over a core-validated group region, without copying. It is never
+// pinned or detached: growth publishes a longer view and every older prefix stays live.
+extern "C" bool bsm_shared_region_buffer(uint8_t* data, size_t length, bsm_handle* out) {
+  JSAutoRealm realm(context, global->get());
+  JS::RootedObject obj(context, JS::NewSharedArrayBufferOverGroupRegion(context, data, length));
+  if (!obj) return failure(out);
+  *out = hold_object(obj);
+  return true;
+}
+// The storage of a real SharedArrayBuffer, so the core can name its region. Null for any other value.
+extern "C" uint8_t* bsm_shared_buffer_data(bsm_handle handle) {
+  JSObject* obj = object(handle);
+  if (!obj || !JS::IsSharedArrayBufferObject(obj)) return nullptr;
+  bool shared = false;
+  JS::AutoCheckCannotGC nogc;
+  return JS::GetSharedArrayBufferData(obj, &shared, nogc);
+}
+#endif
 extern "C" bool bsm_is_detachable_buffer(bsm_handle handle) {
   JSAutoRealm realm(context, global->get());
   JS::RootedObject obj(context, object(handle));

@@ -16,13 +16,51 @@ thread_local! {
     static REJECTIONS: RefCell<Vec<(SmVal, SmVal)>> = const { RefCell::new(Vec::new()) };
 }
 
+#[cfg(not(bun_wasm_shared_group))]
 unsafe extern "C" {
     static __stack_low: u8;
     static __stack_high: u8;
 }
 
+#[cfg(not(bun_wasm_shared_group))]
+fn stack_bounds() -> (usize, usize) {
+    (
+        (&raw const __stack_low) as usize,
+        (&raw const __stack_high) as usize,
+    )
+}
+
+/// The host carves an 8 MiB stack for a group member and the core's entry frames sit above
+/// the side's. The native quota stays inside that stack with a megabyte to spare.
+#[cfg(bun_wasm_shared_group)]
+const GROUP_STACK_BYTES: usize = 7 << 20;
+
+#[cfg(bun_wasm_shared_group)]
+thread_local! {
+    static STACK_ORIGIN: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Record the address of a local in the outermost side frame as the native stack base.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn record_stack_origin(frame: &[u8; 16]) {
+    STACK_ORIGIN.with(|origin| {
+        origin.set(std::hint::black_box(frame.as_ptr()) as usize + frame.len())
+    });
+}
+
+#[cfg(bun_wasm_shared_group)]
+fn stack_bounds() -> (usize, usize) {
+    let high = STACK_ORIGIN.with(Cell::get);
+    assert!(high > GROUP_STACK_BYTES, "side entry recorded its stack");
+    (high - GROUP_STACK_BYTES, high)
+}
+
 #[derive(Clone, Copy)]
 pub struct SpiderMonkey;
+
+/// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) type NestedEngine = SpiderMonkey;
 
 pub struct SmVal(sys::Handle);
 
@@ -431,9 +469,10 @@ impl Engine for SpiderMonkey {
     type Value = SmVal;
 
     fn new(host: Rc<dyn ModuleHost<Self>>) -> Self {
+        let (stack_low, stack_high) = stack_bounds();
         let config = sys::Config {
-            stack_low: (&raw const __stack_low) as usize,
-            stack_high: (&raw const __stack_high) as usize,
+            stack_low,
+            stack_high,
             max_gc_bytes: bunwasm_spidermonkey::max_memory_bytes(),
             tier: std::env::var("BUN_WASM_SPIDERMONKEY_TIER")
                 .ok()
@@ -618,6 +657,34 @@ impl Engine for SpiderMonkey {
     }
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> SmVal {
         SmVal(unsafe { sys::bsm_external_buffer(data, length) })
+    }
+    #[cfg(bun_wasm_shared_group)]
+    fn nested_execute(&self, operation: &SmVal, callback: &SmVal) -> Result<SmVal, SmVal> {
+        crate::nested_bridge::execute(self, operation, callback)
+    }
+    #[cfg(bun_wasm_shared_group)]
+    unsafe fn shared_wasm_memory_buffer(
+        &self,
+        data: *mut u8,
+        length: usize,
+    ) -> Result<SmVal, SmVal> {
+        let mut out = 0;
+        // SAFETY: the core validated this session's stable region and retains it
+        // until the member, engine roots and host instances have all stopped.
+        let ok = unsafe { sys::bsm_shared_region_buffer(data, length, &mut out) };
+        checked(ok, out)
+    }
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_buffer_resource(&self, value: &SmVal) -> Option<u32> {
+        unsafe extern "C" {
+            fn bun_shared_buffer_resource(address: u32) -> u32;
+        }
+        // SAFETY: the shim checks the SharedArrayBuffer class, and the core only looks the
+        // address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(sys::bsm_shared_buffer_data(value.raw()) as usize as u32)
+        };
+        (resource != 0).then_some(resource)
     }
     fn detach_wasm_memory_buffer(&self, value: &SmVal) -> bool {
         unsafe { sys::bsm_detach_external(value.raw()) }

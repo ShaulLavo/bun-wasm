@@ -1,4 +1,7 @@
 include!("../../bunwasm-engine-quickjs/src/side_modules.rs");
+#[cfg(bun_wasm_shared_group)]
+#[path = "../../bunwasm-engine-quickjs/src/nested_bridge.rs"]
+mod nested_bridge;
 mod vm;
 
 unsafe extern "C" {
@@ -13,6 +16,13 @@ pub extern "C" fn spidermonkey_register() {
         42,
         "side constructors once"
     );
+    #[cfg(bun_wasm_shared_group)]
+    unsafe {
+        unsafe extern "C" {
+            fn bun_core_bind_nested(dispatch: extern "C" fn(u32, u32, u32) -> u32);
+        }
+        bun_core_bind_nested(nested_bridge::dispatch);
+    }
     unsafe { bun_core_bind_engine(spidermonkey_run) };
 }
 
@@ -23,5 +33,11 @@ pub extern "C" fn spidermonkey_run(session: u32) -> i32 {
         42,
         "side constructors once"
     );
+    // A group side has no linker stack symbols: the host carves the member stack. The
+    // outermost frame that can hold a value supplies the stack base instead.
+    #[cfg(bun_wasm_shared_group)]
+    let frame = [0u8; 16];
+    #[cfg(bun_wasm_shared_group)]
+    vm::record_stack_origin(&frame);
     driver::run::<vm::SpiderMonkey>(session)
 }

@@ -1,0 +1,422 @@
+diff --git i/js/public/SharedArrayBuffer.h w/js/public/SharedArrayBuffer.h
+index bbefe6bdf..e0be7d949 100644
+--- i/js/public/SharedArrayBuffer.h
++++ w/js/public/SharedArrayBuffer.h
+@@ -29,6 +29,17 @@ class JS_PUBLIC_API AutoRequireNoGC;
+ extern JS_PUBLIC_API JSObject* NewSharedArrayBuffer(JSContext* cx,
+                                                     size_t nbytes);
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++/**
++ * bun-wasm memory group: create a fixed-length SharedArrayBuffer over |nbytes|
++ * of group-region storage at |data|, without copying. The region is borrowed:
++ * the caller keeps it alive and in place for as long as the buffer or any view
++ * of it is reachable. Several buffers may cover prefixes of one region.
++ */
++extern JS_PUBLIC_API JSObject* NewSharedArrayBufferOverGroupRegion(
++    JSContext* cx, uint8_t* data, size_t nbytes);
++#endif
++
+ // TYPE TESTING
+ 
+ /**
+diff --git i/js/src/builtin/AtomicsObject.cpp w/js/src/builtin/AtomicsObject.cpp
+index 12f13f3ca..83ff122f5 100644
+--- i/js/src/builtin/AtomicsObject.cpp
++++ w/js/src/builtin/AtomicsObject.cpp
+@@ -37,6 +37,60 @@
+ 
+ using namespace js;
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++// bun-wasm memory group: every SharedArrayBuffer lives in the group memory, so
++// a wait parks in the one futex the core exports, keyed by absolute address.
++// A notify from another member or from nested WebAssembly then reaches it, and
++// buffers that cover prefixes of one region share one wait identity. The
++// per-buffer waiter list below stays empty.
++extern "C" {
++int32_t bun_futex_wait32(uint32_t address, int32_t expected,
++                         int64_t timeoutNs);
++int32_t bun_futex_wait64(uint32_t address, int64_t expected,
++                         int64_t timeoutNs);
++int32_t bun_futex_wake(uint32_t address, uint32_t count);
++}
++
++static int64_t GroupWaitTimeoutNs(
++    const mozilla::Maybe<mozilla::TimeDuration>& timeout) {
++  if (timeout.isNothing()) {
++    return -1;
++  }
++  // Beyond i64 nanoseconds waits forever.
++  double ns = timeout->ToSeconds() * 1e9;
++  if (!(ns < double(INT64_MAX))) {
++    return -1;
++  }
++  return ns > 0 ? int64_t(ns) : 0;
++}
++
++template <typename T>
++static FutexThread::WaitResult GroupAtomicsWait(
++    JSContext* cx, SharedMem<T*> addr, T value,
++    const mozilla::Maybe<mozilla::TimeDuration>& timeout) {
++  auto address = uint32_t(uintptr_t(addr.unwrap(/* the futex key */)));
++  int64_t timeoutNs = GroupWaitTimeoutNs(timeout);
++  int32_t status = sizeof(T) == 8
++                       ? bun_futex_wait64(address, int64_t(value), timeoutNs)
++                       : bun_futex_wait32(address, int32_t(value), timeoutNs);
++  switch (status) {
++    case 0:
++      return FutexThread::WaitResult::OK;
++    case 1:
++      return FutexThread::WaitResult::NotEqual;
++    case 2:
++      return FutexThread::WaitResult::TimedOut;
++    case -27:
++      // EINTR: the host cancelled this member, which is terminating.
++      __builtin_trap();
++    default:
++      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                                JSMSG_ATOMICS_WAIT_NOT_ALLOWED);
++      return FutexThread::WaitResult::Error;
++  }
++}
++#endif
++
+ static bool ReportBadArrayType(JSContext* cx) {
+   JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                             JSMSG_ATOMICS_BAD_ARRAY);
+@@ -965,10 +1019,12 @@ static void RemoveWaiterImpl(FutexWaiterListNode* node, AutoLockFutexAPI&) {
+   node->setPrev(nullptr);
+ }
+ 
++#ifndef BUN_WASM_SHARED_GROUP
+ // Sync waiters are stack allocated and can simply be removed from the list.
+ static void RemoveSyncWaiter(SyncFutexWaiter* waiter, AutoLockFutexAPI& lock) {
+   RemoveWaiterImpl(waiter, lock);
+ }
++#endif
+ 
+ // Async waiters are heap allocated. After removing the waiter, the caller
+ // is responsible for freeing it. Return the waiter to help enforce this.
+@@ -1242,6 +1298,9 @@ static FutexThread::WaitResult AtomicsWait(
+   SharedMem<T*> addr =
+       sarb->dataPointerShared().cast<T*>() + (byteOffset / sizeof(T));
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  return GroupAtomicsWait(cx, addr, value, timeout);
++#else
+   // Steps 17 and 31 (through destructor).
+   // This lock also protects the "waiters" field on SharedArrayRawBuffer,
+   // and it provides the necessary memory fence.
+@@ -1262,6 +1321,7 @@ static FutexThread::WaitResult AtomicsWait(
+ 
+   // Step 32
+   return retval;
++#endif
+ }
+ 
+ FutexThread::WaitResult js::atomics_wait_impl(
+@@ -1321,6 +1381,16 @@ static bool DoAtomicsWait(JSContext* cx, bool isAsync,
+     return false;
+   }
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  // An async waiter would sit in the per-buffer list, which no other member
++  // and no nested WebAssembly notify can reach. Refuse it instead.
++  if (isAsync) {
++    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                              JSMSG_ATOMICS_WAIT_NOT_ALLOWED);
++    return false;
++  }
++#endif
++
+   // Step 11.
+   Rooted<SharedArrayBufferObject*> unwrappedSab(
+       cx, unwrappedTypedArray->bufferShared());
+@@ -1454,6 +1524,25 @@ bool js::atomics_notify_impl(JSContext* cx, SharedArrayRawBuffer* sarb,
+   // Step 8
+   *woken = 0;
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  if (count == 0) {
++    return true;
++  }
++  auto address = uint32_t(
++      uintptr_t(sarb->dataPointerShared().unwrap(/* the futex key */)) +
++      byteOffset);
++  // A negative count wakes every waiter.
++  uint32_t limit = count < 0 || count > int64_t(UINT32_MAX) ? UINT32_MAX
++                                                            : uint32_t(count);
++  int32_t result = bun_futex_wake(address, limit);
++  if (result < 0) {
++    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                              JSMSG_ATOMICS_WAIT_NOT_ALLOWED);
++    return false;
++  }
++  *woken = result;
++  return true;
++#else
+   Rooted<GCVector<PromiseObject*>> promisesToResolve(
+       cx, GCVector<PromiseObject*>(cx));
+   {
+@@ -1530,6 +1619,7 @@ bool js::atomics_notify_impl(JSContext* cx, SharedArrayRawBuffer* sarb,
+ 
+   // Step 13.
+   return true;
++#endif
+ }
+ 
+ // ES2021 draft rev bd868f20b8c574ad6689fba014b62a1dba819e56
+diff --git i/js/src/vm/SharedArrayObject.cpp w/js/src/vm/SharedArrayObject.cpp
+index b27860a87..33e555f1c 100644
+--- i/js/src/vm/SharedArrayObject.cpp
++++ w/js/src/vm/SharedArrayObject.cpp
+@@ -14,6 +14,9 @@
+ #include "jit/AtomicOperations.h"
+ #include "jit/InlinableNatives.h"
+ #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
++#ifdef BUN_WASM_SHARED_GROUP
++#  include "js/GCAPI.h"  // JS::PrepareForFullGC, JS::NonIncrementalGC
++#endif
+ #include "js/Prefs.h"
+ #include "js/PropertySpec.h"
+ #include "js/SharedArrayBuffer.h"
+@@ -57,6 +60,45 @@ static size_t SharedArrayMappedSize(bool isWasm, size_t length) {
+   return NonWasmSharedArrayAllocSize(length);
+ }
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++// The bun-wasm core leases one group region per fixed-length buffer, so another
++// member of the memory group can attach the same bytes. A release is only
++// queued; the core returns the region on its next allocation or at member stop.
++extern "C" {
++uint32_t bun_shared_buffer_alloc(uint32_t bytes);
++void bun_shared_buffer_release(uint32_t address);
++}
++
++SharedArrayRawBuffer* SharedArrayRawBuffer::AllocateForGroupRegion(
++    uint8_t* data, size_t length, bool owns) {
++  MOZ_RELEASE_ASSERT(data);
++  MOZ_RELEASE_ASSERT(length <= ArrayBufferObject::ByteLengthLimit);
++  static_assert(sizeof(SharedArrayRawBuffer) %
++                        ArrayBufferObject::ARRAY_BUFFER_ALIGNMENT ==
++                    0,
++                "group-region headers keep the engine-allocated layout rule");
++  uint8_t* p = js_pod_malloc<uint8_t>(sizeof(SharedArrayRawBuffer));
++  if (!p) {
++    return nullptr;
++  }
++  return new (p) SharedArrayRawBuffer(GroupRegion{}, data, length, owns);
++}
++
++// Only the header belongs to this zone when the region is borrowed.
++static size_t SharedArrayAccountedSize(const SharedArrayRawBuffer* buffer,
++                                       size_t length) {
++  if (buffer->usesGroupRegion() && !buffer->ownsGroupRegion()) {
++    return sizeof(SharedArrayRawBuffer);
++  }
++  return SharedArrayMappedSize(buffer->isWasm(), length);
++}
++#else
++static size_t SharedArrayAccountedSize(const SharedArrayRawBuffer* buffer,
++                                       size_t length) {
++  return SharedArrayMappedSize(buffer->isWasm(), length);
++}
++#endif
++
+ SharedArrayRawBuffer* SharedArrayRawBuffer::Allocate(bool isGrowable,
+                                                      size_t length,
+                                                      size_t maxLength) {
+@@ -65,6 +107,26 @@ SharedArrayRawBuffer* SharedArrayRawBuffer::Allocate(bool isGrowable,
+   MOZ_ASSERT_IF(!isGrowable, length == maxLength);
+   MOZ_ASSERT_IF(isGrowable, length <= maxLength);
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  // A growable buffer keeps engine-owned storage: its reservation is not a
++  // region another member could attach.
++  if (!isGrowable) {
++    if (length > UINT32_MAX) {
++      return nullptr;
++    }
++    uint32_t address = bun_shared_buffer_alloc(uint32_t(length));
++    if (!address) {
++      return nullptr;
++    }
++    auto* data = reinterpret_cast<uint8_t*>(uintptr_t(address));
++    auto* buffer = AllocateForGroupRegion(data, length, /* owns = */ true);
++    if (!buffer) {
++      bun_shared_buffer_release(address);
++    }
++    return buffer;
++  }
++#endif
++
+   size_t allocSize = NonWasmSharedArrayAllocSize(maxLength);
+   uint8_t* p = js_pod_calloc<uint8_t>(allocSize);
+   if (!p) {
+@@ -278,6 +340,11 @@ void SharedArrayRawBuffer::dropReference() {
+     UnmapBufferMemory(addressType, basePointer, mappedSizeWithHeader,
+                       committedSize);
+   } else {
++#ifdef BUN_WASM_SHARED_GROUP
++    if (ownsGroupRegion()) {
++      bun_shared_buffer_release(uint32_t(uintptr_t(regionData_)));
++    }
++#endif
+     js_delete(this);
+   }
+ }
+@@ -565,7 +632,15 @@ bool SharedArrayBufferObject::sliceImpl(JSContext* cx, const CallArgs& args) {
+     }
+ 
+     // Step 18.
+-    if (obj->rawBufferObject() == unwrappedResult->rawBufferObject()) {
++#ifdef BUN_WASM_SHARED_GROUP
++    // Views of one group region are distinct headers over the same storage.
++    bool sameStorage =
++        obj->dataPointerShared() == unwrappedResult->dataPointerShared();
++#else
++    bool sameStorage =
++        obj->rawBufferObject() == unwrappedResult->rawBufferObject();
++#endif
++    if (sameStorage) {
+       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                 JSMSG_SAME_SHARED_ARRAY_BUFFER_RETURNED);
+       return false;
+@@ -693,6 +768,15 @@ FixedLengthSharedArrayBufferObject* SharedArrayBufferObject::New(
+   bool isGrowable = false;
+   size_t maxLength = length;
+   auto* buffer = SharedArrayRawBuffer::Allocate(isGrowable, length, maxLength);
++#ifdef BUN_WASM_SHARED_GROUP
++  if (!buffer) {
++    // Dead buffers still hold their regions until they are finalized. One full
++    // collection finalizes them in the foreground, then the core can reuse them.
++    JS::PrepareForFullGC(cx);
++    JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::LAST_DITCH);
++    buffer = SharedArrayRawBuffer::Allocate(isGrowable, length, maxLength);
++  }
++#endif
+   if (!buffer) {
+     js::ReportOutOfMemory(cx);
+     return nullptr;
+@@ -778,8 +862,7 @@ SharedArrayBufferType* SharedArrayBufferObject::NewWith(
+ bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
+                                               size_t length) {
+   MOZ_ASSERT(!isInitialized());
+-  if (!zone()->addSharedMemory(buffer,
+-                               SharedArrayMappedSize(buffer->isWasm(), length),
++  if (!zone()->addSharedMemory(buffer, SharedArrayAccountedSize(buffer, length),
+                                MemoryUse::SharedArrayRawBuffer)) {
+     return false;
+   }
+@@ -792,7 +875,7 @@ bool SharedArrayBufferObject::acceptRawBuffer(SharedArrayRawBuffer* buffer,
+ 
+ void SharedArrayBufferObject::dropRawBuffer() {
+   size_t length = byteLengthOrMaxByteLength();
+-  size_t size = SharedArrayMappedSize(isWasm(), length);
++  size_t size = SharedArrayAccountedSize(rawBufferObject(), length);
+   zoneFromAnyThread()->removeSharedMemory(rawBufferObject(), size,
+                                           MemoryUse::SharedArrayRawBuffer);
+   rawBufferObject()->dropReference();
+@@ -1041,6 +1124,32 @@ JS_PUBLIC_API JSObject* JS::NewSharedArrayBuffer(JSContext* cx, size_t nbytes) {
+                                       /* proto = */ nullptr);
+ }
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++JS_PUBLIC_API JSObject* JS::NewSharedArrayBufferOverGroupRegion(
++    JSContext* cx, uint8_t* data, size_t nbytes) {
++  MOZ_ASSERT(cx->realm()->creationOptions().getSharedMemoryAndAtomicsEnabled());
++
++  if (nbytes > ArrayBufferObject::ByteLengthLimit) {
++    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                              JSMSG_SHARED_ARRAY_BAD_LENGTH);
++    return nullptr;
++  }
++
++  auto* buffer = SharedArrayRawBuffer::AllocateForGroupRegion(
++      data, nbytes, /* owns = */ false);
++  if (!buffer) {
++    js::ReportOutOfMemory(cx);
++    return nullptr;
++  }
++
++  auto* obj = SharedArrayBufferObject::New(cx, buffer, nbytes);
++  if (!obj) {
++    buffer->dropReference();
++  }
++  return obj;
++}
++#endif
++
+ JS_PUBLIC_API bool JS::IsSharedArrayBufferObject(JSObject* obj) {
+   return obj->canUnwrapAs<SharedArrayBufferObject>();
+ }
+diff --git i/js/src/vm/SharedArrayObject.h w/js/src/vm/SharedArrayObject.h
+index ec23e2c1c..25be2c657 100644
+--- i/js/src/vm/SharedArrayObject.h
++++ w/js/src/vm/SharedArrayObject.h
+@@ -66,6 +66,16 @@ class SharedArrayRawBuffer {
+   // representing tasks waiting on some location within this buffer.
+   FutexWaiterListHead waiters_;
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  // bun-wasm memory group: storage in a group region instead of after this
++  // header. The region never moves, so the pointer is stable for the life of
++  // the header. Null for buffers whose data follows the header.
++  uint8_t* regionData_ = nullptr;
++  // Whether dropping the last reference returns the region to the core. A
++  // view over a WebAssembly.Memory region borrows it and returns nothing.
++  uint32_t ownsRegion_ = 0;
++#endif
++
+  protected:
+   SharedArrayRawBuffer(bool isGrowableJS, uint8_t* buffer, size_t length)
+       : isWasm_(false),
+@@ -75,6 +85,18 @@ class SharedArrayRawBuffer {
+     MOZ_ASSERT(buffer == dataPointerShared());
+   }
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  enum class GroupRegion {};
++
++  SharedArrayRawBuffer(GroupRegion, uint8_t* data, size_t length, bool owns)
++      : isWasm_(false),
++        isGrowableJS_(false),
++        refcount_(1),
++        length_(length),
++        regionData_(data),
++        ownsRegion_(owns) {}
++#endif
++
+   enum class WasmBuffer {};
+ 
+   SharedArrayRawBuffer(WasmBuffer, uint8_t* buffer, size_t length)
+@@ -86,6 +108,16 @@ class SharedArrayRawBuffer {
+   static SharedArrayRawBuffer* Allocate(bool isGrowable, size_t length,
+                                         size_t maxLength);
+ 
++#ifdef BUN_WASM_SHARED_GROUP
++  // A header for |length| bytes of group-region storage at |data|. The caller
++  // keeps a borrowed region alive for as long as any object can reach it.
++  static SharedArrayRawBuffer* AllocateForGroupRegion(uint8_t* data,
++                                                      size_t length, bool owns);
++
++  bool usesGroupRegion() const { return regionData_ != nullptr; }
++  bool ownsGroupRegion() const { return ownsRegion_ != 0; }
++#endif
++
+   inline WasmSharedArrayRawBuffer* toWasmBuffer();
+ 
+   // This may be called from multiple threads.  The caller must take
+@@ -215,6 +247,11 @@ inline WasmSharedArrayRawBuffer* SharedArrayRawBuffer::toWasmBuffer() {
+ }
+ 
+ inline SharedMem<uint8_t*> SharedArrayRawBuffer::dataPointerShared() const {
++#ifdef BUN_WASM_SHARED_GROUP
++  if (regionData_) {
++    return SharedMem<uint8_t*>::shared(regionData_);
++  }
++#endif
+   uint8_t* ptr =
+       reinterpret_cast<uint8_t*>(const_cast<SharedArrayRawBuffer*>(this));
+   ptr += isWasm() ? sizeof(WasmSharedArrayRawBuffer)
