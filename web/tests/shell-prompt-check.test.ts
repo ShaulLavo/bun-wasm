@@ -117,7 +117,7 @@ const transcriptCallers = [
 ];
 const nonTranscriptCallers = [
   // The unit-test module hook substitutes helpers without reading a real browser transcript.
-  "scripts/fixtures/stack-measurement-provider.ts",
+  "scripts/fixtures/stack-measurement-provider.ts", "scripts/fixtures/quickjs-stack-policy.ts",
   "sandbox/tests/startup-cache.mjs", "sandbox/tests/next-dev.ts", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
