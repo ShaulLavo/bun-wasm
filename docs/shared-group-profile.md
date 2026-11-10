@@ -98,8 +98,8 @@ optional growth room that yields to what the group and backing budget have left.
 atomic, holes are never added together, and a reservation never moves or shrinks, so admission is
 first-come: growth below the declared maximum, and a later worker's memory, can be refused because
 of what was admitted earlier. The declared maximum stays the limit used for import matching. The
-Browser host does not do this yet: it still commits the declared maximum and refuses a 65536-page
-one at any size.
+Browser host follows the same rule through Waffle's exact-length regions, so its optional growth
+room is chosen in steps rather than as half of what is left.
 
 ## Processes on the Browser host
 
@@ -107,6 +107,8 @@ The page admits a group core as the first member of a new group. A `worker_threa
 its parent's group, and any other spawn starts its own. Members share WebAssembly objects by
 reference, as on the native host. The runtime that hosts it needs the `memoryGroups` policy above
 (`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's 1 GiB, and
-the host still commits each Memory's declared maximum. [The Browser nested host
-record](bun-patches/shared-nested-browser.md) lists how it differs from the native host.
+each Memory's reservation is committed in full when it is created. A shared-backend module may
+export its function tables on both hosts. One that exports a global loads on the native host only.
+[The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs from
+the native host.
 

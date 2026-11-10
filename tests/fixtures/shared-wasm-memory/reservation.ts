@@ -1,5 +1,6 @@
 // Group-guest admission of shared memories whose declared maximum is larger than the storage the
-// group selects. These limits are host resources, so only guest.ts runs this file.
+// group selects. These limits are host resources, so this runs alone in its own group guest, on
+// the native host and on the Browser host.
 import { strict as assert } from 'node:assert';
 
 const PAGE = 65536;

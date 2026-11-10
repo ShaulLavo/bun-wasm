@@ -2,7 +2,9 @@
 // (crates/bunwasm-host/src/nested.rs). Regionized modules run on the page's own WebAssembly in
 // this member's worker, over regions of the group memory the embedded engine's SABs alias.
 import { WasiExit } from "waffle/core/wasi";
-import { readModuleInfo, type FunctionType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
+import { compileSections, section, utf8Name } from "./binary.js";
+import { FunctionTypes, type WasmFunction } from "./function-type.js";
+import { isReference, readModuleInfo, type FunctionType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
 import {
   BACKEND, BAD_FRAME, FRAME_ALIGN, FRAME_BYTES, MAX_DEPTH, MAX_RESOURCES, MAX_VALUES, OK, PENDING_EXCEPTION,
   decodeRequest, encodeReply, type Binding, type Reply, type Request, type WasmNumber,
@@ -14,11 +16,16 @@ import {
 
 const PAGE_BYTES = 65536;
 const MAX_GROUP_PAGES = 65536;
+/** The largest reservation whose byte length is still a signed 32-bit size, as on the native host. */
+const MAX_RESERVATION_PAGES = 32767;
+/** Optional growth room when the declared maximum cannot fit. A preference, never a refusal. */
+const PREFERRED_FALLBACK_HEADROOM_PAGES = 1024;
 const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
-const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [48, "NoMem"], [71, "Search"]]);
-const TABLE_AND_GLOBAL_REFUSAL = "Nested tables and globals are not available on the Browser host";
-const TABLE_AND_GLOBAL_REQUESTS = ["TableExport", "TableLength", "TableGet", "TableSet", "TableGrow", "GlobalGet", "GlobalSet"];
+const NO_MEMORY = 48;
+const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
+const GLOBAL_REFUSAL = "Nested globals are not available on the Browser host";
+const GLOBAL_REQUESTS = ["GlobalGet", "GlobalSet"];
 const MODULE_ALIGN = 16;
 const encoder = new TextEncoder();
 
@@ -40,18 +47,12 @@ interface WasiImports { imports(module: WebAssembly.Module): WebAssembly.Imports
 
 /** A core-validated group core imports only the functions it uses; this names the rest. */
 function declarationModule(): WebAssembly.Module {
-  const unsigned = (value: number): number[] => value < 0x80 ? [value] : [(value & 0x7f) | 0x80].concat(unsigned(value >>> 7));
-  const name = (text: string) => [text.length].concat(Array.from(new TextEncoder().encode(text)));
-  const section = (id: number, content: number[]) => [id].concat(unsigned(content.length), content);
   const i32 = 0x7f, i64 = 0x7e;
   const signature = (params: number[]) => [0x60, params.length].concat(params, [1, i32]);
   const types = [signature([i32, i32, i32]), signature([i32]), signature([i32, i32, i64]), signature([i32, i64, i64]), signature([i32, i32]), signature([i32, i32, i32, i32, i32])];
   const functions: readonly (readonly [string, number])[] = [["shm_create", 0], ["shm_detach", 1], ["futex_wait32", 2], ["futex_wait64", 3], ["futex_wake", 4], ["shm_publish", 5], ["shm_publication_open", 0], ["shm_withdraw", 1]];
-  const imports = functions.flatMap(([text, type]) => name("runtime_shm").concat(name(text), [0, type]));
-  return new WebAssembly.Module(Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0].concat(
-    section(1, [types.length].concat(types.flat())),
-    section(2, [functions.length].concat(imports)),
-  )));
+  const imports = functions.flatMap(([text, type]) => utf8Name("runtime_shm").concat(utf8Name(text), [0, type]));
+  return compileSections(section(1, [types.length].concat(types.flat())), section(2, [functions.length].concat(imports)));
 }
 
 export function regionProvider(wasi: WasiImports): RegionProvider {
@@ -66,6 +67,10 @@ class PendingException extends Error {}
 class NestedExecution extends Error {
   constructor(message: string) { super(`nested execution failed: ${message}`); }
 }
+/** An index or size a table refuses. The guest sees a RangeError, as on the native host. */
+class TableRange extends Error {
+  constructor() { super("WebAssembly table index or size out of range"); }
+}
 
 interface Entries {
   readonly alloc: (size: number, align: number) => number;
@@ -74,26 +79,48 @@ interface Entries {
 }
 
 /**
+ * Sizes to ask the group owner for, largest first: the declared maximum, then the required pages
+ * with optional growth room that halves until it fits, then the required pages alone. Each request
+ * is one owner step that changes nothing when refused, so the choice needs no view of the owner's
+ * free space and cannot race another member.
+ */
+function reservationSizes(required: number, desired: number): number[] {
+  const sizes = [desired];
+  for (let room = PREFERRED_FALLBACK_HEADROOM_PAGES; room > 0; room >>>= 1) {
+    if (required + room < desired) sizes.push(required + room);
+  }
+  if (required < desired) sizes.push(required);
+  return sizes;
+}
+
+/**
  * One member's lease on a nested memory. The length lives in a group cell so every member sees one
  * value. Growth only moves that cell: Waffle zeroes the whole reservation when it is created.
+ * `maximum` is the declared limit that imports are matched against. `reserved` is the storage the
+ * group holds for it: never more than the maximum allows, often less, and one identity page for a
+ * zero-maximum memory.
  */
 class Region {
   released = false;
+  /** Both bounds: a zero-maximum memory's identity page must never become visible. */
+  private readonly limit: number;
   constructor(
     readonly handle: number, readonly cellHandle: number, readonly base: number, readonly maximum: number,
-    private readonly cells: Int32Array,
-  ) {}
+    readonly reserved: number, private readonly cells: Int32Array,
+  ) { this.limit = Math.min(maximum, reserved); }
   /** Group memory is writable by every member, so the cell is checked on each read. */
   get pages(): number {
     const pages = Atomics.load(this.cells, CELL_PAGES) >>> 0;
-    if (pages > this.maximum) throw new NestedExecution("nested memory page count is corrupt");
+    if (pages > this.limit) throw new NestedExecution("nested memory page count is corrupt");
     return pages;
   }
   get bytes(): number { return this.pages * PAGE_BYTES; }
+  /** The admitted contiguous storage, charged in full whatever is visible. */
+  get reservedBytes(): number { return this.reserved * PAGE_BYTES; }
   grow(delta: number): number {
     for (;;) {
       const old = this.pages;
-      if (old + delta > this.maximum) return -1;
+      if (old + delta > this.limit) return -1;
       if (Atomics.compareExchange(this.cells, CELL_PAGES, old, old + delta) === old) return old;
     }
   }
@@ -154,11 +181,23 @@ function getResource<T>(items: readonly T[], id: number, message: string): T {
   return item;
 }
 
+/** One handle per object: the JS API hands out one function or table object however it is reached. */
+function internResource<K, T>(ids: Map<K, number>, items: T[], key: K, create: () => T): number {
+  let id = ids.get(key);
+  if (id === undefined) {
+    id = pushResource(items, create());
+    ids.set(key, id);
+  }
+  return id;
+}
+
 /** `bytes` is kept only for a module this member compiled: a received one already has a token. */
 interface CompiledModule { readonly module: WebAssembly.Module; readonly info: ModuleInfo; readonly bytes?: Uint8Array<ArrayBuffer>; }
 interface Created { readonly handle: number; readonly address: number; }
 interface Guest{ readonly instance: WebAssembly.Instance; readonly compiled: CompiledModule; readonly memory: Region; }
-interface NestedFunction { readonly fn: (...args: unknown[]) => unknown; readonly type: FunctionType; }
+interface NestedFunction { readonly fn: WasmFunction; readonly type: FunctionType; }
+/** `owner` is the module whose instance exported the table: where an entry's type is looked for first. */
+interface NestedTable { readonly table: WebAssembly.Table; readonly owner: ModuleInfo; }
 
 const floats = new Float32Array(1);
 const floatBits = new Uint32Array(floats.buffer);
@@ -227,21 +266,25 @@ function isTrap(error: unknown): error is Error {
   return error instanceof WebAssembly.RuntimeError || error instanceof RangeError || (error instanceof Error && error.name === "InternalError");
 }
 
+function errorCategory(error: unknown, category: string): string {
+  if (error instanceof TableRange) return "RangeError";
+  return isTrap(error) || error instanceof NestedExecution ? "RuntimeError" : category;
+}
+
 function replyError(error: unknown, category: string): Reply {
   if (error instanceof PendingException) return "PendingException";
-  const execution = isTrap(error) || error instanceof NestedExecution;
-  return { Error: { category: execution ? "RuntimeError" : category, message: error instanceof Error ? error.message : String(error) } };
+  return { Error: { category: errorCategory(error, category), message: error instanceof Error ? error.message : String(error) } };
 }
 
 function bindingNames(binding: Binding): { module: string; name: string } {
   return "Callback" in binding ? binding.Callback : "Function" in binding ? binding.Function : binding.Global;
 }
 
-/** One path for Compile and AttachModule, so both keep the table and global refusal. */
+/** One path for Compile and AttachModule, so both keep the global refusal. */
 function compileRegionized(bytes: Uint8Array<ArrayBuffer>): Pick<CompiledModule, "module" | "info"> {
   const module = new WebAssembly.Module(bytes);
   // Refuse here, before an instance's start code can run and then fail building its exports.
-  if (WebAssembly.Module.exports(module).some(item => item.kind === "table" || item.kind === "global")) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
+  if (WebAssembly.Module.exports(module).some(item => item.kind === "global")) throw new Error(GLOBAL_REFUSAL);
   return { module, info: readModuleInfo(bytes) };
 }
 
@@ -256,7 +299,10 @@ export class NestedHost {
   private readonly modules: CompiledModule[] = [];
   private readonly guests: Guest[] = [];
   private readonly functions: NestedFunction[] = [];
-  private readonly functionIds = new Map<unknown, number>();
+  private readonly functionIds = new Map<WasmFunction, number>();
+  private readonly functionTypes = new FunctionTypes();
+  private readonly tables: NestedTable[] = [];
+  private readonly tableIds = new Map<WebAssembly.Table, number>();
   private readonly regions = new Slots<Region>();
   private readonly invocations: number[] = [];
 
@@ -282,8 +328,9 @@ export class NestedHost {
   snapshot() {
     const regions = this.regions.live();
     return {
-      modules: this.modules.length, instances: this.guests.length, functions: this.functions.length, memories: regions.length,
-      reservedCommittedBytes: regions.reduce((sum, region) => sum + Math.max(region.maximum, 1) * PAGE_BYTES, 0),
+      modules: this.modules.length, instances: this.guests.length, tables: this.tables.length,
+      functions: this.functions.length, memories: regions.length,
+      reservedCommittedBytes: regions.reduce((sum, region) => sum + region.reservedBytes, 0),
       visibleBytes: regions.reduce((sum, region) => sum + region.bytes, 0),
       coreFailed: this.coreFailed, activeInvocations: this.invocations.length,
       instantiationAttempts: this.instantiationAttempts, failedInstantiations: this.failedInstantiations,
@@ -376,20 +423,41 @@ export class NestedHost {
       const { module, memory, bindings, invocation } = request.Instantiate;
       return this.enter(invocation, () => this.instantiate(module, memory, bindings));
     }
-    if (TABLE_AND_GLOBAL_REQUESTS.some(name => name in request)) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
+    if ("TableExport" in request) return this.tableExport(request.TableExport.instance, request.TableExport.name);
+    if ("TableLength" in request) return { Count: this.table(request.TableLength.table).table.length };
+    if ("TableGet" in request) return this.tableGet(request.TableGet.table, request.TableGet.index);
+    if ("TableSet" in request) return this.tableSet(request.TableSet.table, request.TableSet.index, request.TableSet.function);
+    if ("TableGrow" in request) return this.tableGrow(request.TableGrow.table, request.TableGrow.delta, request.TableGrow.function);
+    if (GLOBAL_REQUESTS.some(item => item in request)) throw new Error(GLOBAL_REFUSAL);
     if (!("Call" in request)) throw new Error("Unknown nested request");
     const { function: id, arguments: args, invocation } = request.Call;
     return this.enter(invocation, () => this.call(id, args));
   }
 
+  /**
+   * A reservation is one stable contiguous range chosen from what the group has now. The declared
+   * maximum is a limit, not a promise of storage: it is reserved when it fits, and otherwise only
+   * the initial bytes must fit. Optional growth room never refuses bytes that do fit.
+   */
   private reserve(initial: number, maximum: number): Reply {
     if (initial > maximum || maximum > MAX_GROUP_PAGES) throw new Error("region admission: Inval");
-    // A four-GiB reservation overflows the provider's 32-bit length, as it does natively.
-    if (maximum >= MAX_GROUP_PAGES) throw new Error("region admission: NoMem");
+    if (initial > MAX_RESERVATION_PAGES) throw new Error("region admission: NoMem");
+    if (!this.regions.hasRoom()) throw new Error("nested resource limit");
+    // A zero-page memory still owns one charged page, so its identity is a distinct address.
+    const sizes = reservationSizes(Math.max(initial, 1), Math.min(Math.max(maximum, 1), MAX_RESERVATION_PAGES));
     return this.withOutput(8, out => {
-      const data = this.createRegion(Math.max(maximum, 1) * PAGE_BYTES, PAGE_BYTES, out);
-      return { Handle: this.reserveCell(data, initial, maximum, out) };
+      for (const pages of sizes) {
+        const memory = this.reserveAt(pages, initial, maximum, out);
+        if (memory !== undefined) return { Handle: memory };
+      }
+      throw new Error("region admission: NoMem");
     });
+  }
+
+  /** One attempt. `undefined` means the group has no room for this size and its page cell. */
+  private reserveAt(pages: number, initial: number, maximum: number, out: number): number | undefined {
+    const data = this.tryCreateRegion(pages * PAGE_BYTES, PAGE_BYTES, out);
+    return data && this.reserveCell(data, pages, initial, maximum, out);
   }
 
   /** A temporary output span in member memory, for Waffle's checked output pointers. */
@@ -399,29 +467,41 @@ export class NestedHost {
     finally { if (!this.coreFailed) this.inCore(entries => entries.free(out, bytes, FRAME_ALIGN)); }
   }
 
-  private createRegion(length: number, align: number, out: number): Created {
+  /** `undefined` when the group has no room for it. Every other refusal is an error. */
+  private tryCreateRegion(length: number, align: number, out: number): Created | undefined {
     const status = this.region().shm_create(length, align, out);
+    if (status === -NO_MEMORY) return undefined;
     if (status < 0) throw new Error(`region admission: ${shmError(status)}`);
     const view = new DataView(this.shared().buffer);
     return { handle: view.getUint32(out, true), address: view.getUint32(out + 4, true) };
   }
 
+  private createRegion(length: number, align: number, out: number): Created {
+    const created = this.tryCreateRegion(length, align, out);
+    if (!created) throw new Error("region admission: NoMem");
+    return created;
+  }
+
   private detach(handle: number): void { this.region().shm_detach(handle); }
 
-  /** An unpublished region must not stay charged to the group. */
-  private reserveCell(data: Created, initial: number, maximum: number, out: number): number {
-    try { return this.insertReserved(data, this.createRegion(CELL_BYTES, CELL_ALIGN, out), initial, maximum); }
-    catch (error) {
+  /** An unpublished region must not stay charged to the group, whether its cell fails or has no room. */
+  private reserveCell(data: Created, pages: number, initial: number, maximum: number, out: number): number | undefined {
+    try {
+      const cell = this.tryCreateRegion(CELL_BYTES, CELL_ALIGN, out);
+      if (cell) return this.insertReserved(data, cell, pages, initial, maximum);
+    } catch (error) {
       this.detach(data.handle);
       throw error;
     }
+    this.detach(data.handle);
+    return undefined;
   }
 
-  private insertReserved(data: Created, cell: Created, initial: number, maximum: number): number {
+  private insertReserved(data: Created, cell: Created, pages: number, initial: number, maximum: number): number {
     try {
       const cells = new Int32Array(this.shared().buffer, cell.address, CELL_BYTES / Int32Array.BYTES_PER_ELEMENT);
       Atomics.store(cells, CELL_PAGES, initial);
-      return this.regions.insert(new Region(data.handle, cell.handle, data.address, maximum, cells));
+      return this.regions.insert(new Region(data.handle, cell.handle, data.address, maximum, pages, cells));
     } catch (error) {
       this.detach(cell.handle);
       throw error;
@@ -461,8 +541,8 @@ export class NestedHost {
     if (!this.regions.hasRoom()) throw new Error("nested resource limit");
     const value = this.openPublication(token, MEMORY_PUBLICATION);
     try {
-      const { maximum, cells } = validateMemory(value, this.shared().buffer);
-      return { Handle: this.regions.insert(new Region(value.primary, value.companion, value.primaryAddress, maximum, cells)) };
+      const { maximum, reserved, cells } = validateMemory(value, this.shared().buffer);
+      return { Handle: this.regions.insert(new Region(value.primary, value.companion, value.primaryAddress, maximum, reserved, cells)) };
     } catch (error) {
       this.releaseHolds(value);
       throw error;
@@ -504,7 +584,7 @@ export class NestedHost {
 
   private span(id: number): Reply {
     const region = this.regions.get(id);
-    return { Memory: { pointer: region.base, pages: region.pages, maximum: region.maximum, committed: Math.max(region.maximum, 1) * PAGE_BYTES } };
+    return { Memory: { pointer: region.base, pages: region.pages, maximum: region.maximum, committed: region.reservedBytes } };
   }
 
   private growRegion(id: number, delta: number): Reply {
@@ -668,13 +748,71 @@ export class NestedHost {
     const value = guest.instance.exports[name];
     const type = guest.compiled.info.exports.get(name);
     if (typeof value !== "function" || !type) throw new Error("missing nested function");
-    if (type.params.concat(type.results).includes("ref")) throw new Error("reference/SIMD values cannot cross this nested JS ABI");
-    let id = this.functionIds.get(value);
-    if (id === undefined) {
-      id = pushResource(this.functions, { fn: value as NestedFunction["fn"], type });
-      this.functionIds.set(value, id);
-    }
+    return this.functionReply(value as WasmFunction, () => type);
+  }
+
+  /** One id per function, whether an export or a table entry named it. `resolve` runs for a new one. */
+  private functionReply(fn: WasmFunction, resolve: () => FunctionType): Reply {
+    const known = this.functionIds.get(fn);
+    const type = known === undefined ? resolve() : getResource(this.functions, known, "invalid function").type;
+    if (type.params.concat(type.results).some(isReference)) throw new Error("reference/SIMD values cannot cross this nested JS ABI");
+    const id = internResource(this.functionIds, this.functions, fn, () => ({ fn, type }));
     return { Function: { id, params: type.params, results: type.results } };
+  }
+
+  private tableExport(instanceId: number, name: string): Reply {
+    const guest = getResource(this.guests, instanceId, "invalid instance");
+    const table = guest.instance.exports[name];
+    if (!(table instanceof WebAssembly.Table)) throw new Error("missing nested table");
+    if (guest.compiled.info.tables.get(name) !== "funcref") throw new Error("unsupported nested table element");
+    return { Handle: internResource(this.tableIds, this.tables, table, () => ({ table, owner: guest.compiled.info })) };
+  }
+
+  private table(id: number): NestedTable { return getResource(this.tables, id, "invalid nested table"); }
+
+  private tableGet(id: number, index: number): Reply {
+    const { table, owner } = this.table(id);
+    if (index >= table.length) throw new TableRange();
+    const entry = table.get(index) as WasmFunction | null;
+    if (entry === null) return "Null";
+    return this.functionReply(entry, () => this.entryType(entry, owner));
+  }
+
+  /**
+   * A new entry is a function of the table's own module, unexported or imported: tables are never
+   * imported, and a function set from outside already has an id. The engine's link check names its
+   * type. The entry's name (its index where it was defined) only says which signature to try first.
+   */
+  private entryType(fn: WasmFunction, owner: ModuleInfo): FunctionType {
+    const type = this.functionTypes.find(fn, this.entryCandidates(fn, owner));
+    if (!type) throw new Error("nested table entry has no known function type");
+    return type;
+  }
+
+  private *entryCandidates(fn: WasmFunction, owner: ModuleInfo): Iterable<FunctionType> {
+    const hinted = owner.functions[Number(fn.name)];
+    if (hinted) yield hinted;
+    yield* owner.types;
+  }
+
+  private tableEntry(id: number | null): WasmFunction | null {
+    return id === null ? null : getResource(this.functions, id, "invalid nested function").fn;
+  }
+
+  private tableSet(id: number, index: number, functionId: number | null): Reply {
+    const { table } = this.table(id);
+    const entry = this.tableEntry(functionId);
+    if (index >= table.length) throw new TableRange();
+    table.set(index, entry);
+    return { Count: 0 };
+  }
+
+  /** The table's declared maximum and the engine's own limit decide, as the Store's do natively. */
+  private tableGrow(id: number, delta: number, functionId: number | null): Reply {
+    const { table } = this.table(id);
+    const entry = this.tableEntry(functionId);
+    try { return { Count: table.grow(delta, entry) }; }
+    catch (error) { throw error instanceof RangeError ? new TableRange() : error; }
   }
 
   private call(id: number, args: readonly WasmNumber[]): Reply {

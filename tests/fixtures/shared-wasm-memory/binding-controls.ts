@@ -10,6 +10,7 @@ for (const name of [
   'plain-sab-guest',
   'table-global',
   'table-global-guest',
+  'table-controls',
 ]) {
   const child = Bun.spawn([process.execPath, 'run', `${import.meta.dir}/${name}.ts`], { stdout: 'pipe', stderr: 'inherit' });
   const [output, status] = await Promise.all([new Response(child.stdout).text(), child.exited]);

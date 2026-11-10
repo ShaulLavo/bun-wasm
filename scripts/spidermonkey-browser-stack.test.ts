@@ -6,9 +6,9 @@ const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.
 
 test("SpiderMonkey Browser qualification adds direct tier, recursion and reentry controls before the unchanged group assertions", () => {
   const driver = source("web/tests/shared-wasm-memory-browser.ts");
-  expect(driver.indexOf("assertSpiderMonkeyCanary(await runEntry")).toBeLessThan(driver.indexOf('const entries = override'));
-  expect(driver.indexOf("assertSpiderMonkeyRecursion(await runEntry")).toBeLessThan(driver.indexOf('const entries = override'));
-  expect(driver.indexOf("assertSpiderMonkeyReentry(await runEntry")).toBeLessThan(driver.indexOf('const entries = override'));
+  expect(driver.indexOf("assertSpiderMonkeyCanary(await runEntry")).toBeLessThan(driver.indexOf('const entries = oxcTree'));
+  expect(driver.indexOf("assertSpiderMonkeyRecursion(await runEntry")).toBeLessThan(driver.indexOf('const entries = oxcTree'));
+  expect(driver.indexOf("assertSpiderMonkeyReentry(await runEntry")).toBeLessThan(driver.indexOf('const entries = oxcTree'));
   expect(driver).toContain('"a refused reentry must leave the callback usable"');
   expect(driver).toContain('tier !== "interp" && tier !== "pbl"');
   expect(driver).toContain('"selected portable baseline never executed"');
