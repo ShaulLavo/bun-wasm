@@ -160,12 +160,24 @@ function assertSpiderMonkeyRecursion({ value, pageErrors }: EntryRun): void {
   assertRetired(value);
 }
 
+function assertSpiderMonkeyReentry({ value, pageErrors }: EntryRun): void {
+  assert.equal(value.thrown, undefined);
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.deepEqual(pageErrors, []);
+  const observed = JSON.parse(value.stdout ?? "");
+  assert.ok(observed.deepest > 0);
+  assert.equal(observed.recovered, true, "a refused reentry must leave the callback usable");
+  assert.deepEqual(value.groups, []);
+  assertRetired(value);
+}
+
 async function runBrowser(type: BrowserType, name: string, port: number): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
   if (selectedSpiderMonkey) {
     assertSpiderMonkeyCanary(await runEntry(name, port, "spidermonkey-canary.ts"));
     assertSpiderMonkeyRecursion(await runEntry(name, port, "spidermonkey-recursion.ts"));
+    assertSpiderMonkeyReentry(await runEntry(name, port, "spidermonkey-reentry.ts"));
   }
   const override = process.env.SHARED_WASM_ENTRY;
   const entries = override ? [override] : ["browser-guest.ts", DEBT_ENTRY];
