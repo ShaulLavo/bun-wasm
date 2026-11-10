@@ -368,6 +368,8 @@ child at 1024 reached 171 in the same memory group. The permanent control separa
 guest default of 2048 from an absent key that receives the host's policy. Firefox's host default
 is 960, so that child parses deeper than a 1024 parent. A child without an explicit environment
 inherits its parent's value. Each case measures the parent again after its child exits.
+Capacity actions start in a resumed promise job so the first sample does not retain module-loader
+frames that disappear while the child runs. Parent capacity equality remains exact on every engine.
 
 The two original overflow fixtures receive the same literal tuple as the sweep. A cold run
 opens a new browser context for each fixture too. A completed probe is rejected if an explicit
