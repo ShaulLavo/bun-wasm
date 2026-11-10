@@ -27,7 +27,8 @@ regression. It parses deep object and array literals from 16 stack depths,
 requires `RangeError` (QuickJS's separately tracked `invalid property name`
 SyntaxError is tolerated only on QuickJS), and checks the parser recovers after
 each overflow. The array holds `void 0` so JSC's JSON fast path in eval cannot
-bypass the parser.
+bypass the parser. Native fixture discovery runs it on QuickJS, and
+`scripts/jsc-embedding.ts` runs it on the matched JSC pair in the JSC gate.
 
 ## Classification
 

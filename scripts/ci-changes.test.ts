@@ -257,15 +257,15 @@ for (const path of [
   });
 }
 
-for (const path of [
-  "checks/native-stack-getter-headroom.json",
-  "tests/fixtures/stack-getter-headroom/index.ts",
-  "tests/fixtures/stack-getter-headroom/expected.txt",
-]) {
+for (const [path, fixture] of [
+  ["checks/native-stack-getter-headroom.json", "tests/fixtures/stack-getter-headroom"],
+  ["tests/fixtures/stack-getter-headroom/index.ts", ""],
+  ["tests/fixtures/stack-getter-headroom/expected.txt", ""],
+  ["checks/native-parser-literal-overflow.json", "tests/fixtures/parser-literal-overflow"],
+  ["tests/fixtures/parser-literal-overflow/index.ts", ""],
+] as const) {
   test.each(["pull_request", "push"])(`${path} retains the strict JSC stack embedding gate for %s`, event => {
-    const content = path.startsWith("checks/")
-      ? JSON.stringify({ owner: "native", path: "tests/fixtures/stack-getter-headroom" })
-      : "changed stack fixture input\n";
+    const content = fixture ? JSON.stringify({ owner: "native", path: fixture }) : "changed stack fixture input\n";
     expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
     expect(needsJsc([path])).toBe(true);
   });
