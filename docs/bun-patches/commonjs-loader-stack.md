@@ -34,6 +34,8 @@ Behavior the adapter preserves:
 - The wrapper receives `module.exports` as `this` and the same five arguments, or
   six for a transpiled ES module with its `import.meta` object.
 - JSON, HTML, text and required ES module formats take the same routes as before.
+- Hot-mode file requires are rejected after builtin resolution and before cache reuse.
+  The guard returns before the module body runs, so it adds no retained loader frame.
 
 The wrapper is entered through `Reflect.apply`, captured before application code.
 Module loading does not consult mutable `call` or `apply` properties on a wrapper.

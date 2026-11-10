@@ -52,8 +52,8 @@ The `delayed-finish` regression defers finish entry initialization by 500 ms;
 it does not change command budgets or any original case. The late-error control
 also permits the shared host's existing single interrupted-finish cleanup document,
 never another execution of the case body.
-The consumer uses published Waffle 0.0.117, source
-`0f7b66f7ef920aaa4486847b619e050f2e2f8643`, through public tarball pins.
+The consumer pins published Waffle 0.0.118, source
+`6e0608451a3f89c1fa0e4f17dacdc6edc5cbc900`, through public tarballs.
 The hosted controls require confirmed teardown for their session, launcher, server,
 storage and scratch. They declare neither an application fixture nor its callbacks,
 so those two cleanup owners must report `not-created`. No active owner may use that

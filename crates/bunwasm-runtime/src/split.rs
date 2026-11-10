@@ -239,6 +239,7 @@ pub(crate) fn run(options: Options) -> i32 {
         &options.args,
         &options.conditions,
         &options.exec_argv,
+        options.mode,
         options.transpiler,
     );
     SESSION.with(|session| {
