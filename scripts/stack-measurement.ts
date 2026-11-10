@@ -1,16 +1,18 @@
 // The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
 export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
   ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
+/** The chains that recurse through exactly one of JSC's two reserved parser functions per level: assignment and statement. */
+export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Assign|Block)/.test(mode));
 /** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
 export const chainMaximum = 4096;
 const stackModes = [
   "plain", "getter", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
-  "power", "ternary", "statement", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
+  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
   "async", "promise", "console",
 ].concat(chainModes);
 // Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
 const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"].concat(chainModes));
-const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "regexpnc", "lookahead"].concat(chainModes));
+const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead"].concat(chainModes));
 
 function deepestAttempt(mode: string): number {
   // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
@@ -68,10 +70,12 @@ export function chainOwnership(output: string, depth: number): ChainOwnership {
   if (!parsed || typeof parsed !== "object" || !("before" in parsed) || !("after" in parsed) || !("child" in parsed)) throw new Error("Malformed chain ownership");
   const child = parsed.child;
   if (!child || typeof child !== "object" || !("code" in child) || !("output" in child) || typeof child.output !== "string") throw new Error("Malformed chain ownership child");
-  const outcome = stackOutcome({ code: typeof child.code === "number" ? child.code : null, output: child.output }, "chainCapacity", depth);
-  const settings = guestStackSettings(child.output);
-  if (outcome !== "completed" || !settings) throw new Error(`The Worker child did not complete: ${outcome}\n${child.output}`);
-  return { before: capacityRecord(parsed.before), child: { settings, capacities: chainCapacities(child.output) }, after: capacityRecord(parsed.after) };
+  // The probe encodes the child's transcript: a terminal trims the spaces that end a wrapped row.
+  const transcript = decodeURIComponent(child.output);
+  const outcome = stackOutcome({ code: typeof child.code === "number" ? child.code : null, output: transcript }, "chainCapacity", depth);
+  const settings = guestStackSettings(transcript);
+  if (outcome !== "completed" || !settings) throw new Error(`The Worker child did not complete: ${outcome}\n${transcript}`);
+  return { before: capacityRecord(parsed.before), child: { settings, capacities: chainCapacities(transcript) }, after: capacityRecord(parsed.after) };
 }
 
 type Failure = { depth: number; outcome: string };

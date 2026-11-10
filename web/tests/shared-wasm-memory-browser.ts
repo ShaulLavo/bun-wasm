@@ -7,6 +7,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
 import { programKind, programProfile } from "../../src/engine-kind.ts";
 import { buildBrowserEntries } from "../../scripts/browser-build";
+import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
 
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
@@ -40,7 +41,9 @@ async function prepareSite(program: string): Promise<string> {
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./shared-wasm-memory-browser-main.js"></script>');
   await cp(fixtureSource, join(out, "fixture"), { recursive: true });
   const names = (await readdir(fixtureSource)).filter(name => name.endsWith(".ts") || name.endsWith(".wasm"));
-  await Bun.write(join(out, "fixture/index.json"), JSON.stringify(names));
+  // The stack probe the parser reserve ownership entry runs in each group.
+  await copyFile(join(repository, "tests/stack-depth.js"), join(out, "fixture/stack-depth.js"));
+  await Bun.write(join(out, "fixture/index.json"), JSON.stringify(names.concat(["stack-depth.js"])));
   await mkdir(join(out, "program"));
   await copyFile(program, join(out, "program/bun.wasm"));
   const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
@@ -85,7 +88,7 @@ async function result(page: Page): Promise<Result> {
   } finally { clearInterval(progress); }
 }
 
-interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; }
+interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; readonly host: PageHost; }
 
 async function runEntry(name: string, port: number, entry: string): Promise<EntryRun> {
   const page = await browser!.newPage();
@@ -93,9 +96,21 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}`);
   const value = await result(page);
-  console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, ...value, pageErrors }));
+  const host = await pageHost(page, name);
+  console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
   await page.close();
-  return { value, pageErrors };
+  return { value, pageErrors, host };
+}
+
+/** Every case was a real group that ended cleanly, and each member kept its own parser reserve. */
+function assertParserReserveOwnership({ value, pageErrors, host }: EntryRun, kind: string): void {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.deepEqual(pageErrors, []);
+  assert.ok((value.peak?.groups ?? 0) > 0, "the owner never saw a memory group");
+  assert.deepEqual(value.groups, [], "every group is released after its parent and child exit");
+  assertRetired(value);
+  assertOwnership(value.stdout ?? "", kind, host);
 }
 
 async function assertClean({ value, pageErrors }: EntryRun): Promise<void> {
@@ -123,11 +138,11 @@ function assertDebt({ value }: EntryRun): void {
   assert.ok((value.budget ?? 0) > 0, "the failed member's backing stays charged");
 }
 
-async function runBrowser(type: BrowserType, name: string, port: number): Promise<void> {
+async function runBrowser(type: BrowserType, name: string, port: number, kind: string): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
   const override = process.env.SHARED_WASM_ENTRY;
-  const entries = override ? [override] : ["browser-guest.ts", DEBT_ENTRY];
+  const entries = override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY];
   const runs = [];
   for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
@@ -136,6 +151,7 @@ async function runBrowser(type: BrowserType, name: string, port: number): Promis
   if (process.env.SHARED_WASM_CONTROL) { console.log(`control ${process.env.SHARED_WASM_CONTROL} observed`); return; }
   for (const { entry, run } of runs) {
     if (entry === DEBT_ENTRY) assertDebt(run);
+    else if (entry === OWNERSHIP_ENTRY) assertParserReserveOwnership(run, kind);
     else await assertClean(run);
   }
 }
@@ -150,7 +166,7 @@ try {
   const port = serve(out);
   for (const name of names) {
     assert.ok(name in types, `unknown browser ${name}`);
-    await runBrowser(types[name as keyof typeof types], name, port);
+    await runBrowser(types[name as keyof typeof types], name, port, String(JSON.parse(await readFile(join(out, "program/kind.json"), "utf8"))));
   }
 } finally {
   clearTimeout(deadline);

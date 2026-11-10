@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { effectiveParserReserve, jscStackBudgets, qualifiedParserReserves, type StackHost } from "../web/src/engine-stack-budget.ts";
-import { chainCapacities, chainMaximum, chainModes, guestStackSettings, stackOutcome } from "./stack-measurement.ts";
+import { chainCapacities, chainMaximum, chainModes, guestStackSettings, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
 
 const root = resolve(import.meta.dir, "..");
 
@@ -54,9 +54,6 @@ export function capacitiesAt(host: ProbeHost, requested: StackSettings): Capacit
   return { requested, effectiveParserReserve: effectiveParserReserve(requested.parserReserve), capacities: chainCapacities(result.output) };
 }
 
-// The chains that recurse through exactly one reserved parser function per level: assignment and
-// statement, in both parser passes and both source widths.
-const reserveSiteModes = chainModes.filter(mode => /^chain(?:Assign|Block)/.test(mode));
 // One of each rejected form: empty, zero, below and above the range, five digits, a sign,
 // whitespace, a decimal point and trailing text.
 const rejectedSettings = ["", "0", "511", "2049", "10240", "+1024", " 1024", "1024.5", "1024kb"];
@@ -69,7 +66,8 @@ function compare(left: CapacityRecord, right: CapacityRecord, modes: readonly st
 }
 const same = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, chainModes, (a, b) => a === b, "equal to");
 const atMost = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, chainModes, (a, b) => a <= b, "at most");
-const sitesBelow = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, reserveSiteModes, (a, b) => a < b, "below");
+// The two reserved parser sites, in both parser passes and both source widths: eight differentials.
+const sitesBelow = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, reserveSiteChains, (a, b) => a < b, "below");
 
 /** The distinct host budgets, and each family's shipped value at its budget. */
 function shippedSettings(): StackSettings[] {

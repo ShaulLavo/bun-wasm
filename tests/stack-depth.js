@@ -34,6 +34,8 @@ const actions = {
   ternary() { (0, eval)('0?0:'.repeat(n) + '0'); },
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   statement() { (0, eval)('if(0)'.repeat(n) + ';'); },
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
+  awaitchain() { (0, eval)('(async function () { ' + 'await '.repeat(n) + '0; })'); },
   regexpnc() { new RegExp(nest('(?:', ')')).exec('a'); },
   lookahead() { new RegExp('(?=a'.repeat(n) + ')'.repeat(n)).exec('a'); },
   reviver() { JSON.parse(nest('[', ']'), (k, v) => v); },
@@ -131,7 +133,8 @@ actions.chainWorker = async () => {
   let output = '';
   worker.stdout.on('data', (chunk) => { output += chunk; });
   const code = await new Promise((resolve, reject) => { worker.on('error', reject); worker.on('exit', resolve); });
-  console.log('ownership', JSON.stringify({ before, child: { code, output }, after: chainCapacities() }));
+  // A terminal trims the spaces that end a wrapped row, so the child's transcript travels encoded.
+  console.log('ownership', JSON.stringify({ before, child: { code, output: encodeURIComponent(output) }, after: chainCapacities() }));
 };
 actions.promise = async () => { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); await Promise.resolve().then(f); };
 actions.async = async () => { let d = 0; const f = async () => { if (++d < n) await f(); }; await f(); };

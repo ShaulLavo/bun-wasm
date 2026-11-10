@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { effectiveParserReserve } from "../web/src/engine-stack-budget.ts";
 import { capacitiesAt, fileThreshold, parserReserveControls, type ProbeHost, type StackSettings } from "./jsc-parser-reserve.ts";
-import { chainCapacities, chainMaximum, chainModes, guestStackSettings } from "./stack-measurement.ts";
+import { chainCapacities, chainMaximum, chainModes, chainOwnership, guestStackSettings, reserveSiteChains } from "./stack-measurement.ts";
 
 type ReserveRule = (value: string | undefined) => number;
 
@@ -65,6 +65,20 @@ test("the probe's settings and capacities lines are read strictly", () => {
   expect(() => chainCapacities(`capacities ${JSON.stringify({ ...capacities, chainAssignCall8: -1 })}\n`)).toThrow("Malformed");
   expect(() => chainCapacities(`capacities ${JSON.stringify({ ...capacities, other: 1 })}\n`)).toThrow("Malformed");
   expect(() => chainCapacities(`capacities ${JSON.stringify({ chainAssignCall8: 1 })}\n`)).toThrow("Missing");
+});
+
+test("a parent-and-Worker record needs both parent measurements and a completed child", () => {
+  const capacities = Object.fromEntries(chainModes.map(mode => [mode, 9]));
+  const transcript = (code: number, continued = true) => ({ code, output: encodeURIComponent(
+    `settings {"budget":"192","parserReserve":"512"}\ncapacities ${JSON.stringify(capacities)}\ncompleted chainCapacity 4096\n${continued ? "continued\n" : ""}`) });
+  const line = (child: object) => `settings {"budget":"192","parserReserve":"1024"}\nownership ${JSON.stringify({ before: capacities, child, after: capacities })}\ncompleted chainWorker 4096\ncontinued\n`;
+  expect(chainOwnership(line(transcript(0)), 4096)).toEqual({ before: capacities, child: { settings: { budget: "192", parserReserve: "512" }, capacities }, after: capacities });
+  expect(reserveSiteChains).toHaveLength(8);
+  expect(() => chainOwnership(line(transcript(1)), 4096)).toThrow("did not complete: trap");
+  expect(() => chainOwnership(line(transcript(0, false)), 4096)).toThrow("did not complete: missing-continuation");
+  expect(() => chainOwnership(line(transcript(0)), 2048)).toThrow("did not complete: invalid-output");
+  expect(() => chainOwnership("completed chainWorker 4096\ncontinued\n", 4096)).toThrow("Expected one ownership line");
+  expect(() => chainOwnership(`ownership ${JSON.stringify({ before: capacities, child: transcript(0) })}\n`, 4096)).toThrow("Malformed chain ownership");
 });
 
 test("the file threshold is the largest grid value at which every file loads with 16 KiB less", () => {

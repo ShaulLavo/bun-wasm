@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Conditional', 'Block', 'Call', 'Function')
                for parser_pass in ('Compile', 'Call') for width in ('8', '16')]
 MODES = ['plain', 'getter', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
-         'ternary', 'statement',
+         'ternary', 'statement', 'awaitchain',
          'regexpnc', 'lookahead', 'proxychain', 'isarray', 'bound', 'join', 'flat', 'tostring', 'async',
          'promise', 'console', 'require'] + CHAIN_MODES
 
@@ -48,7 +48,7 @@ def require_chain(stack, args, parser):
                     '--env', f'STACK_DEPTH_LEAF={REQUIRE_LEAF_ROOT}/{args.leaf}']
 
 
-SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'regexpnc', 'lookahead', *CHAIN_MODES}
+SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'awaitchain', 'regexpnc', 'lookahead', *CHAIN_MODES}
 
 
 def accepted(mode, outcome):
