@@ -1,9 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-hot-args-"));
+const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-hot-args-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const source = readFileSync(new URL("../crates/bunwasm-cli/src/main.rs", import.meta.url), "utf8");
 const parser = source.slice(source.indexOf("enum Command {"), source.indexOf("// Referenced so the linker"));
