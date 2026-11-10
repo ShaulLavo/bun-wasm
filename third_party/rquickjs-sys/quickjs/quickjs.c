@@ -30931,9 +30931,13 @@ static __exception int js_parse_stmt_resume(JSParseState *s, int *pmask)
 /* bun-wasm: the statement parser is a loop over heap records instead of a
    recursive function, so nested statements add no native frames. Functions
    inside expressions still re-enter it through js_parse_function_decl2;
-   each entry owns the records above its starting depth. */
-static __exception int js_parse_statement_or_decl(JSParseState *s,
-                                                  int decl_mask)
+   each entry owns the records above its starting depth.
+
+   Not inlined: js_parse_source_element also parses nested function
+   declarations without entering this function, and that cycle must not
+   carry this frame and its reservation. */
+static no_inline __exception int js_parse_statement_or_decl(JSParseState *s,
+                                                           int decl_mask)
 {
     JSFunctionDef *owner = s->cur_func;
     BlockEnv *saved_break = owner->top_break;
