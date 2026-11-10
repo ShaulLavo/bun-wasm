@@ -33,6 +33,7 @@ function forgedModule(member: Member, description: Uint8Array, code: Uint8Array,
 const description = encoder.encode('{"memory":{},"imports":[],"exports":[]}');
 const emptyModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 const tableModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 4, 4, 1, 0x70, 0, 1, 7, 5, 1, 1, 0x74, 1, 0]);
+const globalModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 6, 6, 1, 0x7f, 0, 0x41, 0, 0x0b, 7, 5, 1, 1, 0x67, 3, 0]);
 
 function compileLocal(member: Member): number {
   const memory = (member.host as unknown as { shared(): WebAssembly.Memory }).shared();
@@ -184,14 +185,17 @@ describe("published modules", () => {
     expect(receiver.send({ AttachModule: { token: good } })).toHaveProperty("AttachedModule");
   });
 
-  test("attachment keeps the table and global refusal that Compile has", () => {
+  test("attachment keeps the global refusal that Compile has, and admits a table export as Compile does", () => {
     const { join } = group();
     const sender = join(), receiver = join(sender);
-    const token = forgedModule(sender, description, tableModule);
+    const token = forgedModule(sender, description, globalModule);
     const before = counters(sender.owner);
-    expect(errorText(receiver.send({ AttachModule: { token } }))).toContain("Nested tables and globals");
+    expect(errorText(receiver.send({ AttachModule: { token } }))).toBe("Nested globals are not available on the Browser host");
     expect(counters(sender.owner)).toEqual(before);
     expect(receiver.host.snapshot().modules).toBe(0);
+    const admitted = forgedModule(sender, description, tableModule);
+    expect(receiver.send({ AttachModule: { token: admitted } })).toHaveProperty("AttachedModule");
+    expect(receiver.host.snapshot().modules).toBe(1);
   });
 
   test("the owner decides kind before any byte is read", () => {
