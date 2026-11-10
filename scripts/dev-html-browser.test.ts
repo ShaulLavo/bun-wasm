@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chromium, firefox, type Browser, type Page } from "playwright";
+import { chromium, firefox, type Browser, type BrowserContext, type Page } from "playwright";
 import { counterHtml, developmentPageServer } from "../web/tests/fixtures/dev-html-browser";
 
 type PageServer = Awaited<ReturnType<typeof developmentPageServer>>;
@@ -507,6 +507,26 @@ test("development HTML keeps two documents subscribed independently and closes o
   } finally { for (const page of pages) await page.close(); await server.close(); }
 }, 30_000);
 
+async function submitActual(page: Page, command: string): Promise<void> {
+  await page.evaluate(command => {
+    const value: unknown = Reflect.get(globalThis, "playground");
+    if (!value || typeof value !== "object" || !("shell" in value)) throw new Error("Missing shell");
+    const shell = value.shell;
+    if (!shell || typeof shell !== "object" || !("submit" in shell) || typeof shell.submit !== "function") throw new Error("Missing shell submit");
+    void shell.submit(command);
+  }, command);
+}
+
+async function actualListening(page: Page, enabled: boolean): Promise<void> {
+  await page.waitForFunction(enabled => {
+    const value: unknown = Reflect.get(globalThis, "playground");
+    if (!value || typeof value !== "object" || !("previews" in value)) return false;
+    const previews = value.previews;
+    if (!previews || typeof previews !== "object" || !("serves" in previews) || typeof previews.serves !== "function") return false;
+    return previews.serves(5173) === enabled;
+  }, enabled, { timeout: 15_000 });
+}
+
 const integratedSite = process.env.BUN_WASM_DEV_HTML_SITE;
 test.skipIf(!integratedSite)("actual Waffle filesystem commit updates the same running HTML document", async () => {
   if (!integratedSite) throw new Error("Provide the matching current-source development site");
@@ -518,6 +538,7 @@ test.skipIf(!integratedSite)("actual Waffle filesystem commit updates the same r
   const before = verifySite(directory);
   const previousRoot = process.env.ROOT;
   const task = session("bun-wasm-dev-html-actual-");
+  let context: BrowserContext | undefined;
   let app: Page | undefined;
   let preview: Page | undefined;
   const evidence: unknown[] = [];
@@ -525,7 +546,8 @@ test.skipIf(!integratedSite)("actual Waffle filesystem commit updates the same r
     process.env.ROOT = join(directory, "site");
     const url = await task.serve();
     const browser = await task.launch(chromium);
-    app = await browser.newPage();
+    context = await browser.newContext();
+    app = await context.newPage();
     await app.goto(`${url}?engine=browser&prompt=off&mode=memory`);
     expect(await ready(app)).toContain("ready");
     const html = await Bun.file(new URL("../sandbox/template-hono/src/page.html", import.meta.url)).text();
@@ -539,13 +561,7 @@ const server = Bun.serve({hostname:"127.0.0.1",port:5173,fetch(request) {
 }}); state.server ??= server;`;
     await writeFile(app, "/home/user/page.html", html);
     await writeFile(app, "/home/user/server.ts", entry);
-    await app.evaluate(() => {
-      const value: unknown = Reflect.get(globalThis, "playground");
-      if (!value || typeof value !== "object" || !("shell" in value)) throw new Error("Missing shell");
-      const shell = value.shell;
-      if (!shell || typeof shell !== "object" || !("submit" in shell) || typeof shell.submit !== "function") throw new Error("Missing shell submit");
-      void shell.submit("bun --hot run server.ts");
-    });
+    await submitActual(app, "bun --hot run server.ts");
     const listening = await app.waitForFunction(() => {
       const value: unknown = Reflect.get(globalThis, "playground");
       if (!value || typeof value !== "object" || !("previews" in value)) return null;
@@ -631,12 +647,39 @@ const server = Bun.serve({hostname:"127.0.0.1",port:5173,fetch(request) {
     await preview.waitForFunction(() => document.querySelector("#message")?.textContent === "Repaired Waffle update", undefined, { timeout: 30_000 });
     expect(await preview.locator("#count").evaluate(node => Reflect.get(node, "value"))).toBe("2");
     evidence.push({ pid, initialHeaders, events, repairedEvents: await preview.evaluate(() => Reflect.get(window, "actualDevEvents")), terminal: await terminalText(app) });
+    for (const mode of [
+      { name: "non-hot", command: "bun run server.ts", entry },
+      { name: "production", command: "NODE_ENV=production bun --hot run server.ts", entry },
+      { name: "development-false", command: "bun --hot run server.ts", entry: entry.replace("Bun.serve({", "Bun.serve({development:false,") },
+      { name: "hmr-false", command: "bun --hot run server.ts", entry: entry.replace("Bun.serve({", "Bun.serve({development:{hmr:false},") },
+    ]) {
+      await stopForeground(app);
+      await actualListening(app, false);
+      await writeFile(app, "/home/user/server.ts", mode.entry);
+      await submitActual(app, mode.command);
+      await actualListening(app, true);
+      const response = await preview.goto(previewUrl);
+      if (!response) throw new Error("Missing disabled-mode response");
+      const headers = await response.allHeaders();
+      expect(headers["x-bun-wasm-dev-stamp"]).toBeUndefined();
+      expect(await preview.locator("[data-bun-wasm-dev]").count()).toBe(0);
+      const initialStamp: unknown = JSON.parse(initialHeaders["x-bun-wasm-dev-stamp"]!);
+      if (!initialStamp || typeof initialStamp !== "object" || !("server" in initialStamp) || typeof initialStamp.server !== "string") throw new Error("Missing initial instance");
+      const privateRoute = await preview.evaluate(async path => {
+        const response = await fetch(path);
+        return { type: response.headers.get("content-type"), body: await response.text() };
+      }, `/_bun/wasm-dev/${initialStamp.server}/client.js`);
+      expect(privateRoute.type).toContain("text/html");
+      expect(privateRoute.body).not.toContain("data-bun-wasm-dev");
+      evidence.push({ mode: mode.name, headers, privateRouteType: privateRoute.type });
+    }
     expect(verifySite(directory)).toEqual(before);
   } finally {
     if (process.env.DEV_HTML_EVIDENCE_DIR) await Bun.write(`${process.env.DEV_HTML_EVIDENCE_DIR}/actual-waffle.json`, JSON.stringify(evidence, null, 2));
     if (app) await stopForeground(app).catch(() => {});
     await preview?.close();
     await app?.close();
+    await context?.close();
     await task.cleanup();
     if (previousRoot === undefined) delete process.env.ROOT;
     else process.env.ROOT = previousRoot;
