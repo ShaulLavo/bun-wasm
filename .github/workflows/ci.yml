@@ -1819,6 +1819,27 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Configure Web compiler toolchain
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "RUSTUP_TOOLCHAIN=nightly-2026-09-15" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: web-rustup-cache
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-15
+          components: rust-src, rustfmt, clippy
+          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
+      - name: Save completed Web compiler setup
+        if: steps.web-rustup-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
       - name: Web host unit, CLI shim, type and bundle gates
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures

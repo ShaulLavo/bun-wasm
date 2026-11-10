@@ -34,6 +34,28 @@ test("JavaScript quality does not set up or compile Rust", () => {
   expect(quality).not.toContain("sync-bun.sh");
 });
 
+test("Web parser probe uses the pinned compiler and restored toolchain before its unit gate", () => {
+  const web = (workflow.split("\n  web:\n")[1] ?? "").split(/\n  \S/)[0] ?? "";
+  const channel = readFileSync(new URL("../rust-toolchain.toml", import.meta.url), "utf8").match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
+  if (!channel) throw new Error("Missing pinned compiler");
+  const unit = web.indexOf("- name: Web host unit, CLI shim, type and bundle gates");
+  const setup = web.indexOf("- name: Configure Web compiler toolchain");
+  const restore = web.indexOf("id: web-rustup-cache");
+  const install = web.indexOf("uses: dtolnay/rust-toolchain@nightly");
+  expect(setup).toBeGreaterThan(0);
+  expect(restore).toBeGreaterThan(setup);
+  expect(install).toBeGreaterThan(restore);
+  expect(unit).toBeGreaterThan(install);
+  expect(web).toContain(`RUSTUP_TOOLCHAIN=${channel}`);
+  expect(web).toContain(`toolchain: ${channel}`);
+  expect(web).toContain("rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}");
+  expect(web).toContain('CARGO_HOME=$RUNNER_TEMP/cargo');
+  expect(web).toContain('RUSTUP_HOME=$RUNNER_TEMP/rustup');
+  expect(web).toContain("components: rust-src, rustfmt, clippy");
+  expect(web).toContain("targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown");
+  expect(web).not.toContain("Witness the image Rust toolchain");
+});
+
 test("native checks share one cached target through the quality checkpoint", () => {
   expect(rust).toContain("needs.quality.outputs.rust == 'true'");
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
