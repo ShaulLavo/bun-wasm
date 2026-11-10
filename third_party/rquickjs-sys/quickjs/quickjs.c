@@ -18638,10 +18638,12 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
        budget, once for every call the loop below then runs without another
        C call. The fixed reservation stands for the frame storage this
        function no longer takes from the C stack, so the budget keeps
-       covering the host stack one C entry costs. A call's storage is checked
-       by js_frame_push against the frame-stack limit instead, and fails
-       before anything is linked. */
-    js_reserve_wasm_frame(16);
+       covering the host stack one C entry costs: without it the guard
+       allowed more native reentries than the host stack holds, first through
+       Reflect.construct (docs/stack-limits.md has the measurement). A call's
+       storage is checked by js_frame_push against the frame-stack limit
+       instead, and fails before anything is linked. */
+    js_reserve_wasm_frame(48);
     if (js_check_stack_overflow(rt, 0))
         return JS_ThrowStackOverflow(caller_ctx);
     owned = js_frame_push(caller_ctx,
