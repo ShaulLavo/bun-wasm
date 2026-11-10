@@ -168,3 +168,16 @@ test("an overridden require accessor is read once after its require function is 
     ({ value, reads, receiverMatches: receiver === mod });
   `)).toEqual({ value: "intercepted virtual", reads: 1, receiverMatches: true });
 });
+
+for (const cached of [false, true]) {
+  test(`hot file-require guard precedes module loading and cache reuse: cached ${cached}`, () => {
+    expect(moduleHookScenario(`
+      const require = runtime.makeRequire("/entry.cjs");
+      ${cached ? 'require("/child.cjs");' : ""}
+      runtime.hotFileRequire = () => { throw new Error("hot file require refused"); };
+      let refusal;
+      try { require("/child.cjs"); } catch (error) { refusal = error.message; }
+      ({ refusal, builtin: require("node:process") === runtime.builtin("node:process") });
+    `)).toEqual({ refusal: "hot file require refused", builtin: true });
+  });
+}

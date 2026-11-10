@@ -25,6 +25,7 @@ mod encoding;
 pub mod engine_host;
 mod glob;
 pub mod host;
+mod hot_run;
 mod html_rewriter;
 pub mod import_requests;
 pub mod init;
@@ -75,7 +76,15 @@ pub enum Entry {
     Test(Vec<String>),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunMode {
+    #[default]
+    Once,
+    Hot,
+}
+
 pub struct Options {
+    pub mode: RunMode,
     pub entry: Entry,
     /// Arguments after the entry point, exposed through `process.argv`.
     pub args: Vec<String>,
@@ -120,6 +129,7 @@ pub(crate) struct State {
     start: Instant,
     argv: Vec<String>,
     exec_argv: Vec<String>,
+    mode: RunMode,
 }
 
 impl State {
@@ -157,6 +167,7 @@ impl State {
             start: Instant::now(),
             argv,
             exec_argv,
+            mode: RunMode::Once,
         }
     }
 
@@ -243,8 +254,9 @@ pub fn run(options: Options) -> i32 {
         conditions,
         exec_argv,
         transpiler,
+        mode,
     } = options;
-    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, transpiler);
+    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, mode, transpiler);
     engine_host::init(entry, state, main_path)
 }
 
@@ -272,6 +284,7 @@ fn new_state(
     args: &[String],
     conditions: &[String],
     exec_argv: &[String],
+    mode: RunMode,
     transpiler: Box<dyn Transpiler>,
 ) -> (Rc<State>, String) {
     let cwd = std::env::current_dir()
@@ -294,12 +307,13 @@ fn new_state(
         .chain(script)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let state = Rc::new(State::with_conditions(
-        argv,
-        conditions.to_vec(),
-        exec_argv.to_vec(),
-        transpiler,
-    ));
+    if mode == RunMode::Hot {
+        transpiler.use_module_records();
+    }
+    let mut state =
+        State::with_conditions(argv, conditions.to_vec(), exec_argv.to_vec(), transpiler);
+    state.mode = mode;
+    let state = Rc::new(state);
     *state.main.borrow_mut() = main_path.clone();
     if let Entry::File(arg) = entry {
         *state.main_arg.borrow_mut() = arg.clone();

@@ -16,38 +16,12 @@
 // no native load or resolve, no module body, no resumed top-level await and no
 // fulfilment or rejection. The pending promises stay pending, and no module the
 // exit interrupted is marked evaluated.
-type Getter = () => unknown;
-type RecordBody = Generator<unknown, void, unknown>;
-type ModuleRecord = {
-  r: string[];
-  i: [number, string][];
-  x: [string, number, string][];
-  s: number[];
-  /** Local exports: [export name, local binding]. */
-  e: [string, string][];
-  a: boolean;
-  f: (api: RegistrationApi) => RecordBody;
-};
-type RegistrationApi = {
-  l(getters: Record<string, Getter>): void;
-  n: object[];
-  ns(request: number): object;
-  readonly meta: object;
-  import(specifier: unknown, options?: unknown): Promise<object>;
-  ga(): unknown;
-  gt(): string;
-};
-(function (native: {
-  resolve(specifier: string, referrer: string): string;
-  load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
-  initMeta(name: string, meta: object): void;
-  /** False once the process has exited: nothing new loads, links, evaluates or resumes. */
-  active?(): boolean;
-  /** Keeps the host's event loop alive while a loader-started dynamic import is pending. */
-  track?(operation: Promise<object>): Promise<object>;
-  /** Readies `name` and its static imports for `load`, for a host that evaluates records asynchronously. */
-  prepare?(name: string): Promise<void>;
-}) {
+type Getter = BunWasm.Getter;
+type RecordBody = BunWasm.RecordBody;
+type ModuleRecord = BunWasm.ModuleRecord;
+type RegistrationApi = BunWasm.RegistrationApi;
+type RecordSessionBindings = BunWasm.RecordSessionBindings;
+(function (native: RecordSessionBindings, installHook?: boolean) {
   "use strict";
   type Status = "loaded" | "linked" | "evaluating" | "evaluating-async" | "evaluated";
   type Capability = { promise: Promise<void>; resolve(): void; reject(error: unknown): void };
@@ -62,7 +36,7 @@ type RegistrationApi = {
     exports: Map<string, string>;
     bindings: object | null;
     namespace: object | null;
-    api: ModuleApi;
+    api: RegistrationApi;
     body: RecordBody | null;
     dfsIndex: number;
     dfsAncestorIndex: number;
@@ -118,6 +92,7 @@ type RegistrationApi = {
   const generatorPrototype = Object.getPrototypeOf(function* () {}).prototype as RecordBody;
   const generatorNext = uncurry(generatorPrototype.next) as (body: RecordBody, value?: unknown) => IteratorResult<unknown, void>;
   const generatorThrow = uncurry(generatorPrototype.throw) as (body: RecordBody, error: unknown) => IteratorResult<unknown, void>;
+  function newSession(native: RecordSessionBindings, installHook = false) {
   const registry = new NativeMap<string, Mod>();
   let asyncCounter = 0;
 
@@ -712,7 +687,7 @@ type RegistrationApi = {
       let name: string;
       let ready: Promise<void>;
       try {
-        name = mode === "text" ? requests.resolve(text, referrer, mode) : native.resolve(text, referrer);
+        name = native.resolveImport ? native.resolveImport(text, referrer, mode) : mode === "text" ? requests.resolve(text, referrer, mode) : native.resolve(text, referrer);
         ready = native.prepare === undefined ? resolvePromise() : native.prepare(name);
       } catch (error) {
         reject(error);
@@ -722,7 +697,7 @@ type RegistrationApi = {
     }));
   }
 
-  defineProperty(globalThis, "__bunwasm_import", descriptor({
+  if (installHook) defineProperty(globalThis, "__bunwasm_import", descriptor({
     value: (referrer: string) => (specifier: unknown, options?: unknown) => dynamicImport(specifier, referrer, options),
     configurable: true,
   }));
@@ -745,5 +720,8 @@ type RegistrationApi = {
       return settleGraph(added => loadName(name, added));
     },
     dynamicImport,
+    newSession,
   };
+  }
+  return newSession(native, installHook !== false);
 })
