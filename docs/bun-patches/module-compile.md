@@ -5,8 +5,9 @@ through the TypeScript `module_compile.ts` factory. No Node or Bun implementatio
 The runtime build discovers the factory through `build/polyfills.rs` and erases its types with
 `scripts/transpile-runtime.ts`, just like the other TypeScript runtime factories.
 
-The adapter compiles a CommonJS body with five formal parameters, then calls the existing
-module wrapper dispatcher. It preserves the exports receiver, module object, local require,
+The adapter compiles a CommonJS body with five formal parameters, then runs the wrapper with
+the loader's shared argument builder ([CommonJS loader stack cost](commonjs-loader-stack.md)).
+It preserves the exports receiver, module object, local require,
 filename, directory, explicit return value, and thrown value. It does not insert a manually
 compiled module into the require cache or mark it loaded. These choices follow Node 26.12.1.
 Native Bun 1.4.4 differs in receiver, explicit return value, loaded state, hashbang handling,
