@@ -1228,6 +1228,8 @@ jobs:
           if-no-files-found: error
 
       - name: Blocking native fixture checks
+        env:
+          INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
@@ -1735,11 +1737,20 @@ jobs:
           sysroot=$("$RUSTC" --print sysroot)
           "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
       - name: Produce the shared native profile once
+        id: shared-quickjs-producer
         if: needs.quality.outputs.shared-native == 'true'
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
           bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native"
+      - name: Retain the matched shared QuickJS program for qualification
+        if: ${{ always() && steps.shared-quickjs-producer.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-quickjs-program
+          path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program/
+          if-no-files-found: error
+          retention-days: 1
       - name: Consume the shared native feature checks
         if: needs.quality.outputs.shared-native == 'true'
         run: |
@@ -1757,6 +1768,7 @@ jobs:
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Produce the shared JSC profile once
+        id: shared-jsc-producer
         if: needs.quality.outputs.shared-native == 'true'
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         env:
@@ -1775,6 +1787,14 @@ jobs:
           export BUN_WASM_TRACE=1
           bun scripts/test-checks.ts native --profile shared-group
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Retain the matched shared JSC program for qualification
+        if: ${{ always() && steps.shared-jsc-producer.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-jsc-program
+          path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program-jsc/
+          if-no-files-found: error
+          retention-days: 1
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
