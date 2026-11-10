@@ -66,12 +66,17 @@ split patch, recipe files and admitted split archive are not changed.
   pointer at its top. It checks the same globals before and after the top-level initializers.
   A mismatch fails before the guest starts. This is an original adapter over Waffle 0.0.118,
   not a change to Mozilla's stack quota or its 64 KiB gap.
+- `web/src/nested/host.ts`: the Browser host admits at most 16 active SpiderMonkey nested calls.
+  The next call returns the existing `RangeError` reply without entering Wasm again. This protects
+  the browser-native call stack, which is separate from the 8 MiB linear stack. Other engines keep
+  the 64-call admission path. A caught refusal leaves the invocation stack balanced and later
+  callbacks usable.
 - `web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts`: test-only observation of real
   core and side imports. It records carved bounds and verifies that both instances receive
   the same stack-pointer Global. It never replaces imported values. The Browser driver
   compares these host facts with the side's traced bounds and `register_depth=16`, checks
-  actual interpreter or portable-baseline counters, then tests catchable recursion and
-  recovery before the unchanged shared-memory and retained-debt assertions.
+  actual interpreter or portable-baseline counters, then tests catchable recursion, callback
+  reentry refusal and recovery before the unchanged shared-memory and retained-debt assertions.
 
 ## Limits
 
@@ -92,12 +97,6 @@ JavaScript's top level. That runs the core constructors and each side initialize
 The member protocol supplies `stackBytes`, but Waffle defaults it to 1 MiB. The Browser checks
 therefore use both that request and the actual imported bounds, rather than assuming the
 embedder selected Bun's policy.
-
-Browser qualification remains blocked for portable baseline on Chromium. Direct recursion catches
-`RangeError` and recovers in Chromium, but the unchanged shared-memory fixture can terminate
-with status 134 and `reentered core failed: Maximum call stack size exceeded`. The stack-carve
-check does not change the browser's native call-stack limit. No engine budget or native
-stack policy changes belong to this adapter.
 
 `BUN_WASM_SPIDERMONKEY_TRACE` in the guest environment prints one line on stderr when the engine
 returns: the stack bounds, the stack in use at registration and at engine entry, the interrupt

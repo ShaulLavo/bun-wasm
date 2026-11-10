@@ -172,7 +172,7 @@ function assertSpiderMonkeyReentry({ value, pageErrors }: EntryRun): void {
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
   assert.deepEqual(pageErrors, []);
   const observed = JSON.parse(value.stdout ?? "");
-  assert.ok(observed.deepest > 0);
+  assert.equal(observed.deepest, 16, "the SpiderMonkey admission guard must stop reentry before native exhaustion");
   assert.equal(observed.recovered, true, "a refused reentry must leave the callback usable");
   assert.deepEqual(value.groups, []);
   assertRetired(value);
