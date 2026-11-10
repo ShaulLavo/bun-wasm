@@ -178,7 +178,7 @@ test("release caches can grow after partial restore without saving duplicate war
     const grown = await run(initial);
     expect(grown).toContain("changed=true");
     expect(await run(grown.split("\n")[0]!.split("=")[1]!)).not.toContain("changed=true");
-    expect(save).toContain("if: steps.inventory.outputs.changed == 'true'");
+    expect(save).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.inventory.outputs.changed == 'true'");
     expect(save).not.toContain("github.run_id");
     const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
     expect(workflow.match(/uses: \.\/\.github\/actions\/save-release-downloads/g)?.length).toBe(workflow.match(/uses: \.\/\.github\/actions\/release-downloads/g)?.length);
