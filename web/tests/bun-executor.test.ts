@@ -10,7 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
-import { qualifiedParserReserves, type PageFacts, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -812,12 +812,12 @@ function withQualifiedReserves<Result>(entries: QualifiedParserReserves, run: ()
   finally { replace(shipped); }
 }
 
-function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack">, engine: RunRequest["engine"], env: Record<string, string> = {}, page?: PageFacts) {
+function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack">, engine: RunRequest["engine"], env: Record<string, string> = {}, page?: StackHost) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: host.stack }));
   const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env, page,
+  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env, stackHost: page,
     filesystem: connection.client, runtimeProcess, trace: false, net: null };
   try {
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: host.agent } });
@@ -869,6 +869,16 @@ test("no engine but JSC ever receives the parser reserve", controlled(() => with
   expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
   expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
   expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
+})));
+
+test("the same page observations preserve Safari QuickJS policy and JSC parser selection", controlled(() => withQualifiedReserves(qualified, () => {
+  const page = { platform: "MacIntel", vendor: "Apple Computer, Inc.", maxTouchPoints: 0 };
+  expect(stackEnvironment(macSafari, "quickjs", {}, page)).toEqual({ [budgetKey]: "36" });
+  expect(stackEnvironment(macSafari, "quickjs", { [budgetKey]: "64" }, page)).toEqual({ [budgetKey]: "64" });
+  expect(stackEnvironment(macSafari, "jsc", {}, page)).toEqual({ [budgetKey]: "192", [reserveKey]: "1056" });
+  expect(stackEnvironment(macSafari, "browser", {}, page)).toEqual({});
+  expect(stackEnvironment(macSafari, "quickjs", {}, { ...page, maxTouchPoints: 5 })).toEqual({ [budgetKey]: "32" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { ...page, maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
 })));
 
 test("a host without a qualified value adds only its budget", controlled(() => withQualifiedReserves(qualified, () => {

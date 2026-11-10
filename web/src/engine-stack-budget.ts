@@ -2,20 +2,21 @@ import type { Engine } from "../../src/engine-kind.js";
 
 /** The host families of docs/stack-limits.md. "firefox-desktop" is desktop Firefox off Linux. */
 export const stackHosts = ["v8", "firefox-linux", "firefox-desktop", "safari-macos", "other"] as const;
-export type StackHost = typeof stackHosts[number];
+export type StackHostFamily = typeof stackHosts[number];
+export type StackHost = { readonly platform?: string; readonly vendor?: string; readonly maxTouchPoints?: number };
 
 /** What only the page can read. A worker has no touch points, and iPadOS Safari sends a Macintosh user agent. */
-export interface PageFacts { readonly maxTouchPoints: number }
+export type PageFacts = Pick<StackHost, "maxTouchPoints">;
 
-/** The page's facts for a run request, or undefined where there are none to read, as in a worker. */
-export function pageFacts(): PageFacts | undefined {
-  const maxTouchPoints: unknown = globalThis.navigator?.maxTouchPoints;
-  return typeof maxTouchPoints === "number" ? { maxTouchPoints } : undefined;
+/** Page observations for a run request, or undefined when no navigator is available. */
+export function pageFacts(): StackHost | undefined {
+  if (!globalThis.navigator) return undefined;
+  return { platform: navigator.platform, vendor: navigator.vendor, maxTouchPoints: navigator.maxTouchPoints };
 }
 
 /** A parser reserve that passed its own host family's qualification, never another family's. */
 interface QualifiedParserReserve { readonly bytes: string; readonly minimumSafariMajor?: number }
-export type QualifiedParserReserves = { readonly [Host in StackHost]?: QualifiedParserReserve };
+export type QualifiedParserReserves = { readonly [Host in StackHostFamily]?: QualifiedParserReserve };
 
 /**
  * BUN_WASM_JSC_PARSER_RESERVE per host family (docs/stack-limits.md). A family without an entry
@@ -28,7 +29,7 @@ export const qualifiedParserReserves: QualifiedParserReserves = {
 
 const safariImpostors = /Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPR|Firefox|Mobile|iPhone|iPad|Android/;
 
-function firefoxHost(userAgent: string): StackHost | undefined {
+function firefoxHost(userAgent: string): StackHostFamily | undefined {
   if (!/\bFirefox\/\d+/.test(userAgent) || /\b(?:Android|Mobile|Tablet|FxiOS)\b/.test(userAgent)) return undefined;
   if (/\bX11\b/.test(userAgent) && /\bLinux\b/.test(userAgent)) return "firefox-linux";
   return /\b(?:Windows NT|Macintosh|X11)\b/.test(userAgent) ? "firefox-desktop" : undefined;
@@ -39,20 +40,26 @@ function macSafari(userAgent: string, page: PageFacts | undefined): boolean {
   return /\bMacintosh\b/.test(userAgent) && /\bVersion\/\d+/.test(userAgent) && /\bSafari\//.test(userAgent) && !safariImpostors.test(userAgent);
 }
 
-export function stackHost(stack: string, userAgent: string, page?: PageFacts): StackHost {
+export function stackHost(stack: string, userAgent: string, page?: PageFacts): StackHostFamily {
   if (/\n\s+at /.test(stack)) return "v8";
   return firefoxHost(userAgent) ?? (macSafari(userAgent, page) ? "safari-macos" : "other");
 }
 
 /** JSC's native recursion budget in KiB for each host family. */
-export const jscStackBudgets: Readonly<Record<StackHost, string>> = {
+export const jscStackBudgets: Readonly<Record<StackHostFamily, string>> = {
   v8: "800", "firefox-linux": "208", "firefox-desktop": "208", "safari-macos": "192", other: "192",
 };
 
-export function engineStackBudgets(stack: string, userAgent: string): Partial<Record<Engine, string>> | null {
-  const host = stackHost(stack, userAgent);
-  const jsc = jscStackBudgets[host];
-  return host === "safari-macos" || host === "other" ? { quickjs: "32", jsc } : { jsc };
+export function engineStackBudgets(stack: string, userAgent: string, host?: StackHost): Partial<Record<Engine, string>> | null {
+  if (/\n\s+at /.test(stack)) return { jsc: "800" };
+  const desktopFirefox = /\bFirefox\/\d+/.test(userAgent)
+    && /\b(?:Windows NT|Macintosh|X11)\b/.test(userAgent)
+    && !/\b(?:Android|Mobile|Tablet)\b/.test(userAgent);
+  if (desktopFirefox) return { jsc: "208" };
+  // A Macintosh UA also identifies desktop-style iPads. Touch evidence must come from the page.
+  const desktopSafari = host?.platform === "MacIntel" && host.vendor === "Apple Computer, Inc." && host.maxTouchPoints === 0
+    && /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X [\d_.]+\) AppleWebKit\/[\d.]+ \(KHTML, like Gecko\) Version\/[\d.]+ Safari\/[\d.]+$/.test(userAgent);
+  return { quickjs: desktopSafari ? "36" : "32", jsc: "192" };
 }
 
 /** The qualified parser reserve for this host, or undefined to keep the guest's default. */

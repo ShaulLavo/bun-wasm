@@ -114,14 +114,27 @@ depths.
 `BUN_WASM_STACK_KIB` is clamped to 7 MiB in both engines, below the 8 MiB shadow
 stack, so no value can wrap to "no limit". Values that are not positive decimal
 numbers keep the default. The clamp keeps the guard alive, but it does not make a
-budget fit the host: a budget larger than the host stack allows traps as before. The browser executor (`web/src/engine-stack-budget.ts`) passes 32 KiB to
-QuickJS on WebKit and unmeasured hosts. V8 and desktop Firefox keep QuickJS's
-152 KiB default. Desktop Firefox uses a measured 208 KiB JSC budget. In WebKit on
-the Mac with every function in its first tier, getters,
-`JSON.stringify` and `toString` reentry trap at 50 KiB, and the fixture's
-`JSON.stringify` traps at 45 KiB while building its RangeError, so the room there is
-about 43 to 47 KiB. At 40 KiB (1.25 times 32) every path and fixture still passes.
-Linux WebKit under `ulimit -s 512` has more room (54 KiB for its tightest path).
+budget fit the host: a budget larger than the host stack allows traps as before.
+The browser executor (`web/src/engine-stack-budget.ts`) gives QuickJS 36 KiB only
+when the worker has Safari's full Macintosh user agent and the page reports
+`MacIntel`, Apple's vendor, and exactly zero touch points. The page launcher
+carries these observations to every root and spawned worker because
+`WorkerNavigator` does not expose `maxTouchPoints`. Desktop-style iPad user agents
+alone cannot select this budget. iOS, iPadOS, other WebKit hosts and missing or
+unknown observations retain 32 KiB. Explicit environment overrides are unchanged.
+V8 and desktop Firefox keep QuickJS's 152 KiB default. All JSC and browser-engine
+choices are unchanged.
+
+After native-call frame removal and parser exception preservation, the measured
+36 KiB candidate clears the original Minipass and RxJS module-body boundaries.
+It does not prove application startup. React Router next fails esbuild resolution,
+and Angular has a later RangeError. On desktop Safari 26.4, 59 fresh sessions
+passed an original 32 KiB native-call calibration and 29 controls at both 36 KiB
+and its full 1.25-times margin of 45 KiB. Those controls retain all 25 recursion
+inputs, both overflow fixtures, native-call semantics and parser recovery.
+This evidence does not qualify iOS, iPadOS, unknown hosts or a larger budget.
+
+Desktop Firefox uses a measured 208 KiB JSC budget.
 Desktop Firefox was measured with all 25 recursion cases below, each in a fresh
 browser context. At both 152 KiB and a 190 KiB margin, every case completed or
 threw a catchable exception and continued. Both stack-overflow fixtures also
@@ -268,7 +281,8 @@ tried, and no other guard or budget moves.
 
 The executor (`web/src/engine-stack-budget.ts`) runs in a worker and sees the user agent and
 whether the engine is V8. A worker cannot read touch points, and iPadOS Safari in desktop mode
-sends a Macintosh user agent, so the page reports `navigator.maxTouchPoints` in the run request.
+sends a Macintosh user agent, so the page reports its platform, vendor, and `navigator.maxTouchPoints` in the run request's `stackHost` field.
+Both engine policies use that one field. QuickJS retains its positively observed desktop Safari rule above.
 
 | Host | JSC budget | Parser reserve |
 | --- | ---: | --- |
@@ -365,7 +379,11 @@ transpiler first. Its recursion has no stack guard in the guest and does not rea
 chain of about 24,000 assignment targets traps the native launcher's 16 MiB host stack there,
 before and after this change.
 
-## Nested require
+## Historical nested require measurements
+
+This common-loader snapshot predates the native-call dispatcher split, parser
+exception preservation and measured desktop Safari policy described above. Its
+frame costs and safety conclusions are historical, not current limits.
 
 A CommonJS module that requires another keeps the loader's frames on the stack until
 the inner module finishes, so a chain of modules is a recursion path like the others.
@@ -393,20 +411,20 @@ Real packages at 32 KiB, each loaded alone from an empty stack:
 | `prompts` 2.4.2 (loaded by Astro 5.14.1) | 9 modules | `RangeError` | loads, with 7 spare levels |
 | `@angular/cli` 20.3.7 `src/utilities/config.js` (through `@angular-devkit/core` and rxjs) | 14 modules | `RangeError`, needs about 54 KiB | `RangeError`, needs 33 to 34 KiB |
 
-The Angular chain still does not fit in 32 KiB. It now fails twelve modules deep in
-rxjs while compiling the thirteenth. The native call into each module body is the
-largest cost left, and removing it needs a different wrapper shape on every engine.
-A larger budget is not the answer: 40 KiB is the measured ceiling for WebKit above.
+At this baseline, Angular failed twelve modules deep in rxjs while compiling the
+thirteenth. The native-call cost had not yet been reduced by the dispatcher split,
+and 40 KiB was the tested WebKit safety margin. The later native comparison and
+45 KiB desktop Safari safety controls above supersede those conclusions.
 
 JSC completes a 512-module chain at 192 KiB before and after, because its
 JavaScript-to-JavaScript calls stay on the C-loop stack. Its getter guard was live
 in the same run (34 levels). The browser-native engine ignores the budget.
 
 These are launcher measurements of the guest's own guard. They are not a Safari
-run, and they do not show that Astro or Angular start there: later phases of both
-have never run at 32 KiB. An overflow that lands in QuickJS's parser can also
-surface as a `SyntaxError` instead of a `RangeError`. The unchanged loader reported
-`SyntaxError: missing formal parameter` one level past its capacity at 40 KiB.
+run and do not show that Astro or Angular start there. The original parser also
+replaced a pending overflow with `SyntaxError: missing formal parameter` one level
+past the loader's capacity at 40 KiB. The parameter-lookahead correction above
+now preserves that overflow's `RangeError` and recovery.
 
 `tests/fixtures/require-chain-stack` holds the line: a child with
 `BUN_WASM_STACK_KIB=32` loads a 16-module chain, catches unbounded recursion inside
@@ -559,7 +577,15 @@ module the first time it loads, then exits before the application starts.
 capacity and cold-recursion checks. The Chromium Processes leg runs both hosts
 once against the existing Rust producer's verified site, then runs Firefox at
 190 KiB to check the default budget's safety margin. No guest is rebuilt by the
-consumer. Changes to the executor policy, probe, or fixture select that producer.
+consumer. The WebKit Processes leg exercises the selected 36 KiB policy and
+45 KiB margin with explicit desktop page observations and a Safari user agent.
+It checks the actual worker environment, retains the original 32 KiB native-call
+calibration, and runs all 25 cold probes plus the four original fixtures.
+Linux WebKit's injected observations test policy transport, not genuine Safari
+qualification. Probe inputs, accepted errors, fixture output and deadlines remain
+unchanged. `checks/web-quickjs-stack-policy.json` tests this browser command with
+an injected provider without running a guest. Changes to the executor policy,
+probe, or fixture select the existing guest producer.
 
 `checks/browser-guest-jsc-parser-reserve.json` registers the parser reserve check on the same
 site, in Chromium and Firefox: the host's defaults, the rows of the executor contract, a

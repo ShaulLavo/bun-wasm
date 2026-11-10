@@ -8,7 +8,7 @@ import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
-import { engineStackBudgets, jscParserReserve, type PageFacts } from "./engine-stack-budget.js";
+import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -22,12 +22,12 @@ export type { Engine } from "../../src/engine-kind.js";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  /** Page observations unavailable on WorkerNavigator, also supplied for guest spawns. */
+  stackHost?: StackHost;
   memoryTelemetry?: MemoryTelemetryTransport;
   linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
   trace: boolean;
-  /** What only the page can read about its device (engine-stack-budget.ts); absent when it reported nothing. */
-  page?: PageFacts;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
   /** Bun-owned DNS lookup requests are served by the page runtime. */
@@ -81,9 +81,9 @@ function withDefault(env: Record<string, string>, key: string, value: string | u
  * it, independently of the other: an explicit or empty value of one never changes the other's default.
  */
 function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Record<string, string> {
-  const budgeted = withDefault(req.env, "BUN_WASM_STACK_KIB", engineStackBudgets(stack, userAgent)?.[req.engine]);
+  const budgeted = withDefault(req.env, "BUN_WASM_STACK_KIB", engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
   if (req.engine !== "jsc") return budgeted;
-  return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.page));
+  return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
 }
 
 export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined): WorkerExecutor<RunRequest> {

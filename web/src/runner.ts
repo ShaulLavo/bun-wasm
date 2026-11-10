@@ -189,7 +189,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       ...rootCommand(options),
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
-      page: pageFacts(),
+      stackHost: pageFacts(),
       net: ring,
       lookupPort: lookupChannel?.port2,
       slots: slotsMode(),

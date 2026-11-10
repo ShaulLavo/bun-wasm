@@ -22,13 +22,27 @@ Run all 208 boxes. Hermes is parked and excluded from this matrix:
 source env.sh
 bun /work/heavy-runner/current/run.js --class browser goals-matrix -- \
   bun scripts/goals-matrix/fleet.ts --asset-source=/absolute/delivery-manifest.json \
-  --device-udid=CLAIMED_SIMULATOR_UDID
+  --device-udid=CLAIMED_SIMULATOR_UDID \
+  --mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-ID
 ```
 
 Use T3 `device_list` and `device_open` to claim an unclaimed iPhone simulator first.
 Use its returned pinned command for native Safari app actions. The fleet runner
 stages a generated runner and the static build to a unique Mac task directory,
-checks the owner reservation, takes the Mac lock, and owns its SafariDriver.
+checks the owner reservation, and runs the whole native workload through the
+installed Mac FIFO queue. Supply your lane and actual T3 thread ID, copied
+unchanged including any opaque prefix. The queue owns admission and lock release.
+The workload owns its SafariDriver and server.
+The default queue estimate is 600 seconds, wait budget is 3600 seconds, and workload
+limit is 900 seconds. Set `--mac-expected-seconds`, `--mac-wait-seconds`, and
+`--mac-timeout-seconds` for a different bounded campaign. These limits do not change
+framework phase deadlines. The dependency install runs inside admission too.
+Direct automatic native `run.ts` invocations use the same installed CLI. Native
+resource helpers reject callers outside its supervised process group.
+Queue release does not prove that external native consumers stopped. After the
+workload starts, staging removal also requires successful native driver and Safari
+teardown. Missing or failed cleanup evidence retains staging for recovery.
+Cancellation before workload admission is checked separately.
 It never boots, erases, or shuts down a simulator. Close the task device session
 afterward and restore only its task-owned boot state through T3.
 
@@ -80,11 +94,15 @@ in a unique Mac task directory. Start the wrapper there with `HOST=127.0.0.1`,
 and `GOALS_IPHONE_TOKEN` set to a random 64-character hexadecimal test token:
 
 ```sh
-bun /absolute/iphone-mac.js /absolute/iphone-server.js /absolute/cleanup.json
+~/.bun/bin/bun ~/.agents/skills/machine-fleet/scripts/mac-queue.ts run \
+  --lane YOUR-LANE --thread YOUR-T3-THREAD-ID --task "Visible iPhone campaign" \
+  --expected-seconds 600 --wait-seconds 3600 --timeout-seconds 900 -- \
+  ~/.bun/bin/bun /absolute/iphone-mac.js /absolute/iphone-server.js /absolute/cleanup.json
 ```
 
-The wrapper checks availability, takes the normal Mac lock, refuses any running
-SafariDriver, and releases its lock after the owned server exits. The server prints
+The wrapper requires installed queue admission, checks the owner reservation,
+refuses any running SafariDriver, and stops its owned server. Only the queue
+supervisor releases the lock after all supervised consumers stop. The server prints
 its loopback control URL. Forward that port to the PC with an owned SSH port
 forward. Pass the forwarded URL, with the unchanged token path, to the runner:
 
@@ -106,8 +124,9 @@ command failure stops the campaign and leaves its exact error in the report.
 All existing phase deadlines apply, including the 20-second cleanup limit.
 
 Stop the wrapper and owned port forward after the campaign, copy its cleanup
-receipt, and verify the recorded server PID, listeners, and lock are absent on the
-Mac before removing staging. Close only the task's T3 device session without
+receipt, and verify the recorded server PID and listeners are absent. Check the
+installed queue status for the completed task before removing staging. A native
+cleanup receipt never claims queue release, and another task may already hold the lock. Close only the task's T3 device session without
 shutting down the retained simulator. Preserve original reports and asset inputs.
 
 Fleet browser selections are respected on both hosts. A Chrome-only run does not
@@ -136,7 +155,8 @@ bun /work/heavy-runner/current/run.js --class browser goals-install-policy -- \
 	--asset-source=/absolute/delivery-manifest.json \
 	--output=/absolute/new-campaign --browsers=chrome,safari --engines=browser \
 	--frameworks=nuxt,astro,react-router,solidstart,tanstack-start,angular \
-	--timeout-ms=90000 --install-timeout-ms=nuxt:110000
+	--timeout-ms=90000 --install-timeout-ms=nuxt:110000 \
+	--mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-ID
 ```
 
 The same options work with `run.ts` and explicit native WebDriver endpoints.

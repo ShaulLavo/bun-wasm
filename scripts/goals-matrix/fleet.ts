@@ -7,14 +7,14 @@ import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
 import { bounded } from "./execute";
 import { buildAngularDiagnosticSource } from "./angular-diagnostic";
-import { ownedCommand, withSignals } from "./lifetime";
-function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
+import { CommandExitError, ownedCommand, withSignals } from "./lifetime";
+import { quote, admission, nativeQueueScript } from "./mac-queue";
 class NativeUnavailable extends Error {}
 async function discoverMac(signal: AbortSignal): Promise<string> {
   try {
     const home = (await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", "printf '%s' \"$HOME\""], signal)).trim();
     if (!home.startsWith("/Users/") || /[\r\n]/.test(home)) throw new Error("Unexpected Mac home from discovery");
-    await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", "python3 ~/.agents/skills/machine-fleet/scripts/availability.py check"], signal, 15_000);
+    await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", "python3 ~/.agents/skills/machine-fleet/scripts/availability.py check --owner-only"], signal, 15_000);
     return home;
   } catch (error) { signal.throwIfAborted(); throw new NativeUnavailable(String(error)); }
 }
@@ -47,9 +47,23 @@ async function bundle(destination: string, source: Report["source"]): Promise<vo
   await writeFile(join(destination, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { playwright: "1.64.1" } }));
 }
 async function verifyRemoteStopped(remote: string): Promise<void> {
-  const script = `set -eu; cd ${quote(remote)}; pid=$(cat runner.pid); if kill -0 "$pid" 2>/dev/null; then exit 75; fi; cat report/native-cleanup.json`;
-  const cleanup: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
-  if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true || !("lockRemoved" in cleanup) || cleanup.lockRemoved !== true) throw new Error("Remote driver/lock shutdown is unproved; retaining staging");
+  const script = `set -eu; cd ${quote(remote)}; code=$(cat queue-exit); case "$code" in ''|*[!0-9]*) exit 75;; esac; "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status`;
+  const status: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
+  if (!status || typeof status !== "object" || !("holder" in status) || !("waiting" in status) || !Array.isArray(status.waiting)) throw new Error("Remote queue shutdown is unproved; retaining staging");
+  const tickets: unknown[] = (status.holder === null ? [] : [status.holder]).concat(status.waiting);
+  for (const ticket of tickets) {
+    if (!ticket || typeof ticket !== "object" || !("task" in ticket) || typeof ticket.task !== "string" || ticket.task === `bun-wasm goals ${remote}`) throw new Error("Remote queue shutdown is unproved; retaining staging");
+  }
+  await verifyNativeStopped(remote);
+}
+async function verifyNativeStopped(remote: string): Promise<void> {
+  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; printf '{"workloadStarted":%s,"cleanup":%s}\n' "$started" "$cleanup"`;
+  const proof: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
+  if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
+  if (proof.cleanup === null && !proof.workloadStarted) return;
+  const cleanup = proof.cleanup;
+  if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
+    || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
 }
 export async function removeStaging(remote: string, started: boolean, config: Options): Promise<void> {
   if (started) await verifyRemoteStopped(remote);
@@ -59,9 +73,11 @@ export async function removeStaging(remote: string, started: boolean, config: Op
 }
 export function nativeRunnerArgs(config: Options, remote: string): string[] {
   const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
-  return [`--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
+  const queue = admission(config);
+  return [`--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--timeout-ms=${config.timeoutMs}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
 }
 async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
+  admission(config);
   const home = await discoverMac(signal);
   const call = (args: string[]) => ownedCommand(args, signal);
   const remote = `${home}/tmp/bun-wasm-goals-${crypto.randomUUID()}`;
@@ -77,7 +93,7 @@ async function mac(config: Options, source: Report["source"], local: string, sig
     }
     for (const name of await readdir(local)) await call(["mesh", "cp", "-r", join(local, name), `mac:${remote}/${name}`]);
     const args = nativeRunnerArgs(config, remote);
-    const script = `set -eu; cd ${quote(remote)}; export PATH="$HOME/.bun/bin:$PATH"; bun install --ignore-scripts; echo $$ > runner.pid; exec bun run.js ${args.map(quote).join(" ")}`;
+    const script = nativeQueueScript(config, remote, home, args);
     signal.throwIfAborted(); started = true;
     await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], signal, 86_400_000, true, [0, 1]);
     await call(["mesh", "cp", "-r", `mac:${remote}/report`, local + "/collected"]);
@@ -99,7 +115,7 @@ export async function collectNativeReport(collected: string, output: string): Pr
 async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
   try { await removeStaging(remote, started, config); }
   catch (error) {
-    await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify runner, driver and owned lock have stopped before removing this staging directory" }, null, 2));
+    await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify the installed queue has settled and its supervised consumers have stopped before removing this staging directory" }, null, 2));
     if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; cleanup: ${String(error)}`);
     throw error;
   }
@@ -140,6 +156,11 @@ async function lockedFleet(config: Options, signal: AbortSignal): Promise<Report
   } finally { await rmdir(lock); }
 }
 if (import.meta.main) {
-  const report = await fleet(options(process.argv.slice(2)));
-  process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
+  try {
+    const report = await fleet(options(process.argv.slice(2)));
+    process.exitCode = report.cells.some(cell => cell.status === "fail") ? 1 : 0;
+  } catch (error) {
+    if (!(error instanceof CommandExitError)) throw error;
+    console.error(error.message); process.exitCode = error.code;
+  }
 }
