@@ -77,3 +77,14 @@ mode, including when text or dynamic-import lowering forces printing. That scan
 must not turn a deferred write to a constant into a load-time build failure.
 Native STORE evaluation still supplies the run-time `TypeError`; it is not routed
 through registration records. No additional upstream patch is needed.
+
+## Private hot sessions
+
+The factory now separates process-lifetime intrinsic capture from session-owned
+registries. `newSession` reuses those captured intrinsics without replacing the
+ordinary generated-code import hook. Hot sessions use the same linking,
+namespace, cycle, top-level-await and rejection algorithms. Their optional
+import resolver preserves the existing options-aware process request boundary.
+The hot controller omits settle-only host tracking because cancellation may
+intentionally leave an import promise pending. This does not change ordinary
+loader tracking. See [same-realm hot runs](server-hot-run.md).

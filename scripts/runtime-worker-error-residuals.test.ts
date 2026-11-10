@@ -70,6 +70,7 @@ function mainEntry(text: string, requested: string, mainArg: string, worker: boo
     runMain: (_requested: string): unknown => undefined,
   };
   const native = {
+    runMode: () => "once",
     mainArg: () => mainArg,
     exists() { calls.push("exists"); return exists; },
     moduleFormat: () => "esm",
