@@ -162,8 +162,7 @@ The published runtime source reference is `ShaulLavo/waffle`,
 `packages/waffle/browser/{worker,process-broker}.ts` at
 `6e0608451a3f89c1fa0e4f17dacdc6edc5cbc900`, runtime 0.0.118 with host interface 2.
 The matching public program family is 0.0.20. Web, sandbox and the shell guest builder
-select reviewed, merged Bash source `1754fe78a9a3fd05725a34200c0e5e98731dcfb9`,
-which still pins program family 0.0.19. This mixed graph is incomplete.
+select reviewed, merged Bash source `161153b839b58cdb6f9e1385698aaf4ba9453432`.
 
 The original bundle gate in `scripts/runtime-size.ts` classifies the exact observation
 module as eager lifecycle control alongside outcome and directory cells. Its real
