@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { chromium, webkit, type Browser } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
@@ -11,15 +12,26 @@ const root = resolve(import.meta.dir, "..");
 const fixture = join(root, "tests/fixtures/cli-hot-run");
 
 test("Node host rejects hot watching explicitly, in store/native and records/hooks modes", () => {
-  const guest = process.env.BUN_WASM_TEST_BROWSER_WASM ?? join(root, "dist/bun-browser.wasm");
-  for (const [modules, context] of [["store", "native"], ["records", "hooks"]]) {
-    const child = spawnSync("node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--wasm", guest,
-      "--modules", modules!, "--context", context!, "--dir", `${fixture}::/`, "--env", "PWD=/", "--", "--hot", "run", "/index.ts"],
-    { encoding: "utf8", timeout: 15000 });
-    expect(child.status).toBe(1);
-    expect(child.stdout).toBe("");
-    expect(child.stderr).toContain("ENOTSUP");
-    expect(child.stderr).toContain("watch");
+  const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-hot-node-"));
+  try {
+    const provided = process.env.BUN_WASM_BROWSER_SITE;
+    let guest = process.env.BUN_WASM_TEST_BROWSER_WASM ?? join(root, "dist/bun-browser.wasm");
+    if (provided && !process.env.BUN_WASM_TEST_BROWSER_WASM) {
+      verifySite(resolve(provided));
+      guest = join(scratch, "bun-browser.wasm");
+      writeFileSync(guest, gunzipSync(readFileSync(join(provided, "site/bun-browser.wasm.gz"))));
+    }
+    for (const [modules, context] of [["store", "native"], ["records", "hooks"]]) {
+      const child = spawnSync("node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--wasm", guest,
+        "--modules", modules!, "--context", context!, "--dir", `${fixture}::/`, "--env", "PWD=/", "--", "--hot", "run", "/index.ts"],
+      { encoding: "utf8", timeout: 15000 });
+      expect(child.status).toBe(1);
+      expect(child.stdout).toBe("");
+      expect(child.stderr).toContain("ENOTSUP");
+      expect(child.stderr).toContain("watch");
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }, 40000);
 
