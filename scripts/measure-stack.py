@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,32 +44,65 @@ def require_chain(stack, args, parser):
                     '--env', f'STACK_DEPTH_LEAF={REQUIRE_LEAF_ROOT}/{args.leaf}']
 
 
+SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'regexpnc', 'lookahead'}
+
+
+def accepted(mode, outcome):
+    if outcome == 'completed':
+        return True
+    if mode == 'console':
+        return False
+    return outcome == 'caught:RangeError' or (outcome == 'caught:SyntaxError' and mode in SYNTAX_MODES)
+
+
 def run(command, mode, n):
-    result = subprocess.run(command + [mode, str(n)], text=True, capture_output=True, timeout=120)
-    match = re.search(r'^(completed|caught) \w+ (?:(\w+) )?\d+', result.stdout, re.M)
-    if result.returncode == 0 and match and 'continued' in result.stdout:
-        return 'completed' if match[1] == 'completed' else f'caught:{match[2]}'
-    output = (result.stderr + result.stdout).lower()
-    if 'call stack' in output or 'stack overflow' in output or 'stack exhausted' in output:
+    try:
+        result = subprocess.run(command + [mode, str(n)], text=True, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return 'timeout'
+    if result.returncode != 0:
         return 'trap'
-    raise RuntimeError(f'{mode} {n}: exit {result.returncode}\n{result.stdout[-1000:]}\n{result.stderr[-2000:]}')
+    lines = result.stdout.splitlines()
+    outcomes = [line for line in lines if re.match(r'^(completed|caught) ', line)]
+    if len(outcomes) != 1:
+        return 'invalid-output'
+    line = outcomes[0]
+    if lines.count('continued') > 1:
+        return 'invalid-output'
+    if 'continued' not in lines or lines.index('continued') <= lines.index(line):
+        return 'missing-continuation'
+    if line == f'completed {mode} {n}':
+        return 'completed'
+    caught = re.fullmatch(r'caught (\w+) (\w+) (\d+) (.*)', line)
+    if not caught or caught[1] != mode or int(caught[3]) != n:
+        return 'invalid-output'
+    outcome = f'caught:{caught[2]}'
+    return outcome if accepted(mode, outcome) else f'unexpected:{caught[2]}'
 
 
 def capacity(command, mode, high):
+    failures = []
+
+    def trial(depth, require_completion=False):
+        outcome = run(command, mode, depth)
+        if not accepted(mode, outcome) or (require_completion and outcome != 'completed'):
+            failures.append({'depth': depth, 'outcome': outcome})
+        return outcome
+
     if mode == 'require':
-        baseline = run(command, mode, 0)
+        baseline = trial(0, require_completion=True)
         if baseline != 'completed':
-            return {'refused_at_zero': baseline}
-    if run(command, mode, high) == 'completed':
-        return {'completed_at_max': high}
+            return {'refused_at_zero': baseline, 'failures': failures}
+    if trial(high) == 'completed':
+        return {'completed_at_max': high, 'failures': failures}
     low = 0
     while low + 1 < high:
         middle = (low + high) // 2
-        if run(command, mode, middle) == 'completed':
+        if trial(middle) == 'completed':
             low = middle
         else:
             high = middle
-    return {'capacity': low, 'beyond': run(command, mode, low + 1)}
+    return {'capacity': low, 'beyond': trial(low + 1), 'failures': failures}
 
 
 def main():
@@ -84,6 +118,11 @@ def main():
     parser.add_argument('--leaf', help='module path inside --leaf-root that the last require level loads, such as node_modules/prompts/index.js')
     parser.add_argument('modes', nargs='*', default=MODES)
     args = parser.parse_args()
+    args.modes = list(dict.fromkeys(args.modes))
+    if args.max <= 0:
+        parser.error('--max must be positive')
+    if any(mode not in MODES for mode in args.modes):
+        parser.error('unknown stack mode')
     args.host = args.host or ('node' if args.engine == 'browser' else 'launcher')
     if args.engine == 'browser' and args.host != 'node':
         parser.error('--engine browser requires --host node')
@@ -106,7 +145,8 @@ def main():
         results = {mode: capacity(command, mode, min(args.max, MAX.get(mode, args.max))) for mode in args.modes}
     print(json.dumps({'engine': args.engine, 'wasm': wasm, 'host': args.host, 'stack_kib': args.stack_kib,
                       'budget_kib': args.budget_kib, 'leaf': args.leaf, 'results': results}))
+    return int(any(row['failures'] for row in results.values()))
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

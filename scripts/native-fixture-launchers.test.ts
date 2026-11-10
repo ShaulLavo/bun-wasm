@@ -15,12 +15,16 @@ printf '%s\\n' "host-stack=$BUN_WASM_HOST_STACK_KIB" "cache=$BUN_WASM_CACHE_DIR"
 if [ -n "$LAUNCHER_EXPECTED" ]; then
   cat "$LAUNCHER_EXPECTED"
 else
-  printf 'completed plain 1\\ncontinued\\n'
+  for argument do
+    previous="$last"
+    last="$argument"
+  done
+  printf 'completed %s %s\\ncontinued\\n' "$previous" "$last"
 fi
 `, { mode: 0o755 });
 const wasm = join(scratch, "guest with spaces.wasm");
 
-function run(script: string, args: readonly string[], expected?: string) {
+function run(script: string, args: readonly string[], expected?: string, expectedStatus = 0) {
   const executable = script.endsWith(".py") ? ["python3"] : ["node", "--no-warnings"];
   const result = Bun.spawnSync(executable.concat([join(root, script)], args), {
     cwd: root,
@@ -39,7 +43,7 @@ function run(script: string, args: readonly string[], expected?: string) {
     timeout: 10000,
   });
   expect(result.stderr.toString()).toBe("");
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode).toBe(expectedStatus);
   return { stdout: result.stdout.toString(), args: readFileSync(argumentsFile, "utf8").trimEnd().split("\n") };
 }
 
@@ -93,7 +97,7 @@ test("stack measurement gives the require mode a private scratch preopen and an 
 test("stack measurement distinguishes a failing package leaf from a passing zero-depth chain", () => {
   const expected = join(scratch, "refused-at-zero.txt");
   writeFileSync(expected, "caught require RangeError 0 Maximum call stack size exceeded\ncontinued\n");
-  const result = run("scripts/measure-stack.py", ["--wasm", wasm, "--max", "1", "require"], expected);
+  const result = run("scripts/measure-stack.py", ["--wasm", wasm, "--max", "1", "require"], expected, 1);
   expect(JSON.parse(result.stdout)).toMatchObject({ results: { require: { refused_at_zero: "caught:RangeError" } } });
   expect(result.args.slice(-5, -3)).toEqual(["require", "0"]);
 });
