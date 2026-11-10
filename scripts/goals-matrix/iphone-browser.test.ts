@@ -1,5 +1,5 @@
-import { test, expect } from "bun:test";
-import { chromium } from "playwright";
+import { test, expect, spyOn } from "bun:test";
+import { chromium, webkit, type Browser, type BrowserType } from "playwright";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse, observeIphoneOrigins } from "./iphone-server";
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
@@ -111,3 +111,60 @@ test("real product service worker injects the configured preview even when HTTP 
     await page.evaluate(async () => { for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister(); });
   } finally { await browser?.close(); bus.close(); await owner.stop(true); await control.stop(true); }
 }, 15000);
+
+function reloadingHtml(request: Request, revision: { value: number }): Response {
+  if (new URL(request.url).pathname === "/revision") return new Response(String(revision.value));
+  return new Response(`<!doctype html><html><body><h1>revision ${revision.value}</h1><script>
+const initial = ${revision.value};
+setInterval(async () => { if (await (await fetch('/revision')).text() !== String(initial)) location.reload(); }, 20);
+</script></body></html>`, { headers: { "content-type": "text/html" } });
+}
+
+async function previewReload(engine: BrowserType): Promise<void> {
+  const bus = new IphoneBus("/__goals_iphone/" + "d".repeat(64));
+  let ownerOrigin = "";
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => bus.handle(request, ownerOrigin) });
+  const restore = observeIphoneOrigins(bus, control.url.origin);
+  const origins = new LoopbackPreviewOrigins();
+  const owner = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch: request => observeIphoneResponse(new Response("<!doctype html><html><body>owner</body></html>", { headers: { "content-type": "text/html" } }), request.url, bus, control.url.origin),
+  });
+  ownerOrigin = owner.url.origin;
+  const revision = { value: 1 };
+  const read = "new Promise(resolve => { const text = document.querySelector('h1').textContent; if (text === 'revision 2') resolve(text); })";
+  let acknowledge = () => {};
+  const delivered = new Promise<void>(resolve => { acknowledge = resolve; });
+  const poll = bus.poll.bind(bus);
+  const observedPoll = spyOn(bus, "poll").mockImplementation((...args) => {
+    const value = poll(...args);
+    if (value && typeof value === "object" && "source" in value && value.source === read) acknowledge();
+    return value;
+  });
+  let browser: Browser | undefined;
+  try {
+    browser = await engine.launch({ headless: true });
+    const binding = await origins.bind({}, 5173, { fetch: request => reloadingHtml(request, revision), upgrade: (_request, socket) => { socket.destroy(); }, close() {} });
+    bus.configure("host", owner.url.href);
+    const page = await browser.newPage();
+    await page.goto(owner.url.href);
+    await waitReady(bus, "host");
+    bus.configure("preview", binding.origin + "/");
+    await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000);
+    await waitReady(bus, "preview");
+    const before = bus.state("preview");
+    if (!before?.timeOrigin) throw new Error("Missing initial preview identity");
+    const pending = bus.execute("preview", read, 3000, true).catch(error => error);
+    await delivered;
+    revision.value = 2;
+    expect(await pending).toBe("revision 2");
+    expect(bus.state("preview")?.nonce).not.toBe(before.nonce);
+    expect(bus.state("preview")?.timeOrigin).not.toBe(before.timeOrigin);
+  } finally {
+    observedPoll.mockRestore();
+    await browser?.close(); bus.close(); restore(); await origins.close(); await owner.stop(true); await control.stop(true);
+  }
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`read-only preview observation follows a real automatic document reload in ${engine.name()}`, () => previewReload(engine), 15000);
+}
