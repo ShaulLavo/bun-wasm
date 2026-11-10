@@ -27,7 +27,7 @@ function receiver(execArgv: string[] | undefined = undefined) {
     worker_codec: { create: () => ({
       prepare: () => ({ graph: { nodes: [] }, commit() {} }), decode: (value: unknown) => value,
     }) },
-    spawn: { spawn: () => child },
+    spawn: { spawnWorker: () => child },
     worker_channel: { open: () => ({
       send() {}, close() {}, get ended() { return ended; },
       pump(receive: (frame: unknown) => void) { for (const frame of frames.splice(0)) receive(frame); return false; },

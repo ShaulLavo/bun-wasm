@@ -27,7 +27,14 @@ Each nested memory is one `shm_create` region of its whole declared maximum, cha
 group owner, plus a 16-byte page cell. Handles carry a slot and generation, as on the native
 host. Waffle zeroes the whole reservation when it is created, and growth is a compare-and-swap on
 the cell, so it never moves storage or holds a lock a stopped member could leave behind. A failed
-defined memory detaches both regions. Waffle's owner reclaims holds at the member's physical stop.
+defined memory detaches both regions. Waffle's owner reclaims holds at its supported member-stop boundary. This does
+not prove that the browser agent has physically ended.
+
+The runtime has one authoritative `require("spawn")` declaration for ordinary
+spawn, private Worker spawn and executable lookup. Shell and Worker consumers
+therefore see the same API regardless of declaration load order. Worker fixture
+providers implement `spawnWorker` and carry metadata in its third argument, not
+in a public options field.
 
 Workers of a group core join their parent's group, chosen only by the typed `request.worker` field
 that `spawnWorker` sets. An environment marker or a public `_worker` option starts a new group.
