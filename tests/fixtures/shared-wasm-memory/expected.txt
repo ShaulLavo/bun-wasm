@@ -16,6 +16,7 @@ plain-sab: pass
 plain-sab guest: pass
 table-global: pass
 table-global guest: pass
+shared-wasm-memory table exports: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Instance exports: pass

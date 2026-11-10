@@ -4,7 +4,7 @@ import { selectChecks } from "./test-checks.ts";
 
 const root = join(import.meta.dir, "..");
 const wrapper = join(import.meta.dir, "shared-wasm-memory-browser.test.ts");
-const diagnostics = ["SHARED_WASM_CONTROL", "SHARED_WASM_ENTRY"];
+const diagnostics = ["SHARED_WASM_CONTROL", "SHARED_WASM_ENTRY", "SHARED_WASM_OXC_TREE"];
 
 function environment(): NodeJS.ProcessEnv {
   const env = { ...process.env };

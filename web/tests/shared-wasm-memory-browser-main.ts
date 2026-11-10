@@ -4,6 +4,7 @@ import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { prepareProgram } from "../../src/assets.ts";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { startRun } from "../src/runner";
+import { fixtureFileUrl, installFixtureTree, parseFixtureTree } from "./fixture-tree";
 import { AgentLockObserver, heldLockNames } from "./shared-wasm-agent/observer";
 
 const FIXTURE = "/home/user/fixture";
@@ -191,16 +192,16 @@ async function run() {
   if (!crossOriginIsolated) throw new Error("A memory group requires a cross-origin isolated page");
   const broker = captureBroker();
   installAgentWorkers();
-  const manifest: unknown = await (await fetch("./fixture/index.json")).json();
-  if (!Array.isArray(manifest)) throw new Error("Invalid fixture manifest");
-  const names = manifest.map(String);
-  const entry = new URLSearchParams(location.search).get("entry") ?? "browser-guest.ts";
+  const manifest: unknown = await (await fetch("./fixture-manifest.json")).json();
+  const entries = parseFixtureTree(manifest);
+  const query = new URLSearchParams(location.search);
+  const entry = query.get("entry") ?? "browser-guest.ts";
+  const fixture = query.has("oxc") ? "/" : FIXTURE;
   const runtime = createRuntime({
     filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) },
     memoryGroups: BUN_MEMORY_GROUP_POLICY,
   });
-  await runtime.filesystem.mkdirp(FIXTURE);
-  for (const name of names) await runtime.filesystem.writeFile(`${FIXTURE}/${name}`, await bytes(`./fixture/${name}`));
+  await installFixtureTree(runtime.filesystem, fixture, entries, path => bytes(fixtureFileUrl(path)));
   for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
   const kind: unknown = await (await fetch("./program/kind.json")).json();
@@ -212,8 +213,8 @@ async function run() {
   const started = performance.now();
   const job = startRun({
     runtime, module, engine: kind, moduleScope: false,
-    args: ["run", `${FIXTURE}/${entry}`],
-    env: { PWD: FIXTURE, HOME: "/home/user", PATH: "/bin:/usr/bin", SHARED_WASM_PAGE_CONTROL: CONTROL },
+    args: ["run", `${fixture === "/" ? "" : fixture}/${entry}`],
+    env: { PWD: fixture, HOME: "/home/user", PATH: "/bin:/usr/bin", SHARED_WASM_PAGE_CONTROL: CONTROL },
   }, {
     stdout(data) { stdout += decoder.decode(data, { stream: true }); },
     stderr(data) { stderr += decoder.decode(data, { stream: true }); },

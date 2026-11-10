@@ -20,7 +20,10 @@ export interface Member {
   readonly host: NestedHost;
   send(request: Request): Reply;
   raw(op: number, a?: number, b?: number, c?: number, d?: number): number[];
+  /** The core's callback dispatcher. It answers status 0 and leaves the frame; a test may replace it. */
+  dispatch: Dispatch;
 }
+type Dispatch = (invocation: number, callback: number, pointer: number) => number;
 
 function bindMember(lease: Lease, owner: Owner): Member {
   const { memory, port } = lease.launch().request;
@@ -53,9 +56,10 @@ function bindMember(lease: Lease, owner: Owner): Member {
   };
   const host = new NestedHost(() => {}, () => {});
   host.bindProvider(provider);
-  const exports = { bun_core_alloc: alloc, bun_core_free: () => {}, bun_nested_dispatch: () => 0 };
+  const core: Pick<Member, "dispatch"> = { dispatch: () => 0 };
+  const exports = { bun_core_alloc: alloc, bun_core_free: () => {}, bun_nested_dispatch: (...frame: Parameters<Dispatch>) => core.dispatch(...frame) };
   host.bindCore({ exports } as unknown as WebAssembly.Instance, memory);
-  const send = (request: Request): Reply => {
+  const exchange = (request: Request): Reply => {
     const bytes = encoder.encode(JSON.stringify(request));
     const pointer = alloc(bytes.length, 8);
     new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
@@ -65,7 +69,13 @@ function bindMember(lease: Lease, owner: Owner): Member {
     const length = view().getUint32(out + 4, true);
     return JSON.parse(decoder.decode(new Uint8Array(memory.buffer, target, length).slice())) as Reply;
   };
-  return { lease, owner, host, send, raw };
+  /** Nothing a request allocates outlives its reply, so thousands of requests fit the one heap region. */
+  const send = (request: Request): Reply => {
+    const mark = next;
+    try { return exchange(request); }
+    finally { next = mark; }
+  };
+  return Object.assign(core, { lease, owner, host, send, raw });
 }
 
 /** One page's groups under a small policy. Each `join()` is a new group; `join(peer)` joins the peer's. */
