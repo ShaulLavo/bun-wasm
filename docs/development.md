@@ -31,10 +31,14 @@ sccache when it is installed. The wrapper also works inside the heavy runner:
 bun /work/heavy-runner/current/run.js --class build bun-host -- bash scripts/with-build-cache.sh cargo build -j 2 -p bunwasm-host
 ```
 
-Each checkout defaults to its own `target/`. Rust dependencies and CMake C/C++
-objects share the disk object cache (`/work/cache/sccache` on the maintainer's
-mounted data drive, or sccache's native default elsewhere). Each invocation owns
+Set `CARGO_TARGET_DIR` to a checkout-owned path before running the wrapper.
+Rust dependencies and CMake C/C++ objects share the disk object cache
+(`/work/cache/sccache` on the maintainer's mounted data drive, or sccache's native
+default elsewhere). Each invocation owns
 and stops a private sccache server; local crates keep Cargo's incremental builds.
+Rust `staticlib` packaging runs directly through rustc because the pinned cache
+does not hash all transitive native inputs. Other Rust crate types still use the
+cache. See [the cache contract and regression](bun-patches/rust-compiler-cache.md).
 Set `SCCACHE_DIR` to choose another cache or `BUILD_CACHE=0` to bypass it.
 
 Run each command from the repository root.
@@ -72,6 +76,22 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 | `bun scripts/refresh-compatibility-docs.ts --check` | The generated tables in the compatibility records. |
 
 `scripts/test.sh --update` regenerates a fixture's `expected.txt` with native Bun. Review the diff before you commit it. To add a fixture, create `tests/fixtures/<name>/` with an `index.ts` and an `expected.txt`. The header of `scripts/test.sh` documents the optional files.
+
+## Update the Waffle release closure
+
+Update the runtime, relay, and base-family pins in the root, Web, and sandbox
+manifests together. Set the root `waffleHostInterface` to the released interface.
+Run `.github/scripts/update-waffle-records.sh` to refresh archive hashes, sizes,
+tagged source revisions, native source files, and program provenance.
+The updater refuses mixed interfaces or native files that differ from the runtime
+archive. It validates the original program commit and base source identity formats.
+Validation or staging failures keep `scripts/waffle-release-inputs.json` unchanged.
+The completed record replaces the old file through an atomic sibling rename.
+
+Regenerate the lockfiles with Bun, then verify frozen installs in all three scopes.
+Run the normal quality, package, and Web gates. Use the shared-group CI checks for
+both existing engine producers and their Chromium consumers. Keep these gates
+blocking while a matching program family or reviewed Bash source is unpublished.
 
 ## Change Bun's source
 

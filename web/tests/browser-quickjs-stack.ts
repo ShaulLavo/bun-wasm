@@ -38,6 +38,18 @@ async function capacity(browser: Browser, url: string): Promise<void> {
   });
 }
 
+async function nativeCapacity(browser: Browser, url: string): Promise<void> {
+  await opened(browser, url, async page => {
+    const fixture = new URL("../../tests/fixtures/stack-native-call/", import.meta.url);
+    for (const name of ["control.ts", "semantics.ts"]) {
+      await writeFile(page, `/home/user/${name}`, readFileSync(new URL(name, fixture), "utf8"));
+    }
+    const result = await run(page, `BUN_WASM_STACK_KIB=${budget ?? "32"} bun run control.ts`, 90_000);
+    assert.equal(result.code, 0, `native call capacity: ${JSON.stringify(result)}`);
+    assert.equal(result.output.trim(), readFileSync(new URL("expected.txt", fixture), "utf8").trim());
+  });
+}
+
 async function overflow(browser: Browser, url: string, mode: string): Promise<void> {
   await opened(browser, url, async page => {
     const output = await execute(page, mode, mode === "bound" ? 2000 : 200000);
@@ -47,11 +59,15 @@ async function overflow(browser: Browser, url: string, mode: string): Promise<vo
 }
 
 async function checkBrowser(name: string, url: string): Promise<void> {
-  assert.ok(name === "firefox" || name === "chromium");
+  assert.ok(name === "firefox" || name === "chromium" || name === "webkit");
   const browser: Browser = await task.launch(playwright[name]);
   try {
-    await capacity(browser, url);
-    console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} plain 200 completes`);
+    if (name !== "webkit") {
+      await capacity(browser, url);
+      console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} plain 200 completes`);
+    }
+    await nativeCapacity(browser, url);
+    console.log(`PASS ${name}/quickjs budget=${budget ?? "32"} native calls and recovery`);
     for (const mode of modes) {
       await overflow(browser, url, mode);
       console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} cold ${mode} recovers`);

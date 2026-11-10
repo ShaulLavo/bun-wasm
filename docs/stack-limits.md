@@ -130,6 +130,26 @@ React Router's ordinary CommonJS dependency loading. Firefox on Android remains 
 still uses WebKit and keeps it too. Unknown Firefox platforms also keep the
 smaller budget.
 
+### Native callable frames
+
+QuickJS dispatches native callable classes before entering the bytecode
+interpreter. On the production WASI build, the old dispatcher reserved a
+288-byte interpreter activation even for native calls. The extracted dispatcher
+reserves no shadow bytes; only bytecode and generator execution enter that
+activation. `Function.prototype.call` and `apply` no longer keep the unused frame
+while reentering JavaScript. Interrupt polling, native class dispatch, frame
+bookkeeping and the stack guards are unchanged.
+
+At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
+55 nested calls through both methods, catches unbounded apply recursion and
+continues. The same production core with the old engine fails that fixture on
+both the native launcher and desktop Safari 26.4. All 25 recursion paths and both
+overflow fixtures also recover in fresh Safari sessions at 32 KiB and the existing
+40 KiB safety margin. These are stack controls, not framework acceptance results.
+The browser-guest manifest discovers the cold WebKit check; the native manifest
+discovers the focused fixture. The guest's 8 MiB shadow stack, 7 MiB override clamp
+and browser budget remain unchanged.
+
 ## JSC
 
 JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Proxy
@@ -180,13 +200,80 @@ recovery after all five native exceptions. The same fixture passes on a 1 MiB
 Node Worker stack at 800 KiB and a 21 MiB Worker stack at the unchanged 6144 KiB
 Node policy. These are stack controls, not an Angular application qualification.
 
-Remaining gaps are visible in the original browser-stack probe. Unary operator
-chains and the noncapturing-group and lookahead regexp cases still trap at
-200,000 levels in Chrome. Blocks and conditional expressions now throw instead.
-This is not a claim that every parser or regexp shape is safe. The extra accounting
-can reduce native-path nesting capacities on other hosts. Firefox's original two
-stack fixtures and Linux WebKit under a 512 KiB host stack pass; no new Darwin or
-iOS measurement is claimed.
+Unary operators and regular expressions had guards that never fired, because each
+level spends almost no shadow stack. Unary bytecode generation and every Yarr
+recursive compile pass now reserve 1024 bytes per level, the Yarr interpreter 2048,
+and `await` chains, which had no parser check, reserve 2048 and check. In Google
+Chrome 157 on Linux the original browser-stack probe shows no trap on any of its 25
+paths, warm or in fresh contexts, and getter capacity stays at 142. The fixture also
+passes at the default budget, 800 KiB and 1000 KiB, and on a 1 MiB Node Worker stack.
+
+The trade is depth. On a 1 MiB wasmtime stack at 800 KiB, regexp groups completed
+to 2,000 levels and trapped by 3,000 before; they now complete to 300 and throw a
+catchable error from 400. Unary chains completed to 5,000 and trapped by 10,000;
+they now complete to 700 and throw from 1,000, and `await` chains complete to 400
+and throw by 700.
+
+These depth measurements start with a shallow matching stack. A pattern compiled
+there can still exhaust the interpreter during native callback reentry. On WASI,
+that matching failure now keeps its error result and throws the existing
+`RangeError` instead of silently returning `null` or `false`. The fixture checks
+successful `exec`, `test`, `replace` and `matchAll` results during reentry, then
+checks matching and a genuine non-match after unwinding.
+
+This is not a claim that every shape is safe. Long left-deep chains (`x+x+…`,
+`x&&x&&…`, `x.a.a…`, `x()()…`) still trap at 200,000 levels on wasmtime. They
+recurse in bytecode generation too, but generated code can really be that long, so a
+fixed reserve would cost working depth and needs its own design. Blocks and
+conditional expressions throw. The extra accounting can reduce native-path nesting
+capacities on other hosts. No new Darwin or iOS measurement is claimed.
+
+## Nested require
+
+A CommonJS module that requires another keeps the loader's frames on the stack until
+the inner module finishes, so a chain of modules is a recursion path like the others.
+On QuickJS every JavaScript frame costs about 320 bytes of the budget, and entering
+a module body through `Function.prototype.apply` costs about 510 more.
+
+The loader used to hold six of its own functions between one module body and the
+next. It now holds one ([CommonJS loader stack cost](bun-patches/commonjs-loader-stack.md)).
+Measured on November 10, 2026 on the native launcher, with the budget set to the
+value the browser passes:
+
+| QuickJS budget | Plain calls | Nested `require`, six loader frames | Nested `require`, one loader frame |
+| ---: | ---: | ---: | ---: |
+| 32 KiB | 97 | 8 | 20 |
+| 152 KiB | 501 | 51 | 121 |
+
+One level cost 2,858 bytes before and costs 1,217 now: about 400 for the loader
+frame, 510 for the native call and 310 for a trivial module body. About 7 to 8 KiB
+of either budget is spent outside the levels, mostly on compiling the next module.
+
+Real packages at 32 KiB, each loaded alone from an empty stack:
+
+| Package | Deepest chain on Node | Six loader frames | One loader frame |
+| --- | ---: | --- | --- |
+| `prompts` 2.4.2 (loaded by Astro 5.14.1) | 9 modules | `RangeError` | loads, with 7 spare levels |
+| `@angular/cli` 20.3.7 `src/utilities/config.js` (through `@angular-devkit/core` and rxjs) | 14 modules | `RangeError`, needs about 54 KiB | `RangeError`, needs 33 to 34 KiB |
+
+The Angular chain still does not fit in 32 KiB. It now fails twelve modules deep in
+rxjs while compiling the thirteenth. The native call into each module body is the
+largest cost left, and removing it needs a different wrapper shape on every engine.
+A larger budget is not the answer: 40 KiB is the measured ceiling for WebKit above.
+
+JSC completes a 512-module chain at 192 KiB before and after, because its
+JavaScript-to-JavaScript calls stay on the C-loop stack. Its getter guard was live
+in the same run (34 levels). The browser-native engine ignores the budget.
+
+These are launcher measurements of the guest's own guard. They are not a Safari
+run, and they do not show that Astro or Angular start there: later phases of both
+have never run at 32 KiB. An overflow that lands in QuickJS's parser can also
+surface as a `SyntaxError` instead of a `RangeError`. The unchanged loader reported
+`SyntaxError: missing formal parameter` one level past its capacity at 40 KiB.
+
+`tests/fixtures/require-chain-stack` holds the line: a child with
+`BUN_WASM_STACK_KIB=32` loads a 16-module chain, catches unbounded recursion inside
+a nested module, checks that no failed module stayed cached, and loads again.
 
 ## Browser-native engine
 
@@ -295,6 +382,23 @@ BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the
 
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
 sets the host stack independently of the linked shadow stack.
+
+The `require` path writes its chain of modules into a private scratch directory and
+removes it. `--leaf-root` and `--leaf` end the chain in a real installed package, and
+the result is how many levels fit above it. A package that cannot load alone is
+reported as `refused_at_zero`, not as a capacity of zero:
+
+```sh
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 32 require plain
+python3 scripts/measure-stack.py --engine quickjs --budget-kib 32 \
+  --leaf-root <project with node_modules> --leaf node_modules/prompts/index.js require
+python3 scripts/measure-stack.py --engine jsc --budget-kib 192 require getter
+scripts/test.sh --no-build require-chain-stack
+```
+
+`scripts/measure-require-depth.ts` is a Node preload for the other half of the
+question: with `REQUIRE_DEPTH_TARGETS` it prints the CommonJS chain above a named
+module the first time it loads, then exits before the application starts.
 
 ## Blocking browser check
 

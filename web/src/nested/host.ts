@@ -7,6 +7,10 @@ import {
   BACKEND, BAD_FRAME, FRAME_ALIGN, FRAME_BYTES, MAX_DEPTH, MAX_RESOURCES, MAX_VALUES, OK, PENDING_EXCEPTION,
   decodeRequest, encodeReply, type Binding, type Reply, type Request, type WasmNumber,
 } from "./wire.js";
+import {
+  CELL_ALIGN, CELL_BYTES, CELL_PAGES, DESCRIPTOR_BYTES, MAX_DESCRIPTION_BYTES, MEMORY_PUBLICATION, MODULE_PUBLICATION,
+  readDescriptor, validateMemory, validateModule, type PublicationDescriptor,
+} from "./publication.js";
 
 const PAGE_BYTES = 65536;
 const MAX_GROUP_PAGES = 65536;
@@ -15,11 +19,18 @@ const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [48, "NoMem"], [71, "Search"]]);
 const TABLE_AND_GLOBAL_REFUSAL = "Nested tables and globals are not available on the Browser host";
 const TABLE_AND_GLOBAL_REQUESTS = ["TableExport", "TableLength", "TableGet", "TableSet", "TableGrow", "GlobalGet", "GlobalSet"];
+const MODULE_ALIGN = 16;
+const encoder = new TextEncoder();
+
+function shmError(status: number): string { return SHM_ERRORS.get(-status) ?? String(status); }
 
 /** The documented runtime_shm functions this member's Waffle group attachment provides. */
 export interface RegionProvider {
   shm_create(length: number, align: number, out: number): number;
   shm_detach(handle: number): number;
+  shm_publish(kind: number, primary: number, companion: number, meta: number, out: number): number;
+  shm_publication_open(token: number, kind: number, out: number): number;
+  shm_withdraw(token: number): number;
   futex_wait32(address: number, expected: number, timeoutNs: bigint): number;
   futex_wait64(address: number, expected: bigint, timeoutNs: bigint): number;
   futex_wake(address: number, count: number): number;
@@ -34,9 +45,9 @@ function declarationModule(): WebAssembly.Module {
   const section = (id: number, content: number[]) => [id].concat(unsigned(content.length), content);
   const i32 = 0x7f, i64 = 0x7e;
   const signature = (params: number[]) => [0x60, params.length].concat(params, [1, i32]);
-  const types = [signature([i32, i32, i32]), signature([i32]), signature([i32, i32, i64]), signature([i32, i64, i64]), signature([i32, i32])];
-  const functions = ["shm_create", "shm_detach", "futex_wait32", "futex_wait64", "futex_wake"];
-  const imports = functions.flatMap((text, index) => name("runtime_shm").concat(name(text), [0, index]));
+  const types = [signature([i32, i32, i32]), signature([i32]), signature([i32, i32, i64]), signature([i32, i64, i64]), signature([i32, i32]), signature([i32, i32, i32, i32, i32])];
+  const functions: readonly (readonly [string, number])[] = [["shm_create", 0], ["shm_detach", 1], ["futex_wait32", 2], ["futex_wait64", 3], ["futex_wake", 4], ["shm_publish", 5], ["shm_publication_open", 0], ["shm_withdraw", 1]];
+  const imports = functions.flatMap(([text, type]) => name("runtime_shm").concat(name(text), [0, type]));
   return new WebAssembly.Module(Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0].concat(
     section(1, [types.length].concat(types.flat())),
     section(2, [functions.length].concat(imports)),
@@ -62,20 +73,29 @@ interface Entries {
   readonly dispatch: (invocation: number, callback: number, pointer: number) => number;
 }
 
+/**
+ * One member's lease on a nested memory. The length lives in a group cell so every member sees one
+ * value. Growth only moves that cell: Waffle zeroes the whole reservation when it is created.
+ */
 class Region {
   released = false;
   constructor(
-    private readonly memory: () => WebAssembly.Memory,
-    readonly handle: number, readonly base: number, readonly maximum: number, public pages: number,
+    readonly handle: number, readonly cellHandle: number, readonly base: number, readonly maximum: number,
+    private readonly cells: Int32Array,
   ) {}
+  /** Group memory is writable by every member, so the cell is checked on each read. */
+  get pages(): number {
+    const pages = Atomics.load(this.cells, CELL_PAGES) >>> 0;
+    if (pages > this.maximum) throw new NestedExecution("nested memory page count is corrupt");
+    return pages;
+  }
   get bytes(): number { return this.pages * PAGE_BYTES; }
   grow(delta: number): number {
-    if (this.pages + delta > this.maximum) return -1;
-    const old = this.pages;
-    // Zero before publishing: nested code and SAB views read the visible length.
-    new Uint8Array(this.memory().buffer, this.base + old * PAGE_BYTES, delta * PAGE_BYTES).fill(0);
-    this.pages += delta;
-    return old;
+    for (;;) {
+      const old = this.pages;
+      if (old + delta > this.maximum) return -1;
+      if (Atomics.compareExchange(this.cells, CELL_PAGES, old, old + delta) === old) return old;
+    }
   }
   contains(address: number, width: number): boolean {
     return address >= this.base && address + width <= this.base + this.bytes && address % width === 0;
@@ -90,6 +110,7 @@ class Region {
 class Slots<T> {
   private readonly slots: { generation: number; value: T | undefined }[] = [];
   private readonly free: number[] = [];
+  hasRoom(): boolean { return this.free.length > 0 || this.slots.length < MAX_RESOURCES; }
   insert(value: T): number {
     let slot = this.free.pop();
     if (slot === undefined) {
@@ -133,8 +154,10 @@ function getResource<T>(items: readonly T[], id: number, message: string): T {
   return item;
 }
 
-interface CompiledModule { readonly module: WebAssembly.Module; readonly info: ModuleInfo; }
-interface Guest { readonly instance: WebAssembly.Instance; readonly compiled: CompiledModule; readonly memory: Region; }
+/** `bytes` is kept only for a module this member compiled: a received one already has a token. */
+interface CompiledModule { readonly module: WebAssembly.Module; readonly info: ModuleInfo; readonly bytes?: Uint8Array<ArrayBuffer>; }
+interface Created { readonly handle: number; readonly address: number; }
+interface Guest{ readonly instance: WebAssembly.Instance; readonly compiled: CompiledModule; readonly memory: Region; }
 interface NestedFunction { readonly fn: (...args: unknown[]) => unknown; readonly type: FunctionType; }
 
 const floats = new Float32Array(1);
@@ -212,6 +235,14 @@ function replyError(error: unknown, category: string): Reply {
 
 function bindingNames(binding: Binding): { module: string; name: string } {
   return "Callback" in binding ? binding.Callback : "Function" in binding ? binding.Function : binding.Global;
+}
+
+/** One path for Compile and AttachModule, so both keep the table and global refusal. */
+function compileRegionized(bytes: Uint8Array<ArrayBuffer>): Pick<CompiledModule, "module" | "info"> {
+  const module = new WebAssembly.Module(bytes);
+  // Refuse here, before an instance's start code can run and then fail building its exports.
+  if (WebAssembly.Module.exports(module).some(item => item.kind === "table" || item.kind === "global")) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
+  return { module, info: readModuleInfo(bytes) };
 }
 
 /** One member's nested service. `checkActive` is its cancellation boundary. */
@@ -330,6 +361,11 @@ export class NestedHost {
     if ("Span" in request) return this.span(request.Span.memory);
     if ("Grow" in request) return this.growRegion(request.Grow.memory, request.Grow.delta);
     if ("Release" in request) return this.release(request.Release.memory);
+    if ("PublishMemory" in request) return this.publishMemory(request.PublishMemory.memory);
+    if ("AttachMemory" in request) return this.attachMemory(request.AttachMemory.token);
+    if ("PublishModule" in request) return this.publishModule(request.PublishModule.module, request.PublishModule.description);
+    if ("AttachModule" in request) return this.attachModule(request.AttachModule.token);
+    if ("Withdraw" in request) return this.withdraw(request.Withdraw.token);
     if ("Compile" in request) return this.compile(request.Compile.pointer, request.Compile.length);
     if ("Function" in request) return this.exported(request.Function.instance, request.Function.name);
     if ("Instantiate" in request) {
@@ -337,7 +373,7 @@ export class NestedHost {
       return this.enter(invocation, () => this.instantiate(module, memory, bindings));
     }
     if (TABLE_AND_GLOBAL_REQUESTS.some(name => name in request)) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
-    if (!("Call" in request)) throw new Error("Same-region worker transport is not available on the Browser host");
+    if (!("Call" in request)) throw new Error("Unknown nested request");
     const { function: id, arguments: args, invocation } = request.Call;
     return this.enter(invocation, () => this.call(id, args));
   }
@@ -346,28 +382,120 @@ export class NestedHost {
     if (initial > maximum || maximum > MAX_GROUP_PAGES) throw new Error("region admission: Inval");
     // A four-GiB reservation overflows the provider's 32-bit length, as it does natively.
     if (maximum >= MAX_GROUP_PAGES) throw new Error("region admission: NoMem");
-    const out = this.allocate(8);
-    try {
-      const status = this.region().shm_create(Math.max(maximum, 1) * PAGE_BYTES, PAGE_BYTES, out);
-      if (status < 0) throw new Error(`region admission: ${SHM_ERRORS.get(-status) ?? status}`);
-      return { Handle: this.publish(this.createdRegion(out, initial, maximum)) };
-    } finally {
-      if (!this.coreFailed) this.inCore(entries => entries.free(out, 8, FRAME_ALIGN));
-    }
+    return this.withOutput(8, out => {
+      const data = this.createRegion(Math.max(maximum, 1) * PAGE_BYTES, PAGE_BYTES, out);
+      return { Handle: this.reserveCell(data, initial, maximum, out) };
+    });
   }
 
-  private createdRegion(out: number, initial: number, maximum: number): Region {
-    const view = new DataView(this.shared().buffer);
-    return new Region(() => this.shared(), view.getUint32(out, true), view.getUint32(out + 4, true), maximum, initial);
+  /** A temporary output span in member memory, for Waffle's checked output pointers. */
+  private withOutput<T>(bytes: number, action: (out: number) => T): T {
+    const out = this.allocate(bytes);
+    try { return action(out); }
+    finally { if (!this.coreFailed) this.inCore(entries => entries.free(out, bytes, FRAME_ALIGN)); }
   }
+
+  private createRegion(length: number, align: number, out: number): Created {
+    const status = this.region().shm_create(length, align, out);
+    if (status < 0) throw new Error(`region admission: ${shmError(status)}`);
+    const view = new DataView(this.shared().buffer);
+    return { handle: view.getUint32(out, true), address: view.getUint32(out + 4, true) };
+  }
+
+  private detach(handle: number): void { this.region().shm_detach(handle); }
 
   /** An unpublished region must not stay charged to the group. */
-  private publish(region: Region): number {
-    try { return this.regions.insert(region); }
+  private reserveCell(data: Created, initial: number, maximum: number, out: number): number {
+    try { return this.insertReserved(data, this.createRegion(CELL_BYTES, CELL_ALIGN, out), initial, maximum); }
     catch (error) {
-      this.region().shm_detach(region.handle);
+      this.detach(data.handle);
       throw error;
     }
+  }
+
+  private insertReserved(data: Created, cell: Created, initial: number, maximum: number): number {
+    try {
+      const cells = new Int32Array(this.shared().buffer, cell.address, CELL_BYTES / Int32Array.BYTES_PER_ELEMENT);
+      Atomics.store(cells, CELL_PAGES, initial);
+      return this.regions.insert(new Region(data.handle, cell.handle, data.address, maximum, cells));
+    } catch (error) {
+      this.detach(cell.handle);
+      throw error;
+    }
+  }
+
+  /** Published tokens leave through this u32 output, so one above 0x7fffffff cannot read as an errno. */
+  private commitPublication(kind: number, primary: number, companion: number, meta: number): number {
+    return this.withOutput(8, out => {
+      const status = this.region().shm_publish(kind, primary, companion, meta, out);
+      if (status < 0) throw new Error(`shared publication: ${shmError(status)}`);
+      return new DataView(this.shared().buffer).getUint32(out, true);
+    });
+  }
+
+  private publishMemory(id: number): Reply {
+    const region = this.regions.get(id).lease();
+    return { Count: this.commitPublication(MEMORY_PUBLICATION, region.handle, region.cellHandle, region.maximum) };
+  }
+
+  /** Takes every hold of a publication in one owner step and returns the owner's own extents. */
+  private openPublication(token: number, kind: number): PublicationDescriptor {
+    return this.withOutput(DESCRIPTOR_BYTES, out => {
+      const status = this.region().shm_publication_open(token, kind, out);
+      if (status < 0) throw new Error(`shared attachment: ${shmError(status)}`);
+      return readDescriptor(this.shared().buffer, out);
+    });
+  }
+
+  /** Companion before primary. The primary's detach still runs if the first one is interrupted. */
+  private releaseHolds(value: PublicationDescriptor): void {
+    try { if (value.companion !== 0) this.detach(value.companion); }
+    finally { this.detach(value.primary); }
+  }
+
+  private attachMemory(token: number): Reply {
+    if (!this.regions.hasRoom()) throw new Error("nested resource limit");
+    const value = this.openPublication(token, MEMORY_PUBLICATION);
+    try {
+      const { maximum, cells } = validateMemory(value, this.shared().buffer);
+      return { Handle: this.regions.insert(new Region(value.primary, value.companion, value.primaryAddress, maximum, cells)) };
+    } catch (error) {
+      this.releaseHolds(value);
+      throw error;
+    }
+  }
+
+  private publishModule(id: number, description: string): Reply {
+    const { bytes } = getResource(this.modules, id, "invalid nested module");
+    if (!bytes) throw new Error("Only a module compiled by this member can be published");
+    const text = encoder.encode(description);
+    if (text.length === 0 || text.length > MAX_DESCRIPTION_BYTES) throw new Error("shared publication: Inval");
+    const created = this.withOutput(8, out => this.createRegion(text.length + bytes.length, MODULE_ALIGN, out));
+    try {
+      const target = new Uint8Array(this.shared().buffer, created.address, text.length + bytes.length);
+      target.set(text);
+      target.set(bytes, text.length);
+      return { Count: this.commitPublication(MODULE_PUBLICATION, created.handle, 0, text.length) };
+    } finally { this.detach(created.handle); }
+  }
+
+  /** The copy is taken under the holds. Compiling afterward holds nothing, so it cannot leak one. */
+  private readPublishedModule(token: number): ReturnType<typeof validateModule> {
+    const value = this.openPublication(token, MODULE_PUBLICATION);
+    try { return validateModule(value, this.shared().buffer); }
+    finally { this.releaseHolds(value); }
+  }
+
+  private attachModule(token: number): Reply {
+    if (this.modules.length >= MAX_RESOURCES) throw new Error("nested resource limit");
+    const { description, code } = this.readPublishedModule(token);
+    return { AttachedModule: { id: pushResource(this.modules, compileRegionized(code)), description } };
+  }
+
+  private withdraw(token: number): Reply {
+    const status = this.region().shm_withdraw(token);
+    if (status < 0) throw new Error(`shared publication withdrawal: ${shmError(status)}`);
+    return { Count: 0 };
   }
 
   private span(id: number): Reply {
@@ -385,18 +513,15 @@ export class NestedHost {
     const region = this.regions.get(id);
     region.released = true;
     this.regions.release(id);
-    this.region().shm_detach(region.handle);
+    try { this.detach(region.handle); }
+    finally { this.detach(region.cellHandle); }
     return { Count: 0 };
   }
 
   private compile(pointer: number, length: number): Reply {
     this.region();
     const bytes = this.copy(pointer, length);
-    const module = new WebAssembly.Module(bytes);
-    // Refuse here, before an instance's start code can run and then fail building its exports.
-    if (WebAssembly.Module.exports(module).some(item => item.kind === "table" || item.kind === "global")) throw new Error(TABLE_AND_GLOBAL_REFUSAL);
-    const compiled = { module, info: readModuleInfo(bytes) };
-    return { Handle: pushResource(this.modules, compiled) };
+    return { Handle: pushResource(this.modules, { ...compileRegionized(bytes), bytes }) };
   }
 
   private enter(invocation: number, run: () => Reply): Reply {

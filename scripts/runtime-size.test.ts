@@ -50,6 +50,19 @@ test("Bun policy attribution names current adapters without hiding generic servi
   for (const file of service) expect(() => checkLazyProcessService([file], runtime)).toThrow("process service is eager");
 });
 
+test("process observation stays in the eager lifecycle layer without admitting a process service", async () => {
+  const result = await Bun.build({ entrypoints: [installed("proc/observation.ts")], target: "browser", metafile: true });
+  if (!result.success || !result.metafile) throw new Error("Expected an artifact-free observation bundle");
+  const inputs = Object.values(result.metafile.outputs).flatMap(output => Object.keys(output.inputs));
+  expect(inputs.some(input => runtime.relativeInput(input) === "proc/observation.ts")).toBe(true);
+  expect(() => checkLazyProcessService(inputs, runtime)).not.toThrow();
+  expect(() => checkLazyProcessService([installed("dist/proc/observation.js")], runtime)).not.toThrow();
+  const services = ["supervisor", "registry", "worker-client", "observation-service", "observation-worker"];
+  for (const service of services) expect(() => checkLazyProcessService([installed(`proc/${service}.ts`)], runtime)).toThrow("process service is eager");
+  expect(moduleContributions(result.metafile.outputs, runtime).find(input => input.path === "proc/observation.ts")?.minified)
+    .toBeGreaterThan(0);
+});
+
 test("realm-local terminal turn guards do not admit terminal or process services", () => {
   const guards = ["proc/terminal-turn.ts", "dist/proc/terminal-turn.js"].map(installed);
   expect(() => checkLazyProcessService(guards, runtime)).not.toThrow();

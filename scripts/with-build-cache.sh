@@ -12,7 +12,9 @@ fi
 socket_dir=$(mktemp -d "${SCCACHE_SOCKET_ROOT:-/tmp}/sc.XXXXXXXX")
 export SCCACHE_SERVER_UDS=$socket_dir/server
 export SCCACHE_IDLE_TIMEOUT=60
-export RUSTC_WRAPPER=${RUSTC_WRAPPER:-$(command -v sccache)}
+if [[ -z ${RUSTC_WRAPPER:-} || ${RUSTC_WRAPPER:-} == sccache || "$RUSTC_WRAPPER" -ef "$(command -v sccache)" ]]; then
+  export RUSTC_WRAPPER="$root/scripts/rustc-cache.sh"
+fi
 export CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-$(command -v sccache)}
 export CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-$(command -v sccache)}
 cleanup() {

@@ -10,4 +10,7 @@ await import('./browser-budget.ts');
 await import('./global-controls.ts');
 await import('./simd-controls.ts');
 await import('./link-controls.ts');
-await import('./browser-worker-refusals.ts');
+await import('./table-global-refusal.ts');
+await import('./worker-refusals.ts');
+await import('./browser-transport-controls.ts');
+await import('./membership-forgery-control.ts');

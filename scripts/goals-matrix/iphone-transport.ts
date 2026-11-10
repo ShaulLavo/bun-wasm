@@ -48,8 +48,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
   }
-  async function evaluate<T>(source: string, timeoutMs = config.timeoutMs): Promise<T> {
-    return await request(role + "/execute", { source, timeoutMs }, timeoutMs) as T;
+  async function evaluate<T>(source: string, timeoutMs = config.timeoutMs, observation = false): Promise<T> {
+    return await request(role + "/execute", { source, timeoutMs, observation }, timeoutMs) as T;
   }
   async function ready(selected: "host" | "preview"): Promise<Record<string, unknown>> {
     return until(async () => object(await request(selected + "/state") ?? {}), row => typeof row.timeOrigin === "number" && row.visible === true, config.timeoutMs);
@@ -79,7 +79,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
       title = "Goals " + state.nonce;
     },
-    evaluate: <T>(source: string) => evaluate<T>(source),
+    evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => evaluate<T>(source, config.timeoutMs, options?.observation === true),
     async openPreview(url) {
       await request("preview/configure", { url });
       await present(url);

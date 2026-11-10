@@ -1,0 +1,2 @@
+default shared buffer policy
+default worker data policy
