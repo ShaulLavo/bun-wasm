@@ -126,6 +126,9 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
+        stackHost: globalThis.navigator ? {
+          platform: navigator.platform, vendor: navigator.vendor, maxTouchPoints: navigator.maxTouchPoints,
+        } : undefined,
         trace: false, net: ring, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
       },

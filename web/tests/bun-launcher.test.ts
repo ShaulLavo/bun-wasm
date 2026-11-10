@@ -1,9 +1,12 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { createFilesystemConnection } from "waffle/fs";
+import { workerControlFixture } from "./worker-control-fixture";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
+import { createBunExecutor, type RunRequest } from "../src/bun-executor";
 import { runtimeRelay } from "../src/net/relay";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
@@ -335,5 +338,45 @@ for (const withRelay of [false, true]) test(`broker preview1 preserves the expli
     launches[0]?.network?.dispose();
     create.mockRestore();
     await scopedRuntime.dispose();
+  }
+});
+
+const safariAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
+
+for (const child of [false, true]) test(`Safari page observations reach the ${child ? "spawned" : "root"} executor without WorkerNavigator touch support`, async () => {
+  const control = await workerControlFixture();
+  const connection = createFilesystemConnection();
+  const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const pageHost = { platform: "MacIntel", vendor: "Apple Computer, Inc.", maxTouchPoints: 0 };
+  const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: "createBunExecutor@https://example.test/worker.js:1:1" }));
+  try {
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { ...pageHost, userAgent: safariAgent } });
+    const launches: Launch[] = [];
+    const spawned = { ...context, identity: { ...context.identity, pid: child ? 2 : 1, parentPid: child ? 1 : 0 } };
+    await bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(spawned, service(launches));
+    const launched = launches[0]!;
+    expect(launched.request.stackHost).toEqual(pageHost);
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: safariAgent, platform: "MacIntel" } });
+    const request: RunRequest = {
+      engine: "quickjs", module: launched.request.module, args: launched.request.args, env: launched.request.env,
+      trace: false, net: null, stackHost: launched.request.stackHost,
+      controlGrant: control.grant, filesystem: connection.client,
+    };
+    expect(createBunExecutor(request).env?.(request)?.BUN_WASM_STACK_KIB).toBe("36");
+    for (const override of ["", "32", "64", "invalid"]) {
+      const explicit = { ...request, env: { ...request.env, BUN_WASM_STACK_KIB: override } };
+      expect(createBunExecutor(explicit).env?.(explicit)?.BUN_WASM_STACK_KIB).toBe(override);
+    }
+    const unknown = { ...request, stackHost: undefined };
+    expect(createBunExecutor(unknown).env?.(unknown)?.BUN_WASM_STACK_KIB).toBe("32");
+    const ipad = { ...request, stackHost: { ...pageHost, maxTouchPoints: 5 } };
+    expect(createBunExecutor(ipad).env?.(ipad)?.BUN_WASM_STACK_KIB).toBe("32");
+  } finally {
+    capture.mockRestore();
+    if (navigator) Object.defineProperty(globalThis, "navigator", navigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+    connection.client.port.close();
+    connection.server.port.close();
+    await control.dispose();
   }
 });

@@ -22,12 +22,26 @@ async function execute(page: Page, mode: string, depth: number): Promise<string>
 }
 
 async function opened(browser: Browser, url: string, check: (page: Page) => Promise<void>): Promise<void> {
-  const context = await browser.newContext();
+  const desktopPolicy = browser.browserType().name() === "webkit";
+  const context = await browser.newContext(desktopPolicy ? {
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15",
+  } : {});
   try {
+    // Linux WebKit exercises the policy transport with explicit desktop observations, not Safari qualification.
+    if (desktopPolicy) await context.addInitScript(() => {
+      Object.defineProperties(navigator, {
+        platform: { value: "MacIntel" }, vendor: { value: "Apple Computer, Inc." }, maxTouchPoints: { value: 0 },
+      });
+    });
     const page = await context.newPage();
     await page.goto(`${url}?engine=quickjs&prompt=off&mode=memory`);
     await ready(page, 90_000);
     await writeFile(page, "/home/user/depth.js", probe);
+    if (desktopPolicy) {
+      const selected = await run(page, 'bun -e "console.log(process.env.BUN_WASM_STACK_KIB)"', 90_000);
+      assert.equal(selected.code, 0);
+      assert.equal(selected.output.trim(), "36", "the page-to-worker route must select desktop Safari policy");
+    }
     await check(page);
   } finally { await context.close(); }
 }
@@ -38,15 +52,29 @@ async function capacity(browser: Browser, url: string): Promise<void> {
   });
 }
 
-async function nativeCapacity(browser: Browser, url: string): Promise<void> {
+async function nativeCapacity(browser: Browser, url: string, calibration = false): Promise<void> {
   await opened(browser, url, async page => {
     const fixture = new URL("../../tests/fixtures/stack-native-call/", import.meta.url);
     for (const name of ["control.ts", "semantics.ts"]) {
       await writeFile(page, `/home/user/${name}`, readFileSync(new URL(name, fixture), "utf8"));
     }
-    const result = await run(page, `BUN_WASM_STACK_KIB=${budget ?? "32"} bun run control.ts`, 90_000);
+    const selected = calibration ? "32" : budget ?? (browser.browserType().name() === "webkit" ? undefined : "32");
+    const env = selected ? `BUN_WASM_STACK_KIB=${selected} ` : "";
+    const result = await run(page, `${env}bun run control.ts`, 90_000);
     assert.equal(result.code, 0, `native call capacity: ${JSON.stringify(result)}`);
     assert.equal(result.output.trim(), readFileSync(new URL("expected.txt", fixture), "utf8").trim());
+  });
+}
+
+async function fixture(browser: Browser, url: string, name: string): Promise<void> {
+  await opened(browser, url, async page => {
+    const directory = new URL(`../../tests/fixtures/${name}/`, import.meta.url);
+    const entry = name === "parser-error-preservation" ? "index.ts" : "index.js";
+    await writeFile(page, `/home/user/${entry}`, readFileSync(new URL(entry, directory), "utf8"));
+    const env = budget ? `BUN_WASM_STACK_KIB=${budget} ` : "";
+    const result = await run(page, `${env}bun run ${entry}`, 90_000);
+    assert.equal(result.code, 0, `${name}: ${JSON.stringify(result)}`);
+    assert.equal(result.output.trim(), readFileSync(new URL("expected.txt", directory), "utf8").trim());
   });
 }
 
@@ -66,8 +94,11 @@ async function checkBrowser(name: string, url: string): Promise<void> {
       await capacity(browser, url);
       console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} plain 200 completes`);
     }
+    if (name === "webkit" && !budget) await nativeCapacity(browser, url, true);
     await nativeCapacity(browser, url);
-    console.log(`PASS ${name}/quickjs budget=${budget ?? "32"} native calls and recovery`);
+    console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} native calls and recovery`);
+    const fixtures = name === "webkit" ? ["stack-overflow", "stack-overflow-console", "parser-error-preservation"] : [];
+    for (const fixtureName of fixtures) await fixture(browser, url, fixtureName);
     for (const mode of modes) {
       await overflow(browser, url, mode);
       console.log(`PASS ${name}/quickjs budget=${budget ?? "default"} cold ${mode} recovers`);

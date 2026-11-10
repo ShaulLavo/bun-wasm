@@ -27,10 +27,14 @@ reservation keeps its existing capacity. This extends the platform hunk in
 `jsc/webkit-wasi.patch`; it changes no upstream JavaScript algorithms. The
 browser executor's choice of budget in `web/src/engine-stack-budget.ts` is original
 adapter code. It retains QuickJS's default on desktop Gecko Firefox after cold
-overflow-safety checks at 1.25 times that budget. Safari, Firefox on iOS, and
-unknown hosts keep the smaller QuickJS budget. Explicit environment overrides
-remain unchanged. `web/tests/browser-quickjs-stack.ts` is an original browser
-harness over the existing stack-depth fixture.
+overflow-safety checks at 1.25 times that budget. Positively observed desktop
+Safari uses 36 KiB after native-call frame removal and parser exception
+preservation, with 29 cold controls passing at both 36 and 45 KiB on Safari 26.4.
+The page sends platform, vendor and touch-count observations to root and spawned
+workers. A Macintosh user agent alone cannot distinguish a desktop-style iPad.
+iOS, iPadOS and unknown observations retain 32 KiB. This is not application-startup
+acceptance. Explicit environment overrides and all JSC choices remain unchanged.
+`web/tests/browser-quickjs-stack.ts` is an original browser harness over the existing stack-depth fixture.
 
 Desktop Firefox uses a measured 208 KiB JSC budget instead of the 192 KiB WebKit
 fallback. Its original compiler regression in `web/tests/browser-solid-stack.ts`
