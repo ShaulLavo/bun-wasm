@@ -243,7 +243,17 @@ process has its own revocable identity. Calling `terminate()` is not proof of de
 revokes first, then waits for the filesystem's shared critical-section admission fence before
 reaping locks and requesting termination; an ordinary guest exit acknowledgement also proves
 quiescence. Killed
-process buffers are never reused for another process. Node workers use their real preopens.
+filesystem identities are not reused for another process. Node workers use their real preopens.
+
+A root's canonical Waffle observation survives logical result selection and collection.
+Successful native `Worker.terminate()` return ends that observation. A void return ends it
+synchronously, and a returned promise ends it only when fulfilled. Late observers receive
+`terminated`, not the old exit code or a fabricated signal. Throwing or rejected stops keep
+the selected observation and report their failure. This lifecycle boundary does not prove
+physical reader closure and does not replace filesystem, terminal, notification or memory-group
+cleanup. `run.done` resolves after its filesystem fence without waiting for native termination.
+A Worker acquired after cancellation still belongs to that run's separate stop obligation.
+
 
 Browser children do not share the parent's networking ring. The browser engine
 still has direct host `fetch`; QuickJS/JSC children have no networking slots.
