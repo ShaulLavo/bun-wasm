@@ -43,7 +43,9 @@
       }
       const { binding } = state;
       if (binding.hostname !== requested.hostname || binding.port !== requested.port) return fail("cannot change the listener address or port");
-      staged = { stamp: binding.revisions.stamp(owner.id), fetch: requested.fetch, error: options.error, context: context(), graph: owner };
+      staged = { stamp: binding.revisions.stamp(owner.id),
+        development: globalThis.process.env?.NODE_ENV !== "production" && options.development !== false && (typeof options.development !== "object" || options.development?.hmr !== false),
+        fetch: requested.fetch, error: options.error, context: context(), graph: owner };
       return binding.server;
     }
 
@@ -85,7 +87,7 @@
       if (candidate !== graph || !staged || state.kind === "absent") return fail("evaluation must register exactly one Bun.serve listener");
       const snapshot = staged;
       const { binding } = state;
-      binding.server.reload({ fetch: snapshot.fetch, error: snapshot.error });
+      binding.server.reload({ fetch: snapshot.fetch, error: snapshot.error, development: snapshot.development });
       state = { kind: "committed", binding, snapshot };
       candidate = null;
       staged = null;
@@ -120,6 +122,7 @@
       if (previous.kind !== "absent") { previous.binding.revisions.close(); void previous.binding.server.stop(true); }
     }
 
-    return { serve, select, release, commit, abort, revisions, close, publish, dispose, begin(graph) { candidate = graph; staged = null; } };
+    return { runControl<T>(callback: () => T): T { return internal.runInContext(controllerContext, callback, undefined, []); },
+      serve, select, release, commit, abort, revisions, close, publish, dispose, begin(graph) { candidate = graph; staged = null; } };
   };
 })
