@@ -31,11 +31,7 @@ export function guestStackSettings(output: string): GuestStackSettings | null {
   return { budget, parserReserve };
 }
 
-/** The `capacities` line a `chainCapacity` run prints: one whole number per parser chain. */
-export function chainCapacities(output: string): Record<string, number> {
-  const lines = output.split(/\r?\n/).filter(line => line.startsWith("capacities "));
-  if (lines.length !== 1) throw new Error(`Expected one capacities line, found ${lines.length}`);
-  const parsed: unknown = JSON.parse(lines[0]!.slice("capacities ".length));
+function capacityRecord(parsed: unknown): Record<string, number> {
   if (!parsed || typeof parsed !== "object") throw new Error("Malformed chain capacities");
   const capacities: Record<string, number> = {};
   for (const [mode, value] of Object.entries(parsed)) {
@@ -44,6 +40,38 @@ export function chainCapacities(output: string): Record<string, number> {
   }
   if (Object.keys(capacities).length !== chainModes.length) throw new Error("Missing chain capacities");
   return capacities;
+}
+
+function taggedLine(output: string, tag: string): unknown {
+  const lines = output.split(/\r?\n/).filter(line => line.startsWith(`${tag} `));
+  if (lines.length !== 1) throw new Error(`Expected one ${tag} line, found ${lines.length}`);
+  return JSON.parse(lines[0]!.slice(tag.length + 1));
+}
+
+/** The `capacities` line a `chainCapacity` run prints: one whole number per parser chain. */
+export function chainCapacities(output: string): Record<string, number> {
+  return capacityRecord(taggedLine(output, "capacities"));
+}
+
+export interface ChainOwnership {
+  readonly before: Record<string, number>;
+  readonly child: { readonly settings: GuestStackSettings; readonly capacities: Record<string, number> };
+  readonly after: Record<string, number>;
+}
+
+/**
+ * The `ownership` line a `chainWorker` run prints: the parent's capacities before its Worker child
+ * starts and after it exits, and the child's own validated `chainCapacity` transcript.
+ */
+export function chainOwnership(output: string, depth: number): ChainOwnership {
+  const parsed = taggedLine(output, "ownership");
+  if (!parsed || typeof parsed !== "object" || !("before" in parsed) || !("after" in parsed) || !("child" in parsed)) throw new Error("Malformed chain ownership");
+  const child = parsed.child;
+  if (!child || typeof child !== "object" || !("code" in child) || !("output" in child) || typeof child.output !== "string") throw new Error("Malformed chain ownership child");
+  const outcome = stackOutcome({ code: typeof child.code === "number" ? child.code : null, output: child.output }, "chainCapacity", depth);
+  const settings = guestStackSettings(child.output);
+  if (outcome !== "completed" || !settings) throw new Error(`The Worker child did not complete: ${outcome}\n${child.output}`);
+  return { before: capacityRecord(parsed.before), child: { settings, capacities: chainCapacities(child.output) }, after: capacityRecord(parsed.after) };
 }
 
 type Failure = { depth: number; outcome: string };

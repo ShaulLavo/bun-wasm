@@ -2,6 +2,7 @@
 // `bun run stack-depth.js <mode> <n>` nests one recursive path n levels deep and prints
 // "completed" or "caught <error name>", then "continued"; a wasm trap prints neither.
 // `chainCapacity <n>` also prints "capacities <JSON>": the deepest nesting each parser chain completes.
+// `chainWorker <n>` prints "ownership <JSON>": the same capacities for a parent around a Worker child.
 // Every run first prints "settings <JSON>": the stack budget and parser reserve in its environment.
 const mode = process.argv[2];
 const n = +process.argv[3];
@@ -105,10 +106,32 @@ function chainCapacity(attempt) {
 }
 // Every chain's capacity from one guest: the parser's refusal is catchable, so the search runs in
 // process and prints one JSON line before the usual result. n is the deepest nesting tried.
-actions.chainCapacity = () => {
+function chainCapacities() {
   const capacities = {};
   for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
-  console.log('capacities', JSON.stringify(capacities));
+  return capacities;
+}
+actions.chainCapacity = () => { console.log('capacities', JSON.stringify(chainCapacities())); };
+// A parent and a Worker of this file in one run: the parent's capacities before the child starts
+// and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
+// JSON object merged into the child's copy of the environment; a null value removes that key.
+function workerEnvironment() {
+  const env = { ...process.env };
+  for (const [key, value] of Object.entries(JSON.parse(process.env.STACK_DEPTH_WORKER_ENV || '{}'))) {
+    if (value === null) delete env[key];
+    else env[key] = value;
+  }
+  delete env.STACK_DEPTH_WORKER_ENV;
+  return env;
+}
+actions.chainWorker = async () => {
+  const { Worker } = require('node:worker_threads');
+  const before = chainCapacities();
+  const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
+  let output = '';
+  worker.stdout.on('data', (chunk) => { output += chunk; });
+  const code = await new Promise((resolve, reject) => { worker.on('error', reject); worker.on('exit', resolve); });
+  console.log('ownership', JSON.stringify({ before, child: { code, output }, after: chainCapacities() }));
 };
 actions.promise = async () => { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); await Promise.resolve().then(f); };
 actions.async = async () => { let d = 0; const f = async () => { if (++d < n) await f(); }; await f(); };
