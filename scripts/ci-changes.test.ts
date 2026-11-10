@@ -18,6 +18,8 @@ test.each([
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
+  "scripts/check-quickjs-parser-stack.ts", "scripts/fixtures/quickjs-parser-stack.c", "scripts/fixtures/quickjs-parser-stack.ts",
+  "scripts/fixtures/quickjs-parser-stack.expected.txt",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });
