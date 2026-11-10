@@ -72,6 +72,9 @@ export type TerminalModule = typeof import("./bun-terminal.js") | Error | undefi
 /** The nested execution host as worker.ts loaded it: only for an admitted group member. */
 export type NestedModule = typeof import("./nested/host.js") | Error | undefined;
 
+// Chromium PBL exhausts its browser-native stack at 35 reentries, below the wire's 64-entry limit.
+const SPIDERMONKEY_REENTRY_LIMIT = 16;
+
 export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined): WorkerExecutor<RunRequest> {
   let nested: import("./nested/host.js").NestedHost | undefined;
   let groupMemory: WebAssembly.Memory | undefined;
@@ -99,7 +102,11 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     namespaces(context): WebAssembly.Imports {
       if (!req.memoryGroup) return {};
       if (!nestedModule || nestedModule instanceof Error) throw nestedModule ?? new TypeError("A group member needs the nested execution host");
-      nested = new nestedModule.NestedHost(context.checkActive, text => { context.post("stderr", new TextEncoder().encode(text)); });
+      nested = new nestedModule.NestedHost(
+        context.checkActive,
+        text => { context.post("stderr", new TextEncoder().encode(text)); },
+        req.engine === "spidermonkey" ? SPIDERMONKEY_REENTRY_LIMIT : undefined,
+      );
       return { runtime_nested: nested.imports };
     },
     beforeBindings({ wasi }) {

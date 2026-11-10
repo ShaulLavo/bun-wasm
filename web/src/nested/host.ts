@@ -260,7 +260,11 @@ export class NestedHost {
   private readonly regions = new Slots<Region>();
   private readonly invocations: number[] = [];
 
-  constructor(private readonly checkActive: () => void, private readonly diagnostic: (text: string) => void) {}
+  constructor(
+    private readonly checkActive: () => void,
+    private readonly diagnostic: (text: string) => void,
+    private readonly reentryLimit?: number,
+  ) {}
 
   readonly imports = { request: (pointer: number, length: number, out: number) => this.request(pointer >>> 0, length >>> 0, out >>> 0) };
 
@@ -526,6 +530,9 @@ export class NestedHost {
 
   private enter(invocation: number, run: () => Reply): Reply {
     if (invocation === 0 || this.invocations.length >= MAX_DEPTH) throw new Error("invalid nested invocation");
+    if (this.reentryLimit !== undefined && this.invocations.length >= this.reentryLimit) {
+      return { Error: { category: "RangeError", message: "SpiderMonkey nested callback reentry limit" } };
+    }
     this.invocations.push(invocation);
     try { return run(); }
     finally { this.invocations.pop(); }
