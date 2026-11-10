@@ -524,7 +524,8 @@ class EngineHost {
     native.DOMException = NativeDOMException;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
-    Object.assign(native, this.valueNatives(native.mapPosition));
+    const mapPosition = native.mapPosition;
+    Object.assign(native, this.valueNatives((name, line, col) => name.startsWith("bunwasm:hot:") && native.hotMapLookup ? native.hotMapLookup(name, line, col) : mapPosition(name, line, col)));
     return native;
   }
 

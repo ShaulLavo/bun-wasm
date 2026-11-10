@@ -50,6 +50,7 @@ tests/fixtures/cjs-interop/lib/exports-short.js
 tests/fixtures/cjs-interop/lib/flagged.js
 tests/fixtures/cjs-interop/lib/fn-export.js
 tests/fixtures/cjs-interop/lib/importer.mjs
+tests/fixtures/cli-hot-run/forbidden.cjs
 tests/fixtures/console-format/index.js
 tests/fixtures/cookie-api/index.js
 tests/fixtures/cookie-server/index.js
