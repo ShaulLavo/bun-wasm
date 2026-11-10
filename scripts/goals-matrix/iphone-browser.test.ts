@@ -12,7 +12,7 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
   const restore = observeIphoneOrigins(bus, control.url.origin);
   const origins = new LoopbackPreviewOrigins();
   const owner = Bun.serve({ hostname: "127.0.0.1", port: 0,
-    fetch: (request): Promise<Response> => observeIphoneResponse(new Response("<!doctype html><html><body>owner</body></html>", { headers: { "content-type": "text/html" } }), request.url, bus, control.url.origin),
+    fetch: (request): Promise<Response> => observeIphoneResponse(new Response("<!doctype html><html><body>owner</body></html>", { headers: { "content-type": "text/html" } }), request, bus, control.url.origin),
   });
   ownerOrigin = owner.url.origin;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -73,18 +73,18 @@ test("real product service worker injects the configured preview even when HTTP 
   const owner = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path.startsWith("/__preview/")) { networkPreviewRequests++; return new Response("HTTP must not serve the preview", { status: 500 }); }
-    if (path === "/sw.js") return observeIphoneResponse(new Response(source, { headers: { "content-type": "text/javascript", "service-worker-allowed": "/" } }), request.url, bus, control.url.origin);
+    if (path === "/sw.js") return observeIphoneResponse(new Response(source, { headers: { "content-type": "text/javascript", "service-worker-allowed": "/" } }), request, bus, control.url.origin);
     const html = `<!doctype html><html><body>owner<script>
       navigator.serviceWorker.addEventListener('message', event => {
         if (event.data?.type !== 'preview-request') return;
         const port = event.ports[0];
         port.postMessage({type:'accepted'});
         port.postMessage({type:'head',status:200,statusText:'OK',headers:[['content-type','text/html']]});
-        port.postMessage({type:'data',chunk:new TextEncoder().encode('<!doctype html><html><body><h1>real worker preview</h1><button>Increment</button></body></html>')});
+        port.postMessage({type:'data',chunk:new TextEncoder().encode('<!doctype html><html><body><h1>real worker preview '+(document.body.dataset.revision ?? '1')+'</h1><button>Increment</button></body></html>')});
         port.postMessage({type:'end'});
       });
     </script></body></html>`;
-    return observeIphoneResponse(new Response(html, { headers: { "content-type": "text/html" } }), request.url, bus, control.url.origin);
+    return observeIphoneResponse(new Response(html, { headers: { "content-type": "text/html" } }), request, bus, control.url.origin);
   } });
   ownerOrigin = owner.url.origin;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -105,7 +105,14 @@ test("real product service worker injects the configured preview even when HTTP 
     bus.configure("preview", preview);
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000);
     await waitReady(bus, "preview");
-    expect(await bus.execute("preview", "document.querySelector('h1').textContent", 3000)).toBe("real worker preview");
+    expect(await bus.execute("preview", "document.querySelector('h1').textContent", 3000)).toBe("real worker preview 1");
+    for (const revision of [2, 3]) {
+      await page.evaluate(value => { document.body.dataset.revision = String(value); }, revision);
+      const read = `new Promise(resolve => { const text = document.querySelector('h1').textContent; if (text === 'real worker preview ${revision}') resolve(text); })`;
+      const pending = bus.execute("preview", read, 3000, true).catch((error: unknown) => error);
+      await page.evaluate(() => document.querySelector<HTMLIFrameElement>("iframe")!.contentWindow!.location.reload());
+      expect(await pending).toBe(`real worker preview ${revision}`);
+    }
     expect(bus.state("preview")?.url).toBe(preview);
     expect(networkPreviewRequests).toBe(0);
     await page.evaluate(async () => { for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister(); });
@@ -127,7 +134,7 @@ async function previewReload(engine: BrowserType): Promise<void> {
   const restore = observeIphoneOrigins(bus, control.url.origin);
   const origins = new LoopbackPreviewOrigins();
   const owner = Bun.serve({ hostname: "127.0.0.1", port: 0,
-    fetch: request => observeIphoneResponse(new Response("<!doctype html><html><body>owner</body></html>", { headers: { "content-type": "text/html" } }), request.url, bus, control.url.origin),
+    fetch: request => observeIphoneResponse(new Response("<!doctype html><html><body>owner</body></html>", { headers: { "content-type": "text/html" } }), request, bus, control.url.origin),
   });
   ownerOrigin = owner.url.origin;
   const revision = { value: 1 };

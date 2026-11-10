@@ -10,10 +10,12 @@ function object(value: unknown): Record<string, unknown> {
 export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
   private readonly pending = new Map<Role, Pending>();
+  private readonly issued = new Set<Role>();
   private sequence = 0;
   constructor(readonly path: string) {}
   configure(role: Role, url: string): void {
     this.cancel(role);
+    this.issued.delete(role);
     this.pages.set(role, { url, nonce: crypto.randomUUID(), visible: false });
   }
   state(role: Role): Page | null { return this.pages.get(role) ?? null; }
@@ -21,7 +23,8 @@ export class IphoneBus {
     const entry = Array.from(this.pages).find(([, page]) => page.url === url);
     if (!entry) return;
     const [role, previous] = entry;
-    const page = previous.timeOrigin === undefined ? previous : this.reload(role, previous);
+    const page = (this.issued.has(role) || previous.timeOrigin !== undefined) ? this.reload(role, previous) : previous;
+    this.issued.add(role);
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
     return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)});`;
   }
@@ -86,7 +89,7 @@ export class IphoneBus {
     clearTimeout(pending.timer); this.pending.delete(role);
     pending.reject(reason);
   }
-  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); }
+  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); }
   async handle(request: Request, productOrigin: string): Promise<Response> {
     const route = new URL(request.url).pathname.slice(this.path.length + 1);
     const headers = { "access-control-allow-origin": request.headers.get("origin") ?? "null", "access-control-allow-headers": "content-type", "access-control-allow-methods": "POST, GET", "cache-control": "no-store", "vary": "Origin" };

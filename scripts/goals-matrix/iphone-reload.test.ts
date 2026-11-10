@@ -8,6 +8,7 @@ const endpoint = "http://127.0.0.1:4321";
 function attached(role: "host" | "preview" = "preview") {
   const bus = new IphoneBus("/test");
   bus.configure(role, url);
+  bus.script(url, endpoint);
   const page = bus.state(role);
   if (!page) throw new Error("Missing configured page");
   const key = { nonce: page.nonce, url, timeOrigin: 1, visible: true };
@@ -23,7 +24,7 @@ function replacementKey(bus: IphoneBus) {
 test("preview reload redelivers only the pending observation with its original deadline", async () => {
   const { bus, key } = attached();
   try {
-    const pending = bus.execute("preview", "document.title", 1000, true);
+    const pending = bus.execute("preview", "document.title", 1000, true).catch((error: unknown) => error);
     const first = bus.poll("preview", key, origin);
     const script = bus.script(url, endpoint);
     const next = replacementKey(bus);
@@ -117,6 +118,33 @@ test("explicit preview navigation cancels a reload observation rather than movin
     expect(await pending).toMatchObject({ message: "iPhone observer command expired or closed" });
     const next = { ...replacementKey(bus), url: url + "/other" };
     expect(bus.poll("preview", next, origin)).toBeNull();
+  } finally { bus.close(); }
+});
+
+test("every script gets a new identity even if the previous document never attached", async () => {
+  const { bus, key } = attached();
+  try {
+    const pending = bus.execute("preview", "document.title", 1000, true).catch((error: unknown) => error);
+    const first = bus.poll("preview", key, origin);
+    bus.script(url, endpoint);
+    const attaching = replacementKey(bus);
+    bus.script(url, endpoint);
+    const current = { ...replacementKey(bus), timeOrigin: 3 };
+    expect(current.nonce).not.toBe(attaching.nonce);
+    expect(() => bus.poll("preview", attaching, origin)).toThrow("Wrong");
+    expect(() => bus.reply("preview", { ...attaching, id: 1, ok: true, value: "stale" }, origin)).toThrow("Wrong");
+    expect(bus.poll("preview", current, origin)).toEqual(first);
+    bus.reply("preview", { ...current, id: 1, ok: true, value: "current" }, origin);
+    expect(await pending).toBe("current");
+  } finally { bus.close(); }
+});
+
+test("host script replacement is rejected before its first document attaches", () => {
+  const bus = new IphoneBus("/test");
+  try {
+    bus.configure("host", url);
+    bus.script(url, endpoint);
+    expect(() => bus.script(url, endpoint)).toThrow("Unexpected");
   } finally { bus.close(); }
 });
 

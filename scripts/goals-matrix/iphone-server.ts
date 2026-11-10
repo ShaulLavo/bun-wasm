@@ -2,18 +2,19 @@ import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneServiceWorker } from "./iphone-service-worker";
 
-export async function observeIphoneResponse(response: Response, url: string, bus: IphoneBus, endpoint: string): Promise<Response> {
-  if (response.status === 200 && new URL(url).pathname.endsWith("/sw.js")) {
+export async function observeIphoneResponse(response: Response, request: Request, bus: IphoneBus, endpoint: string): Promise<Response> {
+  if (response.status === 200 && new URL(request.url).pathname.endsWith("/sw.js")) {
     const source = `(${observeIphoneServiceWorker.toString()})(${JSON.stringify(endpoint + bus.path)});\n`;
     const headers = new Headers(response.headers);
     headers.delete("content-length"); headers.delete("etag"); headers.set("cache-control", "no-store");
     return new Response(source + await response.text(), { status: response.status, headers });
   }
+  if (request.mode !== "navigate" && request.headers.get("sec-fetch-mode") !== "navigate") return response;
   if (response.status !== 200 || !response.headers.get("content-type")?.startsWith("text/html")) return response;
   if (response.headers.has("content-encoding")) throw new Error("iPhone observer requires uncompressed HTML");
   const text = await response.text();
   if (text.length > 2 * 1024 * 1024) throw new Error("iPhone observer HTML exceeds 2 MiB");
-  const html = bus.inject(text, url, endpoint);
+  const html = bus.inject(text, request.url, endpoint);
   if (html === text) return new Response(text, response);
   const headers = new Headers(response.headers);
   for (const key of ["content-length", "etag", "last-modified"]) headers.delete(key);
@@ -27,7 +28,7 @@ export function observeIphoneOrigins(bus: IphoneBus, endpoint: string): () => vo
   const original = LoopbackPreviewOrigins.prototype.bind;
   LoopbackPreviewOrigins.prototype.bind = function (owner, port, target) {
     return original.call(this, owner, port, { ...target,
-      fetch: async request => observeIphoneResponse(await target.fetch(request), request.url, bus, endpoint),
+      fetch: async request => observeIphoneResponse(await target.fetch(request), request, bus, endpoint),
     });
   };
   return () => { LoopbackPreviewOrigins.prototype.bind = original; };
@@ -48,7 +49,7 @@ if (import.meta.main) {
     const fetch = options.fetch;
     const server = Reflect.apply(serve, Bun, [{ ...options, async fetch(request: Request, server: unknown) {
       const response: unknown = await Reflect.apply(fetch, this, [request, server]);
-      return response instanceof Response ? observeIphoneResponse(response, request.url, bus, control.url.origin) : response;
+      return response instanceof Response ? observeIphoneResponse(response, request, bus, control.url.origin) : response;
     } }]);
     productOrigin = String(server.url.origin);
     return server;
