@@ -46,8 +46,9 @@ async function bundle(destination: string, source: Report["source"]): Promise<vo
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
   await writeFile(join(destination, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { playwright: "1.64.1" } }));
 }
-async function verifyRemoteStopped(remote: string): Promise<void> {
-  const script = `set -eu; cd ${quote(remote)}; code=$(cat queue-exit); case "$code" in ''|*[!0-9]*) exit 75;; esac; "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status`;
+async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): Promise<void> {
+  const acknowledgement = waitForQueueExit ? "while [ ! -s queue-exit ]; do sleep 0.1; done; " : "";
+  const script = `set -eu; cd ${quote(remote)}; ${acknowledgement}code=$(cat queue-exit); case "$code" in ''|*[!0-9]*) exit 75;; esac; "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status`;
   const status: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
   if (!status || typeof status !== "object" || !("holder" in status) || !("waiting" in status) || !Array.isArray(status.waiting)) throw new Error("Remote queue shutdown is unproved; retaining staging");
   const tickets: unknown[] = (status.holder === null ? [] : [status.holder]).concat(status.waiting);
@@ -65,8 +66,8 @@ async function verifyNativeStopped(remote: string): Promise<void> {
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
     || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
 }
-export async function removeStaging(remote: string, started: boolean, config: Options): Promise<void> {
-  if (started) await verifyRemoteStopped(remote);
+export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
+  if (started) await verifyRemoteStopped(remote, waitForQueueExit);
   await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
@@ -113,7 +114,7 @@ export async function collectNativeReport(collected: string, output: string): Pr
   return report;
 }
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
-  try { await removeStaging(remote, started, config); }
+  try { await removeStaging(remote, started, config, failure !== undefined); }
   catch (error) {
     await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify the installed queue has settled and its supervised consumers have stopped before removing this staging directory" }, null, 2));
     if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; cleanup: ${String(error)}`);

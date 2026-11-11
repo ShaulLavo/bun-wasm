@@ -153,6 +153,47 @@ test.each([false, true])("interrupted fleet waits for the remote queue acknowled
   return localMesh(f, () => delayedAcknowledgement(f, empty, entered), entered);
 }, "console.log(JSON.stringify({holder:null,waiting:[]}));"));
 
+async function exhaustedAcknowledgement(f: Fixture, empty: boolean): Promise<void> {
+  if (empty) await writeFile(join(f.remote, "queue-exit"), "");
+  const result = join(f.home, "exhaustion.json"), budget = join(f.home, "budget");
+  const controller = join(f.home, "exhaustion.ts");
+  await writeFile(controller, `import {mock} from 'bun:test';
+const source=${JSON.stringify(import.meta.dir)};
+const lifetime=await import(source+'/lifetime.ts');
+const command=lifetime.ownedCommand;
+mock.module(source+'/lifetime.ts',()=>({...lifetime,ownedCommand:async(args,signal,timeout,...rest)=>{
+  if(timeout!==20000)return command(args,signal,timeout,...rest);
+  await Bun.write(${JSON.stringify(budget)},String(timeout));
+  return command(args,signal,50,...rest);
+}}));
+const {cleanupStaging}=await import(source+'/fleet.ts');
+let error='';try{await cleanupStaging(${JSON.stringify(f.remote)},true,${JSON.stringify({ ...config(), output: f.home })},new Error('controller cancelled'));}catch(failure){error=String(failure);}
+await Bun.write(${JSON.stringify(result)},JSON.stringify({error}));`);
+  const child = Bun.spawn([process.execPath, controller], { env: { ...f.env, PATH: process.env.PATH }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(await childResult(child)).toBe(0);
+  expect(await readFile(budget, "utf8")).toBe("20000");
+  const outcome = await readFile(result, "utf8");
+  expect(outcome).toContain("controller cancelled; cleanup:");
+  expect(outcome).toContain("Phase timed out after 50 ms");
+  expect(existsSync(f.remote)).toBe(true);
+  expect(await Bun.file(join(f.remote, "queue-exit")).exists()).toBe(empty);
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}
+
+test.each([false, true])("unacknowledged interrupted cleanup exhausts its command bound and preserves staging, initially empty = %j", empty => fixture(f => localMesh(f, () => exhaustedAcknowledgement(f, empty)), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+async function refusedInterruptedCleanup(f: Fixture, nativeStopped: boolean, reason: string): Promise<void> {
+  await mkdir(join(f.remote, "report"));
+  await writeFile(join(f.remote, "queue-exit"), "0\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: nativeStopped, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  await expect(cleanupStaging(f.remote, true, { ...config(), output: f.home }, new Error("controller cancelled"))).rejects.toThrow(reason);
+  expect(await Bun.file(join(f.remote, "queue-workload-started")).exists()).toBe(true);
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}
+
+test.each([false, true])("a stale acknowledgement cannot bypass interrupted cleanup proof, matching ticket = %j", active => fixture(f => localMesh(f, () => refusedInterruptedCleanup(f, active, active ? "Remote queue shutdown is unproved" : "Remote native shutdown is unproved")), `console.log(JSON.stringify({holder:${active ? "{task:'bun-wasm goals '+process.cwd()}" : "null"},waiting:[]}));`));
+
 async function localMesh(f: Fixture, operation: () => Promise<void>, entered?: string): Promise<void> {
   const previous = process.env.PATH;
   await mkdir(join(f.home, "bin"));
