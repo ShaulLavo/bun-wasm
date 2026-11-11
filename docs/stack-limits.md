@@ -458,8 +458,9 @@ before and after this change.
 
 Taken on November 11, 2026 in genuine Safari 26.4 on macOS 26.4 (25E246) on an M1 MacBook Air,
 over SafariDriver, with `web/tests/browser-stack-safari.ts`. Playwright WebKit took no part. The
-pair is the one CI built from the tree this value landed on (`jsc-engine.wasm` sha256
-`e7628017…f7436`), and in every run Safari fetched those bytes.
+pair is the one CI built from the tree of main at `19dba71ea`, where the setting itself landed
+(`jsc-engine.wasm` sha256 `e7628017…f7436`), and in every run Safari fetched those bytes. Later
+engine changes were not measured there.
 
 On the launcher with that pair, 832 is again the largest grid value at which both real files load
 at 176 KiB. At 192 KiB the default and 832 give identical capacities for every guard outside the
