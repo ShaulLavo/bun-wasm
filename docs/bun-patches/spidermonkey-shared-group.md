@@ -53,6 +53,11 @@ split patch, recipe files and admitted split archive are not changed.
 - `scripts/build-engine-spidermonkey-shared.sh`, `scripts/spidermonkey-side-core-receipt.ts`: the
   group side link and its initializer conversion. A group side imports the shared memory and does
   not export it.
+- `.github/workflows/ci.yml`: original CI environment adapter. The shared library producer runs
+  from a fresh pip-free Python virtual environment. Mozilla's pinned `python/mach/mach/site.py`
+  still uses `MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=system` and runs its real package checks
+  against the invoking environment and vendored packages. Unrelated runner tools stay outside
+  that environment. No upstream Python source or dependency requirement changes.
 - `crates/bunwasm-spidermonkey/cpp/engine.cpp`, `engine.h`, `build.rs`, `src/lib.rs`: the region
   view, the storage lookup that lets the core name a buffer's region, and wait permission.
 - `crates/bunwasm-engine-spidermonkey/`: the shared region view, nested execution and stack base.

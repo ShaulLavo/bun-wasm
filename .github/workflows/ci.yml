@@ -1887,6 +1887,10 @@ jobs:
           git -C "$source_tree" config remote.origin.partialclonefilter blob:none
           # The recipe stages fresh headers; only its incremental objects and patched source persist.
           rm -rf -- "$SPIDERMONKEY_BUILD_DIR/native"
+          # Mach checks vendored packages against its invoking Python's packages.
+          # Exclude runner tools and any packages left by a restored environment.
+          python3 -m venv --clear --without-pip "$RUNNER_TEMP/spidermonkey-python"
+          export PATH="$RUNNER_TEMP/spidermonkey-python/bin:$PATH"
           bash spidermonkey/build-shared-group.sh
       - name: Produce the shared SpiderMonkey profile once
         id: shared-spidermonkey-producer
