@@ -2,6 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { browsers, browserLabels, engines, frameworks, boxId } from "./catalog";
 import { validateReport, type Cell, type Report } from "./model";
+import { cellDeadlines, type DeadlinePolicy } from "./deadlines";
 function clean(value: string): string { return value.replace(/[\r\n|]/g, " ").replace(/\s+/g, " ").trim(); }
 function concise(error: string): string {
   const terminal = error.indexOf("; terminal: ");
@@ -18,13 +19,28 @@ function mark(cell: Cell): string {
   if (cell.status === "pending") return "Pending";
   return "Not runnable yet";
 }
+export function deadlineMarkdown(policy: DeadlinePolicy): string {
+  const lines = ["## Deadlines", "", `Campaign phases: ${policy.timeoutMs} ms by default. Cleanup: ${policy.cleanupTimeoutMs} ms, with existing shorter inner bounds.`, "", "| Framework | Default install in ms | Default build in ms |", "| --- | ---: | ---: |"];
+  for (const framework of frameworks) lines.push(`| ${framework.label} | ${policy.installTimeouts[framework.id]} | ${policy.buildTimeouts[framework.id]} |`);
+  if (!policy.calibration) return lines.concat([""]).join("\n");
+  const metadata = policy.calibration;
+  lines.push("", `${metadata.decision}. Decision date: ${metadata.decisionDate}. Margin: ${metadata.margin * 100}%. ${metadata.selection}.`, "",
+    `Frozen input: ${metadata.source.path}. SHA-256: ${metadata.source.sha256}. Run: ${metadata.source.run}. Recorded: ${metadata.source.createdAt}.`, "",
+    "Fixed reviewed limits; campaign execution never recalibrates. No complete pass retains defaults. In-guest engines never widen. Next/SpiderMonkey is exempt. Explicit CLI overrides take precedence and are recorded below. Cleanup and inner bounds are unchanged.", "", "```json", JSON.stringify(policy.overrides, null, 2), "```", "",
+    "| Framework | Browser | Engine | Phase in ms | Install in ms | Build in ms |", "| --- | --- | --- | ---: | ---: | ---: |");
+  for (const framework of frameworks) {
+    lines.push(...browsers.flatMap(browser => engines.map(engine => {
+      const limits = cellDeadlines(policy, { framework: framework.id, browser, engine });
+      return `| ${framework.label} | ${browser} | ${engine} | ${limits.timeoutMs} | ${limits.installTimeoutMs} | ${limits.buildTimeoutMs} |`;
+    })));
+  }
+  return lines.concat([""]).join("\n");
+}
 export function markdown(report: Report): string {
   validateReport(report);
   const cells = new Map(report.cells.map(cell => [boxId(cell), cell]));
   const lines = ["# Framework matrix", "", `Run ${report.run}. Generated ${report.createdAt}. ${report.cells.length} boxes.`, "", `Source ${report.source.commit}${report.source.dirty ? " with uncommitted changes" : ""}.`, "", "```sh", report.command, "```", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", ""];
-  lines.push("## Deadlines", "", `Campaign phases: ${report.deadlines.timeoutMs} ms. Cleanup: ${report.deadlines.cleanupTimeoutMs} ms, with existing shorter inner bounds.`, "", "| Framework | Install in ms | Build in ms |", "| --- | ---: | ---: |");
-  for (const framework of frameworks) lines.push(`| ${framework.label} | ${report.deadlines.installTimeouts[framework.id]} | ${report.deadlines.buildTimeouts[framework.id]} |`);
-  lines.push("");
+  lines.push(deadlineMarkdown(report.deadlines));
   for (const browser of browsers) {
     lines.push(`## ${browserLabels[browser]}`, "", "| Framework | " + engines.join(" | ") + " |", "| --- | " + engines.map(() => "---").join(" | ") + " |");
     for (const framework of frameworks) lines.push(`| ${framework.label} | ` + engines.map(engine => {

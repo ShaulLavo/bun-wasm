@@ -121,7 +121,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup);
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? "")); }, 8_000); }
+  try { await bounded(async () => { await transport.beginCleanup?.(); await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? "")); }, 8_000); }
   catch (error) { errors.push(error); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
@@ -131,7 +131,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
 
 async function cleanupOwned(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, close: NonNullable<Transport["cleanup"]>): Promise<unknown> {
   const errors: unknown[] = [];
-  try { await bounded(() => saveFinalLog(transport, options, results, failureLog), 4_000); }
+  try { await bounded(async () => { await transport.beginCleanup?.(); await saveFinalLog(transport, options, results, failureLog); }, 4_000); }
   catch (error) { errors.push(error); }
   let evidence: unknown;
   try { evidence = await bounded(() => close(10_000), 10_000); }
