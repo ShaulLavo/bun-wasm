@@ -63,9 +63,9 @@ impl Encoding {
 
     fn write(self, units: &[u16]) -> NativeResult {
         match self {
-            Self::String => String::from_utf16(units)
-                .map(Val::Str)
-                .map_err(|_| NativeError::error("Path string result contains an unpaired surrogate")),
+            Self::String => String::from_utf16(units).map(Val::Str).map_err(|_| {
+                NativeError::error("Path string result contains an unpaired surrogate")
+            }),
             Self::Units => Ok(bytes(units)),
         }
     }
@@ -115,7 +115,11 @@ fn lexical(a: Args<'_>, encoding: Encoding) -> NativeResult {
     encoding.write(value)
 }
 
-fn path_slices(a: Args<'_>, index: usize, encoding: Encoding) -> Result<Vec<Vec<u16>>, NativeError> {
+fn path_slices(
+    a: Args<'_>,
+    index: usize,
+    encoding: Encoding,
+) -> Result<Vec<Vec<u16>>, NativeError> {
     let input = a
         .array(index)
         .ok_or_else(|| NativeError::type_error("Expected path array"))?;
@@ -154,18 +158,18 @@ fn join(a: Args<'_>, encoding: Encoding) -> NativeResult {
 }
 
 fn relative(a: Args<'_>, encoding: Encoding) -> NativeResult {
-        let from = encoding.read(&a, 1)?;
-        let to = encoding.read(&a, 2)?;
-        let size = path::relative_buf_len(&from, &to);
-        let mut output = vec![0; size];
-        let mut scratch = vec![0; size];
-        output[..to.len()].copy_from_slice(&to);
-        let result = if a.bool(0) {
-            relative_windows_resolved(&from, &mut output, to.len(), &mut scratch)?
-        } else {
-            relative_posix_resolved(&from, &mut output, to.len(), &mut scratch)?
-        };
-        encoding.write(result)
+    let from = encoding.read(&a, 1)?;
+    let to = encoding.read(&a, 2)?;
+    let size = path::relative_buf_len(&from, &to);
+    let mut output = vec![0; size];
+    let mut scratch = vec![0; size];
+    output[..to.len()].copy_from_slice(&to);
+    let result = if a.bool(0) {
+        relative_windows_resolved(&from, &mut output, to.len(), &mut scratch)?
+    } else {
+        relative_posix_resolved(&from, &mut output, to.len(), &mut scratch)?
+    };
+    encoding.write(result)
 }
 
 pub fn install(table: &mut Table) {

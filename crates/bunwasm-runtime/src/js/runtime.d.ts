@@ -14,6 +14,7 @@ declare namespace BunWasm {
   }
   interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
+    stringIsWellFormed(value: string): boolean;
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
     prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];

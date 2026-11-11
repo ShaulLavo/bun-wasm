@@ -2,7 +2,7 @@
   "use strict";
 
   const native = internal.native.nodePath;
-  const isWellFormed = Function.prototype.call.bind(String.prototype.isWellFormed);
+  const isWellFormed = internal.stringIsWellFormed;
   type StringOperation = "basename" | "dirname" | "extname" | "normalize";
   type Parsed = { root: string; dir: string; base: string; ext: string; name: string };
   type Namespace = ReturnType<typeof namespace> & { win32?: Namespace; posix?: Namespace };
