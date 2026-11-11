@@ -62,9 +62,8 @@ The backing's maximum is the 128 MiB budget, which is all the address space the
 grant reserves. The first version gave each of the 64 directions its own backing
 with a 64 MiB maximum, a 4 GiB reservation. WebKit charges a growable buffer's
 whole maximum against a fixed primitive cage, 16 GiB on iPhone builds, where
-three fast Wasm memories already take 12 GiB. Under those limits in PC WebKit the
-4 GiB made an Astro production build on QuickJS fail to spawn with `ENOMEM` and
-a Next.js install take about three times as long.
+three fast Wasm memories already take 12 GiB. The pool exists only on the Browser
+engine, which is the engine whose first guest then had to fit beside it.
 
 The shared control buffer holds each direction's range as an offset and a capacity
 beside its phase, generation and length. One cursor hands ranges out in order and
