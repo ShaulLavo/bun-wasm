@@ -1,7 +1,7 @@
 import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
-import { createMemoryReader, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
+import { createMemoryReader, publishBrowserCallTrap, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
 import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
@@ -174,10 +174,12 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         onNews() {},
       } : undefined) : undefined;
       const nativeFetch = host.fetch.bind(host);
+      const telemetry = req.memoryTelemetry;
       // No module store: every ES module loads as a registration record (module-records.ts),
       // with or without a service worker controlling this worker.
       return startEngineHost({
         instance, moduleUrls: "blob",
+        onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });

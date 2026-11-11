@@ -6,6 +6,7 @@ import type { Transport } from "./transport";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
+import { browserTrapLog } from "./browser-memory";
 export { bounded } from "./bounded";
 export interface Execution {
   profile?: PlaygroundProfile;
@@ -99,6 +100,7 @@ async function captureFailure(transport: Transport, options: Execution, results:
   try {
     await bounded(async () => {
       text = await terminal(transport);
+      diagnostic = await browserTrapLog(transport, options.box.engine);
       if (options.framework.id !== "angular" || Date.now() >= deadline) return;
       const path = namedAngularDiagnostic(text);
       if (!path) return;
@@ -121,7 +123,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup);
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? "")); }, 8_000); }
+  try { await bounded(async () => { await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? await browserTrapLog(transport, options.box.engine))); }, 8_000); }
   catch (error) { errors.push(error); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
@@ -142,7 +144,7 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
 
 async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<void> {
   let output: string;
-  try { output = await bounded(() => terminal(transport), 2_000) + (failureLog?.diagnostic ?? ""); }
+  try { output = await bounded(async () => await terminal(transport) + (failureLog?.diagnostic ?? await browserTrapLog(transport, options.box.engine)), 2_000); }
   catch (error) {
     if (failureLog?.saved) return;
     const transcript = completedTranscript(results);
