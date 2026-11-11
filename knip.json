@@ -119,6 +119,7 @@
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts",
         "tests/shared-wasm-memory-browser{,-main}.ts",
+        "tests/explicit-profile-browser.ts",
         "tests/shared-wasm-agent/worker.ts"
       ],
       "project": [

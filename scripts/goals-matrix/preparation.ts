@@ -1,10 +1,25 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "./catalog";
-import { profileEngineFiles, registeredEngineGroups } from "./engines";
-import { profileAsset, type ProgramMemoryProfile } from "../../web/src/program-profile";
+import { engineFiles, profileEngineFiles, registeredEngineGroups } from "./engines";
+import { parseMemoryProfile, profileAsset, type ProgramMemoryProfile } from "../../web/src/program-profile";
 import { programProfile } from "../../src/engine-kind";
+export interface SpiderMonkeyInput { directory: string; source: string }
+export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput; shell?: string; profile?: ProgramMemoryProfile } {
+  const [delivery, ...flags] = args;
+  if (!delivery || delivery.startsWith("--")) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery [--spidermonkey=/absolute/pair --spidermonkey-source=/absolute/source.json] [--shell=/absolute/guests] [--profile=split|shared-group]");
+  const options = new Map<string, string>();
+  for (const flag of flags) {
+    const match = /^--(spidermonkey|spidermonkey-source|shell|profile)=(.+)$/.exec(flag);
+    if (!match?.[1] || !match[2] || options.has(match[1])) throw new Error(`Unknown or repeated preparation option: ${flag}`);
+    options.set(match[1], match[2]);
+  }
+  const directory = options.get("spidermonkey"), source = options.get("spidermonkey-source");
+  if (Boolean(directory) !== Boolean(source)) throw new Error("Set --spidermonkey and --spidermonkey-source together");
+  const shell = options.get("shell");
+  return { delivery: resolve(delivery), spidermonkey: directory && source ? { directory: resolve(directory), source: resolve(source) } : undefined, shell: shell ? resolve(shell) : undefined, ...(options.has("profile") ? { profile: parseMemoryProfile(options.get("profile")) } : {}) };
+}
 function hashes(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preparation error: expected an engine fingerprint map");
   const entries = Object.entries(value);
@@ -17,7 +32,7 @@ async function bytes(root: string, name: string): Promise<Uint8Array | undefined
   const plain = Bun.file(join(root, name));
   return await plain.exists() ? plain.bytes() : undefined;
 }
-async function stagedEngine(root: string, names: readonly string[]): Promise<{ name: string; data: Uint8Array }[]> {
+async function stagedEngine(root: string, names: readonly string[], required = false): Promise<{ name: string; data: Uint8Array }[]> {
   const staged: { name: string; data: Uint8Array }[] = [];
   const missing: string[] = [];
   for (const name of names) {
@@ -25,7 +40,7 @@ async function stagedEngine(root: string, names: readonly string[]): Promise<{ n
     if (data) staged.push({ name, data });
     else missing.push(name);
   }
-  if (staged.length && missing.length) throw new Error(`Preparation error: Missing engine assets: ${missing.join(", ")}`);
+  if (missing.length && (required || staged.length)) throw new Error(`Preparation error: Missing engine assets: ${missing.join(", ")}`);
   return staged;
 }
 export async function preflight(root: string, engines: readonly Engine[], profile: ProgramMemoryProfile = "split"): Promise<void> {
@@ -46,14 +61,18 @@ export async function preflight(root: string, engines: readonly Engine[], profil
     if (host[name] !== actual || manifest[name] !== actual) throw new Error(`Preparation error: ${name} embedded host, manifest, and staged bytes disagree; stage assets before building the playground`);
   }
 }
-async function writeStagedEngine(source: string, directory: string, names: readonly string[]): Promise<void> {
-  for (const { name, data } of await stagedEngine(source, names)) await Bun.write(join(directory, name), data);
+async function writeStagedEngine(source: string, directory: string, names: readonly string[], required = false): Promise<void> {
+  for (const { name, data } of await stagedEngine(source, names, required)) await Bun.write(join(directory, name), data);
 }
-export async function withStagedAssets<T>(source: string, build: (directory: string) => Promise<T>): Promise<T> {
+export async function withStagedAssets<T>(source: string, build: (directory: string) => Promise<T>, options: { spidermonkey?: string } = {}): Promise<T> {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-assets-"));
   try {
     await mkdir(scratch, { recursive: true });
-    for (const names of registeredEngineGroups().concat([["bun-tools.wasm"]])) await writeStagedEngine(source, scratch, names);
+    const spiderMonkeyCore = engineFiles("spidermonkey")[0];
+    for (const names of registeredEngineGroups().concat([["bun-tools.wasm"]])) {
+      const selected = spiderMonkeyCore !== undefined && names.includes(spiderMonkeyCore) ? options.spidermonkey : undefined;
+      await writeStagedEngine(selected ?? source, scratch, names, selected !== undefined);
+    }
     for (const engine of ["quickjs", "jsc"] as const) await stageSharedEngine(source, scratch, engine);
     return await build(scratch);
   } finally { await rm(scratch, { recursive: true, force: true }); }
