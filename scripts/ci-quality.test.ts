@@ -709,7 +709,7 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(11);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(14);
   expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(5);
   expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
