@@ -1149,6 +1149,53 @@ jobs:
           key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
         run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile
+      - name: Install ordinary SpiderMonkey producer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm autoconf2.13 python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
+      - uses: actions/cache/restore@v4
+        id: ordinary-cbindgen-cache
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Prepare ordinary pinned cbindgen
+        env:
+          CBINDGEN_CACHE_HIT: ${{ steps.ordinary-cbindgen-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
+            CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
+          fi
+          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
+      - name: Identify ordinary SpiderMonkey native generation
+        id: ordinary-spidermonkey-inputs
+        run: |
+          source env.sh
+          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/ordinary" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/ordinary-native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_ENGINE_BUILD_DIR=$RUNNER_TEMP/ordinary-side" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_PAIR_DIR=$RUNNER_TEMP/ordinary-pair" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_WASM=$RUNNER_TEMP/ordinary-pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
+          echo "hash=$(bun scripts/spidermonkey-ordinary-ci.ts identity)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: ordinary-spidermonkey-cache
+        with:
+          path: ${{ runner.temp }}/spidermonkey/ordinary
+          key: spidermonkey-ordinary-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-inputs.outputs.hash }}
+      - name: Build or verify the ordinary SpiderMonkey library
+        id: ordinary-spidermonkey-native
+        run: |
+          source env.sh
+          bun scripts/spidermonkey-ordinary-ci.ts native
+          echo "ordinary SpiderMonkey exact cache hit=${{ steps.ordinary-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.ordinary-spidermonkey-cache.outputs.cache-matched-key }}"
+      - uses: actions/cache/restore@v4
+        id: ordinary-spidermonkey-cargo
+        with:
+          # Only Cargo objects persist. Completed side/pair outputs must be fresh.
+          path: ${{ runner.temp }}/ordinary-side-cargo
+          key: spidermonkey-ordinary-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-native.outputs.generation }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'crates/**', 'scripts/build-engine-spidermonkey.sh', 'scripts/build-bun-spidermonkey.sh', 'scripts/spidermonkey-side-*.ts', 'scripts/src/engine-init.c') }}
+          restore-keys: |
+            spidermonkey-ordinary-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-native.outputs.generation }}-
       - name: Build the common engine core once
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -1176,6 +1223,13 @@ jobs:
           trap 'exit 143' TERM
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
+      - name: Build the ordinary SpiderMonkey side using the completed core
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source env.sh
+          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
+          export SPIDERMONKEY_CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-side-cargo/${{ steps.ordinary-spidermonkey-native.outputs.generation }}"
+          CARGO_BUILD_JOBS=2 bash scripts/build-bun-spidermonkey.sh
       - name: Package the native profile launcher
         if: needs.quality.outputs.shared-native == 'true'
         run: |
@@ -1257,9 +1311,45 @@ jobs:
           JOBS=2 bash scripts/build-bash-web-shell.sh
           ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm
           ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json
+          export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
+          export BUN_WASM_SHELL="$GITHUB_WORKSPACE/dist/bash-web-shell.wasm"
+          export BUN_WASM_ENV_UTILITY="$GITHUB_WORKSPACE/dist/bash-web-env.wasm"
           bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
+
+      - name: Export the live-gated ordinary SpiderMonkey pair
+        run: |
+          source env.sh
+          bun scripts/spidermonkey-ordinary-ci.ts export "$RUNNER_TEMP/ordinary-spidermonkey-program"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-spidermonkey-program
+          path: ${{ runner.temp }}/ordinary-spidermonkey-program/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save verified ordinary SpiderMonkey native generation
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/spidermonkey/ordinary
+          key: ${{ steps.ordinary-spidermonkey-cache.outputs.cache-primary-key }}
+      - name: Save ordinary SpiderMonkey side Cargo objects
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ordinary-side-cargo
+          key: ${{ steps.ordinary-spidermonkey-cargo.outputs.cache-primary-key }}
+      - name: Save ordinary pinned cbindgen
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-cbindgen-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: ${{ steps.ordinary-cbindgen-cache.outputs.cache-primary-key }}
+      - name: Remove ordinary cbindgen build scratch
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/ordinary-cbindgen-target"
 
       - name: Save the completed bash-web shell guest build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'

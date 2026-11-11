@@ -1,17 +1,19 @@
 # SpiderMonkey side/core qualification adapter
 
-This record covers the original bun-wasm adapter that stages parent-admitted
-SpiderMonkey N1 bytes and qualifies an experimental split side/core pair. It does
-not change the normal guest producer, receipt, initializer, default engine menu or
-publication contracts.
+This record covers the original bun-wasm adapter that stages SpiderMonkey native
+bytes and qualifies an experimental split side/core pair. Its origins are a
+parent-admitted archive and a fresh recipe-built library. Supported guest receipts
+and publication contracts remain separate.
 
 | Path | Class | Change |
 | --- | --- | --- |
-| `spidermonkey/prepare-engine-inputs.ts` | Original adapter | Verify the parent native-byte admission receipt, copy the exact archive, profile, headers and confdefs into a private N2 root, and emit a receipt that preserves admitted provenance without a G1/G2 label. |
+| `spidermonkey/prepare-engine-inputs.ts` | Original adapter | Verify the parent native-byte admission receipt or the actual fresh `vm-library.json`, and copy exact archive, profile, headers and confdefs into a private root. Fresh origins carry `BUILT_FROM_RECIPE` and the library receipt hash, without admission flags. Both origins use the same downstream verifier. |
 | `scripts/spidermonkey-side-core-receipt.ts` | Original adapter | Convert the side initializer exports, inspect split imports/exports and exception tags, tag the generic core, and write an experimental pair receipt bound to one source tree and N1 input receipt. |
 | `scripts/build-engine-spidermonkey.sh`, `scripts/build-bun-spidermonkey.sh` | Original adapters | Build the private SpiderMonkey side and compose it with the generic core through the experimental helper. They do not call normal SpiderMonkey guest receipts, the generic initializer helper, or the normal producer. |
+| `scripts/spidermonkey-ordinary-ci.ts` | Original adapter | Cache the ordinary recipe's sparse source, objects and verified library by exact native recipe, glue, compiler, pinned cbindgen and actual ordinary sysroot bytes. Reuse PR 599's sparse promisor setup and isolated pip-free Python pattern, with ordinary no-EH archives. Namespace side Cargo objects by the resulting native identity. |
+| `scripts/spidermonkey-ordinary-fixtures.ts` | Original adapter | Own the reviewed twelve-case list and call `test.sh` once with explicit core, launcher, shell and env guest paths and interpreter tier. The runtime owner runs it once after the existing Rust-job producers. Source tests have a separate quality owner. |
 
-The staging receipt includes an unchanged copy and digest of the parent admission,
+The admitted staging receipt includes an unchanged copy and digest of the parent admission,
 the later qualification, and the original failed attempt and unclaimed compiler
 provenance. It never changes the original native directory. The legacy archive
 basename is only a private symlink to the same admitted bytes.
@@ -25,4 +27,9 @@ registries have separate owners.
 
 The pair recipe requires `SPIDERMONKEY_PAIR_DIR`, checks source and native inputs
 before and after the build, and limits the side compiler to four jobs. Outputs stay
-private and require separate parent acceptance before any native execution.
+private. Ordinary CI runs its live interpreter gate before exporting
+`ordinary-spidermonkey-program`. Its extraction root directly contains the pair,
+experimental receipt, captured inputs and unchanged common-core receipt. Small
+native receipts and identity records live in `native-identity/`. Consumers do not
+need producer paths, the Mozilla archive, source tree or Cargo objects. Runtime
+source changes rebuild the side while the exact native generation stays reusable.

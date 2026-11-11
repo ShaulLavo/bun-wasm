@@ -5,7 +5,7 @@ import { discoverChecks } from "./test-checks.ts";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { assertExternalOutput, checkRecordedObjectClosure, qualifierSource, verifyRecordedFiles } from "../spidermonkey/check-build.ts";
+import { assertExternalOutput, checkRecordedObjectClosure, freshNativeSymbols, qualifierSource, verifyRecordedFiles } from "../spidermonkey/check-build.ts";
 import { embedHooks, checkSymbolDelta, checkUnicodeCommands, commands, installOverlay, nativeInputs, overlayFiles, symbolSets, verifyOverlay } from "../spidermonkey/native-profile.ts";
 
 const root = "/work/tmp/bun-wasm-native-profile-fixture";
@@ -42,6 +42,17 @@ const definitions = [
 ];
 const baselineSymbols = ["malloc U"].concat(embedHooks.map(name => `${name} U`)).join("\n");
 const symbols = definitions.map((name) => `${name} T 0 1`).concat(rust.concat(embedHooks).map((name) => `${name} U`), ["malloc U", "u_foldCase U"]).join("\n");
+
+test("cold symbol checks use the checked-in G2 names and retain every substantive delta gate", () => {
+  const result = freshNativeSymbols(symbols);
+  assert.equal(result.added.length, 9);
+  assert.equal(result.baseline.archiveSha256, "a8327ca68f7052f239ac887204bac16cead4266b495d66a95a9bf80c4d4c5f26");
+  assert.throws(() => freshNativeSymbols(symbols + "\nu_missing U"), /ICU4C/);
+  assert.throws(() => freshNativeSymbols(symbols + "\nnew_core_api U"), /undocumented/);
+  assert.throws(() => freshNativeSymbols(symbols.replace("bunsm_ucd_simple_fold U", "")), /missing Rust/);
+  for (const hook of embedHooks) assert.throws(() => freshNativeSymbols(symbols.replace(`${hook} U`, "")), /missing embed hook/);
+  for (const name of definitions) assert.throws(() => freshNativeSymbols(symbols.replace(`${name} T 0 1`, "").replace(`${name} U`, "")), /ICU4C|missing subset/);
+});
 
 test("native Unicode command gate covers every API, shim, generated support and allocator unit", () => {
   assert.equal(checkUnicodeCommands(entries, root).length, units.length);

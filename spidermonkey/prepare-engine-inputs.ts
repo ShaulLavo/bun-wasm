@@ -60,6 +60,11 @@ function inputReceipt(input: ReturnType<typeof admittedInputs>, admissionSha256:
 }
 
 export function verifyEngineInputs(target: string): void {
+  const receipt = readRecord(join(target, "native-inputs.json"));
+  if (receipt.schema === 3) {
+    verifyFreshEngineInputs(target, receipt);
+    return;
+  }
   const admissionPath = join(target, "parent-admission.json");
   const input = admittedInputs(admissionPath);
   const origin = readRecord(join(target, "native-inputs.json"));
@@ -73,6 +78,62 @@ export function verifyEngineInputs(target: string): void {
   assert.equal(hash(join(target, "js-confdefs.h")), input.headers.confdefsSha256);
   const headers = parseHeaders(join(target, "headers.json"), input.headers.count);
   for (const header of headers) assert.equal(hash(join(target, "include", header.path)), header.sha256);
+}
+
+function freshLibrary(target: string) {
+  const library = readRecord(join(target, "fresh-library.json"));
+  assert.equal(library.gate, "N1");
+  assert.equal(library.revision, "a5df22d986d4b626f771b4f8885241941601c35c");
+  assert.equal(library.target, "wasm32-unknown-wasip1");
+  assert(digest(library.sha256) && positiveInteger(library.bytes));
+  assert(record(library.headers) && positiveInteger(library.headers.count) && digest(library.headers.sha256));
+  assert(digest(library.confdefsSha256) && digest(library.configureStatusSha256) && digest(library.mozconfigSha256));
+  assert(record(library.profile) && library.profile.jit === false && library.profile.sharedMemory === false && library.profile.intlApi === false);
+  for (const name of ["exceptionTagSections", "exceptionTagImports", "nonPicCodeRelocations", "absoluteLibcStateRelocations"]) assert.equal(library[name], 0, `Invalid ${name}`);
+  assert.equal(library.rustStaticlibIncluded, false);
+  assert(record(library.source) && typeof library.source.commit === "string" && /^[0-9a-f]{40}$/.test(library.source.commit)
+    && typeof library.source.tree === "string" && /^[0-9a-f]{40}$/.test(library.source.tree));
+  assert(Array.isArray(library.recipeInputs) && library.recipeInputs.length > 0 && Array.isArray(library.toolchain) && library.toolchain.length > 0);
+  const profile = readRecord(join(target, "native-profile.json"));
+  for (const key of Object.keys(profile)) assert.deepEqual(library[key], profile[key], `Fresh profile differs: ${key}`);
+  return { library, archive: { path: "libspidermonkey_bunwasm.a", bytes: library.bytes, sha256: library.sha256 },
+    headers: { count: library.headers.count, manifestSha256: library.headers.sha256, confdefsSha256: library.confdefsSha256 },
+    source: { head: library.source.commit, tree: library.source.tree } };
+}
+
+function freshReceipt(target: string) {
+  const input = freshLibrary(target);
+  return { schema: 3, status: "BUILT_FROM_RECIPE", origin: { kind: "fresh-library", receiptSha256: hash(join(target, "fresh-library.json")) },
+    source: input.source, archive: input.archive, headers: input.headers,
+    profile: { path: "native-profile.json", sha256: hash(join(target, "native-profile.json")) } };
+}
+
+function verifyFreshEngineInputs(target: string, receipt: Record<string, unknown>): void {
+  assert.deepEqual(receipt, freshReceipt(target), "Staged provenance differs from fresh library");
+  const input = freshLibrary(target);
+  assert.equal(hash(join(target, input.archive.path)), input.archive.sha256);
+  assert.equal(statSync(join(target, input.archive.path)).size, input.archive.bytes);
+  assert.equal(hash(join(target, "headers.json")), input.headers.manifestSha256);
+  assert.equal(hash(join(target, "js-confdefs.h")), input.headers.confdefsSha256);
+  const headers = parseHeaders(join(target, "headers.json"), input.headers.count);
+  for (const header of headers) assert.equal(hash(join(target, "include", header.path)), header.sha256);
+}
+
+export function prepareFreshEngineInputs(build: string, target: string): void {
+  const receipt = readRecord(join(build, "receipt/vm-library.json"));
+  assert(digest(receipt.sha256) && record(receipt.headers) && digest(receipt.headers.sha256) && positiveInteger(receipt.headers.count) && digest(receipt.confdefsSha256));
+  copyVerified(join(build, "receipt/vm-library.json"), join(target, "fresh-library.json"), hash(join(build, "receipt/vm-library.json")));
+  copyVerified(join(build, "receipt/native-profile.json"), join(target, "native-profile.json"), hash(join(build, "receipt/native-profile.json")));
+  copyVerified(join(build, "libspidermonkey_bunwasm.a"), join(target, "libspidermonkey_bunwasm.a"), receipt.sha256);
+  copyVerified(join(build, "receipt/headers.json"), join(target, "headers.json"), receipt.headers.sha256);
+  copyVerified(join(build, "obj/js/src/js-confdefs.h"), join(target, "js-confdefs.h"), receipt.confdefsSha256);
+  const headers = parseHeaders(join(target, "headers.json"), receipt.headers.count);
+  for (const header of headers) copyVerified(join(build, "obj/dist/include", header.path), join(target, "include", header.path), header.sha256);
+  const bytes = JSON.stringify(freshReceipt(target), null, 2) + "\n";
+  const path = join(target, "native-inputs.json");
+  if (existsSync(path)) assert.equal(readFileSync(path, "utf8"), bytes, "Existing input receipt must not be relabeled");
+  else writeFileSync(path, bytes, { flag: "wx" });
+  verifyEngineInputs(target);
 }
 
 export function prepareEngineInputs(admissionPath: string, target: string): void {
@@ -95,7 +156,10 @@ export function prepareEngineInputs(admissionPath: string, target: string): void
 }
 
 if (import.meta.main) {
-  const [admission, target] = process.argv.slice(2);
-  assert(admission && target, "Usage: prepare-engine-inputs.ts PARENT-NATIVE-BYTE-ADMISSION.json TARGET");
-  prepareEngineInputs(resolve(admission), resolve(target));
+  const args = process.argv.slice(2);
+  const fresh = args[0] === "--fresh-library";
+  const [input, target] = fresh ? args.slice(1) : args;
+  assert(input && target, "Usage: prepare-engine-inputs.ts [--fresh-library] INPUT TARGET");
+  if (fresh) prepareFreshEngineInputs(resolve(input), resolve(target));
+  else prepareEngineInputs(resolve(input), resolve(target));
 }

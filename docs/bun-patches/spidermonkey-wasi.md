@@ -45,7 +45,10 @@ and the actual sparse Mozilla sources. No `libjsrust.a` enters the archive.
 
 `check-build.ts` checks every irregexp compile command, private include paths,
 native-Intl exclusion, resolved C++ subset definitions, and the exact new Rust
-requirements against the immutable G2 archive. `--verify` replays these checks
+requirements against the checked-in unresolved names of the immutable G2 archive.
+Historical artifact-only qualification still checks the archive itself.
+The [symbol baseline record](spidermonkey-native-symbol-baseline.md) records its
+source and extraction. `--verify` replays these checks
 without rebuilding or repacking. `native-profile.test.ts` tests rejection paths
 and overlay idempotence. These are original checks, not upstream code.
 
@@ -66,3 +69,8 @@ Receipt creation writes the exported-header manifest. Artifact replay reads and
 compares the saved manifest without repairing or replacing it, including on
 failure. Missing or changed headers and missing or corrupt manifests fail closed.
 The profile tests have a feature-owned blocking quality manifest under scripts.
+
+Fresh cache replay preserves its original source commit, tree and diff as
+provenance. It still checks the current native recipes, profile, Mozilla source
+manifest, configuration, exported headers, archive and toolchain bytes. An
+unrelated runtime source commit does not change the native library generation.
