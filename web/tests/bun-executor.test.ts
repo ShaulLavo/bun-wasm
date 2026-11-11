@@ -10,7 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
-import { qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { hostArchitecture, qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -896,7 +896,9 @@ test("the shipped table gives Linux Firefox and observed macOS Safari exactly th
   const shipped = qualifiedParserReserves["firefox-linux"]?.bytes;
   expect(stackEnvironment(linuxFirefox, "jsc")).toEqual(shipped === undefined ? { [budgetKey]: "208" } : { [budgetKey]: "208", [reserveKey]: shipped });
   for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
-  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192", [reserveKey]: "832" });
+  // The Safari value also needs the worker to observe an ARM64 processor, as on an Apple silicon Mac.
+  const safari: Record<string, string> = hostArchitecture() === "arm64" ? { [budgetKey]: "192", [reserveKey]: "832" } : { [budgetKey]: "192" };
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual(safari);
   expect(stackEnvironment(macSafari, "jsc")).toEqual({ [budgetKey]: "192" });
   expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
 }));

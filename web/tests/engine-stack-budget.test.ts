@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { effectiveParserReserve, engineStackBudgets, jscParserReserve, pageFacts, qualifiedParserReserves, stackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { effectiveParserReserve, engineStackBudgets, hostArchitecture, jscParserReserve, pageFacts, qualifiedParserReserves, stackHost, type HostArchitecture, type QualifiedParserReserves } from "../src/engine-stack-budget";
 
 const firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0";
 const firefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0";
@@ -83,17 +83,30 @@ test("a family without a qualified value never borrows another family's", () => 
 test("the shipped table carries only values that passed their own family's qualification", () => {
   expect(Object.keys(qualifiedParserReserves).toSorted()).toEqual(["firefox-linux", "safari-macos"]);
   expect(qualifiedParserReserves.other).toBeUndefined();
-  expect(qualifiedParserReserves["safari-macos"]?.minimumSafariMajor).toBe(26);
+  expect(qualifiedParserReserves["safari-macos"]).toMatchObject({ minimumSafariMajor: 26, architecture: "arm64" });
   for (const entry of Object.values(qualifiedParserReserves)) expect(effectiveParserReserve(entry.bytes)).toBe(Number(entry.bytes));
 });
 
-test("the shipped Safari value reaches only macOS Safari 26 or later with the zero-touch fact", () => {
-  expect(jscParserReserve(geckoStack, safari, noTouch)).toBe("832");
-  expect(jscParserReserve(geckoStack, safari.replace("Version/26.4", "Version/27.0"), noTouch)).toBe("832");
-  expect(jscParserReserve(geckoStack, safari.replace("Version/26.4", "Version/18.6"), noTouch)).toBeUndefined();
-  expect(jscParserReserve(geckoStack, safari)).toBeUndefined();
-  expect(jscParserReserve(geckoStack, safari, { maxTouchPoints: 5 })).toBeUndefined();
-  for (const agent of [iphone, ipad, firefoxMac, "Unknown/1.0"]) expect(jscParserReserve(geckoStack, agent, noTouch)).toBeUndefined();
+test("the shipped Safari value reaches only Apple silicon macOS Safari 26 or later with the zero-touch fact", () => {
+  const shipped = (agent: string, page?: { maxTouchPoints: number }, architecture: HostArchitecture = "arm64") =>
+    jscParserReserve(geckoStack, agent, page, qualifiedParserReserves, () => architecture);
+  expect(shipped(safari, noTouch)).toBe("832");
+  expect(shipped(safari.replace("Version/26.4", "Version/27.0"), noTouch)).toBe("832");
+  expect(shipped(safari.replace("Version/26.4", "Version/18.6"), noTouch)).toBeUndefined();
+  expect(shipped(safari)).toBeUndefined();
+  expect(shipped(safari, { maxTouchPoints: 5 })).toBeUndefined();
+  for (const agent of [iphone, ipad, firefoxMac, "Unknown/1.0"]) expect(shipped(agent, noTouch)).toBeUndefined();
+  // An Intel Mac sends the same Safari identity. It keeps the default, and so does an unreadable host.
+  expect(shipped(safari, noTouch, "x86")).toBeUndefined();
+  expect(shipped(safari, noTouch, "unknown")).toBeUndefined();
+  // Firefox's value does not depend on the processor.
+  expect(jscParserReserve(geckoStack, firefox, undefined, qualifiedParserReserves, () => "unknown")).toBe("960");
+});
+
+test("the worker reads its own processor family from a float division", () => {
+  const expected = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x86" : "unknown";
+  expect(hostArchitecture()).toBe(expected);
+  expect(hostArchitecture()).toBe(expected);
 });
 
 test("page facts exist only where the page can read its touch points", () => {
