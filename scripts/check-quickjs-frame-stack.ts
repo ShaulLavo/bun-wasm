@@ -11,11 +11,11 @@ import { nativeCheck } from "./quickjs-native-check.ts";
 
 const { root, engine, scratch, cleanup } = nativeCheck("bun-wasm-quickjs-frames-", process.argv[2]);
 
-function run(command: string, args: string[]): { status: number; output: string; stderr: string } {
+function run(command: string, args: string[]): { status: number | null; output: string; stderr: string } {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw result.error;
   process.stderr.write(result.stderr ?? "");
-  return { status: result.status ?? 1, output: result.stdout ?? "", stderr: result.stderr ?? "" };
+  return { status: result.status, output: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 const hashFile = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
