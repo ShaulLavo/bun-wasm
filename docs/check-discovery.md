@@ -40,6 +40,13 @@ building native guests. The native selector reads registered harness paths and
 fixture directories from the verified base, head and their merge ancestor,
 including removed inputs. Every snapshot manifest must be a regular file with
 valid metadata; empty files and symlinks fail selection.
+Browser guest harnesses and their manifests also select the existing Rust producer,
+which builds the receipt-verified guest and bundles the site once. A `browser-guest`
+manifest may declare `inputs` as a nonempty list of exact repository paths for
+feature source or helpers that also need this gate. The selector reads these inputs
+from the same three snapshots, including removals. The check keeps its Browser guest
+owner and split or shared-group profile. Unrelated Web source and docs stay outside
+this producer selection. Source-only `web` checks do not declare producer inputs.
 Seven overlapping probes belong to Web CI only; Web also
 owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECKS=1`
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.

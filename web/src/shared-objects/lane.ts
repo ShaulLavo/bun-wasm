@@ -58,7 +58,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
     const bytes = encoder.encode(text), large = bytes.byteLength > inlineLaneLimit;
     if (large && !overflow) throw laneError(`Message exceeds the ${inlineLaneLimit} byte limit between processes`);
     if (large && bytes.byteLength > overflowLimit) throw laneError(`Message exceeds the ${overflowLimit} byte encoded limit between processes`);
-    if (large && !overflow?.slots) throw laneError("Large-message overflow is unavailable");
+    if (large && !overflow?.arena) throw laneError("Large-message overflow is unavailable");
     const descriptor = large ? new Uint8Array(descriptorBytes) : null;
     const descriptorView = descriptor ? new DataView(descriptor.buffer) : null;
     const need = large ? descriptorBytes : frameHeaderBytes + align(bytes.byteLength);
