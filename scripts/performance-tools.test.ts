@@ -18,7 +18,7 @@ function run(command: string, args: string[]) {
 }
 
 test("the tools package's default Cargo binaries contain only the WASI guest", () => {
-  const manifest = object(JSON.parse(run("cargo", ["read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
+  const manifest = object(JSON.parse(run("rustup", ["run", "stable", "cargo", "read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
   const binaries = array(manifest.targets).map(object).filter(target => array(target.kind).includes("bin")).map(target => target.name);
   expect(binaries).toEqual(["bun-tools"]);
 });
