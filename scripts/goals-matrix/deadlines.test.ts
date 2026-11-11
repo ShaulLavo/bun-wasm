@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initialReport, options, run } from "./run";
-import { deadlinePolicy } from "./deadlines";
+import { deadlinePolicy, campaignDeadlines, cellDeadlines } from "./deadlines";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
 import { combine, nativeRunnerArgs } from "./fleet";
@@ -25,8 +25,8 @@ test("an explicit Nuxt install budget leaves the campaign phase timeout unchange
   for (const framework of frameworks) expect(policy.installTimeouts[framework.id]).toBe(framework.id === "nuxt" ? 110_000 : 90_000);
 });
 
-test("default, strict, and explicit equal-budget runs keep their original effective bounds", () => {
-  expect(options(["--asset-source=test"]).timeoutMs).toBe(90_000);
+test("default runs select calibration while explicit equal-budget controls keep their original bounds", () => {
+  expect(options(["--asset-source=test"]).timeoutMs).toBeUndefined();
   const strict = options(campaign), equal = options(campaign.concat("--install-timeout-ms=nuxt:90000"));
   expect(strict.installTimeouts).toEqual({});
   expect(deadlinePolicy(strict.timeoutMs, strict.installTimeouts)).toEqual(deadlinePolicy(equal.timeoutMs, equal.installTimeouts));
@@ -94,7 +94,7 @@ test("report evidence states and validates the effective install and phase bound
   report.cells[index] = finish(box, attempt);
   const text = markdown(report);
   expect(text).toContain(override);
-  expect(text).toContain("Campaign phases: 90000 ms. Cleanup: 20000 ms");
+  expect(text).toContain("Campaign phases: 90000 ms by default. Cleanup: 20000 ms");
   expect(text).toContain("| Nuxt | 110000 |");
   expect(text).toContain("| Astro | 90000 |");
   const install = attempt.phases.find(phase => phase.phase === "install");
@@ -126,7 +126,7 @@ async function withReportRoot(action: (root: string, output: string) => Promise<
 test("PC runner reports the explicit policy without inventing runnable or accepted boxes", async () => {
   await withReportRoot(async (root, output) => {
     const report = await run(options(campaign.concat(override, `--root=${root}`, `--output=${output}`, "--browsers=chrome", "--frameworks=nuxt,astro", "--engines=browser")));
-    expect(report.deadlines).toEqual(deadlinePolicy(90_000, { nuxt: 110_000 }));
+    expect(report.deadlines).toEqual(campaignDeadlines(90_000, { nuxt: 110_000 }));
     expect(report.cells.every(cell => cell.attempts.length === 0 && cell.status !== "pass")).toBe(true);
     expect(await Bun.file(join(output, "TABLE.md")).text()).toContain("| Nuxt | 110000 |");
     expect(report.resources?.every(resource => resource.stopped)).toBe(true);
@@ -215,6 +215,25 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
     expect(() => process.kill(resource.pid, 0)).toThrow();
   });
 }
+
+test("the real runner applies calibrated cell deadlines to execute and native transport without a uniform flag", async () => {
+  const framework = frameworks.find(item => item.id === "next");
+  if (!framework) throw new Error("Missing Next fixture");
+  await withPlayground(framework, 0, transport => withDriver(transport, (endpoint, timeouts) => withReportRoot(async (root, output) => {
+    await stageUnitHost(root, framework.id);
+    const config = options(["--asset-source=calibration-unit-not-acceptance", `--root=${root}`, `--output=${output}`, "--browsers=safari", "--engines=browser", "--frameworks=next", `--safari-endpoint=${endpoint}`]);
+    const report = await run(config);
+    const cell = report.cells.find(cell => cell.framework === "next" && cell.browser === "safari" && cell.engine === "browser");
+    if (!cell) throw new Error("Missing runner cell");
+    expect(cell.status).toBe("pass");
+    const limits = cellDeadlines(campaignDeadlines(), cell);
+    for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
+    expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }]);
+    expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {} });
+    expect(report.resources?.every(resource => resource.stopped)).toBe(true);
+    for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
+  })));
+});
 
 test("historical reports without deadline evidence are rejected, never rewritten for a new policy", async () => {
   await withReportRoot(async (root, output) => {
