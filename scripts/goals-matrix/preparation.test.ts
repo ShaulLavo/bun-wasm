@@ -34,7 +34,7 @@ test("preparation accepts a separate SpiderMonkey pair with its source record", 
   }
 });
 
-async function checkOverlay(directory: string, original: Uint8Array, replacement: Uint8Array): Promise<void> {
+async function checkOverlay(directory: string, original: Uint8Array<ArrayBuffer>, replacement: Uint8Array<ArrayBuffer>): Promise<void> {
   for (const name of engineFiles("spidermonkey")) expect(await Bun.file(join(directory, name)).bytes()).toEqual(replacement);
   for (const name of engineFiles("quickjs")) expect(await Bun.file(join(directory, name)).bytes()).toEqual(original);
 }
