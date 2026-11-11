@@ -1538,3 +1538,269 @@ diff --git a/Source/WTF/wtf/StackBounds.h b/Source/WTF/wtf/StackBounds.h
 +#define WASM_RESERVE_STACK(bytes) do { } while (false)
 +#endif
  #include <wtf/StackPointer.h>
+diff --git a/Source/JavaScriptCore/bytecode/BytecodeList.rb b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+index 623d253f..fab0e744 100644
+--- a/Source/JavaScriptCore/bytecode/BytecodeList.rb
++++ b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+@@ -1599,5 +1599,11 @@ op :llint_cloop_did_return_from_js_34
+ op :llint_cloop_did_return_from_js_35
+ op :llint_cloop_did_return_from_js_36
+ op :llint_cloop_did_return_from_js_37
++op :llint_cloop_did_return_from_js_38
++op :llint_cloop_did_return_from_js_39
++op :llint_cloop_did_return_from_js_40
++op :llint_cloop_did_return_from_js_41
++op :llint_cloop_did_return_from_js_42
++op :llint_cloop_did_return_from_js_43
+ 
+ end_section :CLoopReturnHelpers
+diff --git a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+index 3bf82d66..f46d4dd5 100644
+--- a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
++++ b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+@@ -88,6 +88,12 @@
+ #define OFFLINE_ASM_ADDRESS64 0
+ #endif
+ 
++#if OS(WASI)
++#define OFFLINE_ASM_WASI 1
++#else
++#define OFFLINE_ASM_WASI 0
++#endif
++
+ #if ASSERT_ENABLED
+ #define OFFLINE_ASM_ASSERT_ENABLED 1
+ #else
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index ad10ba11..c7f0647a 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -893,6 +893,32 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_direct)
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++static UGPRPair callGetterInLoop(CallFrame*, const JSInstruction*, JSFunction* getter, JSValue thisValue);
++
++// JSValue::get(), except that a getter written in JavaScript is not called: it is returned in
++// |getter| with an empty value, for callGetterInLoop. A missing property is undefined and an
++// exception leaves the slot unused, as in JSValue::get(). Host, bound and custom getters and
++// Proxy reads are called here as before.
++template<bool debugLLIntGetById>
++static ALWAYS_INLINE JSValue getOrFindJavaScriptGetter(JSGlobalObject* globalObject, JSValue baseValue, PropertyName propertyName, PropertySlot& slot, JSFunction*& getter)
++{
++    auto scope = DECLARE_THROW_SCOPE(getVM(globalObject));
++    bool hasSlot = baseValue.getPropertySlot<debugLLIntGetById>(globalObject, propertyName, slot);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!hasSlot)
++        return jsUndefined();
++    if (slot.isAccessor()) {
++        auto* function = dynamicDowncast<JSFunction>(slot.getterSetter()->getter());
++        if (function && !function->isHostFunction()) {
++            getter = function;
++            return { };
++        }
++    }
++    RELEASE_AND_RETURN(scope, slot.getValue(globalObject, propertyName));
++}
++#endif
++
+ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_with_this)
+ {
+     LLINT_BEGIN();
+@@ -901,7 +927,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_with_this)
+     JSValue baseValue = getOperand(callFrame, bytecode.m_base);
+     JSValue thisVal = getOperand(callFrame, bytecode.m_thisValue);
+     PropertySlot slot(thisVal, PropertySlot::PropertySlot::InternalMethodType::Get);
++#if ENABLE(C_LOOP) && OS(WASI)
++    JSFunction* getter = nullptr;
++    JSValue result = getOrFindJavaScriptGetter<false>(globalObject, baseValue, ident, slot, getter);
++    LLINT_CHECK_EXCEPTION();
++    if (getter)
++        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, slot.thisValue()));
++#else
+     JSValue result = baseValue.get(globalObject, ident, slot);
++#endif
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
+@@ -962,13 +996,26 @@ static void setupGetByIdPrototypeCache(JSGlobalObject* globalObject, VM& vm, Cod
+     vm.writeBarrier(codeBlock);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++// Only op_get_by_id passes |javaScriptGetter|. Every other caller gets the value as before.
++static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata, JSFunction** javaScriptGetter = nullptr)
++#else
+ static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata)
++#endif
+ {
+     VM& vm = globalObject->vm();
+     auto throwScope = DECLARE_THROW_SCOPE(vm);
+     PropertySlot slot(baseValue, PropertySlot::PropertySlot::InternalMethodType::Get);
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++    // A getter left for the caller is an accessor slot: the caching below stores values only,
++    // so it records neither the getter nor its result.
++    JSValue result = javaScriptGetter
++        ? getOrFindJavaScriptGetter<true>(globalObject, baseValue, ident, slot, *javaScriptGetter)
++        : baseValue.get<true>(globalObject, ident, slot);
++#else
+     JSValue result = baseValue.get<true>(globalObject, ident, slot);
++#endif
+     RETURN_IF_EXCEPTION(throwScope, { });
+ 
+     if (Options::useLLIntICs()
+@@ -1036,7 +1083,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id)
+     const Identifier& ident = codeBlock->identifier(bytecode.m_property);
+     JSValue baseValue = getOperand(callFrame, bytecode.m_base);
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++    JSFunction* getter = nullptr;
++    JSValue result = performLLIntGetByID(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata, &getter);
++    LLINT_CHECK_EXCEPTION();
++    if (getter)
++        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, baseValue));
++#else
+     JSValue result = performLLIntGetByID(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata);
++#endif
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
+@@ -2261,6 +2316,65 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
+     LLINT_CALL_RETURN(globalObject, callerSP, codePtr.taggedPtr(), JSEntryPtrTag);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++// Hands a JavaScript getter that op_get_by_id or op_get_by_id_with_this found back to the C loop.
++// The loop calls it as it calls any JavaScript function, so a getter starts no new CLoop::execute
++// on the host stack.
++//
++// Those two slow paths end in one of three ways, read by callGetByIdSlowPath in
++// LowLevelInterpreter64.asm:
++//   completed:     (pc, nullptr), as LLINT_END_IMPL
++//   threw:         (returnToThrow(vm), exceptionSignal()), as LLINT_THROW_IMPL
++//   call a getter: (entry point, stack pointer for the getter's frame), neither word null or
++//                  the signal
++// setUpCall() reports its own errors the way call slow paths do, as (callToThrow(vm), nullptr),
++// which would read as "completed" here. It becomes "threw" before this returns.
++static UGPRPair callGetterInLoop(CallFrame* callFrame, const JSInstruction* pc, JSFunction* getter, JSValue thisValue)
++{
++    CodeBlock* codeBlock = callFrame->codeBlock();
++    JSGlobalObject* globalObject = codeBlock->globalObject();
++    VM& vm = codeBlock->vm();
++    auto throwScope = DECLARE_THROW_SCOPE(vm);
++
++    // The bytecode reserved no room for this frame, so it goes below everything the caller's
++    // frame can use (CallFrame::topOfFrame(), never above the loop's stack pointer), aligned as
++    // a varargs frame is. Nothing is written until the stack is known to have the room.
++    unsigned callerRegisters = static_cast<unsigned>(callFrame->registers() - callFrame->topOfFrame());
++    CallFrame* calleeFrame = calleeFrameForVarargs(callFrame, callerRegisters, 1);
++    if (!vm.ensureJSStackCapacityFor(calleeFrame->registers())) [[unlikely]] {
++        throwStackOverflowError(globalObject, throwScope);
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    }
++
++    calleeFrame->setCallerFrame(callFrame);
++    calleeFrame->clearReturnPC();
++    calleeFrame->setCodeBlock(nullptr);
++    calleeFrame->setArgumentCountIncludingThis(1);
++    calleeFrame->setCallee(getter);
++    calleeFrame->setThisValue(thisValue);
++    callFrame->setCurrentVPC(pc);
++
++    // setUpCall() can compile the getter, and that can collect. A collection scans the frame
++    // stack from its published pointer and clears what lies below it (CLoopStack::sanitizeStack),
++    // and it cannot see wasm locals. So the finished frame is published while setUpCall() runs:
++    // that keeps the getter and its receiver alive and the frame intact. The caller's pointer is
++    // put back before any way out.
++    CLoopStack& stack = vm.cloopStack();
++    void* callerStackPointer = stack.currentStackPointer();
++    stack.setCurrentStackPointer(calleeFrame);
++    UGPRPair call = setUpCall(calleeFrame, CodeSpecializationKind::CodeForCall, getter);
++    stack.setCurrentStackPointer(callerStackPointer);
++
++    if (throwScope.exception()) [[unlikely]]
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    const void* target;
++    const void* calleeStackPointer;
++    decodeResult(call, target, calleeStackPointer);
++    RELEASE_ASSERT(target && calleeStackPointer == calleeFrame + CallerFrameAndPC::sizeInRegisters);
++    return call;
++}
++#endif
++
+ LLINT_SLOW_PATH_DECL(slow_path_ensure_call_link_info)
+ {
+     LLINT_BEGIN_NO_SET_PC();
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index e2b928eb..4367c726 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -2348,7 +2348,13 @@ llintSlowPathOp(put_setter_by_id)
+ llintSlowPathOp(put_setter_by_val)
+ llintSlowPathOp(set_function_name)
+ llintSlowPathOp(throw)
+-llintSlowPathOp(get_by_id_with_this)
++if C_LOOP and WASI
++    llintOp(op_get_by_id_with_this, OpGetByIdWithThis, macro (size, get, dispatch)
++        callGetByIdSlowPath(_llint_slow_path_get_by_id_with_this, size, OpGetByIdWithThis, dispatch)
++    end)
++else
++    llintSlowPathOp(get_by_id_with_this)
++end
+ 
+ llintOp(op_switch_string, unused, macro (unused, unused, unused)
+     callSlowPath(_llint_slow_path_switch_string)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 7187af71..f78f579a 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -460,6 +460,32 @@ macro callCallSlowPath(slowPath, action)
+     action(r0, r1)
+ end
+ 
++if C_LOOP and WASI
++    # A get_by_id slow path that can hand a JavaScript getter back to this loop
++    # (callGetterInLoop in LLIntSlowPaths.cpp). It ends in one of three ways, and the
++    # exception signal is tested before either register is used as a pointer:
++    #   r1 is LLInt::exceptionSignal (all ones): an exception is pending.
++    #   r1 is zero: done. r0 is the bytecode pointer, as after callSlowPath.
++    #   otherwise: r0 is the getter's entry point and r1 the stack pointer for its frame.
++    #   The getter is called as any JavaScript function is, and its result is stored and
++    #   profiled the way a call's result is.
++    macro callGetByIdSlowPath(slowPath, size, opcodeStruct, dispatch)
++        callCallSlowPath(
++            slowPath,
++            macro (target, calleeStackPointer)
++                bpeq calleeStackPointer, -1, _llint_throw_from_slow_path_trampoline
++                btpnz calleeStackPointer, .callGetter
++                restoreStateAfterCCallWithoutExceptionCheck()
++                dispatch()
++            .callGetter:
++                move calleeStackPointer, sp
++                cloopCallJSFunction target
++                restoreStackPointerAfterCall()
++                dispatchAfterRegularCall(size, opcodeStruct, m_valueProfile, m_dst, dispatch)
++            end)
++    end
++end
++
+ macro callTrapHandler(throwHandler)
+     storePC()
+     prepareStateForCCall()
+@@ -1701,8 +1727,12 @@ llintOpWithMetadata(op_get_by_id, OpGetById, macro (size, get, dispatch, metadat
+     performGetByIDHelper(OpGetById, m_modeMetadata, m_valueProfile, .opGetByIdSlow, size, return)
+ 
+ .opGetByIdSlow:
+-    callSlowPath(_llint_slow_path_get_by_id)
+-    dispatch()
++    if C_LOOP and WASI
++        callGetByIdSlowPath(_llint_slow_path_get_by_id, size, OpGetById, dispatch)
++    else
++        callSlowPath(_llint_slow_path_get_by_id)
++        dispatch()
++    end
+ 
+ .osrReturnPoint:
+     getterSetterOSRExitReturnPoint(op_get_by_id, size)

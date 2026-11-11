@@ -52,6 +52,18 @@ export function stackFixture() {
   return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
+/**
+ * Getter semantics at the smallest browser budget on a small real host stack, with the reduced
+ * Ajv names walk far deeper than that budget ever allowed while getters reentered the interpreter
+ * (16 levels at 192 KiB; Angular's registry needs about 64). docs/bun-patches/jsc-getter-dispatch.md.
+ */
+export function getterDispatchFixture() {
+  const manifest = "native-getter-dispatch.json";
+  const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+  if (check.owner !== "native") throw new Error("JSC getter dispatch fixture needs its native check owner");
+  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000"] };
+}
+
 /** The parser chain fixture on this pair: JSC must refuse its deeper chain with a catchable RangeError. */
 export function parserChainFixture() {
   const manifest = "native-parser-chain-stack.json";
@@ -66,6 +78,8 @@ function testFixtures(artifact: string): void {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
     const stack = stackFixture();
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
+    const getters = getterDispatchFixture();
+    runFixture(artifact, getters.path, scratch, getters.hostOptions);
     const chain = parserChainFixture();
     runFixture(artifact, chain.path, scratch, chain.hostOptions);
     // The parser reserve at every host budget, its rejected forms and each shipped value (docs/stack-limits.md).
