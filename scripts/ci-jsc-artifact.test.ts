@@ -15,7 +15,7 @@ for (const profile of ["split", "shared-group"] as const) {
       symlinkSync("../../icu/prefix/include", join(root, "build/jsc/icu-headers"));
       symlinkSync(join(options.sdk, "lib/clang"), join(root, "shim/sdk-headers"));
       const database = join(root, "build/jsc/compile_commands.json");
-      const commands = readFileSync(database, "utf8").replace("clang++ ", `clang++ -I${options.sdk}/lib/clang -isystem ${options.sysroot}/include `);
+      const commands = readFileSync(database, "utf8").replace("clang++ ", `clang++ -I${root}/build/jsc/headers.hmap -I${options.sdk}/lib/clang -isystem ${options.sysroot}/include `);
       writeFileSync(database, commands);
       const before = await captureSourceManifest({ ...options, build: "jsc" }, "jsc");
       const toolsBefore = await captureSourceManifest({ ...options, build: "tools" });
@@ -86,6 +86,18 @@ test("an excluded intermediate symlink cannot point back into retained headers",
   });
 });
 
+for (const kind of ["file", "directory"] as const) test(`an external intermediate ${kind} alias cannot point back into retained headers`, async () => {
+  await withReceiptFixture(async options => {
+    const root = options.jscBuild!;
+    seedJscArtifact(root);
+    const alias = join(options.repository, "private/external-alias");
+    symlinkSync(join(root, kind === "file" ? "inputs/shim/wasi-compat.h" : "inputs"), alias);
+    const target = kind === "file" ? alias : join(alias, "shim/wasi-compat.h");
+    symlinkSync(target, join(root, "build/jsc/external-hop"));
+    expect(() => jscArtifactInventory({ root, profile: "split", sdk: options.sdk, sysroot: options.sysroot })).toThrow("escapes");
+  });
+});
+
 test("missing shared libcxx completion is rejected before packing", async () => {
   await withReceiptFixture(async options => {
     const root = options.jscBuild!;
@@ -132,7 +144,12 @@ test("compact import preserves blobless sparse WebKit's real offline patch verif
     git("apply", "--index", patch);
     git("remote", "set-url", "origin", `file://${origin}-unavailable`);
     const common = join(import.meta.dir, "../jsc/common.sh");
-    const verify = () => execFileSync("bash", ["-euo", "pipefail", "-c", 'source "$1"; JSC_SRC="$2"; WEBKIT_COMMIT="$3"; check_jsc_webkit_tree; if git -C "$WEBKIT_DIR" cat-file -e HEAD:LayoutTests/unused.html 2>/dev/null; then exit 94; fi; git -C "$WEBKIT_DIR" ls-files -v', "offline-check", common, join(options.repository, "private"), commit], { encoding: "utf8", env: { ...process.env, JSC_BUILD_DIR: root, JSC_PROFILE: "split", GIT_NO_LAZY_FETCH: "1", TMPDIR: join(options.repository, "private") } });
+    // The Git-only check sources common.sh, whose tool lookup still needs a wasm-opt name.
+    const bin = join(options.repository, "private/common-tools");
+    mkdirSync(bin);
+    symlinkSync(join(options.repository, "fake-tool"), join(bin, "wasm-opt"));
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, WASM_TOOLS: join(options.repository, "private/uninstalled-tools"), CARGO_HOME: join(options.repository, "private/uninstalled-cargo"), WASI_SDK_PATH: options.sdk, JSC_BUILD_DIR: root, JSC_PROFILE: "split", GIT_NO_LAZY_FETCH: "1", TMPDIR: join(options.repository, "private") };
+    const verify = () => execFileSync("bash", ["-euo", "pipefail", "-c", 'source "$1"; JSC_SRC="$2"; WEBKIT_COMMIT="$3"; check_jsc_webkit_tree; if git -C "$WEBKIT_DIR" cat-file -e HEAD:LayoutTests/unused.html 2>/dev/null; then exit 94; fi; git -C "$WEBKIT_DIR" ls-files -v', "offline-check", common, join(options.repository, "private"), commit], { encoding: "utf8", env });
     const before = verify();
     expect(before).toContain("S LayoutTests/unused.html");
     const archive = join(options.repository, "private/prebuild.tar.zst");

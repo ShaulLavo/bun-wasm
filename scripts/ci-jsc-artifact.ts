@@ -57,6 +57,7 @@ function dependency(input: string, options: Options, inventory: Inventory, ances
   const path = join(physicalParent, basename(input));
   if (excludedPath(path, options, inventory)) throw new Error(`JSC dependency uses an excluded tree: ${path}`);
   const stat = lstatSync(path);
+  checkRetainedPath(path, options, inventory);
   if (!stat.isSymbolicLink()) return path;
   return dependency(resolve(dirname(path), readlinkSync(path)), options, inventory, ancestors.concat([input]));
 }
@@ -68,13 +69,16 @@ function dependencyParent(path: string, options: Options, inventory: Inventory, 
   return dependency(path, options, inventory, ancestors);
 }
 
-function retainedDependency(input: string, options: Options, inventory: Inventory): void {
-  const path = dependency(input, options, inventory);
+function checkRetainedPath(path: string, options: Options, inventory: Inventory): void {
   if (within(options.root, path)) {
     if (!inventory.entries.has(relative(options.root, path))) throw new Error(`Missing retained JSC dependency: ${path}`);
     return;
   }
-  if (![options.sdk, options.sysroot].some(root => within(realpathSync(root), path))) throw new Error(`JSC dependency escapes transferred prebuild and installed SDK/sysroot: ${input}`);
+  if (![options.sdk, options.sysroot].some(root => within(root, path) || within(realpathSync(root), path))) throw new Error(`JSC dependency escapes transferred prebuild and installed SDK/sysroot: ${path}`);
+}
+
+function retainedDependency(input: string, options: Options, inventory: Inventory): void {
+  dependency(input, options, inventory);
 }
 
 function checkDirectoryClosure(path: string, options: Options, inventory: Inventory): void {
@@ -119,8 +123,8 @@ function checkHeader(input: string, search: boolean, options: Options, inventory
     return;
   }
   const stat = statSync(input);
-  if (search ? !stat.isDirectory() : !stat.isFile()) throw new Error(`Invalid JSC compiler input: ${input}`);
-  if (search) checkDirectoryClosure(realpathSync(input), options, inventory);
+  if (!stat.isFile() && !(search && stat.isDirectory())) throw new Error(`Invalid JSC compiler input: ${input}`);
+  if (search && stat.isDirectory()) checkDirectoryClosure(realpathSync(input), options, inventory);
 }
 
 function checkHeaders(options: Options, inventory: Inventory): void {
