@@ -1350,6 +1350,7 @@ jobs:
           source env.sh
           bun scripts/spidermonkey-ordinary-ci.ts export "$RUNNER_TEMP/ordinary-spidermonkey-program"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: ordinary-spidermonkey-program
           path: ${{ runner.temp }}/ordinary-spidermonkey-program/
@@ -1714,6 +1715,7 @@ jobs:
       - name: Configure private shared JSC build path
         run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: shared-prebuild.tar
           path: ${{ runner.temp }}/shared-prebuild-transfer
@@ -1836,6 +1838,7 @@ jobs:
           manifest=$(bun scripts/ci-spidermonkey-prebuild.ts write "$SPIDERMONKEY_BUILD_DIR" "$SM_NATIVE_INPUTS")
           echo "manifest-sha256=$manifest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: shared-spidermonkey-prebuild
           path: |
@@ -2169,6 +2172,7 @@ jobs:
           echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         if: needs.quality.outputs.shared-native == 'true'
+        timeout-minutes: 5
         with:
           name: shared-spidermonkey-prebuild
           path: ${{ runner.temp }}/spidermonkey/shared
