@@ -102,7 +102,7 @@ const webGuestDirectories = [
 ];
 const webGuestFiles = new Set([
   "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
-  "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
+  "scripts/build-bun-tools.sh", "scripts/optimize-tools.ts", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",

@@ -1167,6 +1167,8 @@ jobs:
         run: |
           bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
+        env:
+          JOBS: "2"
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
