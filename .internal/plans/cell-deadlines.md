@@ -70,6 +70,14 @@ merges continue normally; canonical writes serialize without a human permission
 token. `flock` is required on the canonical Linux host and releases its lock
 when the holder exits, including process interruption.
 
+Every writer of any of the four canonical files must use this same protocol,
+including ad hoc edits to owner decisions in CAMPAIGN-POLICY.json. Hold
+`.canonical-writer.lock` across the complete fresh read/modify/write operation
+and call `assertNoPublication` before writing. Preserve unrelated authority
+fields, including `cellDeadlines`; never write an old snapshot over another
+owner's newer decision. A checksum alone does not serialize a writer that
+ignores this advisory lock.
+
 Use a fresh staging directory:
 
 ```sh

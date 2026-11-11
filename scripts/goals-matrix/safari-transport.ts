@@ -8,6 +8,7 @@ export type SafariTransportOptions = {
 
 export type SafariTransport = {
   readonly capabilities: Readonly<Record<string, unknown>>;
+  beginCleanup(): Promise<void>;
   navigate(url: string): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
   openPreview(url: string): Promise<void>;
@@ -18,6 +19,7 @@ export type SafariTransport = {
 };
 
 type Request = (path: string, body?: unknown, method?: string) => Promise<unknown>;
+type CleanupRequests = { command: Request; session: Request; timeoutMs: number };
 
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Safari WebDriver object");
@@ -90,11 +92,12 @@ Promise.resolve().then(() => (0, eval)(expression)).then(value => {
 }).catch(error => done({ ok: false, message: String(error), stack: error && error.stack ? String(error.stack) : "" }));
 `;
 
-function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanupRequest: Request): SafariTransport {
+function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests): SafariTransport {
   let preview: string | undefined;
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
-  const command: Request = (path, body, method) => request(sessionPath + path, body, method);
+  let operationRequest = request;
+  const command: Request = (path, body, method) => operationRequest(sessionPath + path, body, method);
   const select = async (selected: string): Promise<void> => { await command("/window", { handle: selected }); };
   const navigate = async (url: string): Promise<void> => { await command("/url", { url }); };
 
@@ -136,6 +139,10 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   }
 
   return Object.freeze({ capabilities,
+    beginCleanup: () => serial(async () => {
+      operationRequest = cleanup.command;
+      await command("/timeouts", { script: cleanup.timeoutMs, pageLoad: cleanup.timeoutMs, implicit: 0 });
+    }),
     navigate: (url: string) => serial(() => navigate(url)),
     evaluate: <T>(expression: string) => serial(() => evaluate<T>(expression)),
     openPreview: (url: string) => serial(() => openPreview(url)),
@@ -147,7 +154,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     closePreview: () => serial(closePreview),
     close(interruptPending = false) {
       if (interruptPending) lifetime.abort(new Error("Safari session cleanup interrupted pending commands"));
-      return closing ??= tail.then(async () => { await cleanupRequest(sessionPath, undefined, "DELETE"); });
+      return closing ??= tail.then(async () => { await cleanup.session(sessionPath, undefined, "DELETE"); });
     },
   });
 }
@@ -162,7 +169,7 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const lifetime = new AbortController();
   const address = endpoint.href.replace(/\/$/, "");
   const request = createRequest(address, options.timeoutMs, lifetime.signal);
-  const cleanupRequest = createRequest(address, cleanupTimeoutMs);
+  const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal), session: createRequest(address, cleanupTimeoutMs), timeoutMs: cleanupTimeoutMs };
   const opened = object(await request("/session", { capabilities: { alwaysMatch: requested } }));
   const sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
   try {
@@ -170,6 +177,6 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
     verifyCapabilities(capabilities, options);
     await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
     const host = handle(await request(`${sessionPath}/window`));
-    return transport(request, sessionPath, host, capabilities, lifetime, cleanupRequest);
-  } catch (error) { return cleanupAfterFailure(error, async () => { await cleanupRequest(sessionPath, undefined, "DELETE"); }); }
+    return transport(request, sessionPath, host, capabilities, lifetime, cleanup);
+  } catch (error) { return cleanupAfterFailure(error, async () => { await cleanup.session(sessionPath, undefined, "DELETE"); }); }
 }

@@ -79,6 +79,7 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
 async function nativeTransport(box: Cell, config: Options, timeoutMs: number): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
     control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
+    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000),
     saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
   });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
@@ -128,7 +129,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const port = framework.rootPreview ? await availablePort() : 5173;
   const limits = cellDeadlines(policy, cell);
   return execute({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
-    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs) : nativeTransport(cell, config, limits.timeoutMs),
+    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
 }

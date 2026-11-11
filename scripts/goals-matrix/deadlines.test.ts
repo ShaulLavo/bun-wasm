@@ -163,12 +163,16 @@ test("continuation accepts the same policy, retains failed history, and rejects 
   });
 });
 
-async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>, deleteDelayMs = 0): Promise<void> {
+type CleanupDelays = { session?: number; preview?: number; transcript?: number };
+async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>, delays: CleanupDelays = {}): Promise<void> {
   const timeouts: unknown[] = [];
   async function route(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     const body = request.method === "POST" ? object(await request.json()) : {};
-    if (request.method === "DELETE" && path === "/session/deadline-unit") await Bun.sleep(deleteDelayMs);
+    if (request.method === "DELETE" && path === "/session/deadline-unit") await Bun.sleep(delays.session ?? 0);
+    if (timeouts.length > 1 && request.method === "DELETE" && path.endsWith("/window")) await Bun.sleep(delays.preview ?? 0);
+    const expression = Array.isArray(body.args) ? body.args[0] : undefined;
+    if (timeouts.length > 1 && path.endsWith("/execute/async") && typeof expression === "string" && expression.includes("function transcript")) await Bun.sleep(delays.transcript ?? 0);
     if (path === "/session") return Response.json({ value: { sessionId: "deadline-unit", capabilities: { browserName: "Safari", platformName: "macOS", transport: "unit-fixture" } } });
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
@@ -209,7 +213,7 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
     const cell = report.cells.find(cell => cell.framework === framework && cell.browser === "safari" && cell.engine === "browser");
     expect(cell).toMatchObject(framework === "nuxt" ? { status: "pass" } : { status: "fail", phase: "install", error: expect.stringContaining("200 ms") });
     expect(cell?.attempts[0]?.phases.find(phase => phase.phase === "install")?.timeoutMs).toBe(framework === "nuxt" ? 900 : 200);
-    expect(timeouts).toEqual([{ script: 200, pageLoad: 200, implicit: 0 }]);
+    expect(timeouts).toEqual([{ script: 200, pageLoad: 200, implicit: 0 }, { script: 200, pageLoad: 200, implicit: 0 }]);
     const resource = report.resources?.[0];
     if (!resource) throw new Error("Missing owned server receipt");
     expect(resource.stopped).toBe(true);
@@ -217,9 +221,11 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
   });
 }
 
-test("the real runner applies calibrated cell deadlines to execute and native transport without a uniform flag", async () => {
+test.each(["session", "preview", "transcript"] as const)("the real calibrated native runner preserves the %s cleanup allowance", async delayed => {
   const framework = frameworks.find(item => item.id === "hono");
   if (!framework) throw new Error("Missing Hono fixture");
+  const delays: CleanupDelays = {};
+  delays[delayed] = 1800;
   await withPlayground(framework, 0, transport => withDriver(transport, (endpoint, timeouts) => withReportRoot(async (root, output) => {
     await stageUnitHost(root, framework.id);
     const config = options(["--asset-source=calibration-unit-not-acceptance", `--root=${root}`, `--output=${output}`, "--browsers=safari", "--engines=browser", "--frameworks=hono", `--safari-endpoint=${endpoint}`]);
@@ -227,15 +233,46 @@ test("the real runner applies calibrated cell deadlines to execute and native tr
     const cell = report.cells.find(cell => cell.framework === "hono" && cell.browser === "safari" && cell.engine === "browser");
     if (!cell) throw new Error("Missing runner cell");
     expect(cell.status).toBe("pass");
+    expect(cell.attempts[0]?.phases.find(phase => phase.phase === "cleanup")?.durationMs).toBeGreaterThanOrEqual(1800);
     const limits = cellDeadlines(campaignDeadlines(), cell);
     expect(limits.timeoutMs).toBe(1470);
     for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
-    expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }]);
+    expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }, { script: 10_000, pageLoad: 10_000, implicit: 0 }]);
     expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {} });
     expect(report.resources?.every(resource => resource.stopped)).toBe(true);
     for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
-  }), 1800));
+  }), delays));
 }, 10_000);
+
+test("a cleanup-mode failure still closes the owned transport", async () => {
+  const framework = frameworks.find(item => item.id === "hono");
+  if (!framework) throw new Error("Missing Hono fixture");
+  await withPlayground(framework, 0, async transport => {
+    let closed = false;
+    const close = transport.close.bind(transport);
+    transport.beginCleanup = () => { throw new Error("cleanup request reset failed"); };
+    transport.close = async () => { closed = true; await close(); };
+    const cell = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
+    expect(cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("cleanup request reset failed") });
+    expect(closed).toBe(true);
+  });
+});
+
+test("a stalled cleanup-mode switch stays inside the existing owned observation bound", async () => {
+  const framework = frameworks.find(item => item.id === "hono");
+  if (!framework) throw new Error("Missing Hono fixture");
+  await withPlayground(framework, 0, async transport => {
+    let closed = false;
+    transport.beginCleanup = () => new Promise(() => {});
+    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const cell = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
+    expect(cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("4000 ms") });
+    expect(cell.attempts[0]?.phases.at(-1)?.timeoutMs).toBe(20_000);
+    expect(closed).toBe(true);
+  });
+}, 7000);
 
 test("historical reports without deadline evidence are rejected, never rewritten for a new policy", async () => {
   await withReportRoot(async (root, output) => {

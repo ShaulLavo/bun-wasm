@@ -418,3 +418,20 @@ test.each(["safari", "iphone-safari"] as const)("%s session cleanup retains its 
   await transport.close();
   expect(driver.deleted).toBe(true);
 }, 10_000);
+
+test("cleanup updates the WebDriver script deadline only when an independent allowance is supplied", async () => {
+  const ordinary = fixture();
+  const direct = await ordinary.connect({ timeoutMs: 100 });
+  await direct.beginCleanup();
+  expect(ordinary.calls.filter(call => call.path.endsWith("/timeouts")).at(-1)?.body).toEqual({ script: 100, pageLoad: 100, implicit: 0 });
+  await direct.close();
+
+  const driver = fixture();
+  const transport = await driver.connect({ timeoutMs: 100, cleanupTimeoutMs: 1000 });
+  try {
+    await expect(transport.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))")).rejects.toThrow();
+    await transport.beginCleanup();
+    expect(await transport.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))")).toBe(42);
+    expect(driver.calls.filter(call => call.path.endsWith("/timeouts")).at(-1)?.body).toEqual({ script: 1000, pageLoad: 1000, implicit: 0 });
+  } finally { await transport.close(); }
+});
