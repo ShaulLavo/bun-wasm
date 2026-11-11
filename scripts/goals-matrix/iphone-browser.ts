@@ -48,6 +48,7 @@ export function presentIphonePreview(url: string | null): void {
   frame.title = "Goals framework preview";
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:white";
   frame.src = url;
+  frame.addEventListener("load", () => frame.focus(), { once: true });
   document.body.appendChild(frame);
 }
 
