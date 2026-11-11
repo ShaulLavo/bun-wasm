@@ -2,8 +2,12 @@ use std::{env, path::PathBuf};
 
 #[path = "../bunwasm-cli/max_memory.rs"]
 mod max_memory;
+#[path = "../bunwasm-runtime/build/program_profile.rs"]
+mod program_profile;
 
 fn main() {
+    program_profile::configure();
+    println!("cargo:rerun-if-env-changed=SPIDERMONKEY_LIBCXX_DIR");
     println!("cargo:rerun-if-env-changed=SPIDERMONKEY_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SPIDERMONKEY_G2_DIR");
     println!("cargo:rerun-if-env-changed=SPIDERMONKEY_NATIVE_DIR");
@@ -36,8 +40,23 @@ fn main() {
         native.join("js-confdefs.h")
     };
     let sysroot = PathBuf::from(env::var("BUN_WASM_SYSROOT").expect("source env.sh"));
-    cc::Build::new()
-        .cpp(true)
+    // A shared-group side compiles the group arms against the atomics library and links the
+    // atomics libc++ (jsc/build-libcxx.sh). wasm-ld refuses the SDK's under --shared-memory.
+    let shared_group = env::var("BUN_WASM_PROGRAM_PROFILE").as_deref() == Ok("shared-group");
+    assert!(
+        !(shared_group && standalone),
+        "the standalone probe is split-only"
+    );
+    let libcxx = if shared_group {
+        PathBuf::from(env::var("SPIDERMONKEY_LIBCXX_DIR").expect("atomics libc++ directory"))
+    } else {
+        sysroot.join("lib/wasm32-wasip1/noeh")
+    };
+    let mut shim = cc::Build::new();
+    if shared_group {
+        shim.define("BUN_WASM_SHARED_GROUP", "1");
+    }
+    shim.cpp(true)
         .file(if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {
             "cpp/shim.cpp"
         } else {
@@ -57,10 +76,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/engine.cpp");
     println!("cargo:rerun-if-changed=cpp/engine.h");
     println!("cargo:rustc-link-search=native={}", native.display());
-    println!(
-        "cargo:rustc-link-search=native={}",
-        sysroot.join("lib/wasm32-wasip1/noeh").display()
-    );
+    println!("cargo:rustc-link-search=native={}", libcxx.display());
     println!("cargo:rustc-link-lib=static=spidermonkey_g2");
     println!("cargo:rustc-link-lib=static=c++");
     println!("cargo:rustc-link-lib=static=c++abi");
