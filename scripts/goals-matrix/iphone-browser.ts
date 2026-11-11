@@ -51,10 +51,12 @@ export function presentIphonePreview(url: string | null): void {
   document.body.appendChild(frame);
 }
 
-export function armIphoneClick(button: string, clicked: string): { before: string; label: string; url: string; timeOrigin: number; nonce: string } {
+type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };
+export function armIphoneClick(button: string, clicked: string): IphoneClickArm {
   const target = document.querySelector<HTMLButtonElement>(button);
   const before = document.querySelector(clicked)?.textContent?.trim() ?? "";
-  if (!target || target.disabled || !/\b0\b/.test(before)) throw new Error("iPhone counter is not ready at zero");
+  if (!target || target.disabled) return { ready: false, before };
+  if (!/\b0\b/.test(before)) throw new Error(`iPhone counter must start at zero, received ${before}`);
   target.scrollIntoView({ block: "center" });
   const box = target.getBoundingClientRect();
   if (document.visibilityState !== "visible" || document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== target) throw new Error("iPhone counter is not visibly hittable");
@@ -65,5 +67,5 @@ export function armIphoneClick(button: string, clicked: string): { before: strin
   const state = { trusted: false, target };
   Object.assign(globalThis, { __goalsIphoneClick: state });
   target.addEventListener("click", event => { state.trusted = event.isTrusted; }, { once: true });
-  return { before, label, ...key };
+  return { ready: true, before, label, ...key };
 }
