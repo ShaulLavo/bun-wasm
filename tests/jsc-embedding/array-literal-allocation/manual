@@ -1,0 +1,1 @@
+The Node host refuses two engine allocations for this run (scripts/jsc-embedding.ts). Native Bun has no such refusal, so it cannot regenerate expected.txt.
