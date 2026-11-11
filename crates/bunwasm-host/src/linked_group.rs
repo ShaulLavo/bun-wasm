@@ -1053,10 +1053,7 @@ mod tests {
             format!("{error:#}").contains("cannot import GOT.mem.table_of_contents"),
             "{error:#}"
         );
-        assert_eq!(
-            admit(&image(foreign), false).unwrap(),
-            Profile::SharedGroup
-        );
+        assert_eq!(admit(&image(foreign), false).unwrap(), Profile::SharedGroup);
     }
 
     #[test]

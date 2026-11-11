@@ -85,7 +85,10 @@ fn regions_are_not_counted_and_stay_available_at_the_cap() {
         .group
         .create(member.member, 3 * PAGE_BYTES, 16)
         .unwrap();
-    let reserved = member.group.create_reservation(member.member, 2, 8).unwrap();
+    let reserved = member
+        .group
+        .create_reservation(member.member, 2, 8)
+        .unwrap();
     let after = group.snapshot();
     assert_eq!(after.member_pages, 4);
     assert_eq!(after.regions, 2);

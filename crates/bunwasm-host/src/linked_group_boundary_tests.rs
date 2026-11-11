@@ -182,9 +182,7 @@ impl Top {
         P: wasmtime::WasmParams,
         R: wasmtime::WasmResults,
     {
-        self.instance
-            .get_typed_func(&mut self.store, name)
-            .unwrap()
+        self.instance.get_typed_func(&mut self.store, name).unwrap()
     }
 
     fn store(&mut self, at: u32, value: u32) {
@@ -353,7 +351,9 @@ fn the_final_group_page_and_the_signed_endpoint_work_through_the_production_adap
     // The final byte is addressable from the guest.
     let store8 = top.function::<(i32, i32), ()>("store8");
     let load8 = top.function::<i32, i32>("load8");
-    store8.call(&mut top.store, ((END - 1) as i32, 0xa5)).unwrap();
+    store8
+        .call(&mut top.store, ((END - 1) as i32, 0xa5))
+        .unwrap();
     assert_eq!(load8.call(&mut top.store, (END - 1) as i32).unwrap(), 0xa5);
     traps_past_the_end(&engine, &backing, &placement);
 
@@ -365,7 +365,11 @@ fn the_final_group_page_and_the_signed_endpoint_work_through_the_production_adap
     assert!(top.memory.read(&top.store, end..end + 1).is_none());
     assert!(top.memory.write(&mut top.store, end - 2, b"abc").is_none());
     assert!(top.memory.write(&mut top.store, end, b"a").is_none());
-    assert!(top.memory.write(&mut top.store, usize::MAX, b"ab").is_none());
+    assert!(
+        top.memory
+            .write(&mut top.store, usize::MAX, b"ab")
+            .is_none()
+    );
     assert_eq!(top.bytes(END - 2, 2), [0xed, 0xa5]);
     top.memory.write(&mut top.store, end - 3, b"xyz").unwrap();
     assert_eq!(top.bytes(END - 3, 3), b"xyz");
@@ -427,7 +431,10 @@ fn the_final_group_page_and_the_signed_endpoint_work_through_the_production_adap
     assert_eq!(shm::group_grow(&lease, 1), NOMEM);
     assert_eq!(shm::shm_create(&lease, PAGE, 16, LAST_PAGE), NOMEM);
     assert_eq!(shm::shm_create(&lease, 1, 16, END - 4), INVAL);
-    assert_eq!(NestedMemory::new(&lease, 1, 1).err(), Some(shm::Errno::NoMem));
+    assert_eq!(
+        NestedMemory::new(&lease, 1, 1).err(),
+        Some(shm::Errno::NoMem)
+    );
     // Rolldown's own growth stops at its reservation, below its declared maximum.
     assert_eq!(rolldown.grow(1024), Ok(16384));
     assert_eq!(rolldown.grow(1), Err(shm::Errno::NoMem));
@@ -442,7 +449,10 @@ fn the_final_group_page_and_the_signed_endpoint_work_through_the_production_adap
     assert_eq!(group.snapshot().member_pages, rest);
     lease.physical_stopped();
     let stopped = group.snapshot();
-    assert_eq!((stopped.members, stopped.holds, stopped.member_pages), (0, 0, 0));
+    assert_eq!(
+        (stopped.members, stopped.holds, stopped.member_pages),
+        (0, 0, 0)
+    );
     assert_eq!(stopped.free_bytes, u64::from(END) - u64::from(PAGE));
     assert_eq!(budget.committed_bytes(), u64::from(END));
     drop(top);

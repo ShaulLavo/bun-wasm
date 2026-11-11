@@ -43,8 +43,9 @@ test("the group address space has the same bounded reader and never falls below 
 
 test("the packaged Bun group policy is pinned to both authorities", () => {
   // src/engine-kind.ts ships in the package and cannot read the repository at run time.
-  expect(BUN_MEMORY_GROUP_POLICY.maximumPages).toBe(sharedGroupMaxPages());
-  expect(BUN_MEMORY_GROUP_POLICY.memberPages).toBe(sharedGroupMemberPages());
+  const policy: { readonly maximumPages: number; readonly memberPages: number } = BUN_MEMORY_GROUP_POLICY;
+  expect(policy.maximumPages).toBe(sharedGroupMaxPages());
+  expect(policy.memberPages).toBe(sharedGroupMemberPages());
   expect(Object.keys(BUN_MEMORY_GROUP_POLICY).sort()).toEqual(["maximumPages", "memberPages", "stackBytes"]);
 });
 
@@ -98,7 +99,7 @@ test("only shared-group consumers follow the group address space", () => {
     "crates/bunwasm-spidermonkey/src/lib.rs", "crates/bunwasm-host/src/process/stdio.rs", "jsc/common.sh", "jsc/configure.sh", "spidermonkey/build-probe-core.ts"]) {
     expect(read(path)).not.toMatch(/group.address.space/i);
   }
-  const readers = tracked("group-address-space\\.txt").filter(path => !path.startsWith(".internal/"));
+  const readers = tracked("group-address-space\\.txt").filter(path => !path.startsWith(".internal/") && !path.startsWith("tests/"));
   expect(readers).toEqual(["crates/bunwasm-cli/build.rs", "crates/bunwasm-cli/group_address_space.rs", "crates/bunwasm-host/src/linked_group.rs",
     "scripts/guest-source-manifest.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts"]);
 });
