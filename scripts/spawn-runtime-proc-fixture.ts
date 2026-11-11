@@ -23,6 +23,7 @@ interface FakeChild {
 }
 interface ServiceOptions {
   failSpawn?: number;
+  spawnDetail?: string;
   deferStart?: boolean;
   now?: () => number;
   onSpawn?(child: FakeChild): void;
@@ -90,6 +91,13 @@ export function service(options: ServiceOptions = {}) {
       options.onSpawn?.(child);
       if (!options.deferStart && (!child.selected || child.selected[0] === 0)) child.started = true;
       return child.pid;
+    },
+    procSpawnError(id: number) {
+      calls.push(`spawnError:${id}`);
+      if (id === 0) return options.spawnDetail ?? "";
+      const child = children.get(id);
+      if (!child || child.reaped || child.waited) return -12;
+      return child.selected?.[0] === 2 ? options.spawnDetail ?? "" : "";
     },
     ownJob: 3,
     procJobOf(id: number) { return id === 0 ? this.ownJob : children.get(id)?.job ?? -71; },
