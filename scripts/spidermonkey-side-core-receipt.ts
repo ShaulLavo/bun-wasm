@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 import { importedMemory, tagProgramCore } from "../src/engine-kind.ts";
 import { verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
 import { sideSourceSha256 } from "./spidermonkey-side-inputs.ts";
+import { assertSideMemory } from "./src/engine-explicit-init.ts";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const digest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -170,7 +171,7 @@ export function convertSideInitializers(bytes: Uint8Array, profile: "split" | "s
   assert(!original.some(entry => requiredSideExports.slice(0, 3).includes(entry.name)));
   const memories = WebAssembly.Module.imports(new WebAssembly.Module(input)).filter(entry => entry.kind === "memory");
   assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "SpiderMonkey side must import core memory");
-  assert.equal(importedMemory(input)?.shared, profile === "shared-group", "SpiderMonkey side memory sharing must match its program profile");
+  assertSideMemory(input, profile);
   const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
   assert.deepEqual(imports.filter(entry => entry.kind === "table"), [{ module: "env", name: "__indirect_function_table", kind: "table" }]);
   assert(!original.some(entry => entry.kind === 2 || entry.name === "memory" || entry.name === "__stack_pointer"), "Side already exports memory or stack");

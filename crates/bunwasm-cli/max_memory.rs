@@ -9,26 +9,30 @@ pub const MAX_MEMORY_BYTES: u64 = parse(include_str!("max-memory.txt"));
 const LIMIT: u64 = 1 << 31;
 
 /// One line of decimal bytes, a page multiple in (0, 2 GiB]. Anything else fails the build.
-const fn parse(text: &str) -> u64 {
+/// The one parser of every memory authority file (`group_address_space.rs` reads its own).
+pub const fn parse(text: &str) -> u64 {
     let bytes = text.as_bytes();
     assert!(
         bytes.len() > 1 && bytes[bytes.len() - 1] == b'\n',
-        "max-memory.txt is one line"
+        "a memory authority is one line"
     );
     let mut value: u64 = 0;
     let mut index = 0;
     while index < bytes.len() - 1 {
         let digit = bytes[index];
-        assert!(digit.is_ascii_digit(), "max-memory.txt holds decimal bytes");
+        assert!(
+            digit.is_ascii_digit(),
+            "a memory authority holds decimal bytes"
+        );
         value = value * 10 + (digit - b'0') as u64;
         // Bounded before the next multiply, so no number of digits can wrap, with or
         // without overflow checks.
-        assert!(value <= LIMIT, "max-memory.txt must be at most 2 GiB");
+        assert!(value <= LIMIT, "a memory authority must be at most 2 GiB");
         index += 1;
     }
     assert!(
         value > 0 && value.is_multiple_of(65_536),
-        "max-memory.txt must be a positive page multiple"
+        "a memory authority must be a positive page multiple"
     );
     value
 }

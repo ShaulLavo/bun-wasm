@@ -19,7 +19,7 @@ test("playground boot admits Bun group cores with their declared memory and stac
     }
     assert.equal(requests.length, 3);
     for (const options of requests) {
-      assert.deepEqual(options.memoryGroups, { maximumPages: 16384, stackBytes: 8 << 20 });
+      assert.deepEqual(options.memoryGroups, { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 });
       assert.deepEqual(options.filesystem, { mode: "memory", name: "bun-wasm-workspace-nuxt" });
     }
     process.exit(0);
