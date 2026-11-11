@@ -37,11 +37,24 @@ test("draft PRs defer native and browser work until ready without changing push 
   }
 });
 
-test("only PR updates cancel older runs and each non-PR run has a separate group", () => {
+test("main pushes replace pending runs while PR cancellation and isolated manual groups remain", () => {
   expect(record(workflow.concurrency)).toEqual({
-    group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
+    group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
+  const group = (event: string, run: number, pr = 0, ref = "refs/heads/main") => {
+    const expression = String(record(workflow.concurrency).group).split("-${{ ")[1]?.replace(/ }}$/, "")
+      .replaceAll("github.event_name", JSON.stringify(event)).replaceAll("github.ref", JSON.stringify(ref))
+      .replaceAll("github.event.pull_request.number", String(pr)).replaceAll("github.run_id", String(run));
+    return new Function("format", `return (${expression})`)((pattern: string, value: number) => pattern.replace("{0}", String(value)));
+  };
+  expect(group("push", 1)).toBe("push-main");
+  expect(group("push", 2)).toBe(group("push", 1));
+  expect(group("pull_request", 1, 4)).toBe("pr-4");
+  expect(group("pull_request", 2, 5)).toBe("pr-5");
+  expect(group("workflow_dispatch", 1)).toBe("run-1");
+  expect(group("workflow_dispatch", 2)).toBe("run-2");
+  expect(group("push", 3, 0, "refs/heads/other")).toBe("run-3");
 });
 
 test("update statuses run only for manual checks of the standing update branch", () => {
