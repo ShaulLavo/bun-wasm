@@ -154,9 +154,20 @@ async function measurePath(attempt: Attempt, host: string, mode: string): Promis
   return Object.assign(row, { capacity: low, beyond: await trial(low + 1) });
 }
 
-export async function measureStackPaths(attempt: Attempt, host: string, report: (row: Row) => void): Promise<boolean> {
+/**
+ * Part `index` of `count` consecutive parts of the fixed path order. The parts of one count cover
+ * every path exactly once, so a sweep split across several runs cannot leave a path out.
+ */
+export function stackModeSlice(index: number, count: number): string[] {
+  const valid = Number.isSafeInteger(index) && Number.isSafeInteger(count) && count >= 1 && count <= stackModes.length && index >= 0 && index < count;
+  if (!valid) throw new Error(`Invalid stack sweep slice: part ${index + 1} of ${count}`);
+  const start = (part: number) => Math.floor(part * stackModes.length / count);
+  return stackModes.slice(start(index), start(index + 1));
+}
+
+export async function measureStackPaths(attempt: Attempt, host: string, report: (row: Row) => void, modes: readonly string[] = stackModes): Promise<boolean> {
   let failed = false;
-  for (const mode of stackModes) {
+  for (const mode of modes) {
     const row = await measurePath(attempt, host, mode);
     report(row);
     failed ||= row.failures.length > 0;

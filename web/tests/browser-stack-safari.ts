@@ -5,7 +5,8 @@
 //   ROOT=<site> ENGINES=jsc STACK_KIB=240 JSC_PARSER_RESERVE=832 bun web/tests/browser-stack-safari.ts --measure --cold
 // `--measure` and `--cold` mean what they mean in browser-stack.mjs. A cold attempt is a new
 // SafariDriver session on a new document, so its wasm starts in JavaScriptCore's first tier.
-// SAFARI_CLEANUP_FILE names the driver teardown receipt.
+// STACK_SLICE=PART/COUNT measures one consecutive part of the paths; the parts of one count cover
+// every path once. SAFARI_CLEANUP_FILE names the driver teardown receipt.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -14,7 +15,7 @@ import { gunzipSync } from "node:zlib";
 import { withNativeDriver } from "../../scripts/goals-matrix/native.ts";
 import { foreground, ObservationTimeout, ready, stopServer, terminal } from "../../scripts/goals-matrix/playground.ts";
 import { createSafariTransport, type SafariTransport } from "../../scripts/goals-matrix/safari-transport.ts";
-import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix, type GuestStackSettings } from "../../scripts/stack-measurement.ts";
+import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix, stackModeSlice, type GuestStackSettings } from "../../scripts/stack-measurement.ts";
 import { effectiveParserReserve } from "../src/engine-stack-budget.ts";
 
 interface Host { readonly endpoint: string; readonly url: string; readonly signal: AbortSignal }
@@ -31,7 +32,16 @@ const fixtureNames = ["stack-overflow", "stack-overflow-console"];
 const requested: GuestStackSettings = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };
 const settingsPrefix = stackEnvironmentPrefix(requested);
 const observed = new Set<string>();
+const modes = sliceModes(process.env.STACK_SLICE);
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+/** STACK_SLICE=2/4 measures the second of four parts, so a long sweep can hold the Mac in short turns. */
+function sliceModes(slice: string | undefined): string[] | undefined {
+  if (slice === undefined) return undefined;
+  const parts = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(slice);
+  if (!parts) throw new Error(`STACK_SLICE must be PART/COUNT, got ${slice}`);
+  return stackModeSlice(Number(parts[1]) - 1, Number(parts[2]));
+}
 
 async function withPage<T>(host: Host, engine: string, use: (page: SafariTransport) => Promise<T>): Promise<T> {
   host.signal.throwIfAborted();
@@ -109,12 +119,12 @@ async function bindSide(page: SafariTransport): Promise<void> {
 
 async function identify(page: SafariTransport, engine: string, label: string): Promise<void> {
   const agent = await page.evaluate<string>("navigator.userAgent");
-  console.log(JSON.stringify({ host: label, capabilities: page.capabilities, agent, cold, measure }));
+  console.log(JSON.stringify({ host: label, capabilities: page.capabilities, agent, cold, measure, slice: process.env.STACK_SLICE ?? null, modes: modes ?? "all" }));
   if (engine === "jsc" && existsSync(join(site, "jsc-engine.wasm.gz"))) await bindSide(page);
 }
 
 async function measureEngine(engine: string, label: string, attempt: (mode: string, depth: number) => Promise<string>): Promise<void> {
-  const failed = await measureStackPaths(attempt, label, row => console.log(JSON.stringify(row)));
+  const failed = await measureStackPaths(attempt, label, row => console.log(JSON.stringify(row)), modes);
   reportSettings(label, engine);
   if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);
 }

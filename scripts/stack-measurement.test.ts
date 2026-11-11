@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { acceptedStackOutcome, guestStackSettings, stackOutcome, type GuestStackSettings } from "./stack-measurement.ts";
+import { acceptedStackOutcome, chainModes, guestStackSettings, measureStackPaths, stackModeSlice, stackOutcome, type GuestStackSettings } from "./stack-measurement.ts";
 
 let scratchToClean: string | undefined;
 afterAll(() => { if (scratchToClean) rmSync(scratchToClean, { recursive: true, force: true }); });
@@ -105,6 +105,23 @@ for (const entry of transcripts) {
     expect(row.beyond ?? "completed").toBe(entry.expected);
   });
 }
+
+test("the parts of a split sweep cover every path exactly once, in order", async () => {
+  const whole: string[] = [];
+  await measureStackPaths(async () => "completed", "all", row => whole.push(row.mode));
+  expect(whole).toEqual(expect.arrayContaining(chainModes.concat(["plain", "getter", "console"])));
+  for (const count of [1, 2, 4, 7, whole.length]) {
+    const parts = Array.from({ length: count }, (_, index) => stackModeSlice(index, count));
+    expect(parts.flat()).toEqual(whole);
+    expect(parts.every(part => part.length > 0)).toBe(true);
+  }
+  const measured: string[] = [];
+  await measureStackPaths(async () => "completed", "part", row => measured.push(row.mode), stackModeSlice(1, 4));
+  expect(measured).toEqual(stackModeSlice(1, 4));
+  for (const [index, count] of [[-1, 4], [4, 4], [0, 0], [0, whole.length + 1], [0.5, 4]] as const) {
+    expect(() => stackModeSlice(index, count)).toThrow(/Invalid stack sweep slice/);
+  }
+});
 
 test("only browser-native Firefox's recursion error is an allowed InternalError", () => {
   const result = { code: 0, output: "caught plain InternalError 1 too much recursion\ncontinued\n" };
