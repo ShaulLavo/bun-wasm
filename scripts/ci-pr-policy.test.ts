@@ -62,3 +62,19 @@ test("no job runs on Boat runners", () => {
   const boatJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(record(value)["runs-on"]).includes("boat"));
   expect(boatJobs.map(([id]) => id)).toEqual([]);
 });
+
+test("artifact transport failures release the runner within five minutes and stay blocking", () => {
+  let transfers = 0;
+  for (const value of Object.values(jobs)) {
+    const steps = record(value).steps;
+    if (!Array.isArray(steps)) throw new Error("Expected job steps");
+    for (const value of steps) {
+      const step = record(value);
+      if (!/^actions\/(?:upload|download)-artifact@/.test(String(step.uses))) continue;
+      expect(step["timeout-minutes"]).toBe(5);
+      expect(step["continue-on-error"]).toBeUndefined();
+      transfers++;
+    }
+  }
+  expect(transfers).toBeGreaterThan(15);
+});
