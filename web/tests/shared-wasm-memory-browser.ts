@@ -9,6 +9,7 @@ import { programKind, programProfile, sharedGroupPair } from "../../src/engine-k
 import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcTree } from "../../scripts/real-oxc-consumer";
 import { buildBrowserEntries } from "../../scripts/browser-build";
+import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
 
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
@@ -49,6 +50,10 @@ async function prepareSite(program: string): Promise<string> {
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./shared-wasm-memory-browser-main.js"></script>');
   if (oxcTree !== undefined) requireOxcTree(oxcTree);
   const entries = await stageFixtureTree(oxcTree ?? fixtureSource, join(out, "fixture"));
+  if (oxcTree === undefined) {
+    await Bun.write(join(out, "fixture/stack-depth.js"), Bun.file(join(repository, "tests/stack-depth.js")));
+    entries.push({ kind: "file", path: "stack-depth.js" });
+  }
   await Bun.write(join(out, "fixture-manifest.json"), JSON.stringify(entries));
   await mkdir(join(out, "program"));
   await Bun.write(join(out, "program/bun.wasm"), coreBytes);
@@ -92,7 +97,7 @@ async function result(page: Page): Promise<Result> {
   } finally { clearInterval(progress); }
 }
 
-interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; }
+interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; readonly host: PageHost; }
 
 async function runEntry(name: string, port: number, entry: string): Promise<EntryRun> {
   const page = await browser!.newPage();
@@ -100,9 +105,21 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
   const value = await result(page);
-  console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, ...value, pageErrors }));
+  const host = await pageHost(page, name);
+  console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
   await page.close();
-  return { value, pageErrors };
+  return { value, pageErrors, host };
+}
+
+/** Every case was a real group that ended cleanly, and each member kept its own parser reserve. */
+function assertParserReserveOwnership({ value, pageErrors, host }: EntryRun, kind: string): void {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.deepEqual(pageErrors, []);
+  assert.ok((value.peak?.groups ?? 0) > 0, "the owner never saw a memory group");
+  assert.deepEqual(value.groups, [], "every group is released after its parent and child exit");
+  assertRetired(value);
+  assertOwnership(value.stdout ?? "", kind, host);
 }
 
 async function assertClean({ value, pageErrors }: EntryRun): Promise<void> {
@@ -140,11 +157,11 @@ function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
   assertRetired(value);
 }
 
-async function runBrowser(type: BrowserType, name: string, port: number): Promise<void> {
+async function runBrowser(type: BrowserType, name: string, port: number, kind: string): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
   const override = process.env.SHARED_WASM_ENTRY;
-  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", DEBT_ENTRY];
+  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY];
   const runs = [];
   for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
@@ -154,6 +171,7 @@ async function runBrowser(type: BrowserType, name: string, port: number): Promis
   for (const { entry, run } of runs) {
     if (oxcTree !== undefined) assertOxc(entry, run);
     else if (entry === DEBT_ENTRY) assertDebt(run);
+    else if (entry === OWNERSHIP_ENTRY) assertParserReserveOwnership(run, kind);
     else await assertClean(run);
   }
 }
@@ -173,7 +191,7 @@ try {
   const port = serve(out);
   for (const name of names) {
     assert.ok(name in types, `unknown browser ${name}`);
-    await runBrowser(types[name as keyof typeof types], name, port);
+    await runBrowser(types[name as keyof typeof types], name, port, String(JSON.parse(await readFile(join(out, "program/kind.json"), "utf8"))));
   }
 } finally {
   clearTimeout(deadline);

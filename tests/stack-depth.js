@@ -1,6 +1,9 @@
 // Recursion probe for scripts/measure-stack.py and web/tests/browser-stack.mjs.
 // `bun run stack-depth.js <mode> <n>` nests one recursive path n levels deep and prints
 // "completed" or "caught <error name>", then "continued"; a wasm trap prints neither.
+// `chainCapacity <n>` also prints "capacities <JSON>": the deepest nesting each parser chain completes.
+// `chainWorker <n>` prints "ownership <JSON>": the same capacities for a parent around a Worker child.
+// Every run first prints "settings <JSON>": the stack budget and parser reserve in its environment.
 const mode = process.argv[2];
 const n = +process.argv[3];
 const nest = (open, close) => open.repeat(n) + close.repeat(n);
@@ -31,6 +34,8 @@ const actions = {
   ternary() { (0, eval)('0?0:'.repeat(n) + '0'); },
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
   statement() { (0, eval)('if(0)'.repeat(n) + ';'); },
+  // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
+  awaitchain() { (0, eval)('(async function () { ' + 'await '.repeat(n) + '0; })'); },
   regexpnc() { new RegExp(nest('(?:', ')')).exec('a'); },
   lookahead() { new RegExp('(?=a'.repeat(n) + ')'.repeat(n)).exec('a'); },
   reviver() { JSON.parse(nest('[', ']'), (k, v) => v); },
@@ -61,9 +66,84 @@ actions.require = () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+// Parser chains, one source shape per recursion in an engine's parser (docs/stack-limits.md). Each
+// is a function body. "Compile" only constructs the function, which syntax-checks the body; "Call"
+// also runs it, which parses the body in full and generates its code. "16" adds one character
+// outside Latin-1, so the engine reads a 16-bit source.
+const chains = {
+  Assign: (depth) => 'var o = {};\n' + 'o.a = '.repeat(depth) + '0;',
+  Conditional: (depth) => 'var x = 0;\nreturn ' + 'x ? 0 : '.repeat(depth) + '0;',
+  Block: (depth) => '{'.repeat(depth) + '}'.repeat(depth),
+  Call: (depth) => 'var f = function (v) { return v; };\nreturn ' + 'f('.repeat(depth) + '0' + ')'.repeat(depth) + ';',
+  Function: (depth) => 'return ' + '(function () { return '.repeat(depth) + '0' + '; })'.repeat(depth) + ';',
+};
+const chainModes = {};
+function addChainMode(kind, pass, width) {
+  chainModes[`chain${kind}${pass}${width}`] = (depth = n) => {
+    const compiled = new Function((width === '16' ? '/* ☃ */' : '') + chains[kind](depth));
+    if (pass === 'Call') compiled();
+  };
+}
+for (const kind of Object.keys(chains)) {
+  for (const pass of ['Compile', 'Call']) ['8', '16'].forEach((width) => addChainMode(kind, pass, width));
+}
+Object.assign(actions, chainModes);
+function chainCompletes(attempt, depth) {
+  try { attempt(depth); return true; }
+  catch (error) {
+    if (error instanceof RangeError || error instanceof SyntaxError || error.name === 'InternalError') return false;
+    throw error;
+  }
+}
+function chainCapacity(attempt) {
+  if (chainCompletes(attempt, n)) return n;
+  let low = 0;
+  let high = n;
+  while (low + 1 < high) {
+    const middle = (low + high) >> 1;
+    if (chainCompletes(attempt, middle)) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+// Every chain's capacity from one guest: the parser's refusal is catchable, so the search runs in
+// process and prints one JSON line before the usual result. n is the deepest nesting tried.
+function chainCapacities() {
+  const capacities = {};
+  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
+  return capacities;
+}
+// Leave the loader's synchronous calls before comparing capacities across contexts.
+actions.chainCapacity = async () => { await Promise.resolve(); console.log('capacities', JSON.stringify(chainCapacities())); };
+// A parent and a Worker of this file in one run: the parent's capacities before the child starts
+// and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
+// JSON object merged into the child's copy of the environment; a null value removes that key.
+function workerEnvironment() {
+  const env = { ...process.env };
+  for (const [key, value] of Object.entries(JSON.parse(process.env.STACK_DEPTH_WORKER_ENV || '{}'))) {
+    if (value === null) delete env[key];
+    else env[key] = value;
+  }
+  delete env.STACK_DEPTH_WORKER_ENV;
+  return env;
+}
+actions.chainWorker = async () => {
+  const { Worker } = require('node:worker_threads');
+  await Promise.resolve();
+  const before = chainCapacities();
+  const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
+  let output = '';
+  worker.stdout.on('data', (chunk) => { output += chunk; });
+  const code = await new Promise((resolve, reject) => { worker.on('error', reject); worker.on('exit', resolve); });
+  // A terminal trims the spaces that end a wrapped row, so the child's transcript travels encoded.
+  console.log('ownership', JSON.stringify({ before, child: { code, output: encodeURIComponent(output) }, after: chainCapacities() }));
+};
 actions.promise = async () => { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); await Promise.resolve().then(f); };
 actions.async = async () => { let d = 0; const f = async () => { if (++d < n) await f(); }; await f(); };
 (async () => {
+  // What this guest was given, so a measurement can record the settings that were in effect.
+  const { BUN_WASM_STACK_KIB: budget = null, BUN_WASM_JSC_PARSER_RESERVE: parserReserve = null } = process.env;
+  console.log('settings', JSON.stringify({ budget, parserReserve }));
   try { await actions[mode](); console.log('completed', mode, n); }
   catch (error) { console.log('caught', mode, error.name, n, error.message); }
   console.log('continued');
