@@ -3,8 +3,10 @@ import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic"
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import type { Transport } from "./transport";
+import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 export interface Execution {
+  profile?: PlaygroundProfile;
   box: Box;
   framework: Framework;
   url: string;
@@ -58,7 +60,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       transport = await creation;
       capabilities = transport.capabilities;
       await transport.navigate(options.url);
-      return ready(transport, options.box.engine, options.timeoutMs);
+      return ready(transport, options.box.engine, options.timeoutMs, options.profile);
     }, options.signal);
     if (!transport) throw new Error("Transport not created");
     await lifecycle(transport, options, results);
