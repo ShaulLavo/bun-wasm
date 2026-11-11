@@ -5,8 +5,8 @@ import { sourceLane } from "./fixtures/shared-objects/source-lane";
 
 function pair(open = openSharedLane) {
   const control = new Int32Array(new SharedArrayBuffer(poolControlWords * 4)), grant = createOverflowGrant();
-  if (!grant?.slots[0]) throw new Error("This source gate requires native growable shared buffers");
-  const overflow = { control, index: 0, slots: grant.slots[0] }, buffer = createSharedLaneBuffer();
+  if (!grant) throw new Error("This source gate requires native growable shared buffers");
+  const overflow = { control, index: 0, arena: grant.arena }, buffer = createSharedLaneBuffer();
   return { control, overflow, buffer, sender: open(buffer, 0, overflow), receiver: open(buffer, 1, overflow) };
 }
 const large = "λ".repeat(550000);
@@ -29,25 +29,64 @@ test("overflow reservation stays invisible, busy until copy, and aborts without 
 });
 
 test("zero-delta reuse works at full budget, another direction cannot grow, closed capacity stays charged", () => {
-  const { sender, receiver, overflow, control } = pair();
+  const { sender, receiver, control } = pair();
   sender.reserve(large)!.commit(); receiver.drain(() => {});
   Atomics.store(control, poolChargedWord, overflowBudget);
   sender.reserve(large)!.commit(); receiver.drain(() => {});
   expect(() => receiver.reserve(large)).toThrow("budget exceeded");
-  expect(overflow.slots[0].byteLength).toBe(0);
+  expect(Atomics.load(control, slotWord(0, 0) + 4)).toBe(0);
   receiver.close();
   expect(() => sender.reserve(large)).toThrow("closed");
   expect(Atomics.load(control, poolChargedWord)).toBe(overflowBudget);
 });
 
-for (const growth of ["none", "partial", "complete"] as const) test(`native growth failure retains only actual capacity, growth=${growth}`, async () => {
-  const lane = await sourceLane({ grow(buffer, length) { if (growth !== "none") buffer.grow(growth === "partial" ? 65536 : length); throw new RangeError("grow rejected"); } });
+for (const growth of ["none", "partial"] as const) test(`native growth failure retains only actual capacity, growth=${growth}`, async () => {
+  const lane = await sourceLane({ grow(buffer) { if (growth === "partial") buffer.grow(65536); throw new RangeError("grow rejected"); } });
   const { sender, receiver, control, overflow } = pair(lane.openSharedLane);
   expect(() => sender.reserve(large)).toThrow("grow rejected");
-  expect(Atomics.load(control, poolChargedWord)).toBe(overflow.slots[1].byteLength);
+  expect(Atomics.load(control, poolChargedWord)).toBe(overflow.arena.byteLength);
   expect(Atomics.load(control, slotWord(0, 1)) & 3).toBe(0);
+  expect(Atomics.load(control, slotWord(0, 1) + 4)).toBe(0);
   expect(receiver.drain(() => { throw new Error("Failed growth delivered"); })).toBe(0);
   sender.reserve("small")!.commit(); receiver.drain(text => expect(text).toBe("small"));
+});
+
+// Directions share the backing, so a grow call that fails after the bytes exist is what losing a
+// race to another direction's larger growth looks like. Both publish.
+test("a growth call that throws once the extent is backed still publishes", async () => {
+  const lane = await sourceLane({ grow(buffer, length) { buffer.grow(length); throw new RangeError("grow rejected"); } });
+  const { sender, receiver, control, overflow } = pair(lane.openSharedLane);
+  sender.reserve(large)!.commit();
+  expect(receiver.drain(text => expect(text).toBe(large))).toBe(1);
+  expect(Atomics.load(control, poolChargedWord)).toBe(overflow.arena.byteLength);
+});
+
+test("every direction shares one backing that reserves the runtime budget and no more", () => {
+  const grant = createOverflowGrant();
+  expect(grant?.arena.maxByteLength).toBe(overflowBudget);
+  expect(grant?.arena.byteLength).toBe(0);
+});
+
+test("the last extent lengthens in place, and an outgrown one moves with twice the room and stays charged", () => {
+  const { sender, receiver, control } = pair();
+  const pages = (text: string) => Math.ceil(text.length / 65536) * 65536;
+  const small = "a".repeat(1100000), medium = "b".repeat(1500000), big = "c".repeat(1600000);
+  const forward = slotWord(0, 1), backward = slotWord(0, 0);
+  sender.reserve(small)!.commit(); receiver.drain(text => expect(text).toBe(small));
+  sender.reserve(medium)!.commit(); receiver.drain(text => expect(text).toBe(medium));
+  expect(Atomics.load(control, forward + 3)).toBe(0);
+  expect(Atomics.load(control, poolChargedWord)).toBe(pages(medium));
+  receiver.reserve(small)!.commit(); sender.drain(text => expect(text).toBe(small));
+  expect(Atomics.load(control, backward + 3)).toBe(pages(medium));
+  const charged = Atomics.load(control, poolChargedWord);
+  expect(charged).toBe(pages(medium) + pages(small));
+  sender.reserve(big)!.commit(); receiver.drain(text => expect(text).toBe(big));
+  expect(Atomics.load(control, forward + 3)).toBe(charged);
+  expect(Atomics.load(control, forward + 4)).toBe(pages(medium) * 2);
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged + pages(medium) * 2);
+  receiver.reserve(small)!.commit(); sender.drain(text => expect(text).toBe(small));
+  sender.reserve(medium)!.commit(); receiver.drain(text => expect(text).toBe(medium));
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged + pages(medium) * 2);
 });
 
 test("failed receiver allocation preserves the published descriptor and credit until a retry copies", async () => {
@@ -76,7 +115,7 @@ for (const kind of ["generation", "utf8", "consume"] as const) test(`malformed $
   const { sender, receiver, control, overflow, buffer } = pair();
   sender.reserve(large)!.commit(); sender.reserve("after")!.commit();
   if (kind === "generation") Atomics.add(control, slotWord(0, 1) + 1, 1);
-  if (kind === "utf8") new Uint8Array(overflow.slots[1])[0] = 0xff;
+  if (kind === "utf8") new Uint8Array(overflow.arena)[Atomics.load(control, slotWord(0, 1) + 3)] = 0xff;
   const consume = () => { if (kind === "consume") throw new Error("consume failed"); };
   expect(() => receiver.drain(consume)).toThrow();
   expect(() => receiver.drain(() => {})).toThrow();
@@ -130,12 +169,10 @@ test("two directions saturate the real committed budget, and smaller reuse has z
   sender.reserve(text)!.commit(); receiver.drain(value => expect(value.length).toBe(overflowLimit));
   receiver.reserve(text)!.commit(); sender.drain(value => expect(value.length).toBe(overflowLimit));
   expect(Atomics.load(control, poolChargedWord)).toBe(overflowBudget);
-  const other = createOverflowGrant();
-  if (!other?.slots[1]) throw new Error("Missing slots");
-  const lane = openSharedLane(createSharedLaneBuffer(), 0, { control, index: 1, slots: other.slots[1] });
+  const lane = openSharedLane(createSharedLaneBuffer(), 0, { control, index: 1, arena: overflow.arena });
   expect(() => lane.reserve(large)).toThrow("budget exceeded");
   sender.reserve(large)!.commit(); receiver.drain(value => expect(value).toBe(large));
-  expect(overflow.slots[0].byteLength + overflow.slots[1].byteLength).toBe(overflowBudget);
+  expect(overflow.arena.byteLength).toBe(overflowBudget);
   expect(buffer.byteLength).toBe(2097184);
 });
 

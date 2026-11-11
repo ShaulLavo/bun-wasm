@@ -267,7 +267,7 @@ for (const failure of ["unpooled", "budget", "grow", "full-ring"] as const) test
   if (failure === "unpooled") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, 32); return grant; };
   if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget); return grant; };
   if (failure === "grow") options.lane = (backing, side, grant) => {
-    const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, slots: grant.overflow?.slots[backing.poolIndex] ?? null };
+    const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, arena: grant.overflow?.arena ?? null };
     return realm.openSharedLane(backing.buffer, side, overflow);
   };
   const { sender, receiver, source, target } = await connection(options);
@@ -310,7 +310,7 @@ for (const fault of ["descriptor-copy", "generation-write"] as const) test(`${fa
   const { sender, receiver, source, target, graph } = await connection({
     grant(value) { grant = value; return value; },
     lane(backing, side, pool) {
-      const overflow = backing.poolIndex === null || !pool ? undefined : { control: new Int32Array(pool.control), index: backing.poolIndex, slots: pool.overflow?.slots[backing.poolIndex] ?? null };
+      const overflow = backing.poolIndex === null || !pool ? undefined : { control: new Int32Array(pool.control), index: backing.poolIndex, arena: pool.overflow?.arena ?? null };
       return lane.openSharedLane(backing.buffer, side, overflow);
     },
   });

@@ -63,7 +63,7 @@ test("SpiderMonkey preflight rejects stale fingerprints and partial pairs", () =
 function transport(status: string): Transport {
   return {
     capabilities: {}, async navigate() {}, async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {}, async close() {},
-    async evaluate<T>(): Promise<T> { return JSON.parse(JSON.stringify({ ready: true, status, engine: box.engine, observedEngine: box.engine, agent: "test" })); },
+    async evaluate<T>(): Promise<T> { return JSON.parse(JSON.stringify({ ready: true, status, engine: box.engine, observedEngine: box.engine, agent: "test", profile: "split" })); },
   };
 }
 test("ready uses the registered SpiderMonkey status and refuses another engine's label", async () => {

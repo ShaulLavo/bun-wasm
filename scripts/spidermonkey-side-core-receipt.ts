@@ -153,8 +153,11 @@ function rejectExceptionTags(bytes: Uint8Array): void {
   assert(!sections(bytes).some(section => section.id === 13), "SpiderMonkey side contains exception tags");
 }
 
-/** Convert a just-linked side module without routing SpiderMonkey through the generic initializer helper. */
-export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+/**
+ * Convert a just-linked side module without routing SpiderMonkey through the generic initializer helper.
+ * A shared-group side imports the shared group memory and never exports it (docs/shared-group-profile.md).
+ */
+export function convertSideInitializers(bytes: Uint8Array, profile: "split" | "shared-group" = "split"): Uint8Array<ArrayBuffer> {
   const input = Uint8Array.from(bytes);
   const before = sections(input);
   const start = before.find(section => section.id === 8);
@@ -167,7 +170,7 @@ export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
   assert(!original.some(entry => requiredSideExports.slice(0, 3).includes(entry.name)));
   const memories = WebAssembly.Module.imports(new WebAssembly.Module(input)).filter(entry => entry.kind === "memory");
   assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "SpiderMonkey side must import core memory");
-  assert.equal(importedMemory(input)?.shared, false, "SpiderMonkey side is split-only");
+  assert.equal(importedMemory(input)?.shared, profile === "shared-group", "SpiderMonkey side memory sharing must match its program profile");
   const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
   assert.deepEqual(imports.filter(entry => entry.kind === "table"), [{ module: "env", name: "__indirect_function_table", kind: "table" }]);
   assert(!original.some(entry => entry.kind === 2 || entry.name === "memory" || entry.name === "__stack_pointer"), "Side already exports memory or stack");
@@ -175,8 +178,8 @@ export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
   assert(stackIndex >= 0, "SpiderMonkey side must import __stack_pointer");
   const renamed = original.map(entry => entry.name === "__wasm_apply_data_relocs" ? { ...entry, name: "spidermonkey_apply_data_relocs" }
     : entry.name === "__wasm_call_ctors" ? { ...entry, name: "spidermonkey_call_ctors" } : entry).concat([
-      { name: "spidermonkey_initialize_memory", kind: 0, index: startIndex }, { name: "__stack_pointer", kind: 3, index: stackIndex }, { name: "memory", kind: 2, index: 0 },
-    ]);
+      { name: "spidermonkey_initialize_memory", kind: 0, index: startIndex }, { name: "__stack_pointer", kind: 3, index: stackIndex },
+    ], profile === "split" ? [{ name: "memory", kind: 2, index: 0 }] : []);
   const payload = Uint8Array.from(u32(renamed.length).concat(...renamed.map(encodeExport)));
   const changed = before.filter(section => section.id !== 8).map(section => section.id === 7 ? makeSection(7, payload) : section.raw);
   const result = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...changed.map(section => Array.from(section))));
@@ -261,8 +264,8 @@ if (import.meta.main) {
     verifyEngineInputs(resolve(first));
   } else if (command === "tag-core" && first && second) {
     tagCore(readFileSync(first), second);
-  } else if (command === "convert-side" && first && second) {
-    writeFileSync(second, convertSideInitializers(readFileSync(first)));
+  } else if (command === "convert-side" && first && second && (third === undefined || third === "--group")) {
+    writeFileSync(second, convertSideInitializers(readFileSync(first), third ? "shared-group" : "split"));
   } else if (command === "finalize-side" && first && second && third && fourth) {
     const side = convertSideInitializers(readFileSync(first));
     writeFileSync(third, side);
@@ -272,6 +275,6 @@ if (import.meta.main) {
   } else if (command === "verify-pair" && first && second && third && fourth) {
     verifyPairReceipt(first, second, third, parseInputs(JSON.parse(readFileSync(fourth, "utf8"))));
   } else {
-    throw new Error("Usage: inputs REPOSITORY NATIVE_DIR | verify-native NATIVE_DIR | tag-core INPUT OUTPUT | convert-side INPUT OUTPUT | finalize-side INPUT CORE OUTPUT INPUTS | write-pair CORE SIDE INPUTS | verify-pair CORE SIDE RECEIPT INPUTS");
+    throw new Error("Usage: inputs REPOSITORY NATIVE_DIR | verify-native NATIVE_DIR | tag-core INPUT OUTPUT | convert-side INPUT OUTPUT [--group] | finalize-side INPUT CORE OUTPUT INPUTS | write-pair CORE SIDE INPUTS | verify-pair CORE SIDE RECEIPT INPUTS");
   }
 }

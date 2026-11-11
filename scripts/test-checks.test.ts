@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches } from "./test-checks";
+import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, parseCheck } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 
@@ -99,6 +99,22 @@ test("missing, duplicate and linked inputs fail closed", () => {
   expect(() => discoverChecks(directory)).toThrow();
   symlinkSync(join(root, "scripts/test-checks.test.ts"), join(directory, "scripts/example.test.ts"));
   expect(() => discoverChecks(directory)).toThrow("Unsafe linked check");
+});
+
+test("Browser guest secondary inputs preserve the blocking owner and profile selection", () => {
+  const path = "scripts/example.test.ts";
+  const inputs = ["web/src/example.ts"];
+  const split = parseCheck({ owner: "browser-guest", path, inputs }, "browser-guest-example.json");
+  const shared = parseCheck({ owner: "browser-guest", path, inputs, profile: "shared-group" }, "browser-guest-example.json");
+  expect(split).toMatchObject({ owner: "browser-guest", path, inputs });
+  expect(selectChecks("browser-guest", [split])).toEqual([path]);
+  expect(selectChecks("browser-guest", [shared], "shared-group")).toEqual([path]);
+  expect(checkCommand("browser-guest", [path])).toEqual(["bun", "test", join(root, path)]);
+  expect(() => parseCheck({ owner: "web", path, inputs }, "web-example.json")).toThrow();
+});
+
+test.each([[], ["../outside.ts"], ["/outside.ts"], ["web/src/*.ts"], ["web/src/../outside.ts"], ["web/src/"], ["web/src/file.ts", "web/src/file.ts"], [17], "web/src/file.ts", null].map(inputs => ({ inputs })))("Browser guest rejects unsafe secondary inputs $inputs", ({ inputs }) => {
+  expect(() => parseCheck({ owner: "browser-guest", path: "scripts/example.test.ts", inputs }, "browser-guest-example.json")).toThrow();
 });
 
 test("runner uses argv, no-build fixtures and failure propagation, not a shell command string", () => {

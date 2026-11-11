@@ -27,8 +27,8 @@ export const sharedPoolLanes = 32;
 /** One saturating cursor per class, then one for the lanes. */
 export const sharedPoolLaneCursor = sharedPoolClasses.length;
 export { poolControlWords as sharedPoolControlWords } from "./lane-overflow.ts";
-import { poolControlWords as sharedPoolControlWords, overflowLimit, overflowBudget, overflowPage, poolChargedWord, poolDisposedWord, poolSlotStart } from "./lane-overflow.ts";
-import type { OverflowGrant, SlotPair } from "./lane-overflow.ts";
+import { poolControlWords as sharedPoolControlWords, overflowLimit, overflowBudget, overflowPage, poolChargedWord, poolDisposedWord, poolSlotStart, poolSlotWords } from "./lane-overflow.ts";
+import type { OverflowGrant } from "./lane-overflow.ts";
 export interface LaneBacking { readonly buffer: SharedArrayBuffer; readonly poolIndex: number | null; }
 export interface SharedPoolGrant {
   readonly control: SharedArrayBuffer;
@@ -207,21 +207,15 @@ function poolGrant(value: unknown): SharedPoolGrant {
 }
 function overflowGrant(value: unknown, control: Int32Array): OverflowGrant | null {
   if (value === null) return null;
-  const input = object(value);
-  if (!Array.isArray(input.slots) || input.slots.length !== sharedPoolLanes) throw poolError();
-  const seen = new Set<SharedArrayBuffer>();
-  function slot(buffer: unknown, index: number) {
-    if (!nativeSharedGrowable(buffer, overflowLimit) || nativeSharedLength(buffer) % overflowPage || seen.has(buffer)) throw poolError();
-    seen.add(buffer);
-    const word = poolSlotStart + index * 3, state = Atomics.load(control, word), length = Atomics.load(control, word + 2);
+  const { arena } = object(value);
+  if (!nativeSharedGrowable(arena, overflowBudget) || nativeSharedLength(arena) % overflowPage) throw poolError();
+  for (let word = poolSlotStart; word < sharedPoolControlWords; word += poolSlotWords) {
+    const state = Atomics.load(control, word), length = Atomics.load(control, word + 2);
+    const offset = Atomics.load(control, word + 3), capacity = Atomics.load(control, word + 4);
     if (state < 0 || state > 7 || length < 0 || length > overflowLimit) throw poolError();
-    return buffer;
+    if (offset < 0 || capacity < 0 || capacity > overflowLimit || offset > overflowBudget - capacity) throw poolError();
   }
-  const slots = input.slots.map((pair: unknown, index: number): SlotPair => {
-    if (!Array.isArray(pair) || pair.length !== 2) throw poolError();
-    return [slot(pair[0], index * 2), slot(pair[1], index * 2 + 1)];
-  });
-  return { slots };
+  return { arena };
 }
 export function sharedResponse(value: unknown): SharedResponse {
   const input = object(value);
