@@ -71,7 +71,8 @@ check("revoked proxy base", thrown(() => revocable.proxy.value), "TypeError");
 check("a read after those errors", plain.doubled, "plainplain");
 
 // Primitive receivers: a strict getter sees the primitive, a sloppy one its wrapper.
-const strictKind = function (this: unknown): string { "use strict"; return typeof this; };
+// Both come from `Function`, so the engine and not the transpiler decides their strictness.
+const strictKind = new Function('"use strict"; return typeof this;') as () => string;
 const sloppyKind = new Function("return typeof this;") as () => string;
 type Kinds = { strictKind: string; sloppyKind: string };
 const primitives: ReadonlyArray<readonly [string, object, unknown]> = [

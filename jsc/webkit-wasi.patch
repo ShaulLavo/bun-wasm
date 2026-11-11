@@ -1572,7 +1572,7 @@ index 3bf82d66..f46d4dd5 100644
  #define OFFLINE_ASM_ASSERT_ENABLED 1
  #else
 diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
-index ad10ba11..c7f0647a 100644
+index ad10ba11..4fbd4d7e 100644
 --- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 +++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 @@ -893,6 +893,32 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_direct)
@@ -1624,12 +1624,13 @@ index ad10ba11..c7f0647a 100644
      LLINT_RETURN_PROFILED(result);
  }
  
-@@ -962,13 +996,26 @@ static void setupGetByIdPrototypeCache(JSGlobalObject* globalObject, VM& vm, Cod
+@@ -962,13 +996,29 @@ static void setupGetByIdPrototypeCache(JSGlobalObject* globalObject, VM& vm, Cod
      vm.writeBarrier(codeBlock);
  }
  
 +#if ENABLE(C_LOOP) && OS(WASI)
-+// Only op_get_by_id passes |javaScriptGetter|. Every other caller gets the value as before.
++// Only op_get_by_id asks for |javaScriptGetter|. Every other caller compiles the code it had.
++template<bool findJavaScriptGetter = false>
 +static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata, JSFunction** javaScriptGetter = nullptr)
 +#else
  static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata)
@@ -1642,22 +1643,24 @@ index ad10ba11..c7f0647a 100644
 +#if ENABLE(C_LOOP) && OS(WASI)
 +    // A getter left for the caller is an accessor slot: the caching below stores values only,
 +    // so it records neither the getter nor its result.
-+    JSValue result = javaScriptGetter
-+        ? getOrFindJavaScriptGetter<true>(globalObject, baseValue, ident, slot, *javaScriptGetter)
-+        : baseValue.get<true>(globalObject, ident, slot);
++    JSValue result;
++    if constexpr (findJavaScriptGetter)
++        result = getOrFindJavaScriptGetter<true>(globalObject, baseValue, ident, slot, *javaScriptGetter);
++    else
++        result = baseValue.get<true>(globalObject, ident, slot);
 +#else
      JSValue result = baseValue.get<true>(globalObject, ident, slot);
 +#endif
      RETURN_IF_EXCEPTION(throwScope, { });
  
      if (Options::useLLIntICs()
-@@ -1036,7 +1083,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id)
+@@ -1036,7 +1086,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id)
      const Identifier& ident = codeBlock->identifier(bytecode.m_property);
      JSValue baseValue = getOperand(callFrame, bytecode.m_base);
  
 +#if ENABLE(C_LOOP) && OS(WASI)
 +    JSFunction* getter = nullptr;
-+    JSValue result = performLLIntGetByID(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata, &getter);
++    JSValue result = performLLIntGetByID<true>(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata, &getter);
 +    LLINT_CHECK_EXCEPTION();
 +    if (getter)
 +        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, baseValue));
@@ -1667,7 +1670,7 @@ index ad10ba11..c7f0647a 100644
      LLINT_RETURN_PROFILED(result);
  }
  
-@@ -2261,6 +2316,65 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
+@@ -2261,6 +2319,65 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
      LLINT_CALL_RETURN(globalObject, callerSP, codePtr.taggedPtr(), JSEntryPtrTag);
  }
  
