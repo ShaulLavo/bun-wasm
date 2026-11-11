@@ -40,7 +40,7 @@ export function installIphoneObserver(endpoint: string, nonce: string): void {
   void poll();
 }
 
-export function presentIphonePreview(url: string | null): void {
+export async function presentIphonePreview(url: string | null): Promise<void> {
   document.getElementById("__goalsIphonePreview")?.remove();
   if (!url) return;
   const frame = document.createElement("iframe");
@@ -48,8 +48,10 @@ export function presentIphonePreview(url: string | null): void {
   frame.title = "Goals framework preview";
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:white";
   frame.src = url;
-  frame.addEventListener("load", () => frame.focus(), { once: true });
-  document.body.appendChild(frame);
+  await new Promise<void>(resolve => {
+    frame.addEventListener("load", () => { frame.focus(); resolve(); }, { once: true });
+    document.body.appendChild(frame);
+  });
 }
 
 type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };
@@ -58,7 +60,6 @@ export function armIphoneClick(button: string, clicked: string): IphoneClickArm 
   const before = document.querySelector(clicked)?.textContent?.trim() ?? "";
   if (!target || target.disabled) return { ready: false, before };
   if (!/\b0\b/.test(before)) throw new Error(`iPhone counter must start at zero, received ${before}`);
-  if (!document.hasFocus()) return { ready: false, before };
   target.scrollIntoView({ block: "center" });
   const box = target.getBoundingClientRect();
   if (document.visibilityState !== "visible" || document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== target) throw new Error("iPhone counter is not visibly hittable");

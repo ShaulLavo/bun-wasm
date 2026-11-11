@@ -35,19 +35,25 @@ async function pendingLoadFocus(engine: BrowserType): Promise<void> {
     close.push(() => browser.close());
     bus.configure("host", owner.url.href);
     const page = await browser.newPage();
+    await page.addInitScript(() => { Document.prototype.hasFocus = () => false; });
     await page.goto(owner.url.href);
     await page.waitForFunction(() => document.title.startsWith("Goals "));
     await page.locator("#editor").focus();
     const transport = await createIphoneTransport({ control: control.url.origin + bus.path, agent: "/unused/agent-device", deviceUDID: "focus-test", timeoutMs: 1000 });
-    await transport.openPreview(owner.url.origin + "/preview");
+    let presented = false;
+    const opening = transport.openPreview(owner.url.origin + "/preview").then(() => { presented = true; });
+    close.push(() => opening.catch(() => {}));
     await requested.promise;
     const arm = `(${armIphoneClick.toString()})("button", "button")`;
-    expect(await transport.evaluate(arm)).toMatchObject({ ready: false, before: "Count 0" });
-    expect(await transport.evaluate("typeof globalThis.__goalsIphoneClick")).toBe("undefined");
+    expect(presented).toBe(false);
+    expect(await page.frameLocator("iframe").locator("button").isEnabled()).toBe(true);
+    expect(await page.frameLocator("iframe").locator("button").evaluate(() => typeof Reflect.get(globalThis, "__goalsIphoneClick"))).toBe("undefined");
     expect(await page.evaluate(() => document.activeElement?.id)).toBe("editor");
     release.resolve();
+    await opening;
     await page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: 1000 });
     expect(await transport.evaluate(arm)).toMatchObject({ ready: true, before: "Count 0" });
+    expect(await transport.evaluate("document.hasFocus()")).toBe(false);
     await transport.closePreview();
   } finally {
     release.resolve();
