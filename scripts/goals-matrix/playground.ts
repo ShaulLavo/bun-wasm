@@ -1,7 +1,9 @@
 import type { Transport } from "./transport";
 import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import type { Framework } from "./catalog";
+import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 interface Playground {
+  profile: PlaygroundProfile;
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
   previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
@@ -20,17 +22,18 @@ export async function until<T>(operation: () => Promise<T>, accept: (value: T) =
     await Bun.sleep(Math.min(100, end - Date.now()));
   }
 }
-function readyState(): { ready: boolean; status: string; engine: string | null; agent: string; observedEngine: string | null } {
+function readyState(): { ready: boolean; status: string; engine: string | null; agent: string; observedEngine: string | null; profile: PlaygroundProfile | null } {
   const control = document.querySelector("#engine");
   const observedEngine = control && "value" in control && typeof control.value === "string" ? control.value : null;
-  return { observedEngine, ready: typeof playground !== "undefined", status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
+  return { observedEngine, ready: typeof playground !== "undefined", profile: typeof playground === "undefined" ? null : playground.profile, status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
 }
-export async function ready(transport: Transport, engine: string, timeoutMs: number): Promise<unknown> {
+export async function ready(transport: Transport, engine: string, timeoutMs: number, profile: PlaygroundProfile = "split"): Promise<unknown> {
   if (!isEngine(engine)) throw new Error(`Engine is not registered: ${engine}`);
   const state = await until(() => transport.evaluate<ReturnType<typeof readyState>>(expression(readyState, undefined)), value => value.ready || /failed|missing/i.test(value.status), timeoutMs);
   const label = ENGINES[engine].name;
   if (!state.status.includes(label)) throw new Error(`Wrong running engine status: ${state.status}`);
   if (!state.ready || !/ready/.test(state.status) || state.engine !== engine || state.observedEngine !== engine) throw new Error(`Playground not ready for ${engine}: ${JSON.stringify(state)}`);
+  if (state.profile !== profile) throw new Error(`Wrong running program profile: expected ${profile}, observed ${state.profile}`);
   return state;
 }
 function transcript(): Promise<string> {
