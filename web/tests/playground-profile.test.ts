@@ -1,10 +1,12 @@
 import { expect, spyOn, test } from "bun:test";
-import { createRuntime, type GuestLauncher } from "waffle";
+import type { GuestLauncher } from "waffle";
 import { prepareProgram } from "../../src/assets";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 import { Playground } from "../src/playground/playground";
 import { registerPlaygroundBun, type PlaygroundProfile } from "../src/playground/program-profile";
+
+const { createRuntime }: typeof import("waffle") = await import(Bun.resolveSync("waffle", process.cwd()));
 
 const empty = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 // The same relocatable-core control used by bun-launcher.test.ts.
