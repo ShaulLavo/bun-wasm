@@ -15,7 +15,7 @@ env:
   BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -23,6 +23,9 @@ jobs:
     name: Code quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
       jsc: ${{ steps.changes.outputs.jsc }}
@@ -48,12 +51,25 @@ jobs:
           EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/ci-refs.ts >> "$GITHUB_OUTPUT"
+      - name: Resolve cumulative main coverage v1
+        id: main-coverage
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: bun scripts/ci-main-coverage.ts "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Select native checks from the complete change list
         id: changes
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
-        run: bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+          MAIN_SELECTION: ${{ steps.main-coverage.outputs.selection }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            test -n "$MAIN_SELECTION"
+            printf '%s\n' "$MAIN_SELECTION" >> "$GITHUB_OUTPUT"
+          else
+            bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+          fi
       - name: Feature PRs preserve current package and workspace versions
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
         env:
@@ -330,6 +346,7 @@ jobs:
           ls -l "$bundle" "$transfer"
           echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
         with:
           path: ${{ runner.temp }}/jsc-prebuild.tar
           if-no-files-found: error
@@ -591,6 +608,7 @@ jobs:
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
@@ -744,6 +762,7 @@ jobs:
       - name: Preserve TLS link failure diagnostics
         if: ${{ failure() && steps.tls-artifact.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: tls-link-failure-${{ github.run_attempt }}
           path: |
@@ -781,6 +800,7 @@ jobs:
           export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
           bun scripts/ci-native-handoff.ts pack "$RUNNER_TEMP/native-quality-artifact"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: native-quality-${{ steps.native-artifact.outputs.producer-attempt }}
           path: ${{ runner.temp }}/native-quality-artifact/
@@ -1013,6 +1033,7 @@ jobs:
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
@@ -1078,6 +1099,7 @@ jobs:
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
           path: ${{ runner.temp }}/native-quality-artifact
@@ -1167,6 +1189,8 @@ jobs:
         run: |
           bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash scripts/with-build-cache.sh bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
+        env:
+          JOBS: "2"
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
@@ -1183,6 +1207,7 @@ jobs:
           cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           git rev-parse HEAD > "$RUNNER_TEMP/native-profile-launcher/source.txt"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         if: needs.quality.outputs.shared-native == 'true'
         with:
           name: native-profile-launcher
@@ -1210,6 +1235,7 @@ jobs:
           git rev-parse HEAD HEAD^{tree} > dist/source-cache-browser/source.txt
           sha256sum dist/source-cache-browser/bun-browser.wasm >> dist/source-cache-browser/source.txt
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: source-cache-browser-guest
           path: dist/source-cache-browser/
@@ -1235,6 +1261,7 @@ jobs:
         if: needs.quality.outputs.jsc == 'true'
         run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         if: always() && needs.quality.outputs.jsc == 'true'
         with:
           name: jsc-embedding-receipts
@@ -1296,6 +1323,7 @@ jobs:
       - name: Build the browser-guest site once
         run: bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: browser-guest-site
           path: ${{ runner.temp }}/browser-guest-site
@@ -1308,6 +1336,7 @@ jobs:
           source env.sh
           bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         if: always()
         with:
           name: web-guest-fixture-receipts
@@ -1514,6 +1543,7 @@ jobs:
           tar --posix -C "$bundle" -cf "$RUNNER_TEMP/shared-prebuild.tar" "${members[@]}" manifest
           echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
         with:
           path: ${{ runner.temp }}/shared-prebuild.tar
           if-no-files-found: error
@@ -1548,6 +1578,7 @@ jobs:
         run: |
           test "$PROFILE_LAUNCHER_RESULT" = success
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         if: needs.quality.outputs.shared-native == 'true'
         with:
           name: native-profile-launcher
@@ -1686,6 +1717,7 @@ jobs:
       - name: Configure private shared JSC build path
         run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: shared-prebuild.tar
           path: ${{ runner.temp }}/shared-prebuild-transfer
@@ -1778,6 +1810,7 @@ jobs:
       - name: Retain the matched shared QuickJS program for qualification
         if: ${{ always() && steps.shared-quickjs-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: shared-quickjs-program
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program/
@@ -1822,6 +1855,7 @@ jobs:
       - name: Retain the matched shared JSC program for qualification
         if: ${{ always() && steps.shared-jsc-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: shared-jsc-program
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program-jsc/
@@ -1911,6 +1945,7 @@ jobs:
       - name: Retain the matched shared SpiderMonkey program for qualification
         if: ${{ always() && steps.shared-spidermonkey-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: shared-spidermonkey-program
           path: |
@@ -2005,6 +2040,7 @@ jobs:
       - name: Retain first C1 WebKit admission failure
         if: failure()
         uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: c1-webkit-failures-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/c1-webkit-failures
@@ -2041,6 +2077,7 @@ jobs:
       - name: Build each process fixture once for all browsers
         run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: process-bundles
           path: ${{ runner.temp }}/process-bundles
@@ -2073,6 +2110,7 @@ jobs:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         with:
           name: process-bundles
           path: ${{ runner.temp }}/process-bundles
@@ -2101,6 +2139,7 @@ jobs:
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
 
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         if: needs.rust.result == 'success'
         with:
           name: source-cache-browser-guest
@@ -2126,6 +2165,7 @@ jobs:
       # job built once from its receipt-verified guest. Each check verifies the site's closed
       # inventory, guest and receipt against this checkout before and after the browser runs.
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         if: needs.rust.result == 'success' && matrix.browser != 'firefox'
         with:
           name: browser-guest-site
