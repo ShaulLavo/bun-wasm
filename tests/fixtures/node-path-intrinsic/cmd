@@ -1,0 +1,2 @@
+-e
+String.prototype.isWellFormed = () => { throw new Error("untrusted intrinsic"); }; const p = require("node:path"); const a = require("node:assert/strict"); a.equal(p.normalize("/a/../\ufeff😀\0"), "/\ufeff😀\0"); a.equal(p.basename("/\ud800"), "\ud800"); a.deepEqual(p.win32.parse("C:\\😀.txt"), { root: "C:\\", dir: "C:\\", base: "😀.txt", ext: ".txt", name: "😀" }); console.log("path intrinsic captured before eval");
