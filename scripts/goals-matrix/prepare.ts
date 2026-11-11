@@ -1,24 +1,44 @@
 import { cp, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { pinnedBashWeb } from "../bash-web-guests";
-import { preflight, withStagedAssets } from "./preparation";
+import { pinnedBashWeb, verifiedGuests } from "../bash-web-guests";
+import { preflight, preparationOptions, withStagedAssets } from "./preparation";
+import { engineFiles } from "./engines";
 import { engines } from "./catalog";
-const delivery = resolve(process.argv[2] ?? "");
-if (!process.argv[2]) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery");
+const { delivery, spidermonkey, shell } = preparationOptions(process.argv.slice(2));
 const manifest: unknown = JSON.parse(await readFile(resolve(delivery, "../delivery-manifest.json"), "utf8"));
+const spiderMonkeySource: unknown = spidermonkey ? JSON.parse(await readFile(spidermonkey.source, "utf8")) : undefined;
 if (!manifest || typeof manifest !== "object" || !("guestSource" in manifest) || !manifest.guestSource || typeof manifest.guestSource !== "object" || !("head" in manifest.guestSource) || typeof manifest.guestSource.head !== "string" || !/^[a-f0-9]{40}$/.test(manifest.guestSource.head)) throw new Error("Delivery manifest has no exact guest source commit");
-const sourcePackage = Bun.spawn(["git", "show", `${manifest.guestSource.head}:web/package.json`], { stdout: "pipe", stderr: "inherit" });
-const original: unknown = JSON.parse(await new Response(sourcePackage.stdout).text());
-if (await sourcePackage.exited !== 0 || !original || typeof original !== "object" || !("dependencies" in original) || !original.dependencies || typeof original.dependencies !== "object" || !("bash-web" in original.dependencies) || !String(original.dependencies["bash-web"]).endsWith("#" + pinnedBashWeb(resolve("web")))) throw new Error("Delivery shell pin differs from current playground; build matching shell guests instead");
+const shellGuests = shell ? verifiedGuests(shell, pinnedBashWeb(resolve("web"))) : undefined;
+if (shell && !shellGuests) throw new Error(`No receipt-backed shell guests in ${shell}`);
+if (!shell) {
+  const sourcePackage = Bun.spawn(["git", "show", `${manifest.guestSource.head}:web/package.json`], { stdout: "pipe", stderr: "inherit" });
+  const original: unknown = JSON.parse(await new Response(sourcePackage.stdout).text());
+  if (await sourcePackage.exited !== 0 || !original || typeof original !== "object" || !("dependencies" in original) || !original.dependencies || typeof original.dependencies !== "object" || !("bash-web" in original.dependencies) || !String(original.dependencies["bash-web"]).endsWith("#" + pinnedBashWeb(resolve("web")))) throw new Error("Delivery shell pin differs from current playground; select matching shell guests with --shell");
+}
+const spiderMonkeyFiles: { file: string; bytes: number; sha256: string }[] = [];
 await withStagedAssets(join(delivery, "web"), async assets => {
+  if (spidermonkey) {
+    for (const file of engineFiles("spidermonkey")) {
+      const data = await Bun.file(join(assets, file)).bytes();
+      spiderMonkeyFiles.push({ file, bytes: data.length, sha256: new Bun.CryptoHasher("sha256").update(data).digest("hex") });
+    }
+  }
   const build = Bun.spawn(["bun", "web/build.ts"], { stdout: "inherit", stderr: "inherit", env: { ...process.env,
+    BASH_WEB_GUESTS_DIR: shell ?? process.env.BASH_WEB_GUESTS_DIR,
+    BASH_WEB_GUESTS: shell ? "required" : process.env.BASH_WEB_GUESTS,
     BUN_WASM: join(assets, "bun.wasm"), JSC_WASM: join(assets, "bun-jsc.wasm"), BUN_BROWSER_WASM: join(assets, "bun-browser.wasm"), BUN_TOOLS_WASM: join(assets, "bun-tools.wasm"),
     SPIDERMONKEY_WASM: await Bun.file(join(assets, "bun-spidermonkey.wasm")).exists() ? join(assets, "bun-spidermonkey.wasm") : undefined,
   } });
   if (await build.exited !== 0) throw new Error("Playground build failed");
-});
+}, { spidermonkey: spidermonkey?.directory });
 await cp(join(delivery, "web/programs"), resolve("web/dist/programs"), { recursive: true });
+for (const guest of shellGuests ?? []) await cp(guest.path, resolve("web/dist/programs", guest.program));
 await preflight(resolve("web/dist"), engines);
+await writeFile(resolve("web/dist/goals-asset-sources.json"), JSON.stringify({
+  delivery: { directory: delivery, manifest },
+  spidermonkey: spidermonkey ? { ...spidermonkey, origin: spiderMonkeySource, files: spiderMonkeyFiles } : undefined,
+  shell: shell ? { directory: shell, receipt: JSON.parse(await readFile(join(shell, "bash-web-guests.json"), "utf8")) } : undefined,
+}));
 
 const source = Bun.spawn(["git", "rev-parse", "HEAD"], { stdout: "pipe" });
 const commit = (await new Response(source.stdout).text()).trim();

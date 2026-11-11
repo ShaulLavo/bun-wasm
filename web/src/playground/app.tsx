@@ -3,12 +3,21 @@ import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
 import { projectTemplates } from "./project-templates";
+import { engineUnavailable, type Engine } from "../engine-loader";
+import { requireProfileEngine, type PlaygroundProfile } from "./program-profile";
 
 type Props = { playground: Playground };
 
-const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"]] as const;
+const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"], ["spidermonkey", "SpiderMonkey (experimental)"]] as const;
 const RUN_TITLE = "Save and run (Ctrl/Cmd-Enter)";
 const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open the latest saved workspace", shell: RUN_TITLE };
+
+function engineOption(engine: Engine, label: string, profile: PlaygroundProfile) {
+  try { requireProfileEngine(engine, profile); }
+  catch (error) { return { label: `${label} (unsupported profile)`, unavailable: String(error) }; }
+  const unavailable = engineUnavailable(engine);
+  return { label: unavailable ? "SpiderMonkey (not in this build)" : label, unavailable };
+}
 
 export function App(handle: Handle<Props>) {
   const { playground } = handle.props;
@@ -44,8 +53,12 @@ function Header(handle: Handle<Props>) {
           disabled={playground.locked}
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
-          {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === playground.engine}>{label}</option>)}
-          {playground.engine === "spidermonkey" ? <option value="spidermonkey" selected>SpiderMonkey (experimental)</option> : null}
+          {ENGINE_OPTIONS.map(([value, label]) => {
+            const option = engineOption(value, label, playground.profile);
+            return <option value={value} selected={value === playground.engine}
+              disabled={option.unavailable !== null} title={option.unavailable ?? undefined}
+            >{option.label}</option>;
+          })}
         </select>
         <RunButton playground={playground} />
       </header>

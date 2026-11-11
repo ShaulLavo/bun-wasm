@@ -98,7 +98,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       const remaining = () => { const left = deadline - Date.now(); if (left <= 0) throw new Error("iPhone click deadline expired"); return left; };
       const trace = new IphoneClickTrace(config.saveNative, timeoutMs, lifetime.signal);
       try {
-        const before = object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`, remaining()));
+        const before = await until(async () => object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`, remaining())), value => value.ready === true, remaining());
         if (typeof before.label !== "string" || typeof before.before !== "string") throw new Error("Missing native click target");
         const expected = before.before.replace(/\b0\b/, "1");
         trace.armed(before, expected);

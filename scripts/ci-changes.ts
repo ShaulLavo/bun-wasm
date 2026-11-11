@@ -4,6 +4,7 @@ import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-ch
 
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
+  "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
@@ -23,6 +24,7 @@ const nativeFiles = new Set([
   "web/src/native-direct-stream.ts",
 ]);
 const sharedSysrootFiles = new Set([
+  "scripts/ci-main-coverage.ts", "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
   ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
   "scripts/build-shared-wasi-libc.sh", "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts",
   "scripts/shared-sysroot-native.ts", "tests/fixtures/shared-sysroot/member.c", "patches/wasi-libc/group-grow.patch",
@@ -36,7 +38,10 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
-  "scripts/src/group-errno-wraps.sh",
+  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
+  "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+  "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
   "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
@@ -58,8 +63,8 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/"];
-export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
+export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
   return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
@@ -73,6 +78,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
   "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
@@ -100,7 +106,7 @@ const webGuestDirectories = [
 ];
 const webGuestFiles = new Set([
   "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
-  "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
+  "scripts/build-bun-tools.sh", "scripts/optimize-tools.ts", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
@@ -142,33 +148,52 @@ export function changedPaths(base: string, head: string, pullRequest: boolean): 
   if (!/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) throw new Error("Expected full base and head commit IDs");
   if (/^0+$/.test(base)) return ["Cargo.toml"];
   const range = pullRequest ? `${base}...${head}` : `${base}..${head}`;
-  return execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", range], { encoding: "utf8" }).split("\0").filter(Boolean);
+  return execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", range], { encoding: "utf8", timeout: 5_000 }).split("\0").filter(Boolean);
 }
 
 function manifestInputs(ref: string): string | undefined {
-  const result = spawnSync("git", ["show", `${ref}:package.json`], { encoding: "utf8" });
+  const result = spawnSync("git", ["show", `${ref}:package.json`], { encoding: "utf8", timeout: 5_000 });
   if (result.status !== 0) return undefined;
   const manifest: unknown = JSON.parse(result.stdout);
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Invalid root package manifest");
   return JSON.stringify(Object.entries(manifest).filter(([key]) => key !== "version"));
 }
 
-function nativeChanges(paths: readonly string[], base: string, head: string, ancestor: string): string[] {
-  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref));
+function nativeChanges(paths: readonly string[], base: string, head: string, checkInputs: readonly string[]): string[] {
   if (!paths.includes("package.json")) return paths.filter(path => needsRust([path], checkInputs));
   const before = manifestInputs(base);
   const after = manifestInputs(head);
   return paths.filter(path => needsRust([path], checkInputs) && (path !== "package.json" || before === undefined || after === undefined || before !== after));
 }
 
+export interface CheckSelection {
+  rust: boolean;
+  jsc: boolean;
+  shared: boolean;
+  shared_native: boolean;
+}
+
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[]): CheckSelection {
+  return { rust: native.length > 0, jsc: needsJsc(paths), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
+}
+
+export function selectChanges(base: string, head: string, pullRequest = false, inputsAt = nativeCheckInputsAt): CheckSelection {
+  const paths = changedPaths(base, head, pullRequest);
+  const ancestor = pullRequest && !/^0+$/.test(base)
+    ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8", timeout: 5_000 }).trim() : base;
+  const refs = Array.from(new Set([base, head, ancestor]));
+  const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
+  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const profileInputs = refs.flatMap(ref => inputsAt(ref, "shared-group"));
+  return classifyChanges(paths, native, profileInputs);
+}
+
+export function selectionOutput(selection: CheckSelection): string {
+  return Object.entries(selection).map(([key, value]) => `${key}=${value}`).join("\n");
+}
+
 if (import.meta.main) {
   const [base, head] = process.argv.slice(2);
   if (!base || !head) throw new Error("Usage: ci-changes.ts <base-sha> <head-sha>");
-  const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
-  const ancestor = process.env.GITHUB_EVENT_NAME === "pull_request" && !/^0+$/.test(base)
-    ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
-  const native = nativeChanges(paths, base, head, ancestor);
-  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  const profileInputs = Array.from(new Set([base, head, ancestor])).flatMap(ref => nativeCheckInputsAt(ref, "shared-group"));
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nshared_native=${needsSharedNative(native, profileInputs)}`);
+  console.log(selectionOutput(selectChanges(base, head, process.env.GITHUB_EVENT_NAME === "pull_request")));
 }

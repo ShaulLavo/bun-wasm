@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
 import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { overflowBudget } from "../web/src/shared-objects/lane-overflow";
 
 const worker = String.raw`
 const { parentPort, receiveMessageOnPort } = require("node:worker_threads");
@@ -67,19 +68,19 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
   try {
     const browser = await task.launch(name === "chromium" ? chromium : webkit);
     const context = await browser.newContext();
-    if (inlineOnly) await context.addInitScript(() => {
+    if (inlineOnly) await context.addInitScript(maximum => {
       const Native = SharedArrayBuffer;
       globalThis.SharedArrayBuffer = new Proxy(Native, { construct(target, args, constructor) {
-        if (args[0] === 0 && args[1]?.maxByteLength === 67108864) throw new RangeError("Private overflow allocation unavailable");
+        if (args[0] === 0 && args[1]?.maxByteLength === maximum) throw new RangeError("Private overflow allocation unavailable");
         return Reflect.construct(target, args, constructor);
       } });
-    });
+    }, overflowBudget);
     const page = await context.newPage(), url = await task.serve();
     await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
     assert.match(await ready(page), /ready/);
-    const capable = await page.evaluate(() => {
-      try { return new SharedArrayBuffer(0, { maxByteLength: 67108864 }).growable === true; } catch { return false; }
-    });
+    const capable = await page.evaluate(maximum => {
+      try { return new SharedArrayBuffer(0, { maxByteLength: maximum }).growable === true; } catch { return false; }
+    }, overflowBudget);
     if (inlineOnly) assert.equal(capable, false);
     await writeFile(page, "/home/user/overflow-worker.cjs", worker);
     await writeFile(page, "/home/user/overflow-main.cjs", main);

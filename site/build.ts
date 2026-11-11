@@ -3,7 +3,7 @@
 // work unchanged in either place.
 import { appendFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { verifySiteGuests } from "../scripts/site-guest-preflight";
+import { resolveSiteSpiderMonkey, verifySiteGuests } from "../scripts/site-guest-preflight";
 
 const root = resolve(import.meta.dir, "..");
 const out = join(import.meta.dir, "dist");
@@ -19,7 +19,9 @@ async function build(app: string): Promise<void> {
   await run(app, ["bun", "run", "build"]);
 }
 
-await verifySiteGuests(root);
+const spiderMonkey = resolveSiteSpiderMonkey(root);
+await verifySiteGuests(root, process.env, spiderMonkey);
+if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 
 // The deployed site always ships bash-web's shell and env guests, built at the apps' pin.
 const guests = Bun.spawn(["bash", "scripts/build-bash-web-shell.sh"], { cwd: root, stdout: "inherit", stderr: "inherit" });
