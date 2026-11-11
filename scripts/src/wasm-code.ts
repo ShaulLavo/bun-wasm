@@ -28,6 +28,8 @@ export interface Instruction {
   readonly extended: number;
   /** A local, global, function or label index, or a signed i32 constant. */
   readonly operand: number;
+  /** Every label a `br_table` can branch to, its default included. Empty for other instructions. */
+  readonly targets: readonly number[];
 }
 
 const valueBytes = new Map([[0x7f, 4], [0x7e, 8], [0x7d, 4], [0x7c, 8], [0x7b, 16], [0x70, 4], [0x6f, 4]]);
@@ -233,14 +235,17 @@ const indexOperand = new Set([0x0c, 0x0d, 0x10, 0x12, 0x20, 0x21, 0x22, 0x23, 0x
 const noOperand = (opcode: number) => opcode <= 0x01 || opcode === 0x05 || opcode === 0x0b || opcode === 0x0f || opcode === 0x1a
   || opcode === 0x1b || (opcode >= 0x45 && opcode <= 0xc4) || opcode === 0xd1;
 
-function readOperand(cursor: Cursor, opcode: number): { extended: number; operand: number } {
+const noTargets: readonly number[] = [];
+
+function readOperand(cursor: Cursor, opcode: number): Omit<Instruction, "at" | "opcode"> {
   let extended = 0;
   let operand = 0;
-  if (noOperand(opcode)) return { extended, operand };
+  let targets = noTargets;
+  if (noOperand(opcode)) return { extended, operand, targets };
   if (indexOperand.has(opcode)) operand = cursor.unsigned();
   else if (opcode === 0x41) operand = cursor.signed32();
   else if (opcode >= 0x02 && opcode <= 0x04) skipBlockType(cursor);
-  else if (opcode === 0x0e) { for (let count = cursor.unsigned(); count >= 0; count--) cursor.unsigned(); }
+  else if (opcode === 0x0e) targets = Array.from({ length: cursor.unsigned() + 1 }, () => cursor.unsigned());
   else if (opcode === 0x11 || opcode === 0x13) { cursor.unsigned(); cursor.unsigned(); }
   else if (opcode === 0x1c) cursor.skip(cursor.unsigned());
   else if (opcode >= 0x28 && opcode <= 0x3e) skipMemoryArgument(cursor);
@@ -252,7 +257,7 @@ function readOperand(cursor: Cursor, opcode: number): { extended: number; operan
   else if (opcode === 0xfd) skipVector(cursor, extended = cursor.unsigned());
   else if (opcode === 0xfe) skipAtomic(cursor, extended = cursor.unsigned());
   else throw new WasmShapeError(`unknown opcode 0x${opcode.toString(16)}`);
-  return { extended, operand };
+  return { extended, operand, targets };
 }
 
 /** Every instruction of the function, in order, including its final `end`. */

@@ -4,19 +4,21 @@
 //   bun scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>...
 //
 // JSC's native recursion guard counts shadow-stack bytes. Every reentry path (Proxy traps,
-// `toString`, computed getters) starts a new `CLoop::execute`, and the bytes that function keeps
-// are what stops those paths before a small host stack runs out. A build that keeps fewer bytes
+// `toString`, computed getters) starts a new `CLoop::execute`, and the bytes that function holds
+// are what stops those paths before a small host stack runs out. A build that holds fewer bytes
 // would admit more levels than the host has room for, with no source change of ours.
 //
-// The check reads the function from the final module and accepts one shape only:
-//   - it opens with allocations `sp = sp - N`, each kept in a local that is never written again;
-//   - it ends with the matching releases, immediately before the function's final `end`;
-//   - nothing else in the function writes or reads the stack pointer.
-// So the whole frame is held from the first instruction to the last, across every opcode and
-// every call out of the loop. Any other shape is an error, not a smaller measurement.
+// The check follows every path through the function and tracks how far the stack pointer is
+// below its value at entry. It knows two ways to write the stack pointer:
+//   allocate:  sp = sp - N, with the new value kept in a local
+//   release:   sp = L + N, where L is a local that still holds an allocation's value
+// At every call out of the function the pointer must be at least the floor below entry, on
+// every path that reaches the call. Any other write to the stack pointer, a release through a
+// local with no known value, a tail call or an instruction the reader does not know is an
+// error, not a smaller measurement.
 import { readInstructions, readWasmModule, WasmShapeError, type Instruction, type WasmFunction } from "./src/wasm-code.ts";
 
-/** Bytes `CLoop::execute` kept when every reentry path's depth was measured (November 11, 2026). */
+/** Bytes `CLoop::execute` held when every reentry path's depth was measured (November 11, 2026). */
 export const cloopFrameFloor = 4896;
 /**
  * Wasm parameters and locals of `CLoop::execute`. A first-tier wasm interpreter keeps each on
@@ -26,12 +28,20 @@ export const cloopValueSlotCeiling = 328;
 const interpreterName = "JSC::LLInt::CLoop::execute(";
 const stackPointerExport = "__stack_pointer";
 const stackPointerImport = "env.__stack_pointer";
+const loopPassLimit = 16;
 
-const op = { end: 0x0b, localGet: 0x20, localSet: 0x21, localTee: 0x22, globalGet: 0x23, globalSet: 0x24, i32Const: 0x41, i32Add: 0x6a, i32Sub: 0x6b } as const;
+const op = {
+  unreachable: 0x00, block: 0x02, loop: 0x03, if: 0x04, else: 0x05, end: 0x0b, br: 0x0c, brIf: 0x0d, brTable: 0x0e, return: 0x0f,
+  call: 0x10, callIndirect: 0x11, returnCall: 0x12, returnCallIndirect: 0x13,
+  localGet: 0x20, localSet: 0x21, localTee: 0x22, globalGet: 0x23, globalSet: 0x24, i32Const: 0x41, i32Add: 0x6a, i32Sub: 0x6b,
+} as const;
 
 export interface CLoopFrame {
+  /** The fewest guarded bytes held at any call out of the function. */
   readonly retainedBytes: number;
-  readonly allocations: readonly number[];
+  /** The most held at any call, where inlined callees add their own frames. */
+  readonly deepestBytes: number;
+  readonly calls: number;
   readonly parameters: number;
   readonly locals: number;
   readonly valueSlots: number;
@@ -39,7 +49,14 @@ export interface CLoopFrame {
   readonly instructions: number;
 }
 
-interface Allocation { readonly bytes: number; readonly local: number }
+/**
+ * What is known on one path: the stack pointer is at least `depth` bytes below its entry
+ * value, and each listed local is at least that many bytes below it. Never mutated.
+ */
+interface PathState { readonly depth: number; readonly locals: ReadonlyMap<number, number> }
+interface Label { readonly loop: boolean; readonly arrivals: PathState[] }
+interface Structured { readonly at: number; readonly body: Node[]; readonly otherwise: Node[] | null }
+type Node = number | Structured;
 
 function stackPointerGlobal(exported: ReadonlyMap<string, number>, imported: readonly string[]): number {
   const index = exported.get(stackPointerExport);
@@ -55,66 +72,173 @@ function interpreterFunction(functions: readonly WasmFunction[]): WasmFunction {
   return matches[0]!;
 }
 
-function matches(instruction: Instruction | undefined, opcode: number, operand?: number): boolean {
+function is(instruction: Instruction | undefined, opcode: number, operand?: number): boolean {
   return instruction?.opcode === opcode && (operand === undefined || instruction.operand === operand);
 }
 
-/** `global.get sp; i32.const N; i32.sub; local.tee L; global.set sp` at |at|, or null. */
-function allocationAt(code: readonly Instruction[], at: number, stackPointer: number): Allocation | null {
-  const shape = matches(code[at], op.globalGet, stackPointer) && matches(code[at + 1], op.i32Const) && matches(code[at + 2], op.i32Sub)
-    && matches(code[at + 3], op.localTee) && matches(code[at + 4], op.globalSet, stackPointer);
-  if (!shape) return null;
-  const bytes = code[at + 1]!.operand;
-  if (bytes <= 0 || bytes % 16 !== 0) throw new WasmShapeError(`unexpected stack allocation of ${bytes} bytes`);
-  return { bytes, local: code[at + 3]!.operand };
-}
-
-function entryAllocations(code: readonly Instruction[], stackPointer: number): Allocation[] {
-  const allocations: Allocation[] = [];
-  for (let next = allocationAt(code, 0, stackPointer); next; next = allocationAt(code, allocations.length * 5, stackPointer)) allocations.push(next);
-  if (allocations.length === 0) throw new WasmShapeError("the function does not open with a stack allocation");
-  return allocations;
-}
-
-/** The releases, last allocation first, must be the function's final instructions before `end`. */
-function requireExitReleases(code: readonly Instruction[], allocations: readonly Allocation[], stackPointer: number): void {
-  if (!matches(code.at(-1), op.end)) throw new WasmShapeError("the function does not end with `end`");
-  allocations.forEach((allocation, order) => {
-    const at = code.length - 1 - 4 * (order + 1);
-    const released = matches(code[at], op.localGet, allocation.local) && matches(code[at + 1], op.i32Const, allocation.bytes)
-      && matches(code[at + 2], op.i32Add) && matches(code[at + 3], op.globalSet, stackPointer);
-    if (!released) throw new WasmShapeError(`the ${allocation.bytes}-byte allocation is not released at the function's end`);
-  });
-}
-
-function count(code: readonly Instruction[], accept: (instruction: Instruction) => boolean): number {
-  return code.reduce((total, instruction) => total + (accept(instruction) ? 1 : 0), 0);
-}
-
-function requireNoOtherStackPointerUse(code: readonly Instruction[], allocations: readonly Allocation[], stackPointer: number): void {
-  const writes = count(code, instruction => matches(instruction, op.globalSet, stackPointer));
-  const reads = count(code, instruction => matches(instruction, op.globalGet, stackPointer));
-  if (writes !== allocations.length * 2) throw new WasmShapeError(`the stack pointer is written ${writes} times, not once per allocation and release`);
-  if (reads !== allocations.length) throw new WasmShapeError(`the stack pointer is read ${reads} times, not once per allocation`);
-  for (const { local } of allocations) {
-    const assignments = count(code, instruction => matches(instruction, op.localSet, local) || matches(instruction, op.localTee, local));
-    if (assignments !== 1) throw new WasmShapeError(`frame local ${local} is assigned ${assignments} times`);
+/** The function's instructions as nested blocks. A node is an instruction index or a block, loop or if. */
+function structure(code: readonly Instruction[]): Node[] {
+  let at = 0;
+  function sequence(): { nodes: Node[]; closedBy: number } {
+    const nodes: Node[] = [];
+    while (at < code.length) {
+      const index = at++;
+      const opcode = code[index]!.opcode;
+      if (opcode === op.end || opcode === op.else) return { nodes, closedBy: opcode };
+      if (opcode !== op.block && opcode !== op.loop && opcode !== op.if) { nodes.push(index); continue; }
+      const body = sequence();
+      const otherwise = body.closedBy === op.else ? sequence() : null;
+      if (otherwise ? otherwise.closedBy !== op.end || opcode !== op.if : body.closedBy !== op.end) throw new WasmShapeError("unbalanced blocks");
+      nodes.push({ at: index, body: body.nodes, otherwise: otherwise?.nodes ?? null });
+    }
+    throw new WasmShapeError("the function does not end with `end`");
   }
-  if (new Set(allocations.map(allocation => allocation.local)).size !== allocations.length) throw new WasmShapeError("two allocations share a frame local");
+  const outer = sequence();
+  if (outer.closedBy !== op.end || at !== code.length) throw new WasmShapeError("the function does not end with `end`");
+  return outer.nodes;
 }
 
-/** The frame `CLoop::execute` holds for its whole activation. Throws on any unrecognized shape. */
+function join(states: readonly (PathState | null)[]): PathState | null {
+  const reachable = Array.from(new Set(states.filter(state => state !== null)));
+  const first = reachable[0];
+  if (!first || reachable.length === 1) return first ?? null;
+  const locals = new Map<number, number>();
+  for (const [local, depth] of first.locals) {
+    const depths = reachable.map(state => state.locals.get(local));
+    if (depths.every(value => value !== undefined)) locals.set(local, Math.min(depth, ...depths.filter(value => value !== undefined)));
+  }
+  return { depth: Math.min(...reachable.map(state => state.depth)), locals };
+}
+
+function sameState(left: PathState | null, right: PathState | null): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.depth !== right.depth || left.locals.size !== right.locals.size) return false;
+  return Array.from(left.locals).every(([local, depth]) => right.locals.get(local) === depth);
+}
+
+class FrameWalk {
+  /** The lowest depth any pass saw at any call. A loop's later passes only see lower ones. */
+  fewest = Infinity;
+  /** Each call's depth on the last pass that reached it. */
+  readonly depthAtCall = new Map<number, number>();
+  private readonly labels: Label[] = [];
+  constructor(private readonly code: readonly Instruction[], private readonly stackPointer: number) {}
+
+  /** The state after the nodes, or null when no path falls out of them. */
+  run(nodes: readonly Node[], entry: PathState | null): PathState | null {
+    let state = entry;
+    for (const node of nodes) {
+      if (!state) return null;
+      state = typeof node === "number" ? this.step(node, state) : this.enter(node, state);
+    }
+    return state;
+  }
+
+  private enter(node: Structured, state: PathState): PathState | null {
+    const opcode = this.code[node.at]!.opcode;
+    if (opcode === op.loop) return this.loop(node, state);
+    const label: Label = { loop: false, arrivals: [] };
+    this.labels.push(label);
+    const exits = [this.run(node.body, state), opcode === op.if ? this.run(node.otherwise ?? [], state) : null];
+    this.labels.pop();
+    return join(exits.concat(label.arrivals));
+  }
+
+  /** A loop's entry state has to hold for every later pass too, so its body runs until it does. */
+  private loop(node: Structured, entry: PathState): PathState | null {
+    let head: PathState | null = entry;
+    for (let pass = 0; pass < loopPassLimit; pass++) {
+      const label: Label = { loop: true, arrivals: [] };
+      this.labels.push(label);
+      const exit = this.run(node.body, head);
+      this.labels.pop();
+      const next = join([entry as PathState | null].concat(label.arrivals));
+      if (sameState(head, next)) return exit;
+      head = next;
+    }
+    throw new WasmShapeError("a loop's stack state did not settle");
+  }
+
+  private branch(depth: number, state: PathState): void {
+    // A branch past every label leaves the function.
+    this.labels[this.labels.length - 1 - depth]?.arrivals.push(state);
+  }
+
+  private step(index: number, state: PathState): PathState | null {
+    const instruction = this.code[index]!;
+    switch (instruction.opcode) {
+      case op.call:
+      case op.callIndirect:
+        this.fewest = Math.min(this.fewest, state.depth);
+        this.depthAtCall.set(index, state.depth);
+        return state;
+      case op.returnCall:
+      case op.returnCallIndirect:
+        throw new WasmShapeError("the function makes a tail call");
+      case op.br:
+        this.branch(instruction.operand, state);
+        return null;
+      case op.brIf:
+        this.branch(instruction.operand, state);
+        return state;
+      case op.brTable:
+        for (const depth of new Set(instruction.targets)) this.branch(depth, state);
+        return null;
+      case op.return:
+      case op.unreachable:
+        return null;
+      case op.localSet:
+      case op.localTee:
+        return state.locals.has(instruction.operand) ? { depth: state.depth, locals: without(state.locals, instruction.operand) } : state;
+      case op.globalSet:
+        return instruction.operand === this.stackPointer ? this.writeStackPointer(index, state) : state;
+      default:
+        return state;
+    }
+  }
+
+  private writeStackPointer(index: number, state: PathState): PathState {
+    const { code, stackPointer } = this;
+    const [first, second, third, fourth] = [code[index - 4], code[index - 3], code[index - 2], code[index - 1]];
+    if (is(first, op.globalGet, stackPointer) && is(second, op.i32Const) && is(fourth, op.localTee)) {
+      const bytes = -added(second!, third);
+      if (!(bytes > 0) || bytes % 16 !== 0) throw new WasmShapeError(`unexpected stack allocation of ${bytes} bytes`);
+      const depth = state.depth + bytes;
+      return { depth, locals: new Map(state.locals).set(fourth!.operand, depth) };
+    }
+    if (is(second, op.localGet) && is(third, op.i32Const)) {
+      const held = state.locals.get(second!.operand);
+      if (held === undefined) throw new WasmShapeError(`the stack pointer is released through local ${second!.operand}, which holds no known allocation`);
+      return { depth: held - added(third!, fourth), locals: state.locals };
+    }
+    throw new WasmShapeError("the stack pointer is written in an unrecognized way");
+  }
+}
+
+/** What `i32.const C` followed by `i32.add` or `i32.sub` adds. Compilers write `- 64` as `+ -64`. */
+function added(constant: Instruction, operator: Instruction | undefined): number {
+  if (is(operator, op.i32Add)) return constant.operand;
+  if (is(operator, op.i32Sub)) return -constant.operand;
+  throw new WasmShapeError("the stack pointer is written in an unrecognized way");
+}
+
+function without(locals: ReadonlyMap<number, number>, local: number): Map<number, number> {
+  const rest = new Map(locals);
+  rest.delete(local);
+  return rest;
+}
+
+/** The frame `CLoop::execute` holds at its calls. Throws on anything the walk cannot prove. */
 export function cloopFrame(bytes: Uint8Array): CLoopFrame {
   const module = readWasmModule(bytes);
   const stackPointer = stackPointerGlobal(module.exportedGlobals, module.importedGlobals);
   const target = interpreterFunction(module.functions);
   const code = readInstructions(module, target);
-  const allocations = entryAllocations(code, stackPointer);
-  requireExitReleases(code, allocations, stackPointer);
-  requireNoOtherStackPointerUse(code, allocations, stackPointer);
-  const sizes = allocations.map(allocation => allocation.bytes);
+  const walk = new FrameWalk(code, stackPointer);
+  walk.run(structure(code), { depth: 0, locals: new Map() });
+  if (walk.depthAtCall.size === 0) throw new WasmShapeError("the function makes no call");
   return {
-    retainedBytes: sizes.reduce((total, size) => total + size, 0), allocations: sizes,
+    retainedBytes: walk.fewest, deepestBytes: Math.max(...walk.depthAtCall.values()), calls: walk.depthAtCall.size,
     parameters: target.parameters, locals: target.locals, valueSlots: target.parameters + target.locals,
     localBytes: target.localBytes, instructions: code.length,
   };
@@ -125,7 +249,7 @@ export interface CLoopFrameLimits { readonly floor: number; readonly valueSlotCe
 /** Reasons the frame fails the limits; empty when it passes. */
 export function cloopFrameFindings(frame: CLoopFrame, limits: CLoopFrameLimits = { floor: cloopFrameFloor, valueSlotCeiling: cloopValueSlotCeiling }): string[] {
   const findings: string[] = [];
-  if (frame.retainedBytes < limits.floor) findings.push(`CLoop::execute keeps ${frame.retainedBytes} guarded bytes, below the ${limits.floor}-byte floor`);
+  if (frame.retainedBytes < limits.floor) findings.push(`CLoop::execute holds ${frame.retainedBytes} guarded bytes at one of its calls, below the ${limits.floor}-byte floor`);
   if (frame.valueSlots > limits.valueSlotCeiling) findings.push(`CLoop::execute has ${frame.valueSlots} wasm parameters and locals, above the ceiling of ${limits.valueSlotCeiling}`);
   return findings;
 }

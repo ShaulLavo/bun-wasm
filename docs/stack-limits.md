@@ -350,21 +350,32 @@ merged the slots would let every reentry path go several times deeper with no so
 change of ours.
 
 `scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>` reads that function from a linked
-side and fails unless it keeps at least 4,896 bytes for its whole activation. It decodes
-every instruction and accepts one shape: the function opens with constant allocations
-from the exported stack pointer, each kept in a local that is never written again; it
-ends with the matching releases immediately before its final `end`; and nothing else in
-it reads or writes the stack pointer. Any other shape, an unknown instruction, a missing
-stack pointer export or more than one such function is a failure, not a smaller reading.
-The same check bounds the function's wasm parameters and locals at 328 (293 measured,
-plus 12%), because a first-tier wasm interpreter keeps each of them on the host stack.
+side and fails unless it holds at least 4,896 bytes at every call it makes, which is
+where every slow path and every reentry starts. It decodes every instruction and follows
+every path through the function's blocks, loops and branches, tracking how far the
+exported stack pointer is below its value at entry. It knows two writes: an allocation
+of a constant size whose result is kept in a local, and a release through a local that
+still holds an allocation's value. Where paths meet it keeps the smaller depth, and a
+loop's body is walked again until its entry state holds for every pass. Anything else is
+a failure, not a smaller reading: another kind of write to the stack pointer, a release
+through a local that was overwritten on some path, a tail call, an unknown instruction,
+a missing stack pointer export, or more than one such function.
+
+The two builds differ, which is why the check follows paths and does not match a fixed
+prologue. The split side allocates once at entry and releases once at its end: 683 calls,
+all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
+own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
+function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
+each of them on the host stack. The split side has 293 and the bound is that plus 12%.
+The shared-group side has 52.
 
 `scripts/build-engine-jsc.sh` runs the check on every side it produces or reuses, split
 and shared-group, before the side gets its receipt. `scripts/jsc-cloop-frame.test.ts`
-(`checks/quality-jsc-cloop-frame.json`) holds the rejected shapes and a threshold that
-fails. If a pin or toolchain change trips the floor, measure every reentry path again
-before changing the number; an escaping function-scope reservation in `CLoop::execute`
-is the way to restore it.
+(`checks/quality-jsc-cloop-frame.json`) holds the accepted shapes, the paths that reach a
+call with too little held, the rejected writes and a threshold that fails. If a pin or
+toolchain change trips the floor, measure every reentry path again before changing the
+number. An escaping function-scope reservation in `CLoop::execute` is the way to restore
+the bytes.
 
 ## JSC parser reserve
 

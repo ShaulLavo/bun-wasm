@@ -113,9 +113,9 @@ path and their cost. The measured depths of those paths are unchanged.
 slow-path call site, of which one is live at a time. Those dead bytes are what make the guard
 stop native reentry at a depth Safari's host stack can hold. A compiler or flag change that
 merged the slots would let every reentry path go several times deeper with no source change
-here. `scripts/jsc-cloop-frame.ts` now fails the JSC side producer if the function keeps fewer
-than 4,896 bytes for its whole activation, or has more wasm locals than measured plus 12%
-([the interpreter frame floor](../stack-limits.md#the-interpreter-frame-floor)).
+here. `scripts/jsc-cloop-frame.ts` now fails the JSC side producer if the function holds fewer
+than 4,896 bytes at any call it makes, on any path, or has more wasm locals than measured plus
+12% ([the interpreter frame floor](../stack-limits.md#the-interpreter-frame-floor)).
 
 ## Measurements
 
@@ -130,10 +130,13 @@ of `19dba71e`) and the same core with a side built from this change.
 | Proxy `get` trap | 29 | 29 |
 | `toString` reentry | 31 | 31 |
 
-`CLoop::execute` keeps 4,896 guarded bytes and has 293 wasm parameters and locals before and
-after. The static frames of the computed-getter and `toString` cycles are identical. The Proxy
-read cycle lost one function to inlining: 6,560 to 6,512 guarded bytes and 429 to 419 wasm
-locals per level.
+`CLoop::execute` holds 4,896 guarded bytes at each of its 683 calls and has 293 wasm
+parameters and locals, before and after. The static frames of the computed-getter and
+`toString` cycles are identical. The Proxy read cycle lost one function to inlining: 6,560 to
+6,512 guarded bytes and 429 to 419 wasm locals per level, and its depth at 192 KiB is still 29.
+With the host stack cut to 256 and 512 KiB and the guard out of the way, wasmtime ran out
+3 to 15% deeper on the three reentry paths after the change, so no path costs more host stack
+per level there.
 
 ## Tests
 
