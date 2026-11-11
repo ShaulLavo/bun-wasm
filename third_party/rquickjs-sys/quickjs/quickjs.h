@@ -518,13 +518,66 @@ JS_EXTERN void JS_SetGCThreshold(JSRuntime *rt, size_t gc_threshold);
 /* use 0 to disable maximum stack size check */
 JS_EXTERN void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size);
 /* bun-wasm: ordinary bytecode frames live in a runtime-owned frame stack.
-   The limit bounds the bytes that stack costs the allocator, chunk headers,
-   unused tails and the spare chunk included. Zero is a valid limit. Returns
-   -1 and changes nothing for a value above the supported range or below
-   what live frames already hold. */
+   The limit bounds what the segments that stack holds, the idle spare
+   included, are declared to cost the allocator's backing (JSMallocBoundFunc
+   below). Zero is a valid limit. Returns -1 and changes nothing for a value
+   above the supported range, below what live frames already hold, or while
+   the allocator is being asked for a segment. */
 JS_EXTERN int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes);
 JS_EXTERN void JS_GetFrameStackUsage(JSRuntime *rt, size_t *plive,
                                      size_t *pcommitted, size_t *plimit);
+/* bun-wasm: what an allocator declares before a request is made, so the
+   frame stack can refuse a block instead of overshooting its limit.
+   JSMallocFunctions cannot say this: js_malloc_usable_size answers only
+   after the block exists, and only for the block.
+
+   The result bounds what one js_malloc(opaque, size) block can cost the
+   allocator's backing while the block is held, whichever is larger:
+   - what serving the request can make the allocator newly acquire from its
+     own source, whether linear memory, the operating system or a parent
+     allocator: the block with its header and padding, its bookkeeping
+     wherever that is kept, and the whole segment, pool, lease or mapping
+     the allocator may have to take, at the granularity it grows by;
+   - what the block keeps from every other request while it is held, when
+     the allocator serves it from storage it already had: the block, and
+     the rest of any slab, pool or region that only requests of its kind
+     can use.
+   It holds in any state the allocator can be in when the request arrives.
+   Zero says the allocator cannot state such a bound for that request.
+   'opaque' is the one given to JS_NewRuntime2.
+
+   Declaring a bound also promises that once a block is freed, its storage
+   and the bookkeeping that went with it are either returned to that source
+   or part of a heap that any later request through the same callbacks can
+   be served from. The frame stack charges a block its bound from before
+   the request until js_free has returned. What the limit then bounds is
+   the backing that the blocks the frame stack holds can account for. It is
+   not the process's resident size, and not what an allocator keeps in a
+   reusable heap after a block has gone back to it.
+
+   The function must be truthful: nothing here can check it. It must not
+   allocate, call into the engine, or change the runtime's limits or the
+   allocator state the request that follows relies on, and other users of
+   the allocator must not be able to make it wrong between the question and
+   that request.
+
+   JS_NewRuntime declares JS_DefaultMallocBound for the default callbacks.
+   JS_NewRuntime2 declares nothing: every ordinary bytecode call then fails
+   with an InternalError until JS_SetMallocBound declares the bound of the
+   embedder's allocator. JS_SetMallocBound returns 0, or -1 with nothing
+   changed while the frame stack holds any storage, in use or spare, or is
+   asking the allocator for some. JS_SetMaxFrameStackSize(rt, 0) releases an
+   idle spare first. */
+typedef size_t JSMallocBoundFunc(void *opaque, size_t size);
+JS_EXTERN int JS_SetMallocBound(JSRuntime *rt, JSMallocBoundFunc *bound);
+/* The callbacks JS_NewRuntime uses and the bound it declares for them, for
+   callbacks that pass every request, unchanged and one for one, to these.
+   The bound is nonzero for wasi-libc's allocator on wasm32, and on Linux,
+   macOS and FreeBSD for requests the callbacks map on their own, which are
+   those of at least one frame segment. It is zero for every other request
+   and host (docs/bun-patches/quickjs-frame-stack.md). */
+JS_EXTERN const JSMallocFunctions *JS_GetDefaultMallocFunctions(void);
+JS_EXTERN size_t JS_DefaultMallocBound(void *opaque, size_t size);
 /* should be called when changing thread to update the stack top value
    used to check stack overflow. */
 JS_EXTERN void JS_UpdateStackTop(JSRuntime *rt);

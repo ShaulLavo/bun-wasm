@@ -41,18 +41,29 @@ the C call would have returned.
 | `JS_CallInternal` at `OP_call0` to `OP_call3`, `OP_call`, `OP_tail_call`, `OP_call_method`, `OP_tail_call_method` | `inline_call` when the caller owns a record and `js_frame_inline_callee` accepts the callee. Otherwise the upstream call. |
 | The entry stack check with `alloca_size` | `js_check_stack_overflow(rt, 0)` once per C activation, after a fixed 48-byte reservation. |
 | No counterpart | `JS_SetMaxFrameStackSize`, `JS_GetFrameStackUsage` |
+| `JSMallocFunctions`, which reports a block's size only after it exists | `JSMallocBoundFunc`, `JS_SetMallocBound`: the allocator states before a request what it can cost. `JS_DefaultMallocBound` and `JS_GetDefaultMallocFunctions` for the default callbacks. |
+| `js_def_malloc`, `js_def_calloc`, `js_def_realloc`, `js_def_free` calling libc directly | On Linux, macOS and FreeBSD hosts, a request of at least one frame segment is served from a private mapping of its own. wasm32 keeps libc throughout. |
 
 The emitted bytecode, error messages, error realms, stack traces and interrupt
 polling do not change.
 
 ## Records and ownership
 
-Records live in chunks that never move, because `arguments` objects, closure
-variables and a callee's argument vector point into them. A chunk holds
-16 KiB of records; a record larger than that gets a chunk of its own size.
-Chunks form a stack: a record is popped only when it is the newest, and a chunk
-is released when its last record leaves. One emptied default-size chunk is kept
-as a spare so a call at a chunk boundary does not allocate each time.
+Records live in segments that never move, because `arguments` objects, closure
+variables and a callee's argument vector point into them. A segment is one
+block from the runtime's allocator: a request of 65,280 bytes (64 KiB less
+256), or the next multiple of 64 KiB less 256 for a record that needs more.
+Segments form a stack: a record is popped only when it is the newest, and a
+segment goes back to the allocator when its last record leaves. One emptied
+default-size segment is kept as a spare so a call at a segment boundary does
+not allocate each time. (The code calls a segment a chunk.)
+
+The size follows from how memory is acquired. wasm32 linear memory grows in
+64 KiB pages, so any request can cost a page. A 16 KiB chunk charged a page
+would fit 64 times in 4 MiB, about 8,600 plain frames, under the 20,685 the
+limit has to hold. A request of 64 KiB less 256 leaves the allocator room for
+its own header inside one page, so a segment is charged a page and uses nearly
+all of it. The 256 is a sizing choice; the charge never depends on it.
 
 Only `js_frame_push` creates a `JSExecFrame`. The native and coroutine
 `JSStackFrame` values elsewhere in the engine are never cast to one. A record
@@ -91,30 +102,175 @@ call. That remainder is accepted here, not hidden.
 
 ## The frame limit
 
-`JS_SetMaxFrameStackSize` bounds the bytes the frame stack costs the
-allocator: every chunk's usable size plus the allocator's block header, so
-chunk headers, alignment, unused tails and the spare are all counted. A call
-whose record does not fit throws the same catchable
-`RangeError: Maximum call stack size exceeded` as the stack guard, and the
-engine continues. A failed chunk allocation throws out of memory instead.
-
-Zero is a valid limit and refuses every ordinary call. When a default chunk no
-longer fits the remaining budget, the remainder is offered as an exact-fit
-chunk, so a small limit still runs small calls. The setter refuses a value
-above its maximum or below what live frames hold, and releases the idle spare
-to make a lower value fit. Record sizes are computed with checked arithmetic.
+`JS_SetMaxFrameStackSize` bounds what the segments the frame stack holds can
+cost their allocator's backing. A call whose record does not fit throws the
+same catchable `RangeError: Maximum call stack size exceeded` as the stack
+guard, and the engine continues.
 
 The default, and the setter's maximum, is 4 MiB. It was chosen from
 measurement: a plain recursive call costs about 121 bytes on wasm32, so 2 MiB
-held 17,343 of them. That is more than the 13,786 the native launcher's
-4096 KiB budget allowed before this change, but fewer than the 20,685 recorded
-for the Node host's 6144 KiB. 4 MiB holds 34,721, measured, which keeps both
-([Stack limits](../stack-limits.md) has the measured depths).
+held too few for the 20,685 recorded for the Node host's 6144 KiB budget
+before this change. 4 MiB is 64 segments. The wasm32 contract below reaches
+34,751 frames of a plain recursive function on the bare engine and fails
+under 20,685 ([Stack limits](../stack-limits.md) has the produced guest's
+depths).
 
 This is a deliberate resource bound. Before, the native budget bounded
 JavaScript depth and frame storage together. Now the native budget bounds
 native recursion, and the frame limit bounds how much storage JavaScript calls
 may hold, on every host alike.
+
+### What a segment is charged
+
+Upstream's allocator interface cannot say what a request will cost.
+`js_malloc_usable_size` answers after the block exists, and only for the
+block: not for the page, pool or mapping the allocator had to take to serve
+it. Two earlier forms of this limit failed on exactly that. A chunk served as
+one cell of QuickJS's own 4 KiB arena left 4,000 bytes behind a count of 216
+under a 1,024-byte limit. A 199,968-byte request under a 200,000-byte limit
+came back from glibc as a 200,704-byte mapping and was rejected only after it
+had been made.
+
+So the allocator declares the cost, before the request, through a
+`JSMallocBoundFunc`. For one `js_malloc(opaque, size)` the bound covers,
+whichever is larger:
+
+- everything serving the request can make the allocator newly acquire from
+  its own source: the block, its header and padding, its bookkeeping wherever
+  that is kept, and the whole segment, pool, lease or mapping it may have to
+  take, at the granularity it grows by;
+- everything the block keeps from other requests while it is held, when it is
+  served from storage the allocator already had: the block, and the rest of
+  any slab or pool only requests of its kind can use.
+
+The frame stack then keeps a ledger:
+
+1. The charge is added before the allocator is asked, and only when it fits
+   what the limit has left (an exact fit fits). If the allocator returns
+   nothing, the charge is taken back and no link or count has changed.
+2. A segment keeps the charge it was taken under until it is freed.
+3. A request the allocator serves from storage it already had is charged in
+   full all the same. Two segments may both pay for one shared page. Nothing
+   is ever credited back against another segment.
+4. A segment goes back through the registered `js_free`. Its charge ends once
+   that call has returned. A declaration promises that the storage, with the
+   bookkeeping that manages it, is then either returned to the allocator's
+   source or part of a heap any later request can be served from. A cache,
+   tail or descriptor that stays reserved for the freed block breaks that
+   promise, and such an allocator cannot declare.
+5. The declaration cannot change while any charge is outstanding, for a
+   segment in use or spare, nor while the allocator is being asked for a
+   segment or is taking one back. `JS_SetMallocBound` returns -1 then.
+
+What the limit bounds is therefore the backing the held segments account for.
+It is not the process's resident size, the total the allocator has ever
+acquired, the engine's other allocations, or what an allocator keeps in a
+reusable heap, fragmented or not, after segments have gone back to it.
+
+The declaration is the embedder's promise about its own allocator. Nothing in
+C can check it. The bound function gets the opaque passed to
+`JS_NewRuntime2`, must hold in any state the allocator can be in, and must not
+allocate, call into the engine, change the runtime's limits, or be made wrong
+by another user of the allocator between the question and the request. When
+an allocator reports a usable size above the bound it declared, the block is
+freed and the call fails; that catches one kind of wrong declaration and
+proves nothing about the others.
+
+A segment is requested directly from the registered `js_malloc`, never as a
+cell of QuickJS's small-block arena and without the arena's block header, so
+the request the allocator sees is the one its bound was asked about. The
+runtime's memory limit, allocation count, `malloc_size` and failure record
+apply to it as to any block. An allocator that reports no usable size has the
+segment counted by the bytes requested, so it still counts toward the memory
+limit.
+
+When a segment's bound does not fit what the limit has left, a block of
+exactly the record's size is tried, so an allocator with byte-granular costs
+still runs small calls under a small limit. Zero is a valid limit and refuses
+every ordinary call. The limit setter refuses a value above its maximum or
+below what live frames hold, and releases the idle spare to make a lower
+value fit. All sizes are computed with checked arithmetic.
+
+Three outcomes stay distinct:
+
+| Condition | Error |
+| --- | --- |
+| No declaration, or none for either the segment or the exact-fit block | `InternalError: no allocator block bound for frame storage`, checked before a spare is reused |
+| A valid bound that exceeds what the limit has left, also when the smaller fallback has no bound | `RangeError: Maximum call stack size exceeded` |
+| The allocator returns no memory, or the runtime's memory limit refuses the block | `InternalError: out of memory` |
+
+### What the default callbacks declare
+
+`JS_NewRuntime` declares `JS_DefaultMallocBound` for its own callbacks.
+`JS_NewRuntime2` declares nothing: custom callbacks, rquickjs's `rust-alloc`
+and custom allocators included, run no ordinary bytecode call until the
+embedder calls `JS_SetMallocBound`. The functions are in both pregenerated
+binding files. Callbacks that pass every request, unchanged and one for one,
+to `JS_GetDefaultMallocFunctions()` may declare the default bound.
+
+Production uses `rquickjs::Runtime::new` (rquickjs and rquickjs-core 0.13.0,
+without `rust-alloc`), which calls `JS_NewRuntime`.
+
+**wasm32, split profile.** The engine module imports `malloc` from the core,
+whose libc is wasi-libc `2e6fb9d8ee0c` as Waffle's released builder produces
+it: dlmalloc with 16-byte alignment, no `mmap`, no trimming, no exported
+`mallopt`, contiguous growth and a granularity of one 64 KiB page. For a
+request, `nb = request2size(size) = max(16, align16(size + 4))`, and
+`sys_alloc` is entered at most once, only when no free chunk, the designated
+victim or the top chunk can serve it. With `TOP_FOOT_SIZE = 8 + 32 + 16` and
+`SYS_ALLOC_PADDING = TOP_FOOT_SIZE + 16 = 72`, every path through it asks
+`sbrk` for at most `asize = align65536(nb + 72)` in total:
+
+- with no top chunk, one `sbrk(asize)`; the break is page-aligned, so no
+  alignment is added;
+- with a top chunk, one `sbrk(align65536(nb - top + 72))`, which is no more;
+- if that extension comes back somewhere other than the end of the top's
+  segment, a supplement of `align65536(nb + 72 - s)` after the first `s`;
+  `s` is a multiple of the granularity, so the two sum to `asize`;
+- a growth that fails acquires nothing, and the request fails.
+
+The linker's initial heap is memory the module already has. Chunk headers,
+segment records and fenceposts are inside the segments. `sbrk` grows this
+program's linear memory by exactly the pages asked for, and in this profile
+nothing else grows it: one heap, one thread, no `memory.grow` outside libc.
+The non-adjacent case and dlmalloc's negative-`sbrk` recovery, which WASI's
+`sbrk` cannot perform, are therefore not reachable in it; the bound is not
+claimed for a build where they are. A freed chunk coalesces into dlmalloc's
+bins, designated victim or top, from which any request is served. Linear
+memory never shrinks.
+
+`JS_DefaultMallocBound` returns that `asize`: 65,536 for any request up to
+65,452 bytes, so one page for a default segment and `n` pages for a segment
+of `n` quanta. No call fits a frame limit under 65,536 bytes on wasm32.
+
+**wasm32, shared-group profile.** The same libc built with
+`MORECORE_CONTIGUOUS=0` makes one `sbrk(asize)` per growth and passes it to
+the group provider through `runtime_shm.group_grow`. The bound is what libc
+asks the provider for. It bounds what the group acquires only if the provider
+grants exactly the pages asked for and keeps freed pages reusable. Waffle at
+the pinned `6e060845` does not: it takes leases of 16 to 64 pages for a
+one-page request and can strand a lease's tail. The shared-group profile is
+not qualified by this record until the pin moves to a Waffle revision with
+that guarantee.
+
+**Linux, macOS, FreeBSD (test hosts).** No bound can be stated for the malloc
+of glibc or Apple's libc: top padding, arena heaps, fallback mappings of
+1 MiB, huge pages, size-ranged regions, tunables, `mallopt` and replacement
+allocators all change what a request acquires. The default callbacks
+therefore serve every request of at least one frame segment (65,280 bytes)
+from a private anonymous mapping of its own: a 64-byte header, then the block,
+rounded up to whole pages. The bound is that length exactly, and `free`
+unmaps it. This holds for every large block the default callbacks serve, not
+only frame segments. The block keeps malloc's alignment, because the header
+is a multiple of `max_align_t`'s; a mapped block is recognised by finding its
+header in a list of live mappings, never by reading memory in front of an
+address; `calloc`, `realloc` across the threshold in both directions and the
+usable size keep their meaning; a failed mapping fails the request and never
+falls back to libc. Smaller requests stay with libc and have no bound, as has
+every request when the page size cannot be read. The operating system's own
+bookkeeping for a mapping is not counted.
+
+**Any other host** declares nothing.
 
 ## What stays native
 
@@ -149,13 +305,53 @@ measured on wasmtime, not a browser safety result.
 ## Checks
 
 `scripts/check-quickjs-frame-stack.ts` builds the bare engine with
-`scripts/fixtures/quickjs-frame-stack.c`. It checks zero, tiny, exact and
-refused limits, that the committed count equals what the allocator holds, every
-denied chunk allocation of a deep chain, native recursion through a native
-function, a constructor, `call`, a generator and a mixed chain, chains 6,000
-deep on a 256 KiB native budget for each call shape, the last depth that fits a
-small limit and the first that does not, interrupts polled from inline calls,
-and a refusal that survives a stack-trace hook.
+`scripts/fixtures/quickjs-frame-stack.c` and runs one contract on several
+allocators behind the same callbacks. Each watches the frame stack's blocks
+from its own side: what a request made it acquire and what the block
+occupies are read from the allocator's sources, never from the bound function
+or the engine's count.
+
+- **exact**: a general heap in the fixture that owns its backing and grows a
+  byte-granular break. Small and exact limits are checked to the byte.
+- **paged**: the same heap growing 64 KiB at a time and never shrinking, as
+  wasm32 linear memory does. 64 segments fill 4 MiB exactly, a limit under
+  64 KiB refuses every call, and a second run is served from kept storage
+  without acquiring any while every segment is still charged in full.
+- **default**: the engine's default callbacks. The fixture's own `mmap` and
+  `munmap` see every mapping, so each segment's mapping is compared with its
+  bound and every mapping is seen to return to the system.
+- **sanitizer**, only under AddressSanitizer: libc blocks with a bound that
+  makes no accounting claim, so the sanitizer sees every frame block.
+
+On each it checks zero, tiny, exact and refused limits; that the charged count
+equals the sum of the bounds declared for the blocks held, within the limit,
+and covers what they occupy, also at the deepest point of a chain; that no
+block makes the allocator acquire more than was declared; every denied segment
+of a deep chain, with nothing charged for it; the smallest limit a call fits
+and the refusal one byte under it, where the block that does not fit is priced
+and never requested, for a small frame and for a frame of 25,000 locals; the
+runtime memory limit stopping a segment; native recursion through a native
+function, a constructor, `call`, a generator and a mixed chain; chains 6,000
+deep on a 256 KiB native budget for each call shape; the last depth that fits
+a small limit and the first that does not; interrupts polled from inline
+calls; and a refusal that survives a stack-trace hook. On the exact allocator
+it also checks a block larger than its declared bound, zero, understated and
+unlimited bounds with their error classes, a withdrawn declaration, and a
+declaration that cannot change while a frame or a spare is held or from inside
+the allocator's callbacks. Separate runtimes check custom callbacks that
+declare nothing, an allocator that reports no block sizes, callbacks over
+glibc's malloc, which now run no call and ask malloc for no frame block, and
+an unreadable page size. The default callbacks are checked on their own for
+alignment, mapping size, `calloc`, `realloc` across the threshold and release.
+
+`scripts/check-quickjs-frame-wasi.ts` builds the bare engine with
+`scripts/fixtures/quickjs-frame-wasi.c` for wasm32 against the split-profile
+sysroot and runs it under wasmtime. It reads the linear memory size around
+every request: no request of a 6,000-request sweep over a fragmented heap,
+and no frame segment, grows memory by more than its bound; a limit of 65,535
+bytes refuses and 65,536 runs; plain recursion reaches at least 20,685 frames
+at 4 MiB with the 64 segments charged exactly 4 MiB; and a second run reuses
+the freed segments without growing memory.
 `scripts/fixtures/quickjs-frame-stack.ts` holds call semantics whose expected
 output, `quickjs-frame-stack.expected.txt`, is what the engine printed before
 this change: actual and padded arguments, mapped `arguments`, receivers,
@@ -179,7 +375,12 @@ byte-identical bytecode with the engine before the change.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `quickjs.c`, `quickjs.h`, bytecode call frames | Port | Keep ordinary bytecode frames in a runtime-owned frame stack with a byte limit, and run ordinary-to-ordinary calls without a C call. |
-| `scripts/check-quickjs-frame-stack.ts`, `scripts/quickjs-native-check.ts`, `scripts/fixtures/quickjs-frame-stack.c`, `scripts/fixtures/quickjs-frame-stack.ts` | Original adapter | Exercise the frame limit, accounting, allocation failures and call semantics on the bare engine. |
+| `quickjs.c`, `quickjs.h`, `JSMallocBoundFunc`, `JS_SetMallocBound`, `js_malloc_block_rt` | Port | Let the allocator declare what a request can cost before it is made, and take each frame segment as one direct request charged that bound. |
+| `quickjs.c`, `js_def_malloc` and the other default callbacks, `JS_DefaultMallocBound`, `JS_GetDefaultMallocFunctions` | Port | Declare wasi-libc's dlmalloc growth for the split profile; on Linux, macOS and FreeBSD serve large blocks from private mappings whose cost is exact. |
+| `third_party/rquickjs-sys/src/bindings/wasm32-wasip1.rs`, `x86_64-unknown-linux-gnu.rs` | Port | Add the frame-limit and allocator-bound functions to the pregenerated bindings. |
+| `scripts/check-quickjs-frame-stack.ts`, `scripts/quickjs-native-check.ts`, `scripts/fixtures/quickjs-frame-stack.c`, `scripts/fixtures/quickjs-frame-stack.ts` | Original adapter | Exercise the frame limit, what allocators acquire and hold against what is charged, allocation failures and call semantics on the bare engine. |
+| `scripts/check-quickjs-frame-wasi.ts`, `scripts/fixtures/quickjs-frame-wasi.c` | Original adapter | Compare linear-memory growth with the declared bound on wasm32 under the split-profile libc. |
+| `scripts/fixtures/quickjs-async-context.c`, `quickjs-memory-telemetry.c`, `quickjs-parser-stack.c` | Original adapter | Forward their counting callbacks to the default callbacks and declare the default bound, at all four runtime sites. |
 | `tests/fixtures/stack-frame-storage`, `tests/fixtures/stack-inline-calls` | Original adapter | Exercise large frames and deep ordinary calls through the guest entry point at the browser budgets. |
 
 [Ledger scope and pinned revisions](scope.md).

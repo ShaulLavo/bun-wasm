@@ -55,6 +55,7 @@
         "scripts/check-quickjs-async-context.ts",
         "scripts/check-quickjs-memory-telemetry.ts",
         "scripts/check-quickjs-frame-stack.ts",
+        "scripts/check-quickjs-frame-wasi.ts",
         "scripts/check-quickjs-parser-stack.ts",
         "scripts/crypto-review-vectors.mjs",
         "scripts/generate-*.{ts,mjs}",

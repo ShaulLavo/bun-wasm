@@ -17,12 +17,15 @@ _Static_assert(offsetof(JSBunwasmMemoryTelemetry, malloc_size_after_automatic_gc
 _Static_assert(offsetof(JSBunwasmMemoryTelemetry, malloc_gc_threshold) == 112, "GC threshold offset");
 _Static_assert(offsetof(JSBunwasmMemoryTelemetry, current_malloc_size) == 120, "current malloc offset");
 
+/* Every request goes unchanged to the engine's default callbacks, so these
+   callbacks may declare the default bound for the frame stack. */
+#define backing() JS_GetDefaultMallocFunctions()
 static size_t allocation_calls;
-static void *counted_malloc(void *opaque, size_t size) { allocation_calls++; return malloc(size); }
-static void *counted_calloc(void *opaque, size_t count, size_t size) { allocation_calls++; return calloc(count, size); }
-static void *counted_realloc(void *opaque, void *ptr, size_t size) { allocation_calls++; return realloc(ptr, size); }
-static void counted_free(void *opaque, void *ptr) { free(ptr); }
-static size_t counted_usable(const void *ptr) { return malloc_usable_size((void *)ptr); }
+static void *counted_malloc(void *opaque, size_t size) { allocation_calls++; return backing()->js_malloc(NULL, size); }
+static void *counted_calloc(void *opaque, size_t count, size_t size) { allocation_calls++; return backing()->js_calloc(NULL, count, size); }
+static void *counted_realloc(void *opaque, void *ptr, size_t size) { allocation_calls++; return backing()->js_realloc(NULL, ptr, size); }
+static void counted_free(void *opaque, void *ptr) { backing()->js_free(NULL, ptr); }
+static size_t counted_usable(const void *ptr) { return backing()->js_malloc_usable_size(ptr); }
 
 _Static_assert(sizeof(JSMemoryUsage) == 224, "Rust binding size");
 _Static_assert(offsetof(JSMemoryUsage, array_buffer_count) == 208, "Rust count offset");
@@ -200,6 +203,7 @@ int main(void)
     };
     JSRuntime *rt = JS_NewRuntime2(&functions, NULL);
     assert(rt);
+    JS_SetMallocBound(rt, JS_DefaultMallocBound);
     JSContext *ctx = JS_NewContext(rt);
     assert(ctx);
     cached_readout(rt);
