@@ -670,6 +670,7 @@
       try {
         const wrapper = moduleWrapper(mod, resolved, kind);
         if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, resolved));
+        if (kind === "esm") mod.exports = mod.exports["module.exports"] ?? mod.exports;
       } catch (err) {
         delete moduleCache[resolved];
         throw err;
