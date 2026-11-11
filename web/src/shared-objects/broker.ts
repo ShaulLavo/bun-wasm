@@ -475,7 +475,7 @@ export function createSharedObjectBroker() {
     const control = new Int32Array(pool.control);
     Atomics.store(control, poolDisposedWord, 1);
     pool.lanes.forEach((buffer, index) => {
-      const overflow = { control, index, slots: pool!.overflow?.slots[index] ?? null };
+      const overflow = { control, index, arena: pool!.overflow?.arena ?? null };
       openSharedLane(buffer, 0, overflow).close(); openSharedLane(buffer, 1, overflow).close();
     });
   }

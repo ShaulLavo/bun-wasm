@@ -351,7 +351,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     const { buffer, poolIndex } = backing;
     if (poolIndex === null) return guardedLane(openSharedLane(buffer, side));
     if (!Number.isInteger(poolIndex) || poolIndex < 0 || !pool || pool.lanes[poolIndex] !== buffer || !poolCursors) throw sharedError("Invalid shared lane pool index");
-    return guardedLane(openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, slots: pool.overflow?.slots[poolIndex] ?? null }));
+    return guardedLane(openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, arena: pool.overflow?.arena ?? null }));
   } };
   return { ready, claimBuffer, poolStats: () => ({ claims: poolClaims, refused: poolRefused }), mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
