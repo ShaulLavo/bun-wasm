@@ -8,7 +8,7 @@ import { BUN_MEMORY_GROUP_POLICY, memoryMaximumBytes } from "../../src/engine-ki
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
-import { engineStackBudgets, type StackHost } from "./engine-stack-budget.js";
+import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -75,6 +75,20 @@ export type NestedModule = typeof import("./nested/host.js") | Error | undefined
 // Chromium PBL exhausts its browser-native stack at 35 reentries, below the wire's 64-entry limit.
 const SPIDERMONKEY_REENTRY_LIMIT = 16;
 
+function withDefault(env: Record<string, string>, key: string, value: string | undefined): Record<string, string> {
+  return value === undefined || key in env ? env : { ...env, [key]: value };
+}
+
+/**
+ * The host's stack defaults (engine-stack-budget.ts). Each key is added only when the request lacks
+ * it, independently of the other: an explicit or empty value of one never changes the other's default.
+ */
+function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Record<string, string> {
+  const budgeted = withDefault(req.env, "BUN_WASM_STACK_KIB", engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
+  if (req.engine !== "jsc") return budgeted;
+  return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
+}
+
 export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined): WorkerExecutor<RunRequest> {
   let nested: import("./nested/host.js").NestedHost | undefined;
   let groupMemory: WebAssembly.Memory | undefined;
@@ -82,8 +96,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
-  const stackKib = engineStackBudgets(new Error().stack ?? "", globalThis.navigator?.userAgent ?? "", req.stackHost)?.[req.engine];
-  const baseEnv = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
+  const baseEnv = stackEnvironment(req, new Error().stack ?? "", globalThis.navigator?.userAgent ?? "");
   const generation = allocationBoundaryGeneration(req);
   const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };
   const lookupClient: LookupClient | undefined = req.lookupPort

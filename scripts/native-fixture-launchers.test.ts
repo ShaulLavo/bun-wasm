@@ -110,7 +110,10 @@ function probeRequire(depth: string, leaf?: string) {
     stderr: "pipe",
     timeout: 10000,
   });
-  return { stdout: result.stdout.toString(), left: readdirSync(directory) };
+  // The probe first reports the stack settings it was given; this host passes none.
+  const [settings, ...rest] = result.stdout.toString().split("\n");
+  expect(settings).toBe('settings {"budget":null,"parserReserve":null}');
+  return { stdout: rest.join("\n"), left: readdirSync(directory) };
 }
 
 test("require probe loads its generated chain, reports a failing leaf and removes the chain both times", () => {
