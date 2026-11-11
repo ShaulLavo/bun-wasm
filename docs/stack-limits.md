@@ -328,13 +328,27 @@ Measured on November 11, 2026 on the native launcher: the split JSC pair from ma
 (source tree of `19dba71e`), and the same core with a side built from this change. A
 number is the deepest nesting that completed; one level more threw `RangeError`.
 
-| Path at 192 KiB | Before | After |
-| --- | ---: | ---: |
-| `getter` | 34 | completes at 4,000, the deepest tried |
-| `ajvnames` | 16 | completes at 4,000, the deepest tried |
-| `computedgetter` | 35 | 35 |
-| `proxy` | 29 | 29 |
-| `tostring` | 31 | 31 |
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `getter` | 34 | 39,930 | 36 | 39,930 | 142 | 39,930 |
+| `ajvnames`, 4,096 tried | 16 | completes | 18 | completes | 72 | completes |
+| `ajv`, the real package, 4,096 tried | 16 | completes | 17 | completes | not run | not run |
+| `computedgetter` | 35 | 35 | 38 | 38 | 147 | 147 |
+| `proxy` | 29 | 29 | 32 | 32 | 124 | 125 |
+| `tostring` | 31 | 31 | 34 | 34 | 133 | 133 |
+
+The other 44 paths of the sweep, the 20 parser chains among them, gave identical results at
+all three budgets. The Proxy read gains one level at 800 KiB because the edited
+`get_by_id` slow path's frames came out 48 guarded bytes smaller per level (6,512, was
+6,560). The same cycle has fewer wasm locals (419, was 429), and with the guard out of the
+way wasmtime ran out 15% deeper on it, so it spends less host stack per level than before.
+
+With the host stack cut to 512 KiB, at 192 and at 240 KiB, both pairs gave the same result
+on every one of 15 reentry paths but `getter` and `ajvnames`, and every attempt completed or
+threw its catchable error, with one exception that both pairs share: `JSON.parse` with a
+reviver traps between about 3,615 and 4,500 nested arrays, where the recursive
+`JSONRanges::Entry` container is torn down with no stack check. That is older than this
+change and is not fixed here.
 
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.

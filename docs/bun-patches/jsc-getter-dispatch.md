@@ -105,7 +105,9 @@ unchanged.
 
 Setters, `object[key]`, getters reached from C++ (`JSON.stringify`, `Reflect.get`, spread),
 Proxy traps, `toString` and `valueOf`, and bound, host and callable-proxy getters keep their
-path and their cost. The measured depths of those paths are unchanged.
+path. Their measured depths are unchanged with one exception: a Proxy `get` trap read as
+`proxy.name` passes through the `get_by_id` slow path this change edits, whose frames came out
+48 guarded bytes smaller, and it reaches one level more at 800 KiB (125, was 124).
 
 ## A latent risk this makes visible
 
@@ -124,11 +126,16 @@ of `19dba71e`) and the same core with a side built from this change.
 
 | At 192 KiB | Before | After |
 | --- | ---: | ---: |
-| `object.name` getters | 34 | completes at the 4,000 cap |
-| Reduced Ajv names walk (`ajvnames`) | 16 | completes at the 4,000 cap |
+| `object.name` getters | 34 | 39,930, then the frame stack's own `RangeError` |
+| Reduced Ajv names walk (`ajvnames`) | 16 | completes at 4,096, the deepest tried |
+| Real Ajv 8.17.1 names walk (`ajv`) | 16 | completes at 4,096, the deepest tried |
 | `object[key]` getters (`computedgetter`) | 35 | 35 |
 | Proxy `get` trap | 29 | 29 |
 | `toString` reentry | 31 | 31 |
+
+The whole sweep at 192, 208 and 800 KiB is in [Stack overflow in wasm](../stack-limits.md#getters-called-in-the-loop):
+of 147 path results, the getter and Ajv rows changed as intended, the Proxy read gained one
+level at 800 KiB, and 140 are identical.
 
 `CLoop::execute` holds 4,896 guarded bytes at each of its 683 calls and has 293 wasm
 parameters and locals, before and after. The static frames of the computed-getter and
