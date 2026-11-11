@@ -78,9 +78,9 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
     const page = await context.newPage(), url = await task.serve();
     await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
     assert.match(await ready(page), /ready/);
-    const capable = await page.evaluate(() => {
-      try { return new SharedArrayBuffer(0, { maxByteLength: 67108864 }).growable === true; } catch { return false; }
-    });
+    const capable = await page.evaluate(maximum => {
+      try { return new SharedArrayBuffer(0, { maxByteLength: maximum }).growable === true; } catch { return false; }
+    }, overflowBudget);
     if (inlineOnly) assert.equal(capable, false);
     await writeFile(page, "/home/user/overflow-worker.cjs", worker);
     await writeFile(page, "/home/user/overflow-main.cjs", main);
