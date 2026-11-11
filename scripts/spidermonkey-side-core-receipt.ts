@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { importedMemory, tagProgramCore } from "../src/engine-kind.ts";
 import { verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
+import { sideSourceSha256 } from "./spidermonkey-side-inputs.ts";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const digest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -37,6 +38,7 @@ function run(command: readonly string[], cwd: string): string {
 export interface SideCoreInputs {
   readonly schema: 1;
   readonly scope: "spidermonkey-side-core";
+  readonly sideSourceSha256: string;
   readonly source: { readonly head: string; readonly tree: string };
   readonly native: { readonly receiptSha256: string; readonly archiveSha256: string; readonly archiveBytes: number; readonly profileSha256: string };
   readonly profile: "split";
@@ -46,6 +48,7 @@ export interface ExperimentalReceipt {
   readonly schema: 1;
   readonly experimental: true;
   readonly scope: "spidermonkey-side-core";
+  readonly sideSourceSha256: string;
   readonly source: SideCoreInputs["source"];
   readonly native: SideCoreInputs["native"];
   readonly profile: "split";
@@ -53,12 +56,13 @@ export interface ExperimentalReceipt {
   readonly side: { readonly sha256: string; readonly bytes: number };
 }
 
-function parseInputs(value: unknown): SideCoreInputs {
+export function parseInputs(value: unknown): SideCoreInputs {
   assert(record(value) && value.schema === 1 && value.scope === "spidermonkey-side-core" && value.profile === "split", "Invalid SpiderMonkey side/core inputs");
+  assert(digest(value.sideSourceSha256), "Invalid SpiderMonkey sideSourceSha256");
   assert(record(value.source) && /^[0-9a-f]{40}$/.test(String(value.source.head)) && /^[0-9a-f]{40}$/.test(String(value.source.tree)), "Invalid SpiderMonkey source identity");
   assert(record(value.native) && digest(value.native.receiptSha256) && digest(value.native.archiveSha256) && digest(value.native.profileSha256)
     && positiveInteger(value.native.archiveBytes), "Invalid SpiderMonkey native identity");
-  return { schema: 1, scope: "spidermonkey-side-core", source: { head: String(value.source.head), tree: String(value.source.tree) },
+  return { schema: 1, scope: "spidermonkey-side-core", sideSourceSha256: value.sideSourceSha256, source: { head: String(value.source.head), tree: String(value.source.tree) },
     native: { receiptSha256: value.native.receiptSha256, archiveSha256: value.native.archiveSha256, archiveBytes: value.native.archiveBytes, profileSha256: value.native.profileSha256 }, profile: "split" };
 }
 
@@ -72,7 +76,7 @@ export function captureInputs(repository: string, nativeDirectory: string): Side
   const head = run(["git", "rev-parse", "HEAD"], repository);
   const tree = run(["git", "rev-parse", "HEAD^{tree}"], repository);
   assert(/^[0-9a-f]{40}$/.test(head) && /^[0-9a-f]{40}$/.test(tree), "Invalid source identity");
-  return { schema: 1, scope: "spidermonkey-side-core", source: { head, tree }, native: {
+  return { schema: 1, scope: "spidermonkey-side-core", sideSourceSha256: sideSourceSha256(repository), source: { head, tree }, native: {
     receiptSha256: hash(receipt), archiveSha256: native.archive.sha256, archiveBytes: native.archive.bytes, profileSha256: native.profile.sha256,
   }, profile: "split" };
 }
@@ -227,7 +231,7 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
   const side = readFileSync(sidePath);
   verifyTaggedCore(core);
   verifySide(side, core, inputs);
-  const receipt: ExperimentalReceipt = { schema: 1, experimental: true, scope: "spidermonkey-side-core", source: inputs.source, native: inputs.native, profile: "split",
+  const receipt: ExperimentalReceipt = { schema: 1, experimental: true, scope: "spidermonkey-side-core", sideSourceSha256: inputs.sideSourceSha256, source: inputs.source, native: inputs.native, profile: "split",
     core: { sha256: hash(core), bytes: core.byteLength }, side: { sha256: hash(side), bytes: side.byteLength } };
   writeFileSync(output, JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
   return receipt;
@@ -235,6 +239,7 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
 
 export function verifyPairReceipt(corePath: string, sidePath: string, receiptPath: string, inputs: SideCoreInputs): ExperimentalReceipt {
   const receipt = parseReceipt(JSON.parse(readFileSync(receiptPath, "utf8")));
+  assert.equal(receipt.sideSourceSha256, inputs.sideSourceSha256, "SpiderMonkey side source identity mismatch");
   assert.deepEqual(receipt.source, inputs.source);
   assert.deepEqual(receipt.native, inputs.native);
   const core = readFileSync(corePath);
