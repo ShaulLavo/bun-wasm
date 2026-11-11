@@ -31,6 +31,7 @@ unconfigured path never falls back to the base module.
 The browser accepts `?engine=spidermonkey`. The ordinary menu lists SpiderMonkey
 and enables it when both core and side fingerprints are staged. Without the pair,
 the option is disabled and labelled `SpiderMonkey (not in this build)`. Ordinary
+profile constraints also apply; unsupported engine choices stay disabled.
 SpiderMonkey sessions start with `BUN_WASM_SPIDERMONKEY_TIER=interp`; explicit
 measurement settings can select another tier. Named standard URLs use the
 fingerprinted pair loader. Custom SpiderMonkey core URLs

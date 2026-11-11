@@ -18,6 +18,18 @@ async function fixture(builds: Record<string, string> = {}) {
 
 const pair = { "bun-spidermonkey.wasm": "a".repeat(64), "spidermonkey-engine.wasm": "b".repeat(64) };
 
+test("the shared profile picker disables engines outside the profile contract", async () => {
+  const page = await fixture(pair);
+  const playground = new page.Playground("?engine=quickjs&profile=shared-group");
+  const markup = await page.renderPlayground(playground);
+  for (const engine of ["browser", "spidermonkey"]) {
+    expect(markup.match(new RegExp(`<option[^>]*value="${engine}"[^>]*>`))?.[0]).toContain("disabled");
+  }
+  for (const engine of ["quickjs", "jsc"]) {
+    expect(markup.match(new RegExp(`<option[^>]*value="${engine}"[^>]*>`))?.[0]).not.toContain("disabled");
+  }
+});
+
 test("a staged SpiderMonkey pair is selectable from the ordinary Browser playground", async () => {
   const page = await fixture(pair);
   const playground = new page.Playground("");
