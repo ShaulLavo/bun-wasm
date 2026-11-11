@@ -2,7 +2,8 @@
   "use strict";
   const { native } = internal;
   const capture = Error.captureStackTrace;
-  const parseCapturedStack = native.engine === "jsc" || native.engine === "host" && !internal.hasNativeStackTrace;
+  // JavaScriptCore and SpiderMonkey capture stack text natively and never consult the formatter.
+  const parseCapturedStack = native.engine === "jsc" || native.engine === "spidermonkey" || native.engine === "host" && !internal.hasNativeStackTrace;
   const defaultPrepare = Error.prepareStackTrace;
   const formatted = new WeakMap<object, unknown>();
   let formatting = false;
@@ -55,8 +56,9 @@
     getColumnNumber() { return this.#frame.column; }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
-    // JavaScriptCore names the frames of suspended awaiting callers `async <name>`.
-    isAsync() { return this.#frame.name.startsWith("async "); }
+    // Suspended awaiting callers are named `async <name>` by JavaScriptCore and `async*<name>`
+    // by SpiderMonkey.
+    isAsync() { return /^async[ *]/.test(this.#frame.name); }
   }
   internal.defineHidden(CallSite.prototype, methods);
 
