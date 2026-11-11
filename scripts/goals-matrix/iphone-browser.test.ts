@@ -6,6 +6,14 @@ import { observeIphoneResponse, observeIphoneOrigins } from "./iphone-server";
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 
+function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
+  const encoding = request.headers.get("accept-encoding");
+  if (new URL(request.url).pathname === "/asset.js") { encodings.asset = encoding; return new Response("asset"); }
+  encodings.navigations.push(encoding);
+  const html = '<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>';
+  return encoding?.includes("br") ? new Response(brotliCompressSync(html), { headers: { "content-type": "text/html", "content-encoding": "br" } }) : new Response(html, { headers: { "content-type": "text/html" } });
+}
+
 test("ordinary visible page keeps its owner alive and observes trusted iframe input and same-document edits", async () => {
   const bus = new IphoneBus("/__goals_iphone/" + "a".repeat(64));
   let ownerOrigin = "";
@@ -17,18 +25,11 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
   });
   ownerOrigin = owner.url.origin;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
-  let assetEncoding: string | null = null;
-  const navigationEncodings: (string | null)[] = [];
+  const encodings: { asset: string | null; navigations: (string | null)[] } = { asset: null, navigations: [] };
   try {
     browser = await chromium.launch({ headless: true });
     const binding = await origins.bind({}, 5173, {
-      fetch: request => {
-        if (new URL(request.url).pathname === "/asset.js") { assetEncoding = request.headers.get("accept-encoding"); return new Response("asset"); }
-        const encoding = request.headers.get("accept-encoding");
-        navigationEncodings.push(encoding);
-        const html = '<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>';
-        return encoding?.includes("br") ? new Response(brotliCompressSync(html), { headers: { "content-type": "text/html", "content-encoding": "br" } }) : new Response(html, { headers: { "content-type": "text/html" } });
-      },
+      fetch: request => counterResponse(request, encodings),
       upgrade: (_request, socket) => { socket.destroy(); }, close() {},
     });
     bus.configure("host", owner.url.href);
@@ -39,11 +40,11 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     bus.configure("preview", binding.origin + "/");
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000);
     await waitReady(bus, "preview");
-    expect(navigationEncodings).toEqual(["identity"]);
+    expect(encodings.navigations).toEqual(["identity"]);
     const asset = new URL("/asset.js", binding.origin);
     asset.hostname = "127.0.0.1";
     await fetch(asset, { headers: { host: new URL(binding.origin).host, "accept-encoding": "br" } });
-    expect(assetEncoding).toBe("br");
+    expect(encodings.asset).toBe("br");
     expect(await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000)).toMatchObject({ ready: false, before: "Count 0" });
     await bus.execute("preview", "document.querySelector('button').disabled = false", 3000);
     const before = await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);

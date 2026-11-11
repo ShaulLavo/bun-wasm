@@ -24,11 +24,19 @@ export async function observeIphoneResponse(response: Response, request: Request
   return new Response(html, { status: response.status, headers });
 }
 
+function previewRequest(request: Request, bus: IphoneBus): Request {
+  if (bus.state("preview")?.url !== request.url) return request;
+  if (request.mode !== "navigate" && request.headers.get("sec-fetch-mode") !== "navigate") return request;
+  const headers = new Headers(request.headers);
+  headers.set("accept-encoding", "identity");
+  return new Request(request, { headers });
+}
+
 export function observeIphoneOrigins(bus: IphoneBus, endpoint: string): () => void {
   const original = LoopbackPreviewOrigins.prototype.bind;
   LoopbackPreviewOrigins.prototype.bind = function (owner, port, target) {
     return original.call(this, owner, port, { ...target,
-      fetch: async request => observeIphoneResponse(await target.fetch(request), request, bus, endpoint),
+      fetch: async request => observeIphoneResponse(await target.fetch(previewRequest(request, bus)), request, bus, endpoint),
     });
   };
   return () => { LoopbackPreviewOrigins.prototype.bind = original; };
