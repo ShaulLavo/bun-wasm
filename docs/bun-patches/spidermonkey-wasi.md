@@ -98,3 +98,8 @@ The original `diagnostic-profile.ts` adapter preprocesses the actual header with
 library compiler arguments and embedding settings, matching exported headers
 and forced confdefs, in both split and shared generations. It checks release
 and DEBUG macros and binds the readback into each fresh native receipt.
+
+Archive recipes and irregexp source ownership contribute to one ordered set of
+hashed input paths. Replay reads the complete saved set, then reconstructs the
+irregexp closure without adding duplicate records. Cold creation and replay
+therefore compare the same receipt while still hashing every required input.
