@@ -431,7 +431,7 @@ function main(): void {
     recipeInputs: ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in"].map((path) => ({ path, sha256: fileHash(join(recipe, path)) })),
     patchSha256: fileHash(join(recipe, "spidermonkey-wasi.patch")), mozconfigSha256: fileHash(join(root, "mozconfig")),
     cargoManifestSha256: fileHash(join(root, "firefox/Cargo.toml")),
-    objectLists: packed.inputs.concat(irregexpClosure.inputs).map((path) => ({ path, sha256: fileHash(path) })),
+    objectLists: Array.from(new Set(packed.inputs.concat(irregexpClosure.inputs)), path => ({ path, sha256: fileHash(path) })),
     archiveObjectsSha256: hash(packed.objects.join("\n") + "\n"), relocationCounts,
     exceptionTagSections: 0, exceptionTagImports: 0, nonPicCodeRelocations: 0, absoluteLibcStateRelocations: 0,
     rustStaticlibIncluded: false,

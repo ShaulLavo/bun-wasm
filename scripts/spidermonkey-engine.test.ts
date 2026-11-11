@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { prepareEngineInputs, verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
 import { captureInputs, convertSideInitializers, verifyPairReceipt, verifySide, writePairReceipt } from "./spidermonkey-side-core-receipt.ts";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
+import { performanceProfile } from "../spidermonkey/native-profile.ts";
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const put = (path: string, value: string | Uint8Array) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, value); };
@@ -150,7 +151,7 @@ function implicitSide(shared = false) {
   const section = (id: number, payload: number[]) => [id].concat(u32(payload.length), payload);
   const imported = (label: string, descriptor: number[]) => name("env").concat(name(label), descriptor);
   const exported = (label: string, index: number) => name(label).concat([0], u32(index));
-  const imports = [imported("core_checkpoint", [0, 0]), imported("memory", shared ? [2, 3, 1, 2] : [2, 0, 1]),
+  const imports = [imported("core_checkpoint", [0, 0]), imported("memory", shared ? [2, 3, 1].concat(u32(32768)) : [2, 0, 1]),
     imported("__indirect_function_table", [1, 0x70, 0, 1]), imported("__stack_pointer", [3, 0x7f, 1])];
   const exports = [exported("__wasm_apply_data_relocs", 1), exported("__wasm_call_ctors", 2),
     exported("spidermonkey_register", 3), exported("spidermonkey_run", 4)]
@@ -211,4 +212,34 @@ for (const profile of ["split", "shared-group"] as const) test(`debug filtering 
   for (const label of kept) expect(new Uint8Array(WebAssembly.Module.customSections(module, label)[0]!)).toEqual(Uint8Array.of(0));
   expect(WebAssembly.Module.customSections(module, "dylink.0")).toHaveLength(1);
   for (const label of [".debug_info", ".debug_line", ".debug_abbrev"]) expect(WebAssembly.Module.customSections(module, label)).toHaveLength(0);
+});
+
+test("current admission requires successful source-bound qualification and effective macros", () => {
+  const f = fixture();
+  try {
+    const admissionPath = join(f.root, "PARENT-NATIVE-BYTE-ADMISSION.json");
+    const admission = JSON.parse(readFileSync(admissionPath, "utf8"));
+    const macros = { JS_CRASH_DIAGNOSTICS: null, DEBUG: null, MOZ_DIAGNOSTIC_ASSERT_ENABLED: "1", BUNWASM_EMBED: "1", __wasi__: "1",
+      NIGHTLY_BUILD: "1", MOZ_RELEASE_ASSERT: "(...)", MOZ_CRASH: "(...)" };
+    const release = { macros };
+    const debug = { macros: { ...macros, JS_CRASH_DIAGNOSTICS: "1", DEBUG: "1" } };
+    const qualification = { gate: "N1", source: { commit: admission.compiledSource.head, tree: admission.compiledSource.tree },
+      profile: { performance: performanceProfile }, diagnostics: { profile: performanceProfile, library: release, embedding: release, debugLibrary: debug, debugEmbedding: debug },
+      sha256: admission.archive.sha256, bytes: admission.archive.bytes, confdefsSha256: admission.headers.confdefsSha256,
+      headers: { sha256: admission.headers.manifestSha256, count: admission.headers.count } };
+    delete admission.originalAttempt;
+    delete admission.originalBuildToolchain;
+    admission.status = "ADMITTED_CURRENT_NATIVE_GENERATION";
+    json(admission.qualification.path, qualification);
+    admission.qualification.sha256 = hash(readFileSync(admission.qualification.path));
+    json(admissionPath, admission);
+    prepareEngineInputs(admissionPath, f.native);
+    verifyEngineInputs(f.native);
+    expect(JSON.parse(readFileSync(join(f.native, "native-inputs.json"), "utf8")).schema).toBe(3);
+    json(admission.qualification.path, { ...qualification, diagnostics: { ...qualification.diagnostics,
+      embedding: { macros: { ...macros, JS_CRASH_DIAGNOSTICS: "1" } } } });
+    admission.qualification.sha256 = hash(readFileSync(admission.qualification.path));
+    json(admissionPath, admission);
+    expect(() => prepareEngineInputs(admissionPath, join(f.root, "bad-current"))).toThrow();
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
