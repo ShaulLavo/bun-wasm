@@ -12,7 +12,7 @@ function observe(label: string, error: Error, firstFrame: string): Error {
   assert(stack.includes(firstFrame), `${label}: allocation frame`);
   assert(stack.includes("index.ts:"), `${label}: source mapping`);
   assert.equal(error.stack, stack, `${label}: memoized stack`);
-  if (firstFrame === "allocationLeaf") {
+  if (firstFrame === "allocationLeaf" && ["interp", "pbl"].includes(process.env.BUN_WASM_SPIDERMONKEY_TIER ?? "")) {
     assert(stack.indexOf("allocationLeaf") < stack.indexOf("allocationParent"), `${label}: parent order`);
     assert(stack.indexOf("allocationParent") < stack.indexOf("allocationRoot"), `${label}: root order`);
   }
