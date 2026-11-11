@@ -276,11 +276,12 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     rust: { needs: ["quality", "jsc-prebuild", "native-quality"], minutes: 60 },
     package: { needs: "quality", minutes: 10 },
     "shared-prebuild": { needs: "quality", minutes: 45 },
-    "shared-sysroot": { needs: ["quality", "rust", "shared-prebuild"], minutes: 30 },
+    "shared-spidermonkey-prebuild": { needs: ["quality", "shared-prebuild"], minutes: 30 },
+    "shared-sysroot": { needs: ["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"], minutes: 30 },
     web: { needs: "quality", minutes: 10 },
     "process-bundles": { needs: "quality", minutes: 10 },
     "browser-process": { needs: ["quality", "rust", "process-bundles"], minutes: 10 },
-    "update-status": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-sysroot", "web", "process-bundles", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "process-bundles", "browser-process"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });
