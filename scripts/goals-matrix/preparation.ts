@@ -4,18 +4,19 @@ import { tmpdir } from "node:os";
 import type { Engine } from "./catalog";
 import { engineFiles, registeredEngineGroups } from "./engines";
 export interface SpiderMonkeyInput { directory: string; source: string }
-export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput } {
+export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput; shell?: string } {
   const [delivery, ...flags] = args;
-  if (!delivery || delivery.startsWith("--")) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery [--spidermonkey=/absolute/pair --spidermonkey-source=/absolute/source.json]");
+  if (!delivery || delivery.startsWith("--")) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery [--spidermonkey=/absolute/pair --spidermonkey-source=/absolute/source.json] [--shell=/absolute/guests]");
   const options = new Map<string, string>();
   for (const flag of flags) {
-    const match = /^--(spidermonkey|spidermonkey-source)=(.+)$/.exec(flag);
+    const match = /^--(spidermonkey|spidermonkey-source|shell)=(.+)$/.exec(flag);
     if (!match?.[1] || !match[2] || options.has(match[1])) throw new Error(`Unknown or repeated preparation option: ${flag}`);
     options.set(match[1], match[2]);
   }
   const directory = options.get("spidermonkey"), source = options.get("spidermonkey-source");
   if (Boolean(directory) !== Boolean(source)) throw new Error("Set --spidermonkey and --spidermonkey-source together");
-  return { delivery: resolve(delivery), spidermonkey: directory && source ? { directory: resolve(directory), source: resolve(source) } : undefined };
+  const shell = options.get("shell");
+  return { delivery: resolve(delivery), spidermonkey: directory && source ? { directory: resolve(directory), source: resolve(source) } : undefined, shell: shell ? resolve(shell) : undefined };
 }
 function hashes(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preparation error: expected an engine fingerprint map");

@@ -24,7 +24,8 @@ source env.sh
 TMPDIR=/work/tmp bun /work/heavy-runner/current/run.js --class build goals-sm-prepare -- \
 	bun scripts/goals-matrix/prepare.ts /absolute/delivery \
 	--spidermonkey=/absolute/ordinary-pair \
-	--spidermonkey-source=/absolute/component-sources.json
+	--spidermonkey-source=/absolute/component-sources.json \
+	--shell=/absolute/current-shell-guests
 ```
 
 The directory must contain `bun-spidermonkey.wasm` and
@@ -37,7 +38,13 @@ not shared-profile cores or sides.
 Preparation records the unchanged delivery manifest, the separate source record,
 and the selected pair's byte hashes in `web/dist/goals-asset-sources.json`. Keep
 each component's actual source in that record when core and side differ. The
-existing shell-pin check and host fingerprint checks still apply. For a bounded
+host fingerprint checks still apply. When the delivery has an older shell pin,
+select current shell guests with `--shell`. That directory must contain the
+maintained shell builder's `bash-web-guests.json`, `bash-web-shell.wasm`, and
+`bash-web-env.wasm`. Preparation verifies the receipt against the current
+consumer's shell pin and file hashes, stages those guests, and records the receipt.
+Without `--shell`, the delivery's shell source must still match the current pin.
+For a bounded
 Chrome campaign, run Hono first, then append Vite React with the same clean source:
 
 ```sh
