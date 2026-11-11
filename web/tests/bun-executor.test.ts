@@ -892,11 +892,13 @@ test("the page's zero-touch fact in the run request selects the macOS Safari val
   expect(stackEnvironment(macSafari, "jsc", { [budgetKey]: "240" }, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "240", [reserveKey]: "1056" });
 })));
 
-test("the shipped table gives Linux Firefox exactly its qualified value, and every other host none", controlled(() => {
+test("the shipped table gives Linux Firefox and observed macOS Safari exactly their qualified values, and every other host none", controlled(() => {
   const shipped = qualifiedParserReserves["firefox-linux"]?.bytes;
   expect(stackEnvironment(linuxFirefox, "jsc")).toEqual(shipped === undefined ? { [budgetKey]: "208" } : { [budgetKey]: "208", [reserveKey]: shipped });
   for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
-  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192", [reserveKey]: "832" });
+  expect(stackEnvironment(macSafari, "jsc")).toEqual({ [budgetKey]: "192" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
 }));
 
 let control: Awaited<ReturnType<typeof workerControlFixture>>;

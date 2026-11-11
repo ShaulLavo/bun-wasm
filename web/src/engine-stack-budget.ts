@@ -25,6 +25,8 @@ export type QualifiedParserReserves = { readonly [Host in StackHostFamily]?: Qua
 export const qualifiedParserReserves: QualifiedParserReserves = {
   // Firefox 157 on Linux: every recursion path at 208 and 260 KiB, warm and cold (docs/stack-limits.md).
   "firefox-linux": { bytes: "960" },
+  // Safari 26.4 on an Apple silicon Mac: every recursion path at 192 and 240 KiB, warm and cold (docs/stack-limits.md).
+  "safari-macos": { bytes: "832", minimumSafariMajor: 26 },
 };
 
 const safariImpostors = /Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPR|Firefox|Mobile|iPhone|iPad|Android/;

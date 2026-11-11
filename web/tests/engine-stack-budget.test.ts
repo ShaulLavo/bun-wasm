@@ -81,9 +81,19 @@ test("a family without a qualified value never borrows another family's", () => 
 });
 
 test("the shipped table carries only values that passed their own family's qualification", () => {
-  expect(Object.keys(qualifiedParserReserves).every(host => host === "firefox-linux")).toBe(true);
+  expect(Object.keys(qualifiedParserReserves).toSorted()).toEqual(["firefox-linux", "safari-macos"]);
   expect(qualifiedParserReserves.other).toBeUndefined();
+  expect(qualifiedParserReserves["safari-macos"]?.minimumSafariMajor).toBe(26);
   for (const entry of Object.values(qualifiedParserReserves)) expect(effectiveParserReserve(entry.bytes)).toBe(Number(entry.bytes));
+});
+
+test("the shipped Safari value reaches only macOS Safari 26 or later with the zero-touch fact", () => {
+  expect(jscParserReserve(geckoStack, safari, noTouch)).toBe("832");
+  expect(jscParserReserve(geckoStack, safari.replace("Version/26.4", "Version/27.0"), noTouch)).toBe("832");
+  expect(jscParserReserve(geckoStack, safari.replace("Version/26.4", "Version/18.6"), noTouch)).toBeUndefined();
+  expect(jscParserReserve(geckoStack, safari)).toBeUndefined();
+  expect(jscParserReserve(geckoStack, safari, { maxTouchPoints: 5 })).toBeUndefined();
+  for (const agent of [iphone, ipad, firefoxMac, "Unknown/1.0"]) expect(jscParserReserve(geckoStack, agent, noTouch)).toBeUndefined();
 });
 
 test("page facts exist only where the page can read its touch points", () => {
