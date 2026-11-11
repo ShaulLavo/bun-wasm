@@ -294,3 +294,10 @@ test("every packed member must match the authenticated object manifest and list"
   assert.throws(() => checkRecordedObjectClosure(objects, members.slice(0, 1), manifest), /archive members differ/);
   assert.throws(() => checkRecordedObjectClosure(objects, [{ name: "one.o", bytes: Buffer.from("bad") }, members[1]!], manifest), /archive members differ/);
 }));
+
+test("current performance profile declares the narrow embedding contract", () => {
+  assert.deepEqual(nativeInputs().profile.performance, {
+    promiseMetadata: "allocation-stack-and-captured-rejection-stack", allocationTiming: false,
+    ordinaryResolutionCapture: false, releaseCrashDiagnostics: false, diagnosticAssertions: true,
+  });
+});

@@ -140,7 +140,7 @@ test("pair replay rejects malformed identities and changed artifact bytes", () =
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-function implicitSide() {
+function implicitSide(shared = false) {
   const u32 = (value: number): number[] => {
     const bytes: number[] = [];
     do { const next = value >>> 7; bytes.push((value & 127) | (next ? 128 : 0)); value = next; } while (value);
@@ -150,7 +150,7 @@ function implicitSide() {
   const section = (id: number, payload: number[]) => [id].concat(u32(payload.length), payload);
   const imported = (label: string, descriptor: number[]) => name("env").concat(name(label), descriptor);
   const exported = (label: string, index: number) => name(label).concat([0], u32(index));
-  const imports = [imported("core_checkpoint", [0, 0]), imported("memory", [2, 0, 1]),
+  const imports = [imported("core_checkpoint", [0, 0]), imported("memory", shared ? [2, 3, 1, 2] : [2, 0, 1]),
     imported("__indirect_function_table", [1, 0x70, 0, 1]), imported("__stack_pointer", [3, 0x7f, 1])];
   const exports = [exported("__wasm_apply_data_relocs", 1), exported("__wasm_call_ctors", 2),
     exported("spidermonkey_register", 3), exported("spidermonkey_run", 4)]
@@ -190,4 +190,25 @@ test("the experimental initializer CLI accepts the retained C2 converter inputs"
         .toContainEqual({ name: "spidermonkey_initialize_memory", kind: "function" });
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function customSection(label: string, payload: number[]): number[] {
+  const bytes = Array.from(new TextEncoder().encode(label));
+  const contents = [bytes.length].concat(bytes, payload);
+  expect(contents.length).toBeLessThan(128);
+  return [0, contents.length].concat(contents);
+}
+
+for (const profile of ["split", "shared-group"] as const) test(`debug filtering preserves executable and custom bytes for ${profile}`, () => {
+  const original = implicitSide(profile === "shared-group");
+  const kept = ["name", "bun-wasm-engine", "target_features", "bun-wasm-profile", "unknown-section"];
+  const sections = kept.concat([".debug_info", ".debug_line", ".debug_abbrev"]).map(label => customSection(label, [0]));
+  const input = Uint8Array.from(Array.from(original).concat(...sections));
+  const converted = convertSideInitializers(input, profile);
+  const expected = Uint8Array.from(Array.from(convertSideInitializers(original, profile)).concat(...kept.map(label => customSection(label, [0]))));
+  expect(converted).toEqual(expected);
+  const module = new WebAssembly.Module(converted);
+  for (const label of kept) expect(new Uint8Array(WebAssembly.Module.customSections(module, label)[0]!)).toEqual(Uint8Array.of(0));
+  expect(WebAssembly.Module.customSections(module, "dylink.0")).toHaveLength(1);
+  for (const label of [".debug_info", ".debug_line", ".debug_abbrev"]) expect(WebAssembly.Module.customSections(module, label)).toHaveLength(0);
 });
