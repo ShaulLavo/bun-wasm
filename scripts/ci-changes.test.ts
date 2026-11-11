@@ -16,6 +16,16 @@ test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fix
   expect(needsRust(["docs/bun-patches/spidermonkey-side-core-qualification.md", "spidermonkey/README.md"])).toBe(false);
 });
 
+test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
+});
+
+test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
+});
+
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "tests/fixtures/source-cache/index.ts",
