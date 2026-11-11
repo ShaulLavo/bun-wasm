@@ -246,13 +246,20 @@ of `n` quanta. No call fits a frame limit under 65,536 bytes on wasm32.
 
 **wasm32, shared-group profile.** The same libc built with
 `MORECORE_CONTIGUOUS=0` makes one `sbrk(asize)` per growth and passes it to
-the group provider through `runtime_shm.group_grow`. The bound is what libc
-asks the provider for. It bounds what the group acquires only if the provider
-grants exactly the pages asked for and keeps freed pages reusable. Waffle at
-the pinned `6e060845` does not: it takes leases of 16 to 64 pages for a
-one-page request and can strand a lease's tail. The shared-group profile is
-not qualified by this record until the pin moves to a Waffle revision with
-that guarantee.
+the group provider through `runtime_shm.group_grow`. Waffle 0.0.121, source
+`6515a313bdc5b6b56491eab6210a3a58b9232224`, grants exactly the requested
+pages without speculative leases or unused member remainders. Owner reuse
+adds no backing; otherwise growable backing increases by at most the requested
+pages. This supplies the acquisition bound at libc's source boundary.
+
+Freed dlmalloc chunks remain reusable by frame and nonframe allocations in
+that member. Its heap stays assigned until physical stop, including debt from
+a failed stop. Released member ranges return to the owner's zeroed-on-reuse
+pool; owner committed backing remains high-water until group teardown. The
+fixed profile's startup reservation is separately charged and is not a new
+physical acquisition for each logical grant. None of those quantities is
+process RSS or a promise that the whole runtime fits the frame limit.
+The split measurements below do not qualify a shared-group consumer.
 
 **Linux, macOS, FreeBSD (test hosts).** No bound can be stated for the malloc
 of glibc or Apple's libc: top padding, arena heaps, fallback mappings of
