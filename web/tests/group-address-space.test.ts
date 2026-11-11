@@ -118,7 +118,7 @@ describe("a Bun group filled to its 2 GiB end", () => {
       expect(write(member, wasi, iovec, [END - 16, 4], END - 4)).toBe(0);
       expect(view(member).getUint32(END - 4, true)).toBe(4);
       expect(output.join("")).toBe("top!edgeedge");
-      // Spans, an iovec array and a result cell that reach past the end: an errno, and no output.
+      // Invalid data spans and iovec arrays return an errno before emitting output.
       view(member).setUint32(cell, 0x1234_5678, true);
       for (const refused of [[END - 4, 5], [END - 1, 2], [END, 1], [0xffff_fff0, 0x20]] as const) {
         expect(write(member, wasi, iovec, refused, cell)).not.toBe(0);
@@ -127,6 +127,17 @@ describe("a Bun group filled to its 2 GiB end", () => {
       expect(wasi.fdWrite(1, END - 4, 1, cell)).not.toBe(0);
       expect(view(member).getUint32(cell, true)).toBe(0x1234_5678);
       expect(output.join("")).toBe("top!edgeedge");
+      // Invalid result cells fail after valid data reaches stdout, without storing a partial result.
+      const resultBoundary = ledger(member, groups);
+      view(member).setUint32(END - 4, 0x1234_5678, true);
+      for (const resultCell of [END - 3, END]) {
+        const chunks = output.length;
+        expect(write(member, wasi, iovec, [END - 16, 4], resultCell)).not.toBe(0);
+        expect(output.slice(chunks).join("")).toBe("edge");
+        expect(view(member).getUint32(END - 4, true)).toBe(0x1234_5678);
+        expect(view(member).getUint32(cell, true)).toBe(0x1234_5678);
+        expect(ledger(member, groups)).toEqual(resultBoundary);
+      }
       expect(diagnostics.length).toBeGreaterThan(0);
 
       // One page over: neither a member page nor a region nor a memory is admitted, and nothing changes.
