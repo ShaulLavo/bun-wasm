@@ -52,6 +52,7 @@ fn bounded_spawn_detail(mut detail: String) -> String {
         end -= 1;
     }
     detail.truncate(end);
+    detail.shrink_to_fit();
     detail
 }
 

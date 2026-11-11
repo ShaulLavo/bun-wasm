@@ -48,6 +48,8 @@ diagnostics into guest spawn errors. PID 0 is copied immediately; positive PID d
 are copied after final startup observation and before any consuming wait, including
 paths that skip explicit startup observation. Native Wasmtime imports retain native
 startup error chains with the same lifetime and UTF-8 bound. No upstream source is copied.
+The contract comes from Waffle `docs/host-abi.md` at
+`6de343080c356ea07acf687d974e90e9c83bc83e` (PR 480).
 `scripts/spawn-error-detail.test.ts` covers synchronous failures, Node error events,
 Bun exit callbacks, pending diagnostic publication, kill probes and the status/wait race;
 native import tests cover short buffers, memory validation, authorization and collection.

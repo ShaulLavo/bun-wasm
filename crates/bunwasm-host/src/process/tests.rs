@@ -4,6 +4,9 @@ use super::*;
 fn spawn_diagnostic_keeps_the_winning_cause_and_bounds_only_the_guest_copy() {
     let cancel = Cancellation::default();
     let original = format!("outer context: {}", "🦀".repeat(2048));
+    let bounded = bounded_spawn_detail(original.clone());
+    assert!(bounded.len() <= 4096);
+    assert!(bounded.capacity() <= 4096);
     let error = anyhow::anyhow!(original.clone()).context("module startup");
     let mut host_output = Vec::new();
     assert_eq!(
