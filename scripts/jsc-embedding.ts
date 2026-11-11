@@ -60,10 +60,20 @@ export function parserChainFixture() {
   return { path: check.path, hostOptions: ["--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
+/**
+ * The array literal fixture: the core refuses the literal's 80,016-byte constant buffer during
+ * bytecode generation, then the array's own storage on the first call (docs/bun-patches/jsc-array-literal-allocation.md).
+ */
+export function arrayLiteralFixture() {
+  return { path: "tests/jsc-embedding/array-literal-allocation", hostOptions: ["--refuse-engine-allocation", "80000-80511:2"] };
+}
+
 function testFixtures(artifact: string): void {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-embedding-"));
   try {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
+    const literal = arrayLiteralFixture();
+    runFixture(artifact, literal.path, scratch, literal.hostOptions);
     const stack = stackFixture();
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
     const chain = parserChainFixture();
