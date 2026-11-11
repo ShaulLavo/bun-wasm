@@ -58,5 +58,5 @@ export function initializationPair(kind: PairedEngine, shared = false) {
     ])),
     section(11, vector([[1, 4, 22, 0, 0, 0]])),
   ]);
-  return { kind, core: tagProgramCore(core, kind), side };
+  return { kind, core: tagProgramCore(core, kind), side, untaggedCore: core };
 }
