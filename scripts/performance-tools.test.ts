@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { capture, checkResult } from "./performance/capture";
-import { canonical, identity, json, number, object, parsePlan, sha256, treeInventory } from "./performance/input";
+import { array, canonical, identity, json, number, object, parsePlan, sha256, treeInventory } from "./performance/input";
 import { splitProfile } from "./performance/profile";
 import { replay } from "./performance/replay";
 
@@ -16,6 +16,12 @@ function run(command: string, args: string[]) {
   if (result.error || result.status !== 0) throw new Error(`${command}: ${result.error ?? result.stderr}`);
   return result.stdout;
 }
+
+test("the tools package's default Cargo binaries contain only the WASI guest", () => {
+  const manifest = object(JSON.parse(run("cargo", ["read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
+  const binaries = array(manifest.targets).map(object).filter(target => array(target.kind).includes("bin")).map(target => target.name);
+  expect(binaries).toEqual(["bun-tools"]);
+});
 
 test("saved profile counts sample entries, separates useful callees, and rejects missing captures", () => {
   const frame = (id: number, name: string, url: string, children: number[]) => ({ id, callFrame: { functionName: name, url }, children, hitCount: 9999 });

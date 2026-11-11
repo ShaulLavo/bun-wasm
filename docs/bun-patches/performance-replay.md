@@ -52,4 +52,7 @@ The Rust counter replaces the audit's original `tools/icount.c` using Linux
 rejection, per-event enabled/running metadata, fixed multiplexing rejection,
 explicit affinity selection on hybrid CPUs, and descendant cleanup. It uses no
 upstream copied implementation or additional dependency. None of these tools is
-linked into the guest or listed in the package release payload.
+linked into the guest or listed in the package release payload. The tools crate
+disables automatic binary discovery so its default Cargo build selects only the
+declared `bun-tools` guest. The host counter uses the documented direct `rustc`
+command, which the focused controls also execute.
