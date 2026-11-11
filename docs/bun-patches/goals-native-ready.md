@@ -22,6 +22,9 @@ The timeout bounds this observation only. Admission, workload, product clocks,
 queue ownership, and native cleanup are unchanged. SIGINT and SIGTERM cancel the
 wait. Every outcome closes all installed watchers and removes the deadline timer
 and abort listener through the existing lifetime helpers.
+The existing `bounded` implementation moves unchanged from `execute.ts` into
+`bounded.ts`; `execute.ts` retains its export for existing phase callers.
+`lifetime.ts` imports the same helper without loading the guest execution graph.
 
 `checks/quality-goals-matrix-native-ready.json` owns local file race and resource
 cleanup regressions under the existing blocking quality gate. No native workload

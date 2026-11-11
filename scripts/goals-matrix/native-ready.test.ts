@@ -62,7 +62,7 @@ test("incomplete CLI JSON stays pending until a real file notification completes
   let changed: () => void = () => { throw new Error("Observer not installed"); };
   const waiting = waitNativeReady(f.options, (directory, callback) => { changed = callback; return f.observe(directory, callback); });
   let settled = false;
-  void waiting.then(() => { settled = true; });
+  void waiting.then(() => { settled = true; }, () => { settled = true; });
   changed();
   await Promise.resolve();
   expect(settled).toBe(false);
@@ -136,7 +136,7 @@ test("watcher errors and partial observer installation close every installed wat
   f.watchers.length = 0;
   await expect(waitNativeReady({ ...f.options, exitFile: join(f.root, "absent", "queue.exit") }, f.observe)).rejects.toThrow("ENOENT");
   expect(f.watchers).toHaveLength(1);
-  expect(getEventListeners(f.controller.signal, "abort")).toHaveLength(0);
+  f.cleaned();
 }));
 
 test("read errors fail instead of waiting for another notification", () => fixture(async f => {
