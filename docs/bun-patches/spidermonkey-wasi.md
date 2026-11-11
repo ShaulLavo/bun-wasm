@@ -74,3 +74,8 @@ Fresh cache replay preserves its original source commit, tree and diff as
 provenance. It still checks the current native recipes, profile, Mozilla source
 manifest, configuration, exported headers, archive and toolchain bytes. An
 unrelated runtime source commit does not change the native library generation.
+
+Archive recipes and irregexp source ownership contribute to one ordered set of
+hashed input paths. Replay reads the complete saved set, then reconstructs the
+irregexp closure without adding duplicate records. Cold creation and replay
+therefore compare the same receipt while still hashing every required input.

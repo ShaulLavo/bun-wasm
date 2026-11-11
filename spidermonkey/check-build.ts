@@ -206,6 +206,10 @@ export function headerIdentity(root: string, mode: "write" | "verify" = "write")
   return { count: manifest.count, sha256: manifest.sha256 };
 }
 
+export function nativeObjectListIdentity(archiveInputs: readonly string[], closureInputs: readonly string[]) {
+  return Array.from(new Set(archiveInputs.concat(closureInputs)), path => ({ path, sha256: fileHash(path) }));
+}
+
 const originalBuildHead = "1a53e2123e4876be671a9a03eb025ae569795001";
 const originalBuildTree = "c494195936b4b23bfc8bef9fdcb624e513fa82e4";
 const correctedVerifierHead = "844e52995826ec31d297aaecdd74d53641f9f7fb";
@@ -428,7 +432,7 @@ function main(): void {
     recipeInputs: ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in", "unresolved-symbols.json"].map((path) => ({ path, sha256: fileHash(join(recipe, path)) })),
     patchSha256: fileHash(join(recipe, "spidermonkey-wasi.patch")), mozconfigSha256: fileHash(join(root, "mozconfig")),
     cargoManifestSha256: fileHash(join(root, "firefox/Cargo.toml")),
-    objectLists: packed.inputs.concat(irregexpClosure.inputs).map((path) => ({ path, sha256: fileHash(path) })),
+    objectLists: nativeObjectListIdentity(packed.inputs, irregexpClosure.inputs),
     archiveObjectsSha256: hash(packed.objects.join("\n") + "\n"), relocationCounts,
     exceptionTagSections: 0, exceptionTagImports: 0, nonPicCodeRelocations: 0, absoluteLibcStateRelocations: 0,
     rustStaticlibIncluded: false,
