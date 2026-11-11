@@ -1,3 +1,4 @@
 CommonJS factory, cached identity and ES namespace stay distinct
+converted ES imports preserve namespaces before and after require
 nullish exports keep the namespace; false and zero override it
 ordinary ES namespaces and CommonJS exports stay unchanged

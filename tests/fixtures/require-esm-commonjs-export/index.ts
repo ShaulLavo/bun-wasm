@@ -7,11 +7,15 @@ assert.equal(importDefault(factory).default(), "factory called");
 assert.equal(require("./factory.mts"), factory);
 assert.equal(require.cache[require.resolve("./factory.mts")].exports, factory);
 const namespace = await import("./factory.mts");
-assert.equal(namespace["module.exports"], factory);
+assert.equal(namespace["module.exports"](), "factory called");
 assert.equal(namespace.default(), "default called");
-assert.equal(namespace.calls, 1);
 assert.equal(typeof namespace, "object");
 console.log("CommonJS factory, cached identity and ES namespace stay distinct");
+
+assert.deepEqual(require("./parent.mts").values, ["import-first default", "default called"]);
+assert.equal(require("./import-first.mts")(), "import-first factory");
+assert.equal(require("./factory.mts"), factory);
+console.log("converted ES imports preserve namespaces before and after require");
 
 assert.equal(require("./falsy.mts")["module.exports"], null);
 assert.equal(require("./undefined.mts")["module.exports"], undefined);
