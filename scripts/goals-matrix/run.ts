@@ -18,11 +18,11 @@ import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
 import { appendFile } from "node:fs/promises";
-import { parseMemoryProfile, requireProfileEngine, type ProgramMemoryProfile } from "../../web/src/program-profile";
+import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { verifyPreparedSiteInventory } from "./prepared-site";
 
 export interface Options {
-  profile?: ProgramMemoryProfile;
+  profile?: PlaygroundProfile;
   signal?: AbortSignal;
   nativeAdmission?: NativeAdmission;
   reactStartupUrl?: string;
@@ -46,7 +46,7 @@ export function options(args: readonly string[]): Options {
   }
   const timeoutMs = parseTimeout(values.get("timeout-ms") ?? "90000");
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
-  const profile = parseMemoryProfile(values.get("profile"));
+  const profile = playgroundProfile(values.get("profile") ?? null);
   const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
   for (const engine of selectedEngines) requireProfileEngine(engine, profile);
   const assetSource = values.get("asset-source");
@@ -111,10 +111,10 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-export function playgroundURL(base: string, framework: Framework, engine: Engine, profile: ProgramMemoryProfile = "split"): string {
+export function playgroundURL(base: string, framework: Framework, engine: Engine, profile: PlaygroundProfile = "split"): string {
+  requireProfileEngine(engine, profile);
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
-  requireProfileEngine(engine, profile);
   url.searchParams.set("profile", profile);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
   if (framework.rootPreview) url.searchParams.set("root-previews", "");

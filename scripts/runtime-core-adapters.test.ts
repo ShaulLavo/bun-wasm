@@ -58,11 +58,14 @@ function withoutBuiltinLoaderDeltas(source: string) {
 }
 
 function withoutStackCapabilityDeltas(source: string) {
-  const declaration = '  const parseCapturedStack = native.engine === "jsc" || native.engine === "host" && !internal.hasNativeStackTrace;\n';
+  const declaration = '  const parseCapturedStack = native.engine === "jsc" || native.engine === "spidermonkey" || native.engine === "host" && !internal.hasNativeStackTrace;\n';
+  const awaitingCaller = "/^async[ *]/.test(this.#frame.name)";
   expect(source.split(declaration)).toHaveLength(2);
+  expect(source.split(awaitingCaller)).toHaveLength(2);
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
   return source.replace(declaration, "")
+    .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
 }
@@ -114,7 +117,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin original syntax; stack capability selection, descriptors and builtin changes have explicit deltas.
+// Hashes pin original syntax; stack capability selection, SpiderMonkey's awaiting-caller name, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",

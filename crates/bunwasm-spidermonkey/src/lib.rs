@@ -106,6 +106,10 @@ extern "C" {
         out: *mut Handle,
     ) -> bool;
     pub fn bsm_external_buffer(data: *mut u8, len: usize) -> Handle;
+    #[cfg(bun_wasm_shared_group)]
+    pub fn bsm_shared_region_buffer(data: *mut u8, len: usize, out: *mut Handle) -> bool;
+    #[cfg(bun_wasm_shared_group)]
+    pub fn bsm_shared_buffer_data(handle: Handle) -> *mut u8;
     pub fn bsm_detach_external(handle: Handle) -> bool;
     pub fn bsm_is_detachable_buffer(handle: Handle) -> bool;
     pub fn bsm_detach_buffer(handle: Handle);
@@ -116,6 +120,7 @@ extern "C" {
     pub fn bsm_set_async_context(handle: Handle);
     pub fn bsm_gc();
     pub fn bsm_heap_info(used: *mut f64, total: *mut f64, external: *mut f64);
+    pub fn bsm_tier_counts(polls: *mut u32, entries: *mut u64);
     pub fn bsm_eval(source: *const c_char, len: usize, status: *mut u32) -> Handle;
     pub fn bsm_answer(handle: Handle) -> f64;
     pub fn bsm_poll_count(tier: u8) -> u32;

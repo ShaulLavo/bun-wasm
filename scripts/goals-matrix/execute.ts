@@ -1,15 +1,17 @@
-import type { ProgramMemoryProfile } from "../../web/src/program-profile";
 import { cleanupTimeoutMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import type { Transport } from "./transport";
+import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
+import { bounded } from "./bounded";
+export { bounded } from "./bounded";
 export interface Execution {
+  profile?: PlaygroundProfile;
   box: Box;
   framework: Framework;
   url: string;
-  profile?: ProgramMemoryProfile;
   port?: number;
   timeoutMs: number;
   installTimeoutMs?: number;
@@ -19,18 +21,6 @@ export interface Execution {
   signal?: AbortSignal;
 }
 type FailureLog = { text: string; diagnostic: string; saved: boolean };
-export async function bounded<T>(operation: () => Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    signal?.throwIfAborted();
-    return await Promise.race([operation(), new Promise<never>((_, reject) => {
-      abort = () => reject(signal?.reason ?? new Error("Matrix interrupted"));
-      signal?.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(() => reject(new Error(`Phase timed out after ${timeoutMs} ms`)), timeoutMs);
-    })]);
-  } finally { clearTimeout(timer); if (abort) signal?.removeEventListener("abort", abort); }
-}
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: () => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();

@@ -19,6 +19,14 @@ cannot pass. The same button in the same document must receive a trusted click,
 and its counter must change from zero to one. Other browser transports keep their
 existing click implementation.
 
+Native arming reports a missing or disabled SSR counter as pending until its
+hydration enables the button. The transport polls that state within the original
+click phase deadline before taking a native snapshot or pressing once. A ready
+counter must still start at zero, be visible and hittable, and retain the same
+trusted event, target, URL, time origin and nonce checks. Hydration never grants
+a second tap or a new deadline. Focused controls cover disabled-to-enabled
+observation, a counter that never enables, and exactly one native press.
+
 Each owner tab receives a unique test title for selective native cleanup. The Mac
 wrapper checks availability, owns the normal Mac lock, refuses an existing
 SafariDriver process, and records server and lock cleanup. Device command failure

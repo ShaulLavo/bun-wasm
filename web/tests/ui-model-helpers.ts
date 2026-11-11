@@ -8,6 +8,7 @@ import * as viewModule from "@codemirror/view";
 import { declareModuleMemory, pages, type Runtime } from "waffle";
 import { getVfsDescriptor } from "../src/shared-fs";
 import * as engineLoader from "../src/engine-loader";
+import { profileAsset } from "../src/program-profile";
 import type { Playground } from "../src/playground/playground";
 import type { Sandbox } from "../../sandbox/src/sandbox";
 
@@ -108,7 +109,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     createRuntime: () => (runtime = { ...runtime }),
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => { loads.push(url); return { module: {}, size: 1, build: null }; },
+    loadWasm: async (url: string) => { loads.push(url); return { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null }; },
+    loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], _progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile)),
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
@@ -125,7 +127,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     },
     startRun: (options: { args: string[]; env: Record<string, string> }) => { const run = { args: options.args, env: options.env, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
-    location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign() {} },
+    location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign(_url: string | URL) {} },
     requestIdleCallback: () => 0,
     window: { matchMedia: () => ({ matches: false }) },
     addEventListener: (type: string, listener: (event: { persisted: boolean }) => void) => { if (type === "pagehide") listeners.push(listener); },
@@ -138,7 +140,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "@codemirror/state": Object.keys(stateModule), "@codemirror/view": Object.keys(viewModule),
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
     waffle: ["createRuntime", "declareModuleMemory", "pages"], "browser-programs": ["BrowserPrograms"],
-    "engine-loader": ["ENGINES", "WasmMissing", "isEngine", "loadWasm", "mb", "registerModuleScope"],
+    "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],

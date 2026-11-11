@@ -13,8 +13,8 @@ test("goals record and carry an explicit memory profile without changing the eng
   const args = ["--asset-source=fixture", "--engines=quickjs,jsc"];
   expect(options(args).profile).toBe("split");
   expect(options(args.concat(["--profile=shared-group"])).profile).toBe("shared-group");
-  expect(() => options(args.concat(["--profile=shared"]))).toThrow("Unknown Bun program memory profile");
-  expect(() => options(["--asset-source=fixture", "--profile=shared-group", "--engines=spidermonkey"])).toThrow("unavailable");
+  expect(() => options(args.concat(["--profile=shared"]))).toThrow("Unknown Bun program profile");
+  expect(() => options(["--asset-source=fixture", "--profile=shared-group", "--engines=spidermonkey"])).toThrow("does not support");
   const url = new URL(playgroundURL("https://example.test/", frameworks[0]!, "jsc", "shared-group"));
   expect(url.searchParams.get("engine")).toBe("jsc");
   expect(url.searchParams.get("profile")).toBe("shared-group");
