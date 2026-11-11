@@ -74,7 +74,7 @@ test("JSC stack controls use their discovered fixture with a small real host sta
 test("the JSC gate runs getter semantics at the smallest browser budget, past the old getter depth", () => {
   expect(getterDispatchFixture()).toEqual({
     path: "tests/fixtures/getter-dispatch",
-    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000"],
+    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000", "--env", "GETTER_DISPATCH_WIDE_LOCALS=33000"],
   });
 });
 

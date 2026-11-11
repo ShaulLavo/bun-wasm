@@ -61,10 +61,16 @@ ok 48 nested getters
 ok getters read by a generator
 ok getter read with 8 live locals
 ok super getter read with 8 live locals
+ok throwing getter read with 8 live locals
 ok getter read with 200 live locals
 ok super getter read with 200 live locals
+ok throwing getter read with 200 live locals
 ok getter read with 2000 live locals
 ok super getter read with 2000 live locals
+ok throwing getter read with 2000 live locals
+ok getter read with the most live locals
+ok super getter read with the most live locals
+ok throwing getter read with the most live locals
 ok first calls of fresh getters under allocation
 ok unbounded getter recursion
 ok unbounded super getter recursion

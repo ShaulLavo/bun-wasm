@@ -1572,7 +1572,7 @@ index 3bf82d66..f46d4dd5 100644
  #define OFFLINE_ASM_ASSERT_ENABLED 1
  #else
 diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
-index ad10ba11..4fbd4d7e 100644
+index ad10ba11..1eec7afc 100644
 --- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 +++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 @@ -893,6 +893,32 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_direct)
@@ -1670,7 +1670,7 @@ index ad10ba11..4fbd4d7e 100644
      LLINT_RETURN_PROFILED(result);
  }
  
-@@ -2261,6 +2319,65 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
+@@ -2261,6 +2319,66 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
      LLINT_CALL_RETURN(globalObject, callerSP, codePtr.taggedPtr(), JSEntryPtrTag);
  }
  
@@ -1712,11 +1712,12 @@ index ad10ba11..4fbd4d7e 100644
 +    calleeFrame->setThisValue(thisValue);
 +    callFrame->setCurrentVPC(pc);
 +
-+    // setUpCall() can compile the getter, and that can collect. A collection scans the frame
-+    // stack from its published pointer and clears what lies below it (CLoopStack::sanitizeStack),
-+    // and it cannot see wasm locals. So the finished frame is published while setUpCall() runs:
-+    // that keeps the getter and its receiver alive and the frame intact. The caller's pointer is
-+    // put back before any way out.
++    // setUpCall() can compile the getter. A collection scans the frame stack from its published
++    // pointer, clears what lies below it (CLoopStack::sanitizeStack) and cannot see wasm locals.
++    // ScriptExecutable::prepareForExecutionImpl() defers collection while it compiles, and this
++    // does not rely on that: the finished frame is published while setUpCall() runs, which keeps
++    // the getter and its receiver alive and the frame intact. The caller's pointer is put back
++    // before any way out.
 +    CLoopStack& stack = vm.cloopStack();
 +    void* callerStackPointer = stack.currentStackPointer();
 +    stack.setCurrentStackPointer(calleeFrame);

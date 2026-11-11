@@ -61,7 +61,7 @@ export function getterDispatchFixture() {
   const manifest = "native-getter-dispatch.json";
   const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
   if (check.owner !== "native") throw new Error("JSC getter dispatch fixture needs its native check owner");
-  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000"] };
+  return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000", "--env", "GETTER_DISPATCH_WIDE_LOCALS=33000"] };
 }
 
 /** The parser chain fixture on this pair: JSC must refuse its deeper chain with a catchable RangeError. */

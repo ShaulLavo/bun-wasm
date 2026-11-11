@@ -40,7 +40,7 @@ const end = [0x0b];
 
 interface SideOptions { names?: string[]; exportStackPointer?: boolean; locals?: number }
 
-function side(body: number[], { names = [interpreter], exportStackPointer = true, locals = 4 }: SideOptions = {}): Uint8Array {
+function side(body: number[], { names = [interpreter], exportStackPointer = true, locals = 4 }: SideOptions = {}): Uint8Array<ArrayBuffer> {
   const code = [1].concat(leb(locals), [0x7f], body);
   const functionNames = names.flatMap((name, position) => leb(position + 1).concat(text(name)));
   const nameSection = text("name").concat([1], leb(leb(names.length).length + functionNames.length), leb(names.length), functionNames);

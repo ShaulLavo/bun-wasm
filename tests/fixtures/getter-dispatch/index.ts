@@ -207,12 +207,15 @@ function manyLocals(count: number, read: string, context = ""): string {
 }
 const busy = { get value(): number { const a = 1; const b = [a, 2, 3]; return chain.first.length + b.length + a; } };
 const localSum = (count: number): number => (count * (count - 1)) / 2 + busy.value;
-for (const count of [8, 200, 2000]) {
+// GETTER_DISPATCH_WIDE_LOCALS lets a gate ask for enough locals to need the widest operand form.
+const widest = Number(process.env.GETTER_DISPATCH_WIDE_LOCALS ?? 300);
+for (const [label, count] of [["8", 8], ["200", 200], ["2000", 2000], ["the most", widest]] as const) {
   const reader = new Function("holder", manyLocals(count, "holder.value")) as (holder: typeof busy) => number;
-  check(`getter read with ${count} live locals`, reader(busy), localSum(count));
+  check(`getter read with ${label} live locals`, reader(busy), localSum(count));
   const SuperReader = (0, eval)(`(Parent => class extends Parent { read() { ${manyLocals(count, "super.value")} } })`)(
     class { get value(): number { return busy.value; } }) as new () => { read(): number };
-  check(`super getter read with ${count} live locals`, new SuperReader().read(), localSum(count));
+  check(`super getter read with ${label} live locals`, new SuperReader().read(), localSum(count));
+  check(`throwing getter read with ${label} live locals`, thrown(() => reader({ get value(): number { throw new GetterFailure("busy"); } })), "GetterFailure");
 }
 
 // First calls of getters that were never compiled, with garbage between them.
