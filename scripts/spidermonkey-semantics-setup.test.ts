@@ -29,7 +29,7 @@ function processOutcome(result: Pick<Bun.SyncSubprocess, "exitCode" | "signalCod
   };
 }
 
-function runControls(root: string, args: readonly string[] = []) {
+function runControls(root: string, args: readonly string[] = [], env = process.env) {
   const trace = join(root, "compiler.trace");
   const temporary = mkdtempSync(join(root, "tmp/control-"));
   writeFileSync(trace, "");
@@ -39,7 +39,8 @@ function runControls(root: string, args: readonly string[] = []) {
     const result = Bun.spawnSync([process.execPath, "test", "./scripts/spidermonkey-semantics.test.ts"].concat(args), {
       cwd: root,
       detached: true,
-      env: { ...process.env, TMPDIR: temporary, PATH: `${join(root, "bin")}:${process.env.PATH}`, BUN_WASM_SM_COMPILER_TRACE: trace },
+      // Bun's agent output hides the passing test names used here to prove execution.
+      env: { ...env, CLAUDECODE: undefined, TMPDIR: temporary, PATH: `${join(root, "bin")}:${env.PATH}`, BUN_WASM_SM_COMPILER_TRACE: trace },
       timeout: 30_000,
     });
     pid = result.pid;
@@ -69,6 +70,12 @@ function expectCompleted(result: ReturnType<typeof runControls>, exitCode: numbe
   expect(result, JSON.stringify(result, null, 2)).toMatchObject({ exitCode, signalCode: null, timedOut: false, maxBufferExceeded: false });
 }
 
+function expectRuntimeControls(result: ReturnType<typeof runControls>): void {
+  expectCompleted(result, 0);
+  expect(result.output).toContain(`(pass) ${commonjsTest}`);
+  expect(result.output).toContain(`(pass) ${finalizerTest}`);
+}
+
 function processExists(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error) {
@@ -91,7 +98,7 @@ function prepareRegressionControls() {
     compilerWrapper(join(root, "bin"), "c++", "sleep 6");
     compilerWrapper(join(root, "bin"), "rustup", "sleep 6");
     const started = performance.now();
-    const slow = runControls(root);
+    const slow = runControls(root, [], { ...process.env, CLAUDECODE: "1" });
     const compileElapsedMs = performance.now() - started;
 
     compilerWrapper(join(root, "bin"), "c++", "");
@@ -133,10 +140,8 @@ test("independent native compilers start together instead of spending the setup 
   expect(stages.slice(2).sort()).toEqual(["c++ exec", "rustup exec"]);
 });
 
-test("native compiler setup can exceed five seconds without consuming either runtime deadline", () => {
-  expectCompleted(controls.slow, 0);
-  expect(controls.slow.output).toContain(`(pass) ${commonjsTest}`);
-  expect(controls.slow.output).toContain(`(pass) ${finalizerTest}`);
+test("native compiler setup can exceed five seconds and report executed controls in agent sessions", () => {
+  expectRuntimeControls(controls.slow);
   expect(controls.slow.output).not.toContain("timed out");
   expect(controls.slow.exitCode).toBe(0);
   expect(controls.compileElapsedMs).toBeGreaterThan(6_000);
@@ -162,6 +167,7 @@ test("compiler failure remains blocking and removes partially prepared native co
 
 test("filtering out every runtime test still removes module setup outputs", () => {
   expectCompleted(controls.filtered, 0);
+  expect(() => expectRuntimeControls(controls.filtered)).toThrow();
   expect(controls.filtered.output).not.toContain(`(pass) ${finalizerTest}`);
   expect(controls.filtered.exitCode).toBe(0);
   expect(controls.filtered.leftovers).toEqual([]);

@@ -6,7 +6,8 @@
 
   const apply = Reflect.apply;
 
-  const internal = { native, sharedObjects: native.sharedObjects };
+  const internal = { native, sharedObjects: native.sharedObjects,
+    stringIsWellFormed: Function.prototype.call.bind(String.prototype.isWellFormed) };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {

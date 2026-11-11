@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 import { browsers, engines, boxId, frameworks, type Browser, type Engine, type Framework } from "./catalog";
 import { initialCells, validateReport, type Report, type Cell } from "./model";
 import { saveReport } from "./report";
-import { deadlinePolicy, parseInstallTimeouts, parseTimeout, sameDeadlines } from "./deadlines";
+import { campaignDeadlines, cellDeadlines, parseInstallTimeouts, parseTimeout, sameDeadlines } from "./deadlines";
 import { prerequisites } from "./discovery";
 import { execute, bounded } from "./execute";
 import { createPlaywrightTransport, type Transport } from "./transport";
@@ -25,7 +25,7 @@ export interface Options {
   signal?: AbortSignal;
   nativeAdmission?: NativeAdmission;
   reactStartupUrl?: string;
-  root: string; output: string; timeoutMs: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
+  root: string; output: string; timeoutMs?: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
   iphoneControlUrl?: string; iphoneAgentCommand?: string;
 }
@@ -43,7 +43,8 @@ export function options(args: readonly string[]): Options {
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
-  const timeoutMs = parseTimeout(values.get("timeout-ms") ?? "90000");
+  const suppliedTimeout = values.get("timeout-ms");
+  const timeoutMs = suppliedTimeout === undefined ? undefined : parseTimeout(suppliedTimeout);
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
@@ -75,15 +76,17 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
   };
   return { lane: values.get("mac-lane") ?? "", thread: values.get("mac-thread") ?? "", expectedSeconds: seconds("mac-expected-seconds", 600), waitSeconds: seconds("mac-wait-seconds", 3600), timeoutSeconds: seconds("mac-timeout-seconds", 900) };
 }
-async function nativeTransport(box: Cell, config: Options): Promise<Transport> {
+async function nativeTransport(box: Cell, config: Options, timeoutMs: number): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
-    control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs,
+    control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
+    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000),
     saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
   });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
   const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
-  return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs: config.timeoutMs });
+  return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
+    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000) });
 }
 export async function initialReport(config: Options): Promise<Report> {
   const staged: Report["source"] | undefined = config.sourceFile ? JSON.parse(await readFile(config.sourceFile, "utf8")) : undefined;
@@ -94,7 +97,7 @@ export async function initialReport(config: Options): Promise<Report> {
   const files = await assetIdentity(config.root);
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: deadlinePolicy(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
+  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: unknown = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
@@ -118,14 +121,15 @@ export function playgroundURL(base: string, framework: Framework, engine: Engine
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
 }
-async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal): Promise<Cell> {
+async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal, policy: Report["deadlines"]): Promise<Cell> {
   const missing = prerequisites(cell, config);
   if (missing) return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: cell.attempts, status: "not runnable yet", ...missing };
   const framework = frameworks.find(framework => framework.id === cell.framework);
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
   const port = framework.rootPreview ? await availablePort() : 5173;
-  return execute({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), timeoutMs: config.timeoutMs, buildTimeoutMs: deadlinePolicy(config.timeoutMs).buildTimeouts[cell.framework], installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
-    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
+  const limits = cellDeadlines(policy, cell);
+  return execute({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
+    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);
 }
@@ -178,7 +182,7 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
     for (const [index, cell] of report.cells.entries()) {
       if (!selectedCell(cell, config)) continue;
       if (signal.aborted) break;
-      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, signal);
+      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, signal, report.deadlines);
       report.cells[index] = result;
       const blocker = nativePlatformBlocker(result);
       if (blocker) blockers.set(cell.browser, blocker);

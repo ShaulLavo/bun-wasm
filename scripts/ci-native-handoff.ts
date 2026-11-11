@@ -98,12 +98,12 @@ function presentRoots(directory: string, roots: readonly Root[]): string[] {
   }
   return present;
 }
-function inventory(directory: string, roots: readonly string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
+function inventory(directory: string, roots: readonly string[], archive: ArchiveName, repositories: GitDirectory[], excluded = ""): string[] {
   const paths: string[] = [];
   const tracked = new Set<string>();
   function visit(path: string): void {
     safeRelative(path);
-    if (!include(path, tracked)) return;
+    if (path === excluded || !include(path, tracked)) return;
     const absolute = join(directory, path);
     const stat = lstatSync(absolute);
     const metadata = metadataRoot(path);
@@ -129,6 +129,25 @@ function shell(script: string, ...args: string[]): void {
 function output(values: Record<string, string>): void {
   appendFileSync(required("GITHUB_OUTPUT"), Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
 }
+function stageBunGit(state: Context, scratch: string): string {
+  const path = "vendor/bun/.git";
+  inventory(state.workspace, [path], "sources.tar.zst", []);
+  const directory = join(scratch, "source-git");
+  const metadata = join(directory, path);
+  const bun = join(state.workspace, "vendor/bun");
+  const base = /^BUN_COMMIT=([a-f0-9]{40})$/m.exec(readFileSync(join(state.workspace, "scripts/sync-bun.sh"), "utf8"))?.[1];
+  if (!base) throw new Error("Missing pinned Bun source commit");
+  const head = git(bun, "rev-parse", "HEAD");
+  mkdirSync(join(metadata, "objects/pack"), { recursive: true });
+  mkdirSync(join(metadata, "refs"));
+  // The consumer checks the patched HEAD and reapplies patches to the pinned base tree.
+  // Keep those two complete trees, without upstream history or unrelated refs.
+  shell('git -C "$1" rev-list --objects --no-object-names --no-walk "$3" "$4" | git -C "$1" pack-objects "$2"', bun, join(metadata, "objects/pack/pack"), head, base);
+  writeFileSync(join(metadata, "HEAD"), `${head}\n`);
+  writeFileSync(join(metadata, "shallow"), Array.from(new Set([head, base])).join("\n") + "\n");
+  execFileSync("git", ["-C", bun, "read-tree", head], { env: { ...process.env, GIT_INDEX_FILE: join(metadata, "index") } });
+  return directory;
+}
 async function pack(state: Context, bundle: string): Promise<void> {
   if (existsSync(bundle)) throw new Error("Refusing an existing handoff bundle");
   mkdirSync(bundle);
@@ -143,10 +162,15 @@ async function packArchives(state: Context, bundle: string, scratch: string): Pr
   for (const item of layout(state)) {
     const start = performance.now();
     const roots = presentRoots(item.directory, item.roots);
-    const paths = inventory(item.directory, roots, item.name, repositories);
+    const sources = item.name === "sources.tar.zst";
+    const extraDirectory = sources ? stageBunGit(state, scratch) : item.directory;
+    const paths = inventory(item.directory, roots, item.name, repositories, sources ? "vendor/bun/.git" : "");
+    const extraPaths = sources ? inventory(extraDirectory, ["vendor/bun/.git"], item.name, repositories) : [];
     const list = join(scratch, "files");
+    const extraList = join(scratch, "extra-files");
     writeFileSync(list, paths.join("\0") + "\0");
-    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -o "$3"', item.directory, list, join(bundle, item.name));
+    writeFileSync(extraList, extraPaths.length ? extraPaths.join("\0") + "\0" : "");
+    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -C "$4" -T "$5" -cpf - | zstd -T2 -6 --long=27 -o "$3"', item.directory, list, join(bundle, item.name), extraDirectory, extraList);
     archives[item.name] = await hash(join(bundle, item.name));
     console.log(JSON.stringify({ archive: item.name, roots, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
   }
