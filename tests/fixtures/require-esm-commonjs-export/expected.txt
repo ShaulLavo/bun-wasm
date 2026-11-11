@@ -1,0 +1,3 @@
+CommonJS factory, cached identity and ES namespace stay distinct
+nullish exports keep the namespace; false and zero override it
+ordinary ES namespaces and CommonJS exports stay unchanged
