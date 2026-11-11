@@ -95,10 +95,10 @@ function chainCompletes(attempt, depth) {
     throw error;
   }
 }
-function chainCapacity(attempt) {
-  if (chainCompletes(attempt, n)) return n;
+function chainCapacity(attempt, maximum = n) {
+  if (chainCompletes(attempt, maximum)) return maximum;
   let low = 0;
-  let high = n;
+  let high = maximum;
   while (low + 1 < high) {
     const middle = (low + high) >> 1;
     if (chainCompletes(attempt, middle)) low = middle;
@@ -108,13 +108,17 @@ function chainCapacity(attempt) {
 }
 // Every chain's capacity from one guest: the parser's refusal is catchable, so the search runs in
 // process and prints one JSON line before the usual result. n is the deepest nesting tried.
-function chainCapacities() {
+function chainCapacities(maximum = n) {
   const capacities = {};
-  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
+  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt, maximum);
   return capacities;
 }
 // Leave the loader's synchronous calls before comparing capacities across contexts.
-actions.chainCapacity = async () => { await Promise.resolve(); console.log('capacities', JSON.stringify(chainCapacities())); };
+actions.chainCapacity = async () => {
+  await Promise.resolve();
+  chainCapacities(0);
+  console.log('capacities', JSON.stringify(chainCapacities()));
+};
 // A parent and a Worker of this file in one run: the parent's capacities before the child starts
 // and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
 // JSON object merged into the child's copy of the environment; a null value removes that key.
@@ -130,6 +134,8 @@ function workerEnvironment() {
 actions.chainWorker = async () => {
   const { Worker } = require('node:worker_threads');
   await Promise.resolve();
+  // Enter the whole measurement loop once before comparing contexts, including its PBL frame.
+  chainCapacities(0);
   const before = chainCapacities();
   const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
   let output = '';

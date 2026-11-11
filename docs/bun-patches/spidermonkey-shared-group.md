@@ -77,6 +77,10 @@ split patch, recipe files and admitted split archive are not changed.
   compares these host facts with the side's traced bounds and `register_depth=16`, checks
   actual interpreter or portable-baseline counters, then tests catchable recursion, callback
   reentry refusal and recovery before the unchanged shared-memory and retained-debt assertions.
+- `scripts/shared-wasm-memory-browser.test.ts`: the discovered Browser check uses the selected
+  shared program for separate interpreter and portable-baseline tests. Each retains the original
+  test and Browser-driver deadline. The existing shared CI producer supplies both tests; no
+  additional common core, library or side is built.
 
 ## Limits
 
