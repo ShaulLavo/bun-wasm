@@ -64,7 +64,7 @@ declare namespace BunWasm {
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
-    readonly engine: "quickjs" | "jsc" | "host" | "hermes";
+    readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;

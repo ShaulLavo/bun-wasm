@@ -260,6 +260,8 @@ try {
             export const ENGINES = Object.fromEntries(["browser", "quickjs", "jsc"].map(key => [key, { name: key, wasm: "not-built.wasm" }]));
             export class WasmMissing extends Error {}
             export const isEngine = (key) => Object.hasOwn(ENGINES, key);
+            export const engineUnavailable = (key) => key === "spidermonkey" ? "Artifact-free editor test" : null;
+            export const engineBuildHint = () => "Artifact-free editor test";
             ${app === "web" ? `export { loadEditorEngine as loadWasm } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};` : 'export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); }'}
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);

@@ -12,10 +12,24 @@ export type { Engine } from "../../src/engine-kind.ts";
 /** What each `?engine=` loads. The browser engine runs the program in the page's own JS engine. */
 export const ENGINES: Record<Engine, { name: string; wasm: string; script: string }> = {
   quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
-  spidermonkey: { name: "SpiderMonkey (experimental)", wasm: "bun-spidermonkey.wasm", script: "an external SpiderMonkey guest build described in docs/spidermonkey-host-plumbing.md" },
+  spidermonkey: { name: "SpiderMonkey (experimental)", wasm: "bun-spidermonkey.wasm", script: "scripts/build-bun-spidermonkey.sh" },
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
 };
+
+export function engineBuildHint(engine: Engine): string {
+  const { script, wasm } = ENGINES[engine];
+  if (engine === "spidermonkey") return `Stage a matched ${wasm} and sibling spidermonkey-engine.wasm with SPIDERMONKEY_WASM=/absolute/path/${wasm} bun web/build.ts. Produce the pair with ${script}.`;
+  return `Build it with ${script} (dist/${wasm}), then rebuild web/.`;
+}
+
+/** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
+export function engineUnavailable(engine: Engine): string | null {
+  if (engine !== "spidermonkey") return null;
+  const { core, side } = programProfile(engine);
+  if (assetBuild(core) !== null && assetBuild(side) !== null) return null;
+  return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
+}
 
 export function isEngine(name: string | null): name is Engine {
   return name !== null && Object.hasOwn(ENGINES, name);

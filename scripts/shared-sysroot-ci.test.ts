@@ -150,6 +150,8 @@ test("all shared saves require a successful uncancelled main push and an actual 
     "Save completed shared-sdk setup",
     "Save completed shared-wasm-tools setup",
     "Save completed shared-wasmtime setup",
+    "Save pinned cbindgen",
+    "Save the verified shared SpiderMonkey source and native work",
     "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };

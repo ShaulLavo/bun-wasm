@@ -19,7 +19,7 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
   try {
     browser = await chromium.launch({ headless: true });
     const binding = await origins.bind({}, 5173, {
-      fetch: () => new Response('<!doctype html><html><body><h1>original</h1><button onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>', { headers: { "content-type": "text/html" } }),
+      fetch: () => new Response('<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>', { headers: { "content-type": "text/html" } }),
       upgrade: (_request, socket) => { socket.destroy(); }, close() {},
     });
     bus.configure("host", owner.url.href);
@@ -30,6 +30,8 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     bus.configure("preview", binding.origin + "/");
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000);
     await waitReady(bus, "preview");
+    expect(await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000)).toMatchObject({ ready: false, before: "Count 0" });
+    await bus.execute("preview", "document.querySelector('button').disabled = false", 3000);
     const before = await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);
     expect(before).toMatchObject({ before: "Count 0", label: "Count 0" });
     await bus.execute("preview", "document.querySelector('button').click()", 3000);
@@ -42,6 +44,7 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     const frame = page.frameLocator("iframe");
     await frame.getByRole("button", { name: "Count 0" }).click();
     expect(await bus.execute("preview", "({trusted:globalThis.__goalsIphoneClick.trusted, text:document.querySelector('button').textContent})", 3000)).toEqual({ trusted: true, text: "Count 1" });
+    await expect(bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000)).rejects.toThrow("must start at zero");
     const origin = await bus.execute("preview", "performance.timeOrigin", 3000);
     await bus.execute("host", "document.body.dataset.edited='yes'", 3000);
     await bus.execute("preview", "document.querySelector('h1').textContent='updated'", 3000);
