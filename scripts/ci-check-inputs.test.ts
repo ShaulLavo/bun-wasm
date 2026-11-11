@@ -38,14 +38,14 @@ function repository() {
   return { directory, git, write, commit, select };
 }
 
-const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime");
+const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime" || check.owner === "browser-guest");
 test.each(compiledChecks)("declared $owner check $path retains its blocking Rust owner", check => {
   const path = check.owner === "native" ? `${check.path}/index.ts` : check.path;
   expect(needsRust([path])).toBe(true);
 });
 
 for (const event of ["pull_request", "push"]) {
-  for (const owner of ["native", "runtime"] as const) {
+  for (const owner of ["native", "runtime", "browser-guest"] as const) {
     const input = owner === "native" ? "tests/fixtures/new-owned-case/index.ts" : "scripts/new-owned-case.test.ts";
     const checkPath = owner === "native" ? "tests/fixtures/new-owned-case" : input;
     test(`${event} reads ${owner} check paths from the head snapshot`, () => {
@@ -81,6 +81,60 @@ for (const event of ["pull_request", "push"]) {
     expect(repo.select(base, registered, event).output).toBe("rust=false\njsc=false\nshared=false");
     repo.write("scripts/context-reference.test.ts", "edited Node reference\n");
     expect(repo.select(registered, repo.commit(), event).output).toBe("rust=false\njsc=false\nshared=false");
+  });
+}
+
+const largeMessageManifest = "checks/browser-guest-worker-large-message.json";
+const largeMessageHarness = "scripts/worker-large-message-browser.test.ts";
+const largeMessageSources = [
+  "web/src/shared-objects/broker.ts", "web/src/shared-objects/lane-overflow.ts",
+  "web/src/shared-objects/lane.ts", "web/src/shared-objects/protocol.ts", "web/src/shared-objects/service.ts",
+];
+
+for (const event of ["pull_request", "push"]) {
+  test.each([largeMessageHarness, largeMessageManifest].concat(largeMessageSources))(`${event} selects the real large-message gate for %s alone`, path => {
+    const repo = repository();
+    repo.write(largeMessageManifest, readFileSync(join(import.meta.dir, "..", largeMessageManifest), "utf8"));
+    for (const input of [largeMessageHarness].concat(largeMessageSources)) repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(path, path === largeMessageManifest ? `${readFileSync(join(repo.directory, path), "utf8")}\n` : "changed\n");
+    const selected = repo.select(base, repo.commit(), event);
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.profile).toBe("shared_native=false");
+    expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
+  });
+
+  test.each(["split", "shared-group"] as const)(`${event} retains removed %s Browser guest secondary inputs`, profile => {
+    const repo = repository();
+    const manifest = "checks/browser-guest-secondary.json";
+    const input = "web/src/secondary-input.ts";
+    repo.write(manifest, JSON.stringify({ owner: "browser-guest", path: "scripts/secondary.test.ts", profile, inputs: [input] }));
+    repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(input, "changed\n");
+    const changed = repo.commit();
+    const selectedChange = repo.select(base, changed, event);
+    expect(selectedChange.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selectedChange.profile).toBe(`shared_native=${profile === "shared-group"}`);
+    rmSync(join(repo.directory, manifest));
+    rmSync(join(repo.directory, input));
+    const selected = repo.select(changed, repo.commit(), event);
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.profile).toBe(`shared_native=${profile === "shared-group"}`);
+    expect(selected.inputs).toContain(input);
+  });
+
+  test(`${event} keeps unrelated Web source and docs outside the Browser guest producer`, () => {
+    const repo = repository();
+    repo.write(largeMessageManifest, readFileSync(join(import.meta.dir, "..", largeMessageManifest), "utf8"));
+    repo.write("checks/web-source-only.json", JSON.stringify({ owner: "web", path: "scripts/source-only.test.ts", localRuntime: true }));
+    const base = repo.commit();
+    repo.write("web/src/unrelated.ts", "source-only UI\n");
+    repo.write("scripts/source-only.test.ts", "source-only check\n");
+    repo.write("docs/unrelated.md", "docs\n");
+    const selected = repo.select(base, repo.commit(), event);
+    expect(selected.output).toBe("rust=false\njsc=false\nshared=false");
+    expect(selected.profile).toBe("shared_native=false");
   });
 }
 

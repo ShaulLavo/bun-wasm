@@ -8,15 +8,16 @@ import { IphoneClickTrace } from "./iphone-click";
 import { tabBatch, tabOverview } from "./iphone-tab-fixture";
 import { object } from "./evidence";
 
-const arm = { before: "0", label: "Increment", url: "http://127.0.0.1:1234/task", timeOrigin: 10, nonce: "task-nonce" };
+const arm = { ready: true, before: "0", label: "Increment", url: "http://127.0.0.1:1234/task", timeOrigin: 10, nonce: "task-nonce" };
 const good = { trusted: true, sameTarget: true, url: arm.url, timeOrigin: arm.timeOrigin, nonce: arm.nonce, after: "1" };
 
-async function control(observation: Record<string, unknown> | "pending", save?: (text: string) => Promise<void>) {
+async function control(observation: Record<string, unknown> | "pending", save?: (text: string) => Promise<void>, arms = [arm]) {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-click-"));
   const agent = join(root, "agent-device");
   const release = Promise.withResolvers<void>();
   const rows: Record<string, unknown>[] = [];
   const sources: string[] = [];
+  let arming = 0;
   const commands: string[][] = [];
   const closed = join(root, "closed");
   const beforeTabs = tabBatch(tabOverview(["Goals task-nonce", "fixture owner"]));
@@ -30,7 +31,7 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
     const row = object(await request.json());
     if (typeof row.source !== "string") throw new Error("Missing click expression");
     sources.push(row.source);
-    if (sources.length === 1) return Response.json(arm);
+    if (row.source.includes("function armIphoneClick")) return Response.json(arms[Math.min(arming++, arms.length - 1)]);
     if (observation === "pending") await release.promise;
     return Response.json(observation === "pending" ? good : observation);
   } });
@@ -39,6 +40,24 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   });
   return { transport, rows, sources, commands, closed, async close() { release.resolve(); await transport.close(); await server.stop(true); await rm(root, { recursive: true, force: true }); } };
 }
+
+test("native input waits for hydration before arming and presses exactly once", async () => {
+  const fixture = await control(good, undefined, [{ ...arm, ready: false }, arm]);
+  try {
+    expect(await fixture.transport.nativeClick!("button", "output", 1000)).toMatchObject({ before: "0", after: "1", trusted: true });
+    expect(fixture.sources.filter(source => source.includes("function armIphoneClick"))).toHaveLength(2);
+    expect(fixture.commands).toEqual([["snapshot", "-i"], ["press", "@e1"]]);
+  } finally { await fixture.close(); }
+});
+
+test("an unhydrated button consumes the original click deadline without native input", async () => {
+  const fixture = await control(good, undefined, [{ ...arm, ready: false }]);
+  try {
+    await expect(bounded(() => fixture.transport.nativeClick!("button", "output", 100), 200)).rejects.toThrow();
+    expect(fixture.commands).toEqual([]);
+    expect(fixture.rows.some(row => row.stage === "armed")).toBe(false);
+  } finally { await fixture.close(); }
+});
 
 test("click failure evidence survives a shorter outer cancellation with the exact false predicate", async () => {
   const fixture = await control({ ...good, trusted: false });

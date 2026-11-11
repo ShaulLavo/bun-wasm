@@ -2,9 +2,10 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
-import { ENGINE_BIN } from "../../../src/executable-paths";
+import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
+import { playgroundProfile, registerPlaygroundBun, requireProfileEngine, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -27,7 +28,7 @@ export type Status = { text: string; kind: "" | "ok" | "error" };
 export type Failure = "startup" | "ownership" | "shell";
 
 // The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
-// the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
+// the transpiler and natives; the other engines run the whole runtime in wasm.
 const DEFAULT_ENGINE: Engine = "browser";
 // The guest does not expose an admitted Bun version to this page, so the prompt must not guess one.
 const HOST_VERSIONS = {};
@@ -35,6 +36,7 @@ const HOST_VERSIONS = {};
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
+  readonly profile: PlaygroundProfile;
   readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
@@ -58,6 +60,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
+    this.profile = playgroundProfile(this.params.get("profile"));
+    requireProfileEngine(this.engine, this.profile);
   }
 
   get status(): Status {
@@ -141,9 +145,15 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   private async boot(): Promise<void> {
     installCompileObserver();
-    const measurementEnv = measurementEnvironment(this.params);
+    const engineEnv = {
+      ...(this.engine === "spidermonkey" ? { BUN_WASM_SPIDERMONKEY_TIER: "interp" } : {}),
+      ...measurementEnvironment(this.params),
+    };
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" } });
+    const runtime = createRuntime({
+      filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" },
+      memoryGroups: BUN_MEMORY_GROUP_POLICY,
+    });
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
       shell: new URL("./programs/shell-engine.wasm", location.href),
@@ -201,8 +211,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (wasm instanceof Error) throw wasm;
     const module = wasm.module;
     const engine = this.engine;
-    const bin = ENGINE_BIN[engine];
-    const removeAdapter = runtime.registerAdapter(`bun:${engine}`, async (context, service) => {
+    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile, launcher: async (context, service) => {
       const { bunLauncher } = await import("../bun-launcher");
       return bunLauncher(engine, {
         runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
@@ -210,14 +219,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
         notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
         loadTools: () => loadWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
       })(context, service);
-    });
-    const removePrograms: Array<() => void> = [];
-    for (const name of ["bun", "node", "nodejs"]) {
-      const path = `${bin}/${name}`;
-      removePrograms.push(runtime.registerProgram(path, { adapter: `bun:${engine}`, cooperative: true, module: () => module }));
-      await fs.mkdirp(bin);
-      await fs.writeFile(path, "bun-wasm registered executable\n");
-    }
+    } });
     await fs.flush();
     const { BrowserSession } = await import("bash-web/session");
     const prompt = (await promptModule)?.createPrompt({
@@ -228,7 +230,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
     const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
-      env: { ...measurementEnv, HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...engineEnv, HOME, USER: "user", PATH: `${registration.bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),
@@ -241,26 +243,24 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     term.onResize(({ cols, rows }) => shell.resize(cols, rows));
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
-      void shell.dispose().finally(() => {
-        for (const remove of removePrograms) remove();
-        removeAdapter();
-      }).catch(console.error);
+      void shell.dispose().finally(registration.dispose).catch(console.error);
     });
 
-    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects } });
+    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, profile: registration.profile } });
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
+    const unavailable = engineUnavailable(this.engine);
+    if (unavailable) return new Error(unavailable);
     const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
       return await loadWasm(wasmUrl, (text) => this.setStatus(text));
     } catch (err) {
-      const { script, wasm } = ENGINES[this.engine];
       return new Error(err instanceof WasmMissing
-        ? `${wasmUrl} is not in this build. Build it with ${script} (dist/${wasm}), then rebuild web/.`
+        ? `${String(err)}. ${engineBuildHint(this.engine)}`
         : `could not load bun.wasm: ${String(err)}`);
     }
   }
