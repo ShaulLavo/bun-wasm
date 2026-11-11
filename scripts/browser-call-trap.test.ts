@@ -80,7 +80,7 @@ test("unavailable collection is explicit and does not replace the matrix error",
   expect(await browserTrapLog(transport, "jsc")).toBe("");
 });
 
-test("a stalled diagnostic keeps the original command error, terminal log and cleanup budget", async () => {
+test.each([false, true])("a stalled diagnostic keeps the original error and log with owned cleanup = %s", async owned => {
   const framework = frameworks[0];
   if (!framework) throw Error("Missing matrix framework");
   await withPlayground(framework, 0, async transport => {
@@ -88,16 +88,20 @@ test("a stalled diagnostic keeps the original command error, terminal log and cl
     await evaluate('playground.shell.submit = async () => { throw Error("original command failure"); }');
     await evaluate('playground.term.buffer.active = { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => "kept terminal" }) };');
     let terminalReads = 0;
+    const diagnostic = Promise.withResolvers<string>();
     transport.evaluate = <T>(expression: string): Promise<T> => {
       if (expression.includes("transcript") && ++terminalReads === 2) return Promise.reject(Error("failure-time terminal unavailable"));
-      if (expression.includes("browserTrapFacts")) return new Promise<T>(() => {});
+      if (expression.includes("browserTrapFacts")) return diagnostic.promise.then(() => evaluate<T>(JSON.stringify("late diagnostic")));
       return evaluate<T>(expression);
     };
     let closed = false;
     let saved = "";
-    transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    let saves = 0;
+    const close = transport.close;
+    transport.close = async () => { closed = true; await close(); };
+    if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000,
-      async createTransport() { return transport; }, async saveLog(text) { saved = text; },
+      async createTransport() { return transport; }, async saveLog(text) { saved = text; saves++; },
     });
     expect(result).toMatchObject({ status: "fail", phase: "install" });
     if (result.status !== "fail") throw Error("Expected original command failure");
@@ -106,5 +110,9 @@ test("a stalled diagnostic keeps the original command error, terminal log and cl
     expect(saved).toContain("Browser core trap memory snapshots unavailable within the final observation budget");
     expect(closed).toBe(true);
     expect(result.attempts[0]?.phases.find(value => value.phase === "cleanup")).toMatchObject({ status: "pass", timeoutMs: 20_000 });
+    diagnostic.resolve("late diagnostic");
+    await Bun.sleep(0);
+    expect(saves).toBe(1);
+    expect(saved).not.toContain("late diagnostic");
   });
 }, 10_000);

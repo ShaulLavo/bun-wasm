@@ -6,6 +6,12 @@
 | `web/src/engine-host.js`, `engine-host.d.ts` | Original adapter | Add a synchronous observer at the existing `bunwasm_call` boundary, then rethrow the same error. |
 | `scripts/goals-matrix/browser-memory.ts`, `execute.ts` | Original adapter | Save retained Browser trap snapshots in the existing matrix terminal log before page cleanup. |
 
+Both cleanup paths preserve an available terminal transcript when the optional
+Browser observation stalls. The ordinary path cancels its final log scope before
+closing the transport, so a late observation cannot start another log write.
+Angular's named diagnostic is appended to the already captured Browser facts;
+its timeout retains both those facts and its own unavailable message.
+
 These extend bun-wasm's original host adapters at `9d57bf630`. No Bun, Node,
 WebKit or other upstream implementation is copied. The existing raw engine
 loader is JavaScript because unbundled Node host workflows import its source
