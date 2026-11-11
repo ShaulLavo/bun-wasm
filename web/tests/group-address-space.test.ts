@@ -20,7 +20,7 @@ function grow(member: Member, pages: number): number { return member.raw(GroupOp
 function bytes(member: Member, pointer: number, length: number) { return new Uint8Array(member.memory.buffer, pointer, length); }
 function view(member: Member) { return new DataView(member.memory.buffer); }
 /** Pages members hold now, as the owner reports them. */
-function memberPages(owner: Owner) { return (owner.snapshot() as { memberPages?: number }).memberPages; }
+function memberPages(owner: Owner) { return owner.snapshot().memberPages; }
 
 /** Everything a refusal must leave as it was: owner tables, both charges, the free list, the host. */
 function ledger(member: Member, groups: Groups) {
