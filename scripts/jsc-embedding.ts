@@ -117,6 +117,12 @@ function runHandshake([executable, ...args]: string[], scratch: string): void {
 
 if (import.meta.main) {
   const [command, artifactName, snapshot] = process.argv.slice(2);
+  // Development only: the gate's fixture runs on any pair. It checks no receipt, so it says
+  // nothing about which source or prebuild the pair came from.
+  if (command === "fixtures" && artifactName) {
+    testFixtures(resolve(artifactName));
+    process.exit(0);
+  }
   const current = inputs();
   if (command === "inputs") {
     console.log(JSON.stringify(current));
@@ -136,6 +142,6 @@ if (import.meta.main) {
     console.log(`JSC source ${current.sourceHead}; guest sha256 ${hash(bytes)}`);
     testFixtures(artifact);
   } else {
-    throw new Error("Usage: jsc-embedding.ts inputs | write ARTIFACT INPUTS_JSON | test ARTIFACT");
+    throw new Error("Usage: jsc-embedding.ts inputs | write ARTIFACT INPUTS_JSON | test ARTIFACT | fixtures ARTIFACT");
   }
 }
