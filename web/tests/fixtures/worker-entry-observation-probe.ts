@@ -7,6 +7,8 @@ import { captureNativeReturn, captureProcessObserver } from "waffle/proc/observa
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { browserBuildConfig } from "../../../scripts/browser-build.ts";
 import type { RunRequest } from "../../src/bun-executor.ts";
+import { prepareProgram, programMetadata } from "../../../src/assets.ts";
+import { initializationPair } from "../../../tests/package/engine-initialization-fixture.ts";
 
 const mode = process.argv[2];
 const gate = new Int32Array(new SharedArrayBuffer(8));
@@ -23,10 +25,14 @@ try {
   const build = await Bun.build(config);
   assert.equal(build.success, true, String(build.logs));
   const service = await runtime.processes();
+  const module = mode?.startsWith("nested")
+    ? await prepareProgram(initializationPair("quickjs", true))
+    : new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  const metadata = programMetadata(module);
   const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem, ...(mode?.startsWith("terminal") ? { terminalContext: {} } : {}) };
   await service.adoptRuntimeRoot(transport, { memory: mode?.startsWith("nested") ? "group" : [], filesystem });
-  const group = mode?.startsWith("nested") ? service.admitRootMemoryGroup(transport.pid) : undefined;
+  const group = metadata.linkPlan ? service.admitRootMemoryGroup(transport.pid, { module, linkPlan: metadata.linkPlan }) : undefined;
   const release = service.retainRoot(transport.pid);
   const observer = captureProcessObserver(transport);
   const returned = captureNativeReturn(transport);
@@ -39,7 +45,7 @@ try {
     if (event.data.type === "entry-finished") completed.resolve();
   });
   const request: RunRequest = {
-    controlGrant: service.rootControlGrant(transport.pid), module: new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0])),
+    controlGrant: service.rootControlGrant(transport.pid), module, ...metadata,
     engine: "quickjs", args: [], env: {}, trace: false, net: null, runtimeProcess: transport, filesystem,
     memoryGroup: group?.request,
   };

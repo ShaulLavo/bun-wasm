@@ -62,7 +62,7 @@ class ObservedProcessDriver extends PlaywrightDriver {
   private seeded = false;
   private role = "";
   private observationStop: Promise<DriverCleanup> | undefined;
-  constructor(engine: Engine, scratch: string, private observations: Observations, private control: Control) { super(engine, scratch); }
+  constructor(engine: Engine, scratch: string, private hostedObservations: Observations, private control: Control) { super(engine, scratch); }
 
   private async dispatch(source: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     await super.script(source, signal);
@@ -90,7 +90,7 @@ class ObservedProcessDriver extends PlaywrightDriver {
     const state = await super.script('return { role: window.__suiteConfiguration.role, progress: typeof globalThis.processProgress, nativeWorker: Function.prototype.toString.call(Worker).includes("[native code]") }', signal);
     if (!record(state) || typeof state.role !== "string") throw new Error("Hosted role missing");
     this.role = state.role;
-    this.observations.roles.push(state.role);
+    this.hostedObservations.roles.push(state.role);
     if (state.role === "case") return;
     assert.equal(state.progress, "undefined", "list/finish must not invoke the original envelope");
     assert.equal(state.nativeWorker, true, "list/finish must not replace Worker");
@@ -100,10 +100,10 @@ class ObservedProcessDriver extends PlaywrightDriver {
   }
 
   override async script(source: string, signal: AbortSignal): Promise<unknown> {
-    if (this.control === "late-error" && this.role === "case" && !this.observations.lateError) {
+    if (this.control === "late-error" && this.role === "case" && !this.hostedObservations.lateError) {
       const done = await super.script("return globalThis.processResult?.ok === true && globalThis.processResult.checks.length === 23", signal);
       if (done === true) {
-        this.observations.lateError = true;
+        this.hostedObservations.lateError = true;
         await super.script('queueMicrotask(() => { throw Error("BUN_PROCESS_LATE_ERROR_BEFORE_RETIREMENT"); }); return true;', signal);
       }
     }
@@ -118,9 +118,9 @@ class ObservedProcessDriver extends PlaywrightDriver {
         const databases = await this.dispatch(names, signal);
         assert.deepEqual(databases.names, ["waffle-workspace"], "acknowledged finish must remove the process filesystem");
         await this.dispatch(verifyAndDeleteSentinel, signal);
-        this.observations.foreignSurvived = true;
+        this.hostedObservations.foreignSurvived = true;
       }
-    } catch (error) { this.observations.failure = String(error); }
+    } catch (error) { this.hostedObservations.failure = String(error); }
     return super.stop();
   }
 }

@@ -21,7 +21,7 @@ import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
 import { pairedEngineKinds, isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
-import type { LinkPlanSource, LinkedGroup } from "waffle/link";
+import type { SharedLinkPlan, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 // The guest replaces globalThis.process; retain the actual native exit capability.
@@ -43,7 +43,7 @@ interface Settings {
 }
 interface GuestData {
   module: WebAssembly.Module;
-  linkPlan?: LinkPlanSource;
+  linkPlan?: SharedLinkPlan;
   settings: Settings;
   transport: WorkerProcessTransport;
   request?: SpawnRequest;
@@ -95,7 +95,7 @@ async function main() {
   const config = settings();
   const base = await loadNodeProgram(config.wasmPath);
   const baseModule = base.module;
-  const programs = new Map<WebAssembly.Module, LinkPlanSource>();
+  const programs = new Map<WebAssembly.Module, SharedLinkPlan>();
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
   const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};

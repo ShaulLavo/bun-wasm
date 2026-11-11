@@ -481,13 +481,13 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
 
 for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const pair = quickjsPair("quickjs");
   const module = await prepareProgram({ kind: "quickjs", ...pair });
   const channel = createMemoryChannel();
   const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel };
   const connection = createFilesystemConnection();
-  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off", memoryTelemetry };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
@@ -533,18 +533,18 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programMetadata(module).linkPlan,
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
-  const { prepareLinkPlan } = await import("waffle/link");
+  const { adoptLinkPlan } = await import("waffle/link");
   if (!request.linkPlan) throw new Error("fixture link plan missing");
-  const local = await prepareLinkPlan(request.linkPlan);
+  const local = adoptLinkPlan(request.linkPlan);
   const executor = createBunExecutor(request, host);
   let instance: WebAssembly.Instance | undefined;
   const NativeInstance = WebAssembly.Instance;
@@ -668,12 +668,12 @@ const keepFixtureReference = () => {};
 
 async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup", kind: "quickjs" | "jsc") {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection(), lookup = new MessageChannel();
   const broker = createSharedObjectBroker(), route = kind === "quickjs" ? broker.register() : undefined;
-  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programMetadata(module).linkPlan,
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null,
     slots: "off", sharedObjects: route ? { owner: route.id } : undefined, lookupPort: lookup.port2 };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
@@ -726,7 +726,7 @@ for (const kind of ["quickjs", "jsc"] as const) {
 
 for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const pair = quickjsPair(engine);
   const module = await prepareProgram({ kind: engine, ...pair });
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -737,7 +737,7 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
   linkedDisposals = 0; linkedSideReads = 0;
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, fetch: globalThis.fetch };

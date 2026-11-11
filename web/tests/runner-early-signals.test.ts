@@ -206,7 +206,7 @@ for (const explicit of [false, true]) test(`kill during a network await stops ${
 
 test("the ordinary root runner forwards exact pair inputs to its existing worker", async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareQuickjsProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair();
   const prepared = await prepareQuickjsProgram(core, side);
   const state = fixture();
@@ -215,8 +215,8 @@ test("the ordinary root runner forwards exact pair inputs to its existing worker
     state.admission.resolve();
     await until(() => state.posts.length === 1);
     expect(state.posts[0]!.module).toBe(prepared);
-    expect(state.posts[0]!.linkPlan).toEqual(programLinkPlan(prepared));
-    expect(state.posts[0]!.linkPlan?.libraries[0]?.source).toEqual(side);
+    expect(state.posts[0]!.linkPlan).toEqual(programMetadata(prepared).linkPlan);
+    expect(state.posts[0]!.memoryLimitBytes).toBe(programMetadata(prepared).memoryLimitBytes);
     expect(state.posts[0]!.engine).toBe("quickjs");
   } finally { await state.cleanup(run); }
 });

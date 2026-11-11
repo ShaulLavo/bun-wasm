@@ -138,7 +138,7 @@ for (const executable of ["./bun", "../bin/bun", "/bin/../bin/bun"]) test(`admit
 
 test("the ordinary launcher forwards the prepared pair but keeps tools single-module", async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareQuickjsProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair();
   const prepared = await prepareQuickjsProgram(core, side);
   const launches: Launch[] = [];
@@ -146,8 +146,8 @@ test("the ordinary launcher forwards the prepared pair but keeps tools single-mo
   const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js", loadTools: async () => tools });
   await launcher({ ...context, module: prepared }, service(launches));
   expect(launches[0]!.request.module).toBe(prepared);
-  expect(launches[0]!.request.linkPlan).toEqual(programLinkPlan(prepared));
-  expect(launches[0]!.request.linkPlan.libraries[0].source).toEqual(side);
+  expect(launches[0]!.request.linkPlan).toEqual(programMetadata(prepared).linkPlan);
+  expect(launches[0]!.request.memoryLimitBytes).toBe(programMetadata(prepared).memoryLimitBytes);
   await launcher({ ...context, module: prepared, request: { ...context.request, argv: ["bun", "lint", "input.ts"] } }, service(launches));
   expect(launches[1]!.request.module).toBe(tools);
   expect(launches[1]!.request.linkPlan).toBeUndefined();
@@ -155,7 +155,7 @@ test("the ordinary launcher forwards the prepared pair but keeps tools single-mo
 
 test("child launch selection retains each distinct QuickJS pair", async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram } = await import("../../src/assets");
+  const { prepareQuickjsProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair();
   const sideB = Uint8Array.from(Array.from(side).concat([0, 2, 1, 120]));
   const first = await prepareQuickjsProgram(core, side);
@@ -164,8 +164,8 @@ test("child launch selection retains each distinct QuickJS pair", async () => {
   const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" });
   await launcher({ ...context, module: first, identity: { ...context.identity, pid: 2, parentPid: 1 } }, service(launches));
   await launcher({ ...context, module: second, identity: { ...context.identity, pid: 3, parentPid: 1 } }, service(launches));
-  expect(launches[0]!.request.linkPlan.libraries[0].source).toEqual(side);
-  expect(launches[1]!.request.linkPlan.libraries[0].source).toEqual(sideB);
+  expect(launches[0]!.request.linkPlan).toBe(programMetadata(first).linkPlan);
+  expect(launches[1]!.request.linkPlan).toBe(programMetadata(second).linkPlan);
   expect(launches[0]!.request.module).not.toBe(launches[1]!.request.module);
 });
 
