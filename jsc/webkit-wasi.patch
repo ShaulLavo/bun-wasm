@@ -1405,27 +1405,38 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
 diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
 --- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
 +++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
-@@ -2920,2 +2920,3 @@ RegisterID* DeleteValueNode::emitBytecode(BytecodeGenerator& generator, Register
+@@ -497,2 +497,10 @@ RegisterID* ArrayNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+             auto* array = JSCellButterfly::tryCreate(generator.vm(), cellButterflyStructure, length);
++#if OS(WASI)
++            // A Wasm host can refuse to grow memory while the guest stays usable. The shared buffer
++            // is an optimization, so build this array from its elements like any other literal.
++            if (!array) [[unlikely]] {
++                recommendedIndexingType = static_cast<IndexingType>(recommendedIndexingType & ~CopyOnWrite);
++                return generator.emitNewArray(dst, elements, length, recommendedIndexingType);
++            }
++#endif
+             RELEASE_ASSERT(array);
+@@ -2920,2 +2928,3 @@ RegisterID* DeleteValueNode::emitBytecode(BytecodeGenerator& generator, Register
  {
 +    WASM_RESERVE_STACK(1024);
      generator.emitNodeInIgnoreResultPosition(m_expr);
-@@ -2930,2 +2931,3 @@ RegisterID* VoidNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst
+@@ -2930,2 +2939,3 @@ RegisterID* VoidNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst
  {
 +    WASM_RESERVE_STACK(1024);
      if (dst == generator.ignoredResult()) {
-@@ -2965,2 +2967,3 @@ RegisterID* TypeOfValueNode::emitBytecode(BytecodeGenerator& generator, Register
+@@ -2965,2 +2975,3 @@ RegisterID* TypeOfValueNode::emitBytecode(BytecodeGenerator& generator, Register
  {
 +    WASM_RESERVE_STACK(1024);
      if (dst == generator.ignoredResult()) {
-@@ -3168,2 +3171,3 @@ RegisterID* UnaryOpNode::emitBytecode(BytecodeGenerator& generator, RegisterID*
+@@ -3168,2 +3179,3 @@ RegisterID* UnaryOpNode::emitBytecode(BytecodeGenerator& generator, RegisterID*
  {
 +    WASM_RESERVE_STACK(1024);
      if (dst == generator.ignoredResult()) {
-@@ -3190,2 +3194,3 @@ RegisterID* UnaryPlusNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+@@ -3190,2 +3202,3 @@ RegisterID* UnaryPlusNode::emitBytecode(BytecodeGenerator& generator, RegisterID
  {
 +    WASM_RESERVE_STACK(1024);
      ASSERT(opcodeID() == op_to_number);
-@@ -3200,2 +3205,3 @@ void LogicalNotNode::emitBytecodeInConditionContext(BytecodeGenerator& generator
+@@ -3200,2 +3213,3 @@ void LogicalNotNode::emitBytecodeInConditionContext(BytecodeGenerator& generator
  {
 +    WASM_RESERVE_STACK(1024);
      if (needsDebugHook()) [[unlikely]]

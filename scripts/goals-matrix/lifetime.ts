@@ -1,4 +1,4 @@
-import { bounded } from "./execute";
+import { bounded } from "./bounded";
 export class CommandExitError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
 }

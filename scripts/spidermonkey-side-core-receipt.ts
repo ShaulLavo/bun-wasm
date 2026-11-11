@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { importedMemory, tagProgramCore } from "../src/engine-kind.ts";
 import { verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
+import { sideSourceSha256 } from "./spidermonkey-side-inputs.ts";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const digest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -37,6 +38,7 @@ function run(command: readonly string[], cwd: string): string {
 export interface SideCoreInputs {
   readonly schema: 1;
   readonly scope: "spidermonkey-side-core";
+  readonly sideSourceSha256: string;
   readonly source: { readonly head: string; readonly tree: string };
   readonly native: { readonly receiptSha256: string; readonly archiveSha256: string; readonly archiveBytes: number; readonly profileSha256: string };
   readonly profile: "split";
@@ -46,6 +48,7 @@ export interface ExperimentalReceipt {
   readonly schema: 1;
   readonly experimental: true;
   readonly scope: "spidermonkey-side-core";
+  readonly sideSourceSha256: string;
   readonly source: SideCoreInputs["source"];
   readonly native: SideCoreInputs["native"];
   readonly profile: "split";
@@ -53,12 +56,13 @@ export interface ExperimentalReceipt {
   readonly side: { readonly sha256: string; readonly bytes: number };
 }
 
-function parseInputs(value: unknown): SideCoreInputs {
+export function parseInputs(value: unknown): SideCoreInputs {
   assert(record(value) && value.schema === 1 && value.scope === "spidermonkey-side-core" && value.profile === "split", "Invalid SpiderMonkey side/core inputs");
+  assert(digest(value.sideSourceSha256), "Invalid SpiderMonkey sideSourceSha256");
   assert(record(value.source) && /^[0-9a-f]{40}$/.test(String(value.source.head)) && /^[0-9a-f]{40}$/.test(String(value.source.tree)), "Invalid SpiderMonkey source identity");
   assert(record(value.native) && digest(value.native.receiptSha256) && digest(value.native.archiveSha256) && digest(value.native.profileSha256)
     && positiveInteger(value.native.archiveBytes), "Invalid SpiderMonkey native identity");
-  return { schema: 1, scope: "spidermonkey-side-core", source: { head: String(value.source.head), tree: String(value.source.tree) },
+  return { schema: 1, scope: "spidermonkey-side-core", sideSourceSha256: value.sideSourceSha256, source: { head: String(value.source.head), tree: String(value.source.tree) },
     native: { receiptSha256: value.native.receiptSha256, archiveSha256: value.native.archiveSha256, archiveBytes: value.native.archiveBytes, profileSha256: value.native.profileSha256 }, profile: "split" };
 }
 
@@ -72,7 +76,7 @@ export function captureInputs(repository: string, nativeDirectory: string): Side
   const head = run(["git", "rev-parse", "HEAD"], repository);
   const tree = run(["git", "rev-parse", "HEAD^{tree}"], repository);
   assert(/^[0-9a-f]{40}$/.test(head) && /^[0-9a-f]{40}$/.test(tree), "Invalid source identity");
-  return { schema: 1, scope: "spidermonkey-side-core", source: { head, tree }, native: {
+  return { schema: 1, scope: "spidermonkey-side-core", sideSourceSha256: sideSourceSha256(repository), source: { head, tree }, native: {
     receiptSha256: hash(receipt), archiveSha256: native.archive.sha256, archiveBytes: native.archive.bytes, profileSha256: native.profile.sha256,
   }, profile: "split" };
 }
@@ -149,8 +153,11 @@ function rejectExceptionTags(bytes: Uint8Array): void {
   assert(!sections(bytes).some(section => section.id === 13), "SpiderMonkey side contains exception tags");
 }
 
-/** Convert a just-linked side module without routing SpiderMonkey through the generic initializer helper. */
-export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+/**
+ * Convert a just-linked side module without routing SpiderMonkey through the generic initializer helper.
+ * A shared-group side imports the shared group memory and never exports it (docs/shared-group-profile.md).
+ */
+export function convertSideInitializers(bytes: Uint8Array, profile: "split" | "shared-group" = "split"): Uint8Array<ArrayBuffer> {
   const input = Uint8Array.from(bytes);
   const before = sections(input);
   const start = before.find(section => section.id === 8);
@@ -163,7 +170,7 @@ export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
   assert(!original.some(entry => requiredSideExports.slice(0, 3).includes(entry.name)));
   const memories = WebAssembly.Module.imports(new WebAssembly.Module(input)).filter(entry => entry.kind === "memory");
   assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "SpiderMonkey side must import core memory");
-  assert.equal(importedMemory(input)?.shared, false, "SpiderMonkey side is split-only");
+  assert.equal(importedMemory(input)?.shared, profile === "shared-group", "SpiderMonkey side memory sharing must match its program profile");
   const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
   assert.deepEqual(imports.filter(entry => entry.kind === "table"), [{ module: "env", name: "__indirect_function_table", kind: "table" }]);
   assert(!original.some(entry => entry.kind === 2 || entry.name === "memory" || entry.name === "__stack_pointer"), "Side already exports memory or stack");
@@ -171,8 +178,8 @@ export function convertSideInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
   assert(stackIndex >= 0, "SpiderMonkey side must import __stack_pointer");
   const renamed = original.map(entry => entry.name === "__wasm_apply_data_relocs" ? { ...entry, name: "spidermonkey_apply_data_relocs" }
     : entry.name === "__wasm_call_ctors" ? { ...entry, name: "spidermonkey_call_ctors" } : entry).concat([
-      { name: "spidermonkey_initialize_memory", kind: 0, index: startIndex }, { name: "__stack_pointer", kind: 3, index: stackIndex }, { name: "memory", kind: 2, index: 0 },
-    ]);
+      { name: "spidermonkey_initialize_memory", kind: 0, index: startIndex }, { name: "__stack_pointer", kind: 3, index: stackIndex },
+    ], profile === "split" ? [{ name: "memory", kind: 2, index: 0 }] : []);
   const payload = Uint8Array.from(u32(renamed.length).concat(...renamed.map(encodeExport)));
   const changed = before.filter(section => section.id !== 8).map(section => section.id === 7 ? makeSection(7, payload) : section.raw);
   const result = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...changed.map(section => Array.from(section))));
@@ -227,7 +234,7 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
   const side = readFileSync(sidePath);
   verifyTaggedCore(core);
   verifySide(side, core, inputs);
-  const receipt: ExperimentalReceipt = { schema: 1, experimental: true, scope: "spidermonkey-side-core", source: inputs.source, native: inputs.native, profile: "split",
+  const receipt: ExperimentalReceipt = { schema: 1, experimental: true, scope: "spidermonkey-side-core", sideSourceSha256: inputs.sideSourceSha256, source: inputs.source, native: inputs.native, profile: "split",
     core: { sha256: hash(core), bytes: core.byteLength }, side: { sha256: hash(side), bytes: side.byteLength } };
   writeFileSync(output, JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
   return receipt;
@@ -235,6 +242,7 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
 
 export function verifyPairReceipt(corePath: string, sidePath: string, receiptPath: string, inputs: SideCoreInputs): ExperimentalReceipt {
   const receipt = parseReceipt(JSON.parse(readFileSync(receiptPath, "utf8")));
+  assert.equal(receipt.sideSourceSha256, inputs.sideSourceSha256, "SpiderMonkey side source identity mismatch");
   assert.deepEqual(receipt.source, inputs.source);
   assert.deepEqual(receipt.native, inputs.native);
   const core = readFileSync(corePath);
@@ -256,8 +264,8 @@ if (import.meta.main) {
     verifyEngineInputs(resolve(first));
   } else if (command === "tag-core" && first && second) {
     tagCore(readFileSync(first), second);
-  } else if (command === "convert-side" && first && second) {
-    writeFileSync(second, convertSideInitializers(readFileSync(first)));
+  } else if (command === "convert-side" && first && second && (third === undefined || third === "--group")) {
+    writeFileSync(second, convertSideInitializers(readFileSync(first), third ? "shared-group" : "split"));
   } else if (command === "finalize-side" && first && second && third && fourth) {
     const side = convertSideInitializers(readFileSync(first));
     writeFileSync(third, side);
@@ -267,6 +275,6 @@ if (import.meta.main) {
   } else if (command === "verify-pair" && first && second && third && fourth) {
     verifyPairReceipt(first, second, third, parseInputs(JSON.parse(readFileSync(fourth, "utf8"))));
   } else {
-    throw new Error("Usage: inputs REPOSITORY NATIVE_DIR | verify-native NATIVE_DIR | tag-core INPUT OUTPUT | convert-side INPUT OUTPUT | finalize-side INPUT CORE OUTPUT INPUTS | write-pair CORE SIDE INPUTS | verify-pair CORE SIDE RECEIPT INPUTS");
+    throw new Error("Usage: inputs REPOSITORY NATIVE_DIR | verify-native NATIVE_DIR | tag-core INPUT OUTPUT | convert-side INPUT OUTPUT [--group] | finalize-side INPUT CORE OUTPUT INPUTS | write-pair CORE SIDE INPUTS | verify-pair CORE SIDE RECEIPT INPUTS");
   }
 }

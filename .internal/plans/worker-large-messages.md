@@ -3,6 +3,8 @@
 Status: Approved. Independent plan review completed with three bounded corrections, applied by the parent. The early workload gate below precedes the full implementation investment.
 
 Date: November 9, 2026. Design branch: `design/worker-large-messages`.
+
+Amended November 11, 2026: the slots are ranges of one growable backing whose maximum is the 128 MiB budget, not 64 backings of 64 MiB each. The original shape reserved 4 GiB of address space, which WebKit charges against a fixed cage (16 GiB on iPhone builds). Caller behavior, the cap and the budget below are unchanged. Current detail is in `docs/bun-patches/original-adapter-shared-buffer-pool.md`.
 Parent and only reporting recipient: `mcp:launch:af0b9e1bccb194425523c944af9f581d1766031aa9d73c3597fffbf7276328a1`.
 
 ## Caller usage comes first
