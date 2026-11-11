@@ -3,10 +3,11 @@ import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
 import { projectTemplates } from "./project-templates";
+import { engineUnavailable } from "../engine-loader";
 
 type Props = { playground: Playground };
 
-const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"]] as const;
+const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"], ["spidermonkey", "SpiderMonkey (experimental)"]] as const;
 const RUN_TITLE = "Save and run (Ctrl/Cmd-Enter)";
 const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open the latest saved workspace", shell: RUN_TITLE };
 
@@ -28,6 +29,7 @@ function Header(handle: Handle<Props>) {
   return () => {
     const { playground } = handle.props;
     const { status } = playground;
+    const spiderMonkeyUnavailable = engineUnavailable("spidermonkey");
     return (
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
@@ -44,8 +46,11 @@ function Header(handle: Handle<Props>) {
           disabled={playground.locked}
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
-          {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === playground.engine}>{label}</option>)}
-          {playground.engine === "spidermonkey" ? <option value="spidermonkey" selected>SpiderMonkey (experimental)</option> : null}
+          {ENGINE_OPTIONS.map(([value, label]) => <option
+            value={value} selected={value === playground.engine}
+            disabled={value === "spidermonkey" && spiderMonkeyUnavailable !== null}
+            title={value === "spidermonkey" ? spiderMonkeyUnavailable ?? undefined : undefined}
+          >{value === "spidermonkey" && spiderMonkeyUnavailable ? "SpiderMonkey (not in this build)" : label}</option>)}
         </select>
         <RunButton playground={playground} />
       </header>

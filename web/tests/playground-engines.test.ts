@@ -28,7 +28,8 @@ test("a staged SpiderMonkey pair is selectable from the ordinary Browser playgro
   expect(markup).toContain('value="browser" selected');
 });
 
-for (const builds of [{}, { "bun-spidermonkey.wasm": pair["bun-spidermonkey.wasm"] }, { "spidermonkey-engine.wasm": pair["spidermonkey-engine.wasm"] }]) {
+const incompleteBuilds: Record<string, string>[] = [{}, { "bun-spidermonkey.wasm": pair["bun-spidermonkey.wasm"] }, { "spidermonkey-engine.wasm": pair["spidermonkey-engine.wasm"] }];
+for (const builds of incompleteBuilds) {
   test(`SpiderMonkey stays visible but unavailable with manifest entries ${Object.keys(builds).join(", ") || "absent"}`, async () => {
     const page = await fixture(builds);
     const markup = await page.renderPlayground(new page.Playground(""));

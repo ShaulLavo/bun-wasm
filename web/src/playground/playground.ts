@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -27,7 +27,7 @@ export type Status = { text: string; kind: "" | "ok" | "error" };
 export type Failure = "startup" | "ownership" | "shell";
 
 // The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
-// the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
+// the transpiler and natives; the other engines run the whole runtime in wasm.
 const DEFAULT_ENGINE: Engine = "browser";
 // The guest does not expose an admitted Bun version to this page, so the prompt must not guess one.
 const HOST_VERSIONS = {};
@@ -141,7 +141,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   private async boot(): Promise<void> {
     installCompileObserver();
-    const measurementEnv = measurementEnvironment(this.params);
+    const engineEnv = {
+      ...(this.engine === "spidermonkey" ? { BUN_WASM_SPIDERMONKEY_TIER: "interp" } : {}),
+      ...measurementEnvironment(this.params),
+    };
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({ filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" } });
     const browserPrograms = new BrowserPrograms(runtime, {
@@ -228,7 +231,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
     const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
-      env: { ...measurementEnv, HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
+      env: { ...engineEnv, HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),
@@ -254,13 +257,14 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
+    const unavailable = engineUnavailable(this.engine);
+    if (unavailable) return new Error(unavailable);
     const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
       return await loadWasm(wasmUrl, (text) => this.setStatus(text));
     } catch (err) {
-      const { script, wasm } = ENGINES[this.engine];
       return new Error(err instanceof WasmMissing
-        ? `${wasmUrl} is not in this build. Build it with ${script} (dist/${wasm}), then rebuild web/.`
+        ? `${String(err)}. ${engineBuildHint(this.engine)}`
         : `could not load bun.wasm: ${String(err)}`);
     }
   }
