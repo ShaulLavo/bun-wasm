@@ -129,9 +129,6 @@ test("memory telemetry's limit is the core's declared maximum", () => {
   }
   expect(memoryMaximumBytes(module(section(5, [1, 0, 1])))).toBeUndefined();
   expect(memoryMaximumBytes(module())).toBeUndefined();
-  expect(read("web/src/bun-executor.ts")).toContain("req.memoryLimitBytes ?? null");
-  expect(read("src/assets.ts")).toContain("memoryMaximumBytes(source.core.source) ?? null");
-  expect(read("web/src/memory-telemetry.ts")).toContain("memoryLimitBytes: allocator ? limitBytes : null");
 });
 
 test("root admission reads every actual memory including non-env imports", async () => {

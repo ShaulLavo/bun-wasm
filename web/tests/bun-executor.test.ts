@@ -479,6 +479,28 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   }));
 }
 
+for (const maximumPages of [4, 8]) test(`cloned linked program forwards its ${maximumPages}-page limit into terminal telemetry`, controlled(async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
+  const module = await prepareProgram({ kind: "quickjs", ...quickjsPair("quickjs", maximumPages) });
+  const metadata = programMetadata(module);
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module: structuredClone(module),
+    linkPlan: structuredClone(metadata.linkPlan), memoryLimitBytes: metadata.memoryLimitBytes,
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
+  const executor = createBunExecutor(request, host);
+  try {
+    await bootstrap(request, { ...executor, setup: context => setupLocalFilesystem(context, executor), run: () => 0 }, host);
+    const result = messages.find(message => message.type === "bun-memory");
+    if (result?.type !== "bun-memory") throw new Error("missing terminal memory telemetry");
+    expect(result.snapshot.terminal).toBe(true);
+    expect(result.snapshot.memoryLimitBytes).toBe(maximumPages * 65536);
+  } finally { executor.beforeFinish?.(); connection.client.port.close(); connection.server.port.close(); }
+}));
+
 for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programMetadata } = await import("../../src/assets");
