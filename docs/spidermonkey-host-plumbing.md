@@ -1,9 +1,9 @@
 # SpiderMonkey host integration
 
 SpiderMonkey host loading is experimental and explicit. Tiny fixtures prove this
-plumbing, not Mozilla execution or G3 and G4 runtime acceptance. The normal producer,
-publication packet, default engine, and engine menu still contain only Browser,
-QuickJS, and JSC.
+plumbing, not Mozilla execution or G3 and G4 runtime acceptance. The normal producer
+and publication packet still contain only Browser, QuickJS, and JSC. Browser remains
+the playground's default engine.
 
 ## Selection contract
 
@@ -28,18 +28,21 @@ The Node fixture host accepts `--engine spidermonkey=PATH`, loads that core and 
 sibling side, and registers only configured engine-qualified executables. An
 unconfigured path never falls back to the base module.
 
-The browser accepts `?engine=spidermonkey`. An explicitly selected SpiderMonkey
-engine appears as the current menu option rather than misleadingly showing Browser.
-The normal menu remains Browser, QuickJS and JSC. Named
-standard URLs use the fingerprinted pair loader. Custom SpiderMonkey core URLs
+The browser accepts `?engine=spidermonkey`. The ordinary menu lists SpiderMonkey
+and enables it when both core and side fingerprints are staged. Without the pair,
+the option is disabled and labelled `SpiderMonkey (not in this build)`. Ordinary
+SpiderMonkey sessions start with `BUN_WASM_SPIDERMONKEY_TIER=interp`; explicit
+measurement settings can select another tier. Named standard URLs use the
+fingerprinted pair loader. Custom SpiderMonkey core URLs
 also require both standard manifest fingerprints. The runner reuses the selected
 prepared module for engine-qualified child commands.
 
 Web staging includes SpiderMonkey only when `SPIDERMONKEY_WASM` names an explicit
 core. Its sibling side is required. Both files receive gzip payloads and SHA-256
-manifest entries. No SpiderMonkey guest-build recipe or qualified guest ships with
-this host change. The [library build](spidermonkey-build.md) alone does not produce
-a paired Bun guest.
+manifest entries. `scripts/build-bun-spidermonkey.sh` composes an experimental
+paired guest from an admitted native input directory. The
+[library build](spidermonkey-build.md) alone does not produce a paired Bun guest.
+Optional staging does not add SpiderMonkey to normal publication.
 
 ## Child environments
 
