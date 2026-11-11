@@ -36,7 +36,13 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
-  "scripts/src/group-errno-wraps.sh",
+  "scripts/spidermonkey-browser-ci.test.ts", "checks/quality-spidermonkey-browser-ci.json",
+  "scripts/spidermonkey-browser-stack.test.ts", "checks/quality-spidermonkey-browser-stack.json",
+  "web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts",
+  "checks/browser-guest-shared-wasm-memory.json",
+  "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
+  "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+  "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
   "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
@@ -58,7 +64,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/"];
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
 export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
   return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
