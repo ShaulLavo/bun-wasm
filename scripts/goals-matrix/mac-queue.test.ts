@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { options } from "./run";
-import { nativeRunnerArgs, removeStaging } from "./fleet";
+import { cleanupStaging, nativeRunnerArgs, removeStaging } from "./fleet";
 import { admission, queuedNativeCommand, nativeQueueScript, quote } from "./mac-queue";
 
 const installedQueue = join(homedir(), ".agents/skills/machine-fleet/scripts/mac-queue.ts");
@@ -123,11 +123,41 @@ installedTest("timeout stops task descendants before installed queue release", (
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
 }), 15000);
 
-async function localMesh(f: Fixture, operation: () => Promise<void>): Promise<void> {
+async function delayedAcknowledgement(f: Fixture, empty: boolean, entered: string): Promise<void> {
+  await mkdir(join(f.remote, "report"));
+  await writeFile(join(f.remote, "queue-workload-started"), "started");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  if (empty) await writeFile(join(f.remote, "queue-exit"), "");
+  let settled = false;
+  const cleanup = cleanupStaging(f.remote, true, { ...config(), output: f.home }, new Error("controller cancelled")).then(
+    () => { settled = true; return { ok: true }; },
+    error => { settled = true; return { ok: false, error: String(error) }; },
+  );
+  try {
+    await waitFor(() => Bun.file(entered).exists());
+    await Bun.sleep(100);
+    expect(settled).toBe(false);
+    expect(await Bun.file(join(f.remote, "queue-workload-started")).exists()).toBe(true);
+    await writeFile(join(f.remote, "queue-exit"), "130\n");
+    expect(await cleanup).toEqual({ ok: true });
+    expect(await Bun.file(join(f.remote, "queue-workload-started")).exists()).toBe(false);
+    expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: true, consumersStopped: true });
+  } finally {
+    if (await Bun.file(join(f.remote, "queue-workload-started")).exists()) await writeFile(join(f.remote, "queue-exit"), "130\n");
+    await cleanup;
+  }
+}
+
+test.each([false, true])("interrupted fleet waits for the remote queue acknowledgement, initially empty = %j", empty => fixture(f => {
+  const entered = join(f.home, "cleanup-entered");
+  return localMesh(f, () => delayedAcknowledgement(f, empty, entered), entered);
+}, "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+async function localMesh(f: Fixture, operation: () => Promise<void>, entered?: string): Promise<void> {
   const previous = process.env.PATH;
   await mkdir(join(f.home, "bin"));
   const mesh = join(f.home, "bin/mesh");
-  await writeFile(mesh, `#!/bin/sh\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\nexec "$@"\n`);
+  await writeFile(mesh, `#!/bin/sh\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\n${entered ? `printf entered > ${quote(entered)}\n` : ""}exec "$@"\n`);
   await chmod(mesh, 0o755);
   process.env.PATH = join(f.home, "bin") + ":" + previous;
   try { await operation(); }

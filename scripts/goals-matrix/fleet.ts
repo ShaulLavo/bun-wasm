@@ -112,7 +112,7 @@ export async function collectNativeReport(collected: string, output: string): Pr
   await cp(join(collected, "native-cleanup.json"), join(output, "native-cleanup.json"));
   return report;
 }
-async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
+export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
   try { await removeStaging(remote, started, config); }
   catch (error) {
     await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify the installed queue has settled and its supervised consumers have stopped before removing this staging directory" }, null, 2));
