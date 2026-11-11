@@ -231,7 +231,8 @@ async function main() {
   const path = shimRequire("path");
   const isIgnored = picomatch(fixture.ignores, { contains: true, dot: true });
   const counts = { readFile: 0, readBytes: 0, readlink: 0, stat: 0, ignore: 0 };
-  if (mode === "load") { say("BUN_WASM_PERF_RESULT " + JSON.stringify({ mode, modules: Object.keys(fixture.modules).length, entries: fixture.entries, ignores: fixture.ignores })); return; }
+  if (Object.keys(fixture.stubUse).length) throw new Error("unexpected stub use");
+  if (mode === "load") { say("BUN_WASM_PERF_RESULT " + JSON.stringify({ mode, modules: Object.keys(fixture.modules).length, entries: fixture.entries, ignores: fixture.ignores, stubUse: fixture.stubUse })); return; }
   const result = await nodeFileTrace(fixture.entries, {
     base: root, processCwd: root, mixedModules: true, cache: { analysisCache: new Map() },
     async readFile(file) { counts.readFile++; const text = await inputs.readFile(file); counts.readBytes += text.length; return text; },

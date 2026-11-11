@@ -32,8 +32,10 @@ arithmetic/path positive control in the same guest context. Next package source
 and lock identities belong in each caller's hashed installed-input manifest.
 
 The pure replay fixture adds the same arithmetic control and a result marker,
-emits full file/ESM and warning lists, and rejects stub use even when the traced
-code catches the stub's exception. Its historical short-hash/count check stays
+emits full file/ESM and warning lists, and rejects stub use even when module
+initialization or traced code catches the stub's exception. Load-only results
+also expose an empty stub-use record that the capture boundary requires.
+Its historical short-hash/count check stays
 in place alongside the maintained runner's complete external output oracle.
 `replay-small.json` has four original tiny module bodies, not Next source, and
 exists only to test callback, output-drift and missing-input behavior cheaply.

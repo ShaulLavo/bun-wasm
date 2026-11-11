@@ -78,6 +78,12 @@ export function splitProfile(input: unknown) {
       queue.push(...node.children.map(id => profile.byId.get(id)!));
     }
   }
+  function visitBoundary(node: Node, queue: Node[], found: { callee: string; samples: number }[]) {
+    if (wasm(node)) { found.push({ callee: key(node), samples: totals.get(node.id)! }); return 0; }
+    overheadNodes.add(node.id);
+    queue.push(...node.children.map(id => profile.byId.get(id)!));
+    return node.hits;
+  }
   function crossing(caller: Node, root: Node) {
     if (wasm(root) || synthetic(root)) return;
     if (!hasWasm.has(root.id)) {
@@ -88,13 +94,7 @@ export function splitProfile(input: unknown) {
     const reentries: { callee: string; samples: number }[] = [];
     const queue = [root];
     let overheadSamples = 0;
-    for (let index = 0; index < queue.length; index++) visitBoundary(queue[index]!, queue, reentries);
-    function visitBoundary(node: Node, queue: Node[], found: typeof reentries) {
-      if (wasm(node)) { found.push({ callee: key(node), samples: totals.get(node.id)! }); return; }
-      overheadSamples += node.hits;
-      overheadNodes.add(node.id);
-      queue.push(...node.children.map(id => profile.byId.get(id)!));
-    }
+    for (let index = 0; index < queue.length; index++) overheadSamples += visitBoundary(queue[index]!, queue, reentries);
     markSubtree(root, detourNodes);
     detours.push({ caller: key(caller), reentries, inclusiveSamples: totals.get(root.id)!, overheadSamples });
   }

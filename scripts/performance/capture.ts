@@ -28,11 +28,11 @@ function resultFromOutput(stdout: string): Record<string, unknown> {
 
 export function checkResult(result: Record<string, unknown>, mode: string) {
   if (result.mode !== mode) throw new Error("wrong result mode");
+  if (Object.keys(object(result.stubUse)).length) throw new Error("unexpected stub use");
   if (mode === "load") return;
   for (const key of ["fileList", "esmFileList", "warnings"]) array(result[key]);
   const counts = object(result.counts);
   for (const key of ["readFile", "readStringLength", "readlink", "stat", "ignore"]) number(counts[key]);
-  if (Object.keys(object(result.stubUse)).length) throw new Error("unexpected stub use");
   for (const key of ["fileList", "esmFileList"]) {
     const files = array(result[key]).map(string);
     if (new Set(files).size !== files.length || canonical(files.toSorted()) !== canonical(files)) throw new Error(`invalid full ${key}`);

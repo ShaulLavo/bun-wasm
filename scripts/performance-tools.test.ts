@@ -58,6 +58,29 @@ test("frozen engine input verifies complete lists, warning/count drift, missing 
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
 
+test("load-only replay rejects caught module-initialization stubs", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-perf-load-"));
+  try {
+    const harness = join(fixtures, "nft-replay.cjs"), fixture = join(fixtures, "replay-small.json");
+    const stdout = run(process.execPath, [harness, "load", fixture]);
+    const result = object(JSON.parse(stdout.trim().replace("BUN_WASM_PERF_RESULT ", "")));
+    checkResult(result, "load");
+    const changed = object(json(fixture));
+    const module = object(object(changed.modules)["next/dist/compiled/@vercel/nft"]);
+    module.source = "try { require('child_process').execSync('unused'); } catch {}\n" + module.source;
+    const stubbed = join(scratch, "caught-stub.json");
+    writeFileSync(stubbed, JSON.stringify(changed));
+    const rejected = spawnSync(process.execPath, [harness, "load", stubbed], { encoding: "utf8" });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout).toContain("unexpected stub use");
+    expect(result.stubUse).toEqual({});
+    expect(() => checkResult({ ...result, stubUse: { child_process: 1 } }, "load")).toThrow("stub");
+    const missing = { ...result };
+    delete missing.stubUse;
+    expect(() => checkResult(missing, "load")).toThrow();
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
 test("Linux counter covers orphan work, fails closed and cleans descendants; runner rotates matched warm pairs", async () => {
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return;
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-perf-tools-test-"));
