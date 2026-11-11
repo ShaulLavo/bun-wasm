@@ -7,7 +7,8 @@ import { captureNativeReturn, captureProcessObserver } from "waffle/proc/observa
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { browserBuildConfig } from "../../../scripts/browser-build.ts";
 import type { RunRequest } from "../../src/bun-executor.ts";
-import { prepareProgram, programMetadata } from "../../../src/assets.ts";
+import { prepareLinkPlan } from "waffle/link";
+import { engineLinkPlan } from "../../../src/quickjs-program.ts";
 import { initializationPair } from "../../../tests/package/engine-initialization-fixture.ts";
 
 const mode = process.argv[2];
@@ -25,10 +26,11 @@ try {
   const build = await Bun.build(config);
   assert.equal(build.success, true, String(build.logs));
   const service = await runtime.processes();
-  const module = mode?.startsWith("nested")
-    ? await prepareProgram(initializationPair("quickjs", true))
-    : new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
-  const metadata = programMetadata(module);
+  const plan = mode?.startsWith("nested")
+    ? await prepareLinkPlan(await engineLinkPlan(initializationPair("quickjs", true)))
+    : undefined;
+  const module = plan?.entryModule ?? new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  const metadata = { linkPlan: plan?.shared };
   const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem, ...(mode?.startsWith("terminal") ? { terminalContext: {} } : {}) };
   await service.adoptRuntimeRoot(transport, { memory: mode?.startsWith("nested") ? "group" : [], filesystem });
