@@ -1,9 +1,18 @@
 import { test, expect, spyOn } from "bun:test";
 import { chromium, webkit, type Browser, type BrowserType } from "playwright";
+import { brotliCompressSync } from "node:zlib";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse, observeIphoneOrigins } from "./iphone-server";
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
+
+function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
+  const encoding = request.headers.get("accept-encoding");
+  if (new URL(request.url).pathname === "/asset.js") { encodings.asset = encoding; return new Response("asset"); }
+  encodings.navigations.push(encoding);
+  const html = '<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>';
+  return encoding?.includes("br") ? new Response(brotliCompressSync(html), { headers: { "content-type": "text/html", "content-encoding": "br" } }) : new Response(html, { headers: { "content-type": "text/html" } });
+}
 
 test("ordinary visible page keeps its owner alive and observes trusted iframe input and same-document edits", async () => {
   const bus = new IphoneBus("/__goals_iphone/" + "a".repeat(64));
@@ -16,10 +25,11 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
   });
   ownerOrigin = owner.url.origin;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  const encodings: { asset: string | null; navigations: (string | null)[] } = { asset: null, navigations: [] };
   try {
     browser = await chromium.launch({ headless: true });
     const binding = await origins.bind({}, 5173, {
-      fetch: () => new Response('<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>', { headers: { "content-type": "text/html" } }),
+      fetch: request => counterResponse(request, encodings),
       upgrade: (_request, socket) => { socket.destroy(); }, close() {},
     });
     bus.configure("host", owner.url.href);
@@ -30,6 +40,11 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     bus.configure("preview", binding.origin + "/");
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000);
     await waitReady(bus, "preview");
+    expect(encodings.navigations).toEqual(["identity"]);
+    const asset = new URL("/asset.js", binding.origin);
+    asset.hostname = "127.0.0.1";
+    await fetch(asset, { headers: { host: new URL(binding.origin).host, "accept-encoding": "br" } });
+    expect(encodings.asset).toBe("br");
     expect(await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000)).toMatchObject({ ready: false, before: "Count 0" });
     await bus.execute("preview", "document.querySelector('button').disabled = false", 3000);
     const before = await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);
@@ -64,6 +79,15 @@ async function waitReady(bus: IphoneBus, role: "host" | "preview"): Promise<void
     await Bun.sleep(20);
   }
 }
+
+test("the observer still rejects a server that sends encoded HTML after identity negotiation", async () => {
+  const bus = new IphoneBus("/__goals_iphone/" + "f".repeat(64));
+  const url = "http://127.0.0.1:1234/";
+  bus.configure("preview", url);
+  const request = new Request(url, { headers: { "sec-fetch-mode": "navigate", "accept-encoding": "identity" } });
+  const response = new Response(brotliCompressSync("<html><body>fixture</body></html>"), { headers: { "content-type": "text/html", "content-encoding": "br" } });
+  await expect(observeIphoneResponse(response, request, bus, "http://127.0.0.1:1235")).rejects.toThrow("requires uncompressed HTML");
+});
 
 test("real product service worker injects the configured preview even when HTTP never sees its HTML", async () => {
   const built = await Bun.build({ entrypoints: [new URL("../../web/src/sw.ts", import.meta.url).pathname], target: "browser", define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify("/* socket fixture */") } });
