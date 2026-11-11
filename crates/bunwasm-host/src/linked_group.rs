@@ -28,8 +28,14 @@ use crate::shm::{
     SharedMemoryLease,
 };
 
-/// A Bun group's address space: the guest memory maximum (`max-memory.txt`) every core declares.
-pub(super) const MAX_PAGES: u64 = crate::max_memory::MAX_MEMORY_BYTES / PAGE as u64;
+/// A Bun group's address space (`group-address-space.txt`): the maximum every group core and
+/// side declares for the imported memory. Members and regions are placed below it.
+pub(super) const MAX_PAGES: u64 =
+    crate::group_address_space::GROUP_ADDRESS_SPACE_BYTES / PAGE as u64;
+/// What a group's members may hold together: the guest memory maximum (`max-memory.txt`).
+/// It keeps the aggregate member envelope a 1 GiB group had. It is not a per-engine heap
+/// limit and reserves nothing for later workers. Regions are not counted.
+const MEMBER_PAGES: u32 = (crate::max_memory::MAX_MEMORY_BYTES / PAGE as u64) as u32;
 /// The Bun parser's stack. A PIE member's stack is carved by its host.
 pub(super) const STACK_BYTES: u32 = 8 << 20;
 const PAGE: u32 = 65_536;
@@ -98,6 +104,7 @@ pub(super) fn admit(bytes: &[u8], core: bool) -> Result<Profile> {
         !summary.memory_export,
         "a memory group image cannot export the shared memory"
     );
+    admit_memory(&summary, what)?;
     if core {
         admit_core(&summary)?;
     }
@@ -143,15 +150,22 @@ fn shape_problems(summary: &Summary, core: bool) -> Vec<String> {
 /// stack and derives the default thread stack size). wasm-ld defines no stack for a PIE.
 const HOST_STACK_BOUNDS: [&str; 2] = ["__stack_low", "__stack_high"];
 
-fn admit_core(summary: &Summary) -> Result<()> {
+/// Both halves declare the group address space exactly. Import matching alone would let a side
+/// left at wasm-ld's implicit 65536 pages join any narrower group, hiding the stage it was
+/// linked for; a narrower image cannot instantiate at all.
+fn admit_memory(summary: &Summary, what: &str) -> Result<()> {
     let Some((shared, maximum)) = summary.memory else {
-        bail!("memory group core must import env.memory");
+        bail!("memory group {what} must import env.memory");
     };
-    ensure!(shared, "memory group core must import a shared memory");
+    ensure!(shared, "memory group {what} must import a shared memory");
     ensure!(
         maximum == Some(MAX_PAGES),
-        "memory group core must declare a {MAX_PAGES}-page maximum"
+        "memory group {what} must declare a {MAX_PAGES}-page maximum"
     );
+    Ok(())
+}
+
+fn admit_core(summary: &Summary) -> Result<()> {
     for name in CORE_MEMORY_INITIALIZE.into_iter().chain(CORE_ENTRIES) {
         ensure!(
             summary.functions.iter().any(|export| export == name),
@@ -469,11 +483,13 @@ impl Drop for Admission {
     }
 }
 
-/// A Bun group: the guest memory maximum as its address space, the service's other
-/// defaults (16 members including pending, parallelism 1).
+/// A Bun group: the group address space, the guest memory maximum as what its members may
+/// hold together, and the service's other defaults (16 members including pending,
+/// parallelism 1).
 fn bun_policy() -> GroupPolicy {
     GroupPolicy {
         maximum_pages: MAX_PAGES as u32,
+        member_pages: Some(MEMBER_PAGES),
         ..GroupPolicy::default()
     }
 }
@@ -640,6 +656,10 @@ fn i32_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -> Re
         Val::I32(value as i32),
     )
 }
+
+#[cfg(test)]
+#[path = "linked_group_boundary_tests.rs"]
+mod boundary_tests;
 
 #[cfg(test)]
 mod tests {
@@ -959,13 +979,14 @@ mod tests {
                 maximum: Some(65_536),
                 ..CORE
             },
-            // A core linked for another capacity stage: the maximum must match exactly.
+            // A core linked for another capacity stage, including the 1 GiB guest memory
+            // maximum of stage 1: the maximum must match exactly.
             Image {
-                maximum: Some(MAX_PAGES / 2),
+                maximum: Some(u64::from(MEMBER_PAGES)),
                 ..CORE
             },
             Image {
-                maximum: Some(MAX_PAGES * 2),
+                maximum: Some(MAX_PAGES - 1),
                 ..CORE
             },
             Image {
@@ -1009,11 +1030,7 @@ mod tests {
         ];
         for (shape, reason) in refused {
             let core = Image { shape, ..CORE };
-            let side = Image {
-                maximum: Some(65_536),
-                ..core
-            };
-            for (bytes, is_core) in [(image(core), true), (image(side), false)] {
+            for (bytes, is_core) in [(image(core), true), (image(core), false)] {
                 let error = admit(&bytes, is_core).expect_err("malformed shape admitted");
                 assert!(
                     format!("{error:#}").contains(reason),
@@ -1036,11 +1053,10 @@ mod tests {
             format!("{error:#}").contains("cannot import GOT.mem.table_of_contents"),
             "{error:#}"
         );
-        let side = Image {
-            maximum: Some(65_536),
-            ..foreign
-        };
-        assert_eq!(admit(&image(side), false).unwrap(), Profile::SharedGroup);
+        assert_eq!(
+            admit(&image(foreign), false).unwrap(),
+            Profile::SharedGroup
+        );
     }
 
     #[test]
@@ -1065,14 +1081,7 @@ mod tests {
         });
         assert_eq!(admit(&bytes, true).unwrap(), Profile::SharedGroup);
         let core = Module::new(&engine, &bytes).unwrap();
-        let side = Module::new(
-            &engine,
-            image(Image {
-                maximum: Some(65_536),
-                ..CORE
-            }),
-        )
-        .unwrap();
+        let side = Module::new(&engine, image(CORE)).unwrap();
 
         let layout = CoreLayout::read(&engine, &bytes, &core, &side)
             .expect("validated core import-info must not be reparsed as a split side")
@@ -1085,12 +1094,24 @@ mod tests {
 
     #[test]
     fn a_shared_side_is_a_group_image_and_cannot_grow() {
-        let side = Image {
-            maximum: Some(65_536),
-            ..CORE
-        };
+        let side = CORE;
         assert_eq!(admit(&image(side), false).unwrap(), Profile::SharedGroup);
         assert!(admit(&image(Image { grow: true, ..side }), false).is_err());
+        // wasm-ld's implicit maximum for a shared PIC image, and the guest memory maximum a
+        // stage-1 side declared: a side states the group address space exactly, like its core.
+        for maximum in [65_536, u64::from(MEMBER_PAGES), MAX_PAGES - 1] {
+            let other = Image {
+                maximum: Some(maximum),
+                ..side
+            };
+            let error = admit(&image(other), false).expect_err("another stage's side admitted");
+            assert!(
+                format!("{error:#}").contains(&format!(
+                    "memory group side must declare a {MAX_PAGES}-page maximum"
+                )),
+                "{error:#}"
+            );
+        }
         let split = Image {
             shared: false,
             maximum: None,
@@ -1209,7 +1230,6 @@ mod tests {
         // The same bounds in a side are refused: the host binds them for cores only.
         let side = image(Image {
             shape: Shape::StackBounds,
-            maximum: Some(65_536),
             ..CORE
         });
         let error = admit(&side, false).expect_err("side stack bounds admitted");

@@ -20,7 +20,9 @@ group_errno_wraps=()
 if [[ "$profile" == shared-group ]]; then
   bun "$root/scripts/src/program-profile.ts" environment jsc > /dev/null
   group_errno_wraps=(write writev clock_gettime getcwd)
-  link_profile=(--shared-memory)
+  # The side declares the group address space, like its core (program-profile.ts sharedGroupSideLink).
+  group_address_space=$(bun "$root/scripts/src/program-profile.ts" group-address-space)
+  link_profile=(--shared-memory "--max-memory=$group_address_space")
   for name in "${group_errno_wraps[@]}"; do link_profile+=("--wrap=$name"); done
   init_profile=(-matomics -mbulk-memory -mmutable-globals)
   explicit_profile=(--group)
