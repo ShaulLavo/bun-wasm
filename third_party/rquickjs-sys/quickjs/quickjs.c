@@ -2718,7 +2718,10 @@ static void js_def_unmap(JSDefMapping *map)
         ;
     *link = map->next;
     pthread_mutex_unlock(&js_def_map_lock);
-    munmap(map, map->length);
+    if (munmap(map, map->length) != 0) {
+        fputs("fatal: QuickJS allocator could not unmap backing\n", stderr);
+        _Exit(EXIT_FAILURE);
+    }
 }
 
 static size_t js_def_malloc_usable_size(const void *ptr)
@@ -3921,10 +3924,11 @@ static void js_frame_free_all(JSRuntime *rt)
    released to make a lower value fit. */
 int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes)
 {
-    size_t spare = rt->frame_spare ? rt->frame_spare->charge : 0;
+    size_t spare;
 
     if (bytes > JS_FRAME_STACK_LIMIT_MAX || rt->frame_busy)
         return -1;
+    spare = rt->frame_spare ? rt->frame_spare->charge : 0;
     if (bytes < rt->frame_committed - spare)
         return -1;
     if (bytes < rt->frame_committed) {

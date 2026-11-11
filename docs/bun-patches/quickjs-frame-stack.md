@@ -345,6 +345,12 @@ an unreadable page size. The default callbacks are checked on their own for
 alignment, mapping size, `calloc`, `realloc` across the threshold, release,
 and a mapping that fails: the request fails, a `realloc` leaves its old block
 intact, and a segment is an out-of-memory error with nothing charged.
+Both setters are also called after the backing free, during spare trimming
+and runtime teardown. They refuse before reading storage that has already
+been released. The Linux default-allocator observer counts an unmap only
+after the syscall succeeds. An injected unmap failure must terminate the
+native process with a fatal diagnostic before the frame charge can be
+cleared: the registered void free callback cannot return a release error.
 
 `scripts/check-quickjs-frame-wasi.ts` builds the bare engine with
 `scripts/fixtures/quickjs-frame-wasi.c` for wasm32 against the split-profile

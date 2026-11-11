@@ -19,6 +19,7 @@
    block made the allocator acquire, and what it occupies, are read from the
    allocator's own sources, never from that bound or the engine's count. */
 #include "quickjs.h"
+#include <errno.h>
 #include <malloc.h>
 #include <pthread.h>
 #include <stddef.h>
@@ -126,6 +127,7 @@ static char *heap_base, *heap_brk, *heap_end;
 static Header *heap_free;
 static size_t mapped_ever, mapped_now; /* through this file's mmap and munmap */
 static int mapping_fails;              /* this file's mmap refuses */
+static int unmapping_fails;
 static long page_size_answer;
 
 static void check(int ok, const char *label)
@@ -156,8 +158,15 @@ void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 
 int munmap(void *addr, size_t length)
 {
-    mapped_now -= length;
-    return (int)syscall(SYS_munmap, addr, length);
+    int result;
+    if (unmapping_fails) {
+        errno = ENOMEM;
+        return -1;
+    }
+    result = (int)syscall(SYS_munmap, addr, length);
+    if (result == 0)
+        mapped_now -= length;
+    return result;
 }
 
 long sysconf(int name)
@@ -436,14 +445,17 @@ static void *allocate_zero(void *opaque, size_t count, size_t size)
 static void release(void *opaque, void *p)
 {
     Allocator *a = opaque;
+    int frame;
     if (!p)
         return;
     settle(a);
-    /* giving a frame block back must not be able to change the declaration either */
-    if (forget_frame(a, p) && a->meddles)
-        a->meddled += JS_SetMallocBound(a->rt, NULL) == 0;
+    frame = forget_frame(a, p);
     a->live--;
     backing_give(a, p);
+    if (frame && a->meddles) {
+        a->meddled += JS_SetMallocBound(a->rt, NULL) == 0;
+        a->meddled += JS_SetMaxFrameStackSize(a->rt, DEFAULT_LIMIT) == 0;
+    }
 }
 
 static void *resize(void *opaque, void *p, size_t size)
@@ -1474,13 +1486,38 @@ static void contract_on(const Profile *chosen)
     }
     if (chosen == &default_profile)
         default_large_blocks(rt, ctx);
+    if (chosen == &default_profile)
+        declaration_changes(rt, ctx);
     if (chosen == &default_profile && HOST_WATCH)
         default_mapping_failure(rt, ctx);
     check(memory.over_limit == 0, "no frame block ever left the allocator holding more than the limit");
     check(memory.over_declared == 0, "no frame block made the allocator acquire more than it declared");
     check(memory.untracked == 0, "every frame block was watched");
+    memory.meddles = 1;
     free_context(rt, ctx);
+    check(memory.meddled == 0, "both setters refuse after backing release during runtime teardown");
     check(memory.live == 0 && memory.frame_live == 0, "no allocation outlives the runtime");
+}
+
+static int mode_unmap_failure(void)
+{
+#if HOST_WATCH
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx = JS_NewContext(rt);
+    const char source[] = "(function () { return 42; })()";
+    JSValue value = JS_Eval(ctx, source, strlen(source), "unmap.js", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(value))
+        return 2;
+    JS_FreeValue(ctx, value);
+    unmapping_fails = 1;
+    JS_SetMaxFrameStackSize(rt, 0);
+    unmapping_fails = 0;
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    return 0;
+#else
+    return 77;
+#endif
 }
 
 static int mode_contract(void)
@@ -1518,6 +1555,8 @@ static void *run_job(void *opaque)
         job->status = mode_run(job->argv + 2);
     else if (!strcmp(mode, "contract") && job->argc == 2)
         job->status = mode_contract();
+    else if (!strcmp(mode, "unmap-failure") && job->argc == 2)
+        job->status = mode_unmap_failure();
     else
         job->status = 2;
     return NULL;
