@@ -72,7 +72,8 @@ console.log('grow one page', grown === ROLLDOWN.initial && afterGrow === (ROLLDO
 // Live ballast in 16 MiB blocks, every one of them granted, until less than 208 MiB of the
 // group is left. The allocator gives each block the smallest free chunk that fits, so no free
 // chunk below the ballast reaches 16 MiB afterwards and a 17 MiB payload is built past it.
-// Three payloads, their Bun strings and their copies need 153 MiB if nothing is collected.
+// Each encoding needs temporary strings and several native copies. Collect them between independent
+// round trips while the live ballast keeps every payload in the same high-address window.
 const ballast: Uint8Array[] = [];
 while (END - linearMemoryBytes() > 208 * MiB) {
   const block = new Uint8Array(16 * MiB);
@@ -86,11 +87,15 @@ const payloads: Record<string, () => Buffer> = {
   utf8: () => Buffer.from('東京 ✓ café '.repeat(size / 16 + 1), 'utf8'),
   utf16le: () => Buffer.from('🦊é'.repeat(size / 6 + 1), 'utf16le'),
 };
-for (const [encoding, build] of Object.entries(payloads)) {
+function roundTrip(encoding: string, build: () => Buffer): void {
   const payload = build();
   const result = bunStringRoundTrip(payload, encoding);
   note(`${encoding} string address`, result.address);
   console.log(encoding, 'near the 2 GiB end', result.address >= END - 224 * MiB && result.address < END, 'identical', Buffer.compare(result.bytes, payload) === 0);
+}
+for (const [encoding, build] of Object.entries(payloads)) {
+  roundTrip(encoding, build);
+  Bun.gc(true);
 }
 note('group bytes at the end', linearMemoryBytes());
 console.log('ballast intact', ballast.every((block, index) => block[block.length - 1] === (index & 0xff)), 'group within 2 GiB', linearMemoryBytes() <= END);
