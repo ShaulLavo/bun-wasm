@@ -12,6 +12,10 @@ CommonJS cache. Null and undefined retain the namespace, matching native Bun
 1.4.4. False and zero are valid overrides. ES imports retain the original
 namespace and default export. Genuine CommonJS exports are unchanged.
 
+Converted ES imports and CommonJS require share a module cache. Retain the ES
+namespace privately when selecting an explicit CommonJS override so converted
+imports still receive the default and named ES exports in either loading order.
+
 The installed `yargs@18.0.0/index.mjs` exports its factory as both `default` and
 `module.exports`. Returning its namespace made Angular's CommonJS default-import
 helper wrap an object instead of the factory. The dependency-free fixture
