@@ -78,5 +78,17 @@ ok unbounded computed getter recursion
 ok reads after the overflows
 ok first calls near the stack limit return or throw RangeError
 ok the same getters with the stack back
+ok destructured getters
+ok optional chain getter
+ok optional chain on nothing
+ok getter on the global object
+ok getter ending in a call with more arguments
+ok getter ending in another getter
+ok a hot site of getters ending in calls
+ok overflow caught inside a getter
+ok overflow caught inside a computed getter
+ok getters after the swallowed overflows
 ok nested Ajv names walk
+ok getter running async code
+ok getter returning a promise
 continued

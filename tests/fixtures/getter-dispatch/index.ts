@@ -258,6 +258,64 @@ check("first calls near the stack limit return or throw RangeError",
   nearLimit.length === untouched.length && nearLimit.every(outcome => outcome === "value" || outcome === "RangeError"), true);
 check("the same getters with the stack back", untouched.every((object, index) => object.value === 7 + index), true);
 
+// Reads that are not written as `object.name` but compile to it.
+const origin = { tag: "origin", get first(): string { return `${this.tag}:first`; }, get second(): string { return `${this.tag}:second`; } };
+const { first: destructured, second: renamed } = origin;
+check("destructured getters", `${destructured} ${renamed}`, "origin:first origin:second");
+const optional: { deep?: typeof origin } = { deep: origin };
+check("optional chain getter", optional.deep?.first, "origin:first");
+check("optional chain on nothing", ({} as typeof optional).deep?.first, undefined);
+Object.defineProperty(globalThis, "getterDispatchGlobal", { get(this: unknown) { return this === globalThis ? "global receiver" : "other receiver"; }, configurable: true });
+check("getter on the global object", (globalThis as unknown as { getterDispatchGlobal: string }).getterDispatchGlobal, "global receiver");
+delete (globalThis as { getterDispatchGlobal?: string }).getterDispatchGlobal;
+
+// A strict getter that ends in a call, which a strict engine may make a tail call.
+const tails = new Function("join", '"use strict"; return { tag: "tail", get value() { return join(this.tag, 1, 2, 3, 4, 5); }, get chained() { return this.value; } };')(
+  (...parts: unknown[]) => parts.join("-")) as { value: string; chained: string };
+check("getter ending in a call with more arguments", tails.value, "tail-1-2-3-4-5");
+check("getter ending in another getter", tails.chained, "tail-1-2-3-4-5");
+let tailTotal = 0;
+for (let pass = 0; pass < 20000; pass++) tailTotal += tails.chained.length;
+check("a hot site of getters ending in calls", tailTotal, 280000);
+
+// An overflow caught inside a getter unwinds through every level above it: each level that
+// got a value from the one below adds one. A catch that overflows again hands the error up.
+let returned = 0;
+let swallowed = 0;
+const swallowing = {
+  get depth(): number {
+    try {
+      const below = swallowing.depth;
+      returned++;
+      return 1 + below;
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      swallowed++;
+      return 0;
+    }
+  },
+};
+const reached = swallowing.depth;
+check("overflow caught inside a getter", reached > 40 && reached === returned && swallowed >= 1, true);
+returned = 0;
+swallowed = 0;
+const swallowingKey = {
+  get depth(): number {
+    try {
+      const below = (swallowingKey as Record<string, number>)[dynamic("depth")]!;
+      returned++;
+      return 1 + below;
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      swallowed++;
+      return 0;
+    }
+  },
+};
+const reachedKey = swallowingKey.depth;
+check("overflow caught inside a computed getter", reachedKey > 10 && reachedKey === returned && swallowed >= 1, true);
+check("getters after the swallowed overflows", `${origin.first} ${tails.value}`, "origin:first tail-1-2-3-4-5");
+
 // The names walk of Ajv 8.17.1's code generator (lib/compile/codegen/index.ts), reduced to its
 // recursion. Angular's schema registry nests about 64 `if` nodes; GETTER_DISPATCH_AJV_DEPTH
 // lets a gate ask for more.
@@ -290,4 +348,14 @@ for (let level = 0; level < ajvDepth; level++) {
 }
 const counted = Object.values(root.names).reduce((sum, count) => sum + count, 0);
 check("nested Ajv names walk", counted === ajvDepth && ajvDepth >= 64, true);
-console.log("continued");
+
+// Getters that return promises, read by async code.
+const later = {
+  get soon(): Promise<string> { return Promise.resolve("soon"); },
+  get asyncValue(): Promise<string> { return (async () => `async ${await this.soon}`)(); },
+};
+later.asyncValue.then(async value => {
+  check("getter running async code", value, "async soon");
+  check("getter returning a promise", await later.soon, "soon");
+  console.log("continued");
+});
