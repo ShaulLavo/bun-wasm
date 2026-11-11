@@ -5,8 +5,8 @@
 //   ROOT=<site> ENGINES=jsc STACK_KIB=240 JSC_PARSER_RESERVE=832 bun web/tests/browser-stack-safari.ts --measure --cold
 // `--measure` and `--cold` mean what they mean in browser-stack.mjs. A cold attempt is a new
 // SafariDriver session on a new document, so its wasm starts in JavaScriptCore's first tier.
-// STACK_SLICE=PART/COUNT measures one consecutive part of the paths; the parts of one count cover
-// every path once. SAFARI_CLEANUP_FILE names the driver teardown receipt.
+// STACK_SLICE=PART/COUNT or FIRST-LAST/COUNT measures consecutive parts of the paths; the parts of
+// one count cover every path once. SAFARI_CLEANUP_FILE names the driver teardown receipt.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -35,12 +35,14 @@ const observed = new Set<string>();
 const modes = sliceModes(process.env.STACK_SLICE);
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-/** STACK_SLICE=2/4 measures the second of four parts, so a long sweep can hold the Mac in short turns. */
+/** STACK_SLICE=2/4 or 2-3/4 measures those of four parts, so a long sweep can hold the Mac in short turns. */
 function sliceModes(slice: string | undefined): string[] | undefined {
   if (slice === undefined) return undefined;
-  const parts = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(slice);
-  if (!parts) throw new Error(`STACK_SLICE must be PART/COUNT, got ${slice}`);
-  return stackModeSlice(Number(parts[1]) - 1, Number(parts[2]));
+  const parts = /^([1-9][0-9]*)(?:-([1-9][0-9]*))?\/([1-9][0-9]*)$/.exec(slice);
+  if (!parts) throw new Error(`STACK_SLICE must be PART/COUNT or FIRST-LAST/COUNT, got ${slice}`);
+  const first = Number(parts[1]), last = Number(parts[2] ?? parts[1]), count = Number(parts[3]);
+  if (last < first) throw new Error(`STACK_SLICE parts run backwards: ${slice}`);
+  return Array.from({ length: last - first + 1 }, (_, offset) => stackModeSlice(first - 1 + offset, count)).flat();
 }
 
 async function withPage<T>(host: Host, engine: string, use: (page: SafariTransport) => Promise<T>): Promise<T> {
