@@ -84,6 +84,35 @@ function command(name: string): string {
   return body.split('\n').map(line => line.slice(10)).join('\n');
 }
 
+test('the SM producer isolates Python from ambient packages and clears restored environments', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-python-'));
+  try {
+    const parent = join(root, 'parent');
+    const clean = join(root, 'spidermonkey-python');
+    for (const path of [parent, clean]) {
+      const setup = spawnSync('python3', ['-m', 'venv', '--without-pip', path], { encoding: 'utf8' });
+      expect(setup.status, setup.stderr).toBe(0);
+      const poison = spawnSync(join(path, 'bin/python3'), ['-c',
+        'import pathlib,sysconfig; p=pathlib.Path(sysconfig.get_path("purelib"))/"ambient_ci_poison-1.0.dist-info"; p.mkdir(); (p/"METADATA").write_text("Metadata-Version: 2.1\\nName: ambient-ci-poison\\nVersion: 1.0\\nRequires-Dist: absent-ci-dependency\\n")',
+      ], { encoding: 'utf8' });
+      expect(poison.status, poison.stderr).toBe(0);
+    }
+    const bin = join(root, 'bin'); mkdirSync(bin);
+    writeFileSync(join(root, 'env.sh'), '');
+    writeFileSync(join(bin, 'git'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'bash'), `#!/bin/sh
+exec python3 -c 'import importlib.metadata,sys; print(sys.prefix); print(sorted(d.metadata["Name"] for d in importlib.metadata.distributions()))'
+`, { mode: 0o755 });
+    const result = spawnSync('/bin/bash', ['-euo', 'pipefail', '-c', command('Produce or verify the shared SpiderMonkey library once')], {
+      cwd: root,
+      env: { ...process.env, PATH: `${bin}:${parent}/bin:${process.env.PATH}`, RUNNER_TEMP: root, SPIDERMONKEY_BUILD_DIR: join(root, 'source') },
+      encoding: 'utf8',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split('\n')).toEqual([clean, '[]']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('real workflow steps wire the library, existing core, side and discovered consumer exactly once', () => {
   const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-ci-recorder-'));
   try {
