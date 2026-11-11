@@ -67,7 +67,8 @@ async function exitCode(page: SafariTransport, text: string, timeoutMs: number):
     return result.code;
   } catch (error) {
     if (!(error instanceof ObservationTimeout)) throw error;
-    await stopServer(page, 15_000);
+    // A cold page is discarded after this attempt, so only a reused page must come back to idle.
+    await stopServer(page, 15_000).catch((stopError: unknown) => { if (!cold) throw stopError; });
     return null;
   }
 }
@@ -131,10 +132,23 @@ async function measureEngine(engine: string, label: string, attempt: (mode: stri
   if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);
 }
 
+/**
+ * One attempt in its own session. A page or session that dies under the attempt is a failed
+ * attempt, recorded in its row like a trap, so the sweep still measures the paths after it.
+ */
+async function coldOutcome(host: Host, engine: string, mode: string, depth: number): Promise<string> {
+  try { return await withPage(host, engine, page => outcome(page, mode, depth)); }
+  catch (error) {
+    host.signal.throwIfAborted();
+    console.log(JSON.stringify({ host: `safari/${engine}`, mode, depth, hostError: String(error).slice(0, 2000) }));
+    return "host-error";
+  }
+}
+
 // SafariDriver holds one session at a time, so a cold run never keeps a page open across attempts.
 async function checkCold(host: Host, engine: string, label: string): Promise<void> {
   await withPage(host, engine, page => identify(page, engine, label));
-  if (measure) await measureEngine(engine, label, (mode, depth) => withPage(host, engine, page => outcome(page, mode, depth)));
+  if (measure) await measureEngine(engine, label, (mode, depth) => coldOutcome(host, engine, mode, depth));
   for (const fixture of fixtureNames) await withPage(host, engine, page => fixtures(page, label, [fixture]));
 }
 
