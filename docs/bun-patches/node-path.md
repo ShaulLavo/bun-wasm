@@ -10,9 +10,16 @@ dirname, extname, isAbsolute, normalize, join, and parse algorithms run on
 The previous partial Node POSIX implementation in `src/js/path.js` is removed.
 
 `crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
-original adapters. Little-endian UTF-16 buffers preserve JavaScript code units,
-including lone surrogates and U+FEFF. JavaScript validates and converts arguments
-before native calls. The adapter implements POSIX resolve, relative, format, namespace
+original adapters. After public validation and coercion, a captured
+`String.prototype.isWellFormed` intrinsic selects owned UTF-8 strings for
+well-formed inputs. Rust converts them with `encode_utf16` and checks every output
+with `String::from_utf16`. Bun's algorithms still run on `u16` slices. If any
+relevant input contains an unpaired surrogate, the entire call uses lossless
+little-endian UTF-16 buffers. Neither route normalizes Unicode or drops BOM/NUL
+code units. Both routes return owned data through the existing native transport.
+Windows resolution keeps its UTF-16 route. POSIX resolution scans right to left
+for an absolute path before one normalization, without per-argument parse calls.
+The adapter implements POSIX resolve, relative, format, namespace
 conversion, and `_makeLong` over the native lexical operations and guest
 `process.cwd()`. Bun's native resolve and relative functions read a process-wide
 filesystem singleton, so calling them directly would use the toolchain's cwd

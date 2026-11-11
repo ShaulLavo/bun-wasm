@@ -2,6 +2,8 @@
   "use strict";
 
   const native = internal.native.nodePath;
+  const isWellFormed = Function.prototype.call.bind(String.prototype.isWellFormed);
+  type StringOperation = "basename" | "dirname" | "extname" | "normalize";
   type Parsed = { root: string; dir: string; base: string; ext: string; name: string };
   type Namespace = ReturnType<typeof namespace> & { win32?: Namespace; posix?: Namespace };
 
@@ -39,12 +41,28 @@
   }
 
   function parse(windows: boolean, value: string): Parsed {
-    const result = native.lexical(windows, "parse", encode(value));
+    if (isWellFormed(value)) return native.lexicalString(windows, "parse", value);
+    const result = native.lexicalUnits(windows, "parse", encode(value));
     return { root: decode(result.root), dir: decode(result.dir), base: decode(result.base), ext: decode(result.ext), name: decode(result.name) };
   }
 
   function normalize(windows: boolean, value: string): string {
-    return decode(native.lexical(windows, "normalize", encode(value)));
+    return lexical(windows, "normalize", value);
+  }
+
+  function lexical(windows: boolean, operation: StringOperation, value: string, suffix?: string): string {
+    if (isWellFormed(value) && (suffix === undefined || isWellFormed(suffix))) return native.lexicalString(windows, operation, value, suffix);
+    return decode(native.lexicalUnits(windows, operation, encode(value), suffix === undefined ? undefined : encode(suffix)));
+  }
+
+  function join(windows: boolean, paths: string[]): string {
+    if (paths.every(isWellFormed)) return native.joinString(windows, paths);
+    return decode(native.joinUnits(windows, paths.map(encode)));
+  }
+
+  function isAbsolute(windows: boolean, value: string): boolean {
+    if (isWellFormed(value)) return native.lexicalString(windows, "isAbsolute", value);
+    return native.lexicalUnits(windows, "isAbsolute", encode(value));
   }
 
   function strings(values: readonly unknown[]): string[] {
@@ -69,9 +87,8 @@
     for (let i = paths.length - 1; i >= -1 && !absolute; i--) {
       const value = i >= 0 ? paths[i] : process.cwd();
       if (!value) continue;
-      const parsed = parse(false, value);
-      tail = value.slice(parsed.root.length) + "/" + tail;
-      absolute = parsed.root === "/";
+      absolute = value.startsWith("/");
+      tail = value.slice(absolute ? 1 : 0) + "/" + tail;
     }
     const result = normalize(false, (absolute ? "/" : "") + tail);
     return result.length > 1 && result.endsWith("/") ? result.slice(0, -1) : result;
@@ -81,7 +98,8 @@
     if (from === to) return "";
     const source = resolve(windows, [from]);
     const target = resolve(windows, [to]);
-    return decode(native.relative(windows, encode(source), encode(target)));
+    if (isWellFormed(source) && isWellFormed(target)) return native.relativeString(windows, source, target);
+    return decode(native.relativeUnits(windows, encode(source), encode(target)));
   }
 
   function toNamespacedPath(windows: boolean, value: unknown): unknown {
@@ -104,24 +122,23 @@
   }
 
   function namespace(windows: boolean) {
-    const lexical = (operation: "dirname" | "extname", value: unknown) => decode(native.lexical(windows, operation, encode(validateString(value, "path"))));
     const namespaced = (value: unknown) => toNamespacedPath(windows, value);
     return {
       resolve: (...values: unknown[]) => resolve(windows, resolutionStrings(windows, values)),
       normalize: (value: unknown) => normalize(windows, validateString(value, "path")),
-      isAbsolute: (value: unknown) => native.lexical(windows, "isAbsolute", encode(validateString(value, "path"))),
-      join: (...values: unknown[]) => decode(native.join(windows, strings(values).map(encode))),
+      isAbsolute: (value: unknown) => isAbsolute(windows, validateString(value, "path")),
+      join: (...values: unknown[]) => join(windows, strings(values)),
       relative: (from: unknown, to: unknown) => relative(windows, validateString(from, "from"), validateString(to, "to")),
       toNamespacedPath: namespaced,
       _makeLong: namespaced,
-      dirname: (value: unknown) => lexical("dirname", value),
+      dirname: (value: unknown) => lexical(windows, "dirname", validateString(value, "path")),
       basename(value: unknown, suffix?: unknown) {
         if (suffix !== undefined && typeof suffix !== "string" && !(suffix instanceof String)) invalidType("ext", "string", suffix);
-        const input = encode(validateString(value, "path"));
-        const extension = suffix === undefined ? undefined : encode(String(suffix));
-        return decode(native.lexical(windows, "basename", input, extension));
+        const input = validateString(value, "path");
+        const extension = suffix === undefined ? undefined : String(suffix);
+        return lexical(windows, "basename", input, extension);
       },
-      extname: (value: unknown) => lexical("extname", value),
+      extname: (value: unknown) => lexical(windows, "extname", validateString(value, "path")),
       format: (value: unknown) => format(windows, value),
       parse: (value: unknown) => parse(windows, validateString(value, "path")),
       matchesGlob(value: unknown, pattern: unknown) {
