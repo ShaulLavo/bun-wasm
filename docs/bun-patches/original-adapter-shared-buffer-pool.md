@@ -45,20 +45,42 @@ blocking checks.
 
 `lane.ts` and `lane-overflow.ts` are also original adapters. Each lifetime lane
 now carries its fixed pool index through the worker codec. The pre-entry grant
-contains one private zero-byte growable backing per direction when native GSAB
-allocation is supported. These backings never enter public shared-object identity
-or guest constructor stock. Native constructor, length, maximum, growable and grow
-operations are captured before guest installation. A host without those operations
-receives an explicit inline-only grant, rather than eager fixed-size substitutes.
+contains one private zero-byte growable backing when native GSAB allocation is
+supported. Every direction's large frames live in a range of it. The backing never
+enters public shared-object identity or guest constructor stock. Native constructor,
+length, maximum, growable and grow operations are captured before guest installation.
+A host without those operations receives an explicit inline-only grant, rather than
+eager fixed-size substitutes.
 
 The inline ring remains 1 MiB per direction. A 12-byte tagged descriptor carries
 one complete large frame in the same order stream. Admission caps its complete
 UTF-8 packet at 64 MiB and runtime-wide committed growth at 128 MiB. Growth rounds
 to 64 KiB. A second unread large frame on the same direction rejects immediately
-before transfer detachment. This is not native burst parity. Successful growth
-remains charged after copy, abort, close and sender exit. An interrupted producer
-can strand conservative budget until runtime disposal. The 64 maxima permit
-4 GiB of virtual reservation, not 4 GiB of initial resident payload.
+before transfer detachment. This is not native burst parity.
+
+The backing's maximum is the 128 MiB budget, which is all the address space the
+grant reserves. The first version gave each of the 64 directions its own backing
+with a 64 MiB maximum, a 4 GiB reservation. WebKit charges a growable buffer's
+whole maximum against a fixed primitive cage, 16 GiB on iPhone builds, where
+three fast Wasm memories already take 12 GiB. Under those limits in PC WebKit the
+4 GiB made an Astro production build on QuickJS fail to spawn with `ENOMEM` and
+a Next.js install take about three times as long.
+
+The shared control buffer holds each direction's range as an offset and a capacity
+beside its phase, generation and length. One cursor hands ranges out in order and
+is the budget's charge. A sender changes its direction's range only while it holds
+the slot in its reserved phase, so a reader never sees a range move. A frame that
+fits reuses the range. A larger frame lengthens the range in place when it is the
+last one handed out. Otherwise the direction takes a new range of at least twice
+the old capacity, so slowly growing frames do not abandon one range each, and the
+old range stays charged and unused. Ranges also stay charged after copy, abort,
+close and sender exit. An interrupted producer can strand conservative budget
+until runtime disposal.
+
+Directions grow the one backing concurrently. A grow call that fails while the
+backing is already long enough is treated as a lost race to a longer growth, not
+as an error. A failed growth returns its charge only for bytes that were never
+backed, and only while no later range follows it.
 
 The reader makes a fixed ordinary copy and decodes fatal UTF-8 before returning
 slot credit. Endpoint moves keep the same lane, slot state and unsigned generation.

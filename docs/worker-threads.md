@@ -222,11 +222,19 @@ pre-attached slot, up to 64 MiB encoded. ArrayBuffer base64, graph metadata and
 JSON escaping count toward that cap. Total committed overflow capacity is limited
 to 128 MiB per runtime. This is not a total JavaScript heap or resident-memory bound.
 
+Every slot is a range of one growable backing whose maximum is that 128 MiB, so
+the runtime reserves 128 MiB of address space for large frames and no more. WebKit
+takes a growable buffer's whole maximum from a fixed address-space cage that Wasm
+memories also use, 16 GiB on iPhone builds, so the reservation is kept this small.
+
 Only one unread large frame fits each lifetime direction. A second rejects with
 `DataCloneError` before its ArrayBuffers detach or ports move. Small following
 frames still fit the inline ring. Once the receiver copies the complete large
-frame, that direction can reuse its capacity without another charge. Growth stays
-charged until runtime disposal, even after failed sends, closure or sender exit.
+frame, that direction can reuse its capacity without another charge. A direction
+whose frames outgrow its range gets a new one of at least twice the size, unless
+its range is the last one handed out and can lengthen in place. Every range stays
+charged until runtime disposal, including outgrown ones and those of failed sends,
+closed lanes and exited senders.
 
 Full rings, allocation failure, budget exhaustion, unavailable native GSAB support
 and unpooled lanes also reject large sends synchronously before detachment. Hosts

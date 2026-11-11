@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
 import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { overflowBudget } from "../web/src/shared-objects/lane-overflow";
 
 const worker = String.raw`
 const { parentPort, receiveMessageOnPort } = require("node:worker_threads");
@@ -67,13 +68,13 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
   try {
     const browser = await task.launch(name === "chromium" ? chromium : webkit);
     const context = await browser.newContext();
-    if (inlineOnly) await context.addInitScript(() => {
+    if (inlineOnly) await context.addInitScript(maximum => {
       const Native = SharedArrayBuffer;
       globalThis.SharedArrayBuffer = new Proxy(Native, { construct(target, args, constructor) {
-        if (args[0] === 0 && args[1]?.maxByteLength === 67108864) throw new RangeError("Private overflow allocation unavailable");
+        if (args[0] === 0 && args[1]?.maxByteLength === maximum) throw new RangeError("Private overflow allocation unavailable");
         return Reflect.construct(target, args, constructor);
       } });
-    });
+    }, overflowBudget);
     const page = await context.newPage(), url = await task.serve();
     await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
     assert.match(await ready(page), /ready/);
