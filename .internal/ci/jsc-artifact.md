@@ -18,3 +18,21 @@ and tools source manifests, exercise offline sparse Git patch verification and
 the real CMake preflight, and reject missing or excluded dependencies. They do
 not compile JSC. Hosted CI must validate real consumers and measure real artifact
 sizes; category logs report regular-file bytes and total compressed bytes.
+
+## Approved follow-up measurement
+
+`jsc/build-libcxx.sh`'s `libcxx_source_tree` still uses `git write-tree` without
+`--missing-ok`, while `jsc/common.sh`'s WebKit verifier uses `--missing-ok` to
+avoid fetching unrelated blobs from a sparse, blobless checkout. This is a
+suspected producer/cache cost, not a measured regression. This artifact change
+already excludes the LLVM checkout, so its upload savings do not depend on that
+question.
+
+Reproduce with a tiny local shallow, blobless sparse repository and an unavailable
+origin, following the real offline fixture in `ci-jsc-artifact.test.ts`. Run the
+actual libc++ verifier prefix through `libcxx_source_tree` with its two patch
+files, compare default `write-tree` with `--missing-ok`, and record missing blobs,
+object counts and the tree ID. Preserve worktree, untracked-source and patched-tree
+checks. No LLVM production build is needed for this measurement. Only then choose
+a fix and its cold/warm cache proof. Changing this script currently changes both
+profiles' JSC input hashes, so include that invalidation cost in the decision.
