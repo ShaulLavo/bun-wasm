@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
 import { ENGINE_BIN } from "../../../src/executable-paths";
+import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
@@ -143,7 +144,10 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     installCompileObserver();
     const measurementEnv = measurementEnvironment(this.params);
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" } });
+    const runtime = createRuntime({
+      filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" },
+      memoryGroups: BUN_MEMORY_GROUP_POLICY,
+    });
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
       shell: new URL("./programs/shell-engine.wasm", location.href),
