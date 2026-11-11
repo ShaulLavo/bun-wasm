@@ -38,7 +38,7 @@ STDERR_KEPT = 4000
 
 
 def ajv_codegen(args, parser):
-    """Guest flags for the ajv mode: the package's compile/codegen directory, preopened read-only by use."""
+    """Guest flags for the ajv mode: a preopen of the installed package's compile/codegen directory."""
     if ('ajv' in args.modes) != (args.ajv_codegen is not None):
         parser.error('--ajv-codegen and the ajv mode go together')
     if args.ajv_codegen is None:
