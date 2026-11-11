@@ -41,6 +41,18 @@ test("CI's native command runs the busy-loop stdout handshake fixture", () => {
   expect(command).toContain("stdout-busy-loop");
 });
 
+test("import-specifier collection runs through the shared QuickJS and JSC native gates", () => {
+  const path = "tests/fixtures/esm-import-specifier-collection";
+  expect(discoverChecks().find(check => check.path === path)).toEqual({
+    owner: "native", path, profile: "shared-group", localRuntime: false, batch: "default",
+  });
+  expect(selectChecks("native", undefined, "shared-group")).toContain(path);
+  expect(selectChecks("native")).not.toContain(path);
+  expect(checkCommand("native", [path], "shared-group")).toEqual([
+    "bun", join(root, "scripts/native-profile-fixtures.ts"), path,
+  ]);
+});
+
 test("discovery is sorted and adding a feature needs no shared command edit", () => {
   const directory = fixture();
   writeFileSync(join(directory, "scripts/another.test.ts"), "");
