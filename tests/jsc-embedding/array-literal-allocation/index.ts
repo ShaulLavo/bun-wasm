@@ -8,8 +8,9 @@
 // the first call. Nothing else the engine allocates at startup or here has that size.
 const elementCount = 10_000;
 
-// A function body holding a bare block that declares one all-constant array.
-const build = new Function(`{ const table = [${"0,".repeat(elementCount - 1)}7]; return table; }`) as () => number[];
+// A function whose top level declares one all-constant array, the shape of
+// `const esbuildUsedEnvVars = [...]` in esbuild-wasm's launcher module.
+const build = new Function(`const table = [${"0,".repeat(elementCount - 1)}7]; return table;`) as () => number[];
 
 let first: string;
 try {

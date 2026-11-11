@@ -34,7 +34,7 @@ growth still fails at its next allocation that cannot return null.
 on the matched pair. The Node host's `--refuse-engine-allocation MINIMUM-MAXIMUM:COUNT` option
 (`web/scripts/node-linked.ts`) wraps the libc allocation functions the engine side imports from
 its core and returns their failure result for the first `COUNT` requests in the byte range. The
-fixture compiles a function whose top-level block declares one 10,000-element constant array. The
+fixture compiles a function whose top level declares one 10,000-element constant array. The
 gate refuses two requests of 80,000 to 80,511 bytes: the literal's buffer during bytecode
 generation, then the array's storage on the first call. The first call must throw the catchable
 `RangeError`, the second must build the array, and each evaluation must give a fresh array.
