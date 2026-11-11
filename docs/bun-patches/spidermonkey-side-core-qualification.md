@@ -18,6 +18,11 @@ basename is only a private symlink to the same admitted bytes.
 
 The experimental initializer converter keeps function and data sections unchanged,
 uses global-only import indices, and rejects implicit initialization after conversion.
+Ordinary CI also owns the fresh-library staging origin, the exact native cache,
+and one interpreter fixture gate in the existing Rust job. Its delivery remains
+an experimental split pair. Shared-group producers and supported publication
+registries have separate owners.
+
 The pair recipe requires `SPIDERMONKEY_PAIR_DIR`, checks source and native inputs
 before and after the build, and limits the side compiler to four jobs. Outputs stay
 private and require separate parent acceptance before any native execution.
