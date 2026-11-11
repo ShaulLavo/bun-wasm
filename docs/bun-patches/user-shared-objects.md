@@ -149,10 +149,11 @@ unit reply even while the Browser host refuses table/global operations.
 
 ## Bounded large lane frames
 
-The original lane adapter now uses a pre-attached private growable slot per
-lifetime direction. A tagged descriptor stays in the existing inline ring and
+The original lane adapter now uses a pre-attached private slot per lifetime
+direction. Each slot is a range of one private growable backing shared by all
+directions. A tagged descriptor stays in the existing inline ring and
 commits only after the existing transfer transaction succeeds. The codec carries
-the fixed lane's pool index and side, never a public reference to a growable slot.
+the fixed lane's pool index and side, never a public reference to the growable backing.
 All private grant and lane consumers, including the real-worker synchronous-reply
 fixture, use the same descriptor.
 

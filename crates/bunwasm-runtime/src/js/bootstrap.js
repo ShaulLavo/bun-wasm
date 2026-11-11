@@ -542,6 +542,7 @@
   // --- CommonJS ---------------------------------------------------------------
 
   const moduleCache = Object.create(null);
+  const esmNamespaces = new WeakMap();
   let mainModule;
   const compileModule = internal.require("module_compile");
 
@@ -592,11 +593,20 @@
     try {
       const wrapper = moduleWrapper(mod, path, kind);
       if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, path));
+      if (kind === "esm") selectCommonJsExport(mod);
     } catch (err) {
       delete moduleCache[path];
       throw err;
     }
     mod.loaded = true;
+  }
+
+  function selectCommonJsExport(mod) {
+    const namespace = mod.exports;
+    const common = namespace["module.exports"];
+    if (common == null) return;
+    esmNamespaces.set(mod, namespace);
+    mod.exports = common;
   }
 
   // Data formats fill mod.exports here. Code formats return their compiled wrapper, and the
@@ -670,6 +680,7 @@
       try {
         const wrapper = moduleWrapper(mod, resolved, kind);
         if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, resolved));
+        if (kind === "esm") selectCommonJsExport(mod);
       } catch (err) {
         delete moduleCache[resolved];
         throw err;
@@ -728,8 +739,8 @@
         if (isBuiltinId(resolved)) return commonJsNamespace(internal.builtin(resolved));
         internal.hotFileRequire?.();
         const format = native.moduleFormat(resolved);
-        const exports = loadModule(resolved, format).exports;
-        return format === "esm" ? exports : commonJsNamespace(exports);
+        const mod = loadModule(resolved, format);
+        return format === "esm" ? esmNamespaces.get(mod) ?? mod.exports : commonJsNamespace(mod.exports);
       },
       resolve(spec) {
         const resolved = native.resolve(String(spec), path, false);

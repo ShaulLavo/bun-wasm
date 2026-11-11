@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { capture } from './helper.cjs';
+import { callerLocations, capture } from './helper.cjs';
 
 function caller() { const sites = capture(); return sites; }
 const sites = caller();
@@ -18,6 +18,14 @@ assert.equal(site.getTypeName(), null);
 assert.equal(site.getMethodName(), null);
 assert.ok(/index\.js:\d+:/.test(site.toString()));
 console.log('structured caller');
+
+function deprecated() { return callerLocations(); }
+const [location] = deprecated();
+assert.equal(location.name, 'deprecated');
+assert.ok(location.file.endsWith('index.js'));
+assert.ok(location.line > 0);
+assert.ok(location.column > 0);
+console.log('unfiltered caller');
 
 const previous = Error.prepareStackTrace;
 try {
