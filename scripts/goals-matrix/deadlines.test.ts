@@ -163,11 +163,12 @@ test("continuation accepts the same policy, retains failed history, and rejects 
   });
 });
 
-async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>): Promise<void> {
+async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>, deleteDelayMs = 0): Promise<void> {
   const timeouts: unknown[] = [];
   async function route(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     const body = request.method === "POST" ? object(await request.json()) : {};
+    if (request.method === "DELETE" && path === "/session/deadline-unit") await Bun.sleep(deleteDelayMs);
     if (path === "/session") return Response.json({ value: { sessionId: "deadline-unit", capabilities: { browserName: "Safari", platformName: "macOS", transport: "unit-fixture" } } });
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
@@ -217,23 +218,24 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
 }
 
 test("the real runner applies calibrated cell deadlines to execute and native transport without a uniform flag", async () => {
-  const framework = frameworks.find(item => item.id === "next");
-  if (!framework) throw new Error("Missing Next fixture");
+  const framework = frameworks.find(item => item.id === "hono");
+  if (!framework) throw new Error("Missing Hono fixture");
   await withPlayground(framework, 0, transport => withDriver(transport, (endpoint, timeouts) => withReportRoot(async (root, output) => {
     await stageUnitHost(root, framework.id);
-    const config = options(["--asset-source=calibration-unit-not-acceptance", `--root=${root}`, `--output=${output}`, "--browsers=safari", "--engines=browser", "--frameworks=next", `--safari-endpoint=${endpoint}`]);
+    const config = options(["--asset-source=calibration-unit-not-acceptance", `--root=${root}`, `--output=${output}`, "--browsers=safari", "--engines=browser", "--frameworks=hono", `--safari-endpoint=${endpoint}`]);
     const report = await run(config);
-    const cell = report.cells.find(cell => cell.framework === "next" && cell.browser === "safari" && cell.engine === "browser");
+    const cell = report.cells.find(cell => cell.framework === "hono" && cell.browser === "safari" && cell.engine === "browser");
     if (!cell) throw new Error("Missing runner cell");
     expect(cell.status).toBe("pass");
     const limits = cellDeadlines(campaignDeadlines(), cell);
+    expect(limits.timeoutMs).toBe(1470);
     for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
     expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }]);
     expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {} });
     expect(report.resources?.every(resource => resource.stopped)).toBe(true);
     for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
-  })));
-});
+  }), 1800));
+}, 10_000);
 
 test("historical reports without deadline evidence are rejected, never rewritten for a new policy", async () => {
   await withReportRoot(async (root, output) => {

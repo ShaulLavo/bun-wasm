@@ -159,6 +159,7 @@
     }
   },
   "ignoreBinaries": [
+    "flock",
     "unshare",
     "rustc",
     "ss",

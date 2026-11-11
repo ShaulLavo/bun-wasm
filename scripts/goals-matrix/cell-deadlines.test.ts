@@ -11,7 +11,7 @@ import { initialCells, finish, validateReport, type Attempt, type Report } from 
 import { initialReport, options } from "./run";
 import { nativeRunnerArgs } from "./fleet";
 import { deadlineMarkdown, saveReport } from "./report";
-import { policyMetadata, policyMarkdown, stagePolicyMetadata } from "./policy-metadata";
+import { authoritativePolicy, policyMetadata, policyMarkdown, stagePolicyMetadata } from "./policy-metadata";
 import { validateArchive } from "./archive";
 
 function attempt(box: Box, at: number, shared = 1000, install = 2000, build = 3000): Attempt {
@@ -189,8 +189,10 @@ test("real resume rejects changed cell limits or frozen provenance without mutat
 });
 test("metadata staging changes only future campaign metadata and the deadline section, leaving source, outcomes and original budgets intact", async () => {
   const original = JSON.stringify({ ...input(), deadlines: deadlinePolicy(), command: "original command" });
-  const updated = JSON.parse(policyMetadata(original));
-  expect(updated.campaignPolicy).toEqual(campaignDeadlines());
+  const authority = { schema: 1, ownerDecisions: [{ framework: "next", engine: "spidermonkey", activeLimitMs: 110_000 }] };
+  const policy = authoritativePolicy(authority, undefined);
+  const updated = JSON.parse(policyMetadata(original, policy));
+  expect(updated.campaignPolicy).toEqual({ ...authority, cellDeadlines: campaignDeadlines() });
   delete updated.campaignPolicy;
   expect(updated).toEqual(JSON.parse(original));
   const markdown = "# Original\n\n## Deadlines\n\nOld limits\n\n## Chrome\n\nOriginal outcomes\n";
@@ -198,6 +200,7 @@ test("metadata staging changes only future campaign metadata and the deadline se
   expect(policyMarkdown(markdown)).toEndWith("## Chrome\n\nOriginal outcomes\n");
   await scratch(async root => {
     await writeFile(join(root, "TABLE.json"), original); await writeFile(join(root, "VIEW.json"), original); await writeFile(join(root, "TABLE.md"), markdown);
+    await writeFile(join(root, "CAMPAIGN-POLICY.json"), JSON.stringify(authority));
     await stagePolicyMetadata(root, join(root, "stage"));
     expect(await readFile(join(root, "TABLE.json"), "utf8")).toBe(original);
     expect(JSON.parse(await readFile(join(root, "stage/metadata-update.json"), "utf8"))).toMatchObject({ before: { "TABLE.json": sha256(original), "TABLE.md": sha256(markdown) } });

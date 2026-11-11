@@ -84,7 +84,8 @@ async function nativeTransport(box: Cell, config: Options, timeoutMs: number): P
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");
   const endpoint = box.browser === "safari" ? config.safariEndpoint : config.iphoneEndpoint;
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
-  return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs });
+  return createSafariTransport({ browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
+    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000) });
 }
 export async function initialReport(config: Options): Promise<Report> {
   const staged: Report["source"] | undefined = config.sourceFile ? JSON.parse(await readFile(config.sourceFile, "utf8")) : undefined;

@@ -49,9 +49,28 @@ from 90,000 ms to 4,926 ms and 5,692 ms. Install changes from 90,000 ms to
 
 ## Apply canonical metadata after review and merge
 
-The coordinator runs this from the merged source, with exclusive ownership of
-canonical table writes for the whole recipe. Pause canonical merges first.
-Use a fresh staging directory on each attempt:
+The authority is `/work/reports/goals/CAMPAIGN-POLICY.json`. It retains the
+existing owner decisions, including Next/SpiderMonkey, and stores the reviewed
+policy at `cellDeadlines`. TABLE.json and VIEW.json receive that complete
+authority object as `campaignPolicy`, so subsequent ordinary merges preserve it.
+
+Before publication, the coordinator installs the shared writer protocol from
+merged source. Copy `scripts/goals-matrix/canonical-write.ts` to
+`/work/reports/goals/canonical-write.ts` and apply
+`.internal/plans/canonical-merge-writer.patch` in `/work/reports/goals` after
+checking it against the current helper. If its context changed, reconcile the
+same small wrapper before proceeding. Verify the installed lock module matches
+the merged source. This changes no merge selection or outcome logic: the helper
+holds `.canonical-writer.lock` for its existing read/merge/write operation and
+refuses to write while an unfinished publication marker exists. Do not replace
+the helper or its lock module during an active canonical write.
+
+The publication and recovery commands hold the same OS lock. Tests and PR
+merges continue normally; canonical writes serialize without a human permission
+token. `flock` is required on the canonical Linux host and releases its lock
+when the holder exits, including process interruption.
+
+Use a fresh staging directory:
 
 ```sh
 source env.sh
@@ -60,26 +79,42 @@ bun scripts/goals-matrix/policy-metadata.ts /work/reports/goals "$stage"
 sha256sum --check --strict "$stage/before.sha256"
 ```
 
-If any checksum fails, discard staging and start again from current canonical
-files. Do not apply individual stale files. After all three checks pass:
+Staging reads and checksums all four canonical files and saves recoverable
+originals under `$stage/originals`. It writes nothing to those inputs. An
+unfinished publication must be recovered before staging another update.
+
+Apply the complete set with the executable publisher, not shell copy loops:
 
 ```sh
-for name in TABLE.json VIEW.json TABLE.md; do
-  cp -- "$stage/$name" "/work/reports/goals/$name.policy.tmp"
-done
-for name in TABLE.json VIEW.json TABLE.md; do
-  mv -- "/work/reports/goals/$name.policy.tmp" "/work/reports/goals/$name"
-done
+bun scripts/goals-matrix/policy-metadata.ts --apply "$stage"
 sha256sum --check --strict "$stage/after.sha256"
 ```
 
-Resume canonical merges after the final checks. The tool changes only the
-top-level `campaignPolicy` field and the bounded Markdown Deadlines section.
-The existing `deadlines`, source, commands, timestamps, cells, histories, phase
-timeouts and outcomes stay intact. `campaignPolicy` describes future execution.
-The existing external merge helper preserves that BASE metadata and slices
-the updated deadline section on later merges. TABLE.json and VIEW.json must
-agree when staging. Staging never writes to its inputs.
+The publisher rechecks every original, generated file and backup while holding
+the writer lock, copies and verifies all four temporary files before promoting
+any, and checks every final hash. A failed copy or rename restores the complete
+original set before returning the failure. A stale-input failure writes nothing:
+remove that unused staging directory and stage again from current canonical data.
+
+An interruption or failed rollback leaves
+`.campaign-policy-publication.json` with the staging location. Ordinary merges
+refuse to write until recovery succeeds. Keep the staging directory and run:
+
+```sh
+bun scripts/goals-matrix/policy-metadata.ts --recover "$stage"
+sha256sum --check --strict "$stage/before.sha256"
+```
+
+Recovery restores all four originals and removes the marker and owned temporary
+files only after verification. Then create a fresh stage if publication is still
+needed. Recovery refuses to overwrite an unexpected third-party change: preserve
+the complete current set and backups, reconcile that new evidence under the writer
+lock, and do not resume ordinary merges while the marker remains.
+
+The changes are limited to authority metadata, the top-level `campaignPolicy`
+fields and the bounded Markdown Deadlines section. Original `deadlines`, source,
+commands, timestamps, cells, histories, phase timeouts and outcomes stay intact.
+The new metadata describes future execution, not retroactively executed limits.
 
 Remove the staging directory after application and checksum verification. Keep
 the frozen input, LIMITS.md, source policy and verification logs for review.

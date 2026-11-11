@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createContext, runInContext, type Context } from "node:vm";
 import { createSafariTransport, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
+import { campaignDeadlines, cellDeadlines } from "./deadlines";
 
 type Call = { method: string; path: string; body: Record<string, unknown> };
 type FixtureOptions = {
@@ -404,3 +405,16 @@ test("DELETE session timeout propagates and remains the cached close outcome", a
   expect(transport.close()).toBe(closing);
   expect(driver.calls.filter(call => call.method === "DELETE")).toHaveLength(1);
 });
+
+test.each(["safari", "iphone-safari"] as const)("%s session cleanup retains its inner allowance when phase deadlines tighten", async browser => {
+  const limits = cellDeadlines(campaignDeadlines(), { framework: "hono", browser: "safari", engine: "browser" });
+  expect(limits.timeoutMs).toBe(1470);
+  const driver = fixture({ capabilities: browser === "safari" ? desktop : iphone, intercept: async call => {
+    if (call.path === "/session/owned" && call.method === "DELETE") await Bun.sleep(1800);
+    return undefined;
+  } });
+  const transport = await driver.connect({ browser, deviceUDID: browser === "iphone-safari" ? "owned-iphone" : undefined,
+    timeoutMs: limits.timeoutMs, cleanupTimeoutMs: 10_000 });
+  await transport.close();
+  expect(driver.deleted).toBe(true);
+}, 10_000);

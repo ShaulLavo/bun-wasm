@@ -3,6 +3,7 @@ export type SafariTransportOptions = {
   browser: "safari" | "iphone-safari";
   deviceUDID?: string;
   timeoutMs: number;
+  cleanupTimeoutMs?: number;
 };
 
 export type SafariTransport = {
@@ -153,13 +154,15 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 
 export async function createSafariTransport(options: SafariTransportOptions): Promise<SafariTransport> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 2_147_483_647) throw new Error("Safari timeoutMs must be a positive timer-sized integer");
+  const cleanupTimeoutMs = options.cleanupTimeoutMs ?? Math.min(options.timeoutMs, 10_000);
+  if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 2_147_483_647) throw new Error("Safari cleanupTimeoutMs must be a positive timer-sized integer");
   const endpoint = new URL(options.endpoint);
   if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.search || endpoint.hash) throw new Error("Expected an HTTP SafariDriver endpoint without a query or fragment");
   const requested = requestedCapabilities(options);
   const lifetime = new AbortController();
   const address = endpoint.href.replace(/\/$/, "");
   const request = createRequest(address, options.timeoutMs, lifetime.signal);
-  const cleanupRequest = createRequest(address, Math.min(options.timeoutMs, 10_000));
+  const cleanupRequest = createRequest(address, cleanupTimeoutMs);
   const opened = object(await request("/session", { capabilities: { alwaysMatch: requested } }));
   const sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
   try {
@@ -168,5 +171,5 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
     await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
     const host = handle(await request(`${sessionPath}/window`));
     return transport(request, sessionPath, host, capabilities, lifetime, cleanupRequest);
-  } catch (error) { return cleanupAfterFailure(error, async () => { await request(sessionPath, undefined, "DELETE"); }); }
+  } catch (error) { return cleanupAfterFailure(error, async () => { await cleanupRequest(sessionPath, undefined, "DELETE"); }); }
 }
