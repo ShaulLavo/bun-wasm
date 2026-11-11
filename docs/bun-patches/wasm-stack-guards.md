@@ -174,7 +174,11 @@ Original adapters, none of which retains an upstream implementation:
 - `crates/bunwasm-jsc/cpp/helpers.cpp` parses `BUN_WASM_JSC_PARSER_RESERVE` strictly and makes
   the single setter call inside the existing `JSC::initialize` callback, once per side instance,
   before that instance's only VM exists. An invalid or absent value makes no call.
-- `web/src/engine-stack-budget.ts` holds the host table and the qualified values.
+- `web/src/engine-stack-budget.ts` holds the host table and the qualified values: 960 for desktop
+  Firefox on Linux and 832 for desktop Safari 26 or later on Apple silicon, each measured on its
+  own host. Its `hostArchitecture` is original: a 42-byte wasm function divides zero by zero and
+  the worker reads the processor family from the NaN's sign bit, because Safari's user agent is
+  the same on Apple silicon and Intel Macs.
   `web/src/bun-executor.ts` adds the budget and the reserve independently, the reserve only for
   JSC. The run request's existing `stackHost` field carries the page's platform, vendor, and
   touch-point observations for both engine policies. QuickJS's desktop Safari selection is unchanged.
@@ -221,3 +225,11 @@ The measurement transcript requires one result and exactly one later standalone
 `continued` marker. Duplicate continuation markers fail both real command paths.
 Measurement test scratch follows the host temporary-directory API, including
 normal CI where this workstation's `/work` path does not exist.
+
+`web/tests/browser-stack-safari.ts` is the original adapter for genuine desktop Safari. It drives
+the same probe, classifier, search and fixtures over SafariDriver, through the goals matrix's
+native driver and transport, and it copies no upstream code. A cold attempt is a new SafariDriver
+session on a new document. `stackModeSlice` in `scripts/stack-measurement.ts` splits one sweep into
+consecutive parts that together cover every path once, so a sweep can hold the shared Mac in short
+turns. The adapter checks that Safari fetched the JSC side the site holds and prints the session's
+capabilities.
