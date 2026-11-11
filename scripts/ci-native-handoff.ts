@@ -146,7 +146,7 @@ async function packArchives(state: Context, bundle: string, scratch: string): Pr
     const paths = inventory(item.directory, roots, item.name, repositories);
     const list = join(scratch, "files");
     writeFileSync(list, paths.join("\0") + "\0");
-    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -o "$3"', item.directory, list, join(bundle, item.name));
+    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -6 --long=27 -o "$3"', item.directory, list, join(bundle, item.name));
     archives[item.name] = await hash(join(bundle, item.name));
     console.log(JSON.stringify({ archive: item.name, roots, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
   }
