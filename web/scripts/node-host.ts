@@ -18,7 +18,7 @@ import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts"
 import { createNodeSignalController } from "./node-signals.ts";
 import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
-import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
+import { loadNodeProgram, linkNodeProgram, parseEngineAllocationFault, startNodeProgram, type EngineAllocationFault } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
 import { pairedEngineKinds, isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
@@ -40,6 +40,8 @@ interface Settings {
   /** `--modules records`: no module store, so every ES module loads as a registration record,
    * as in a browser worker (module-records.ts). Default `store`: native modules from Node's hooks. */
   modules: "store" | "records";
+  /** `--refuse-engine-allocation MINIMUM-MAXIMUM:COUNT`: each guest's core refuses that many engine requests of that size. */
+  engineAllocationFault?: EngineAllocationFault;
 }
 interface GuestData {
   module: WebAssembly.Module;
@@ -74,6 +76,7 @@ function settings(): Settings {
     else if (arg?.startsWith("--context=")) result.context = contextMode(arg.slice("--context=".length));
     else if (arg === "--modules") result.modules = modulesMode(argv[++i]);
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
+    else if (arg === "--refuse-engine-allocation") result.engineAllocationFault = parseEngineAllocationFault(argv[++i]);
     else if (arg === "--dir") {
       const [host, guest = host] = argv[++i]!.split("::");
       result.preopens[guest!] = host!;
@@ -177,7 +180,7 @@ async function run(data: GuestData) {
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
     const module = request ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
-    if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports);
+    if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports, config.engineAllocationFault);
     instance = linked?.entry ?? await WebAssembly.instantiate(module, imports);
     cliFetch?.install();
     host.installSlots();

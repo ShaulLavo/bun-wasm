@@ -50,6 +50,11 @@ response. The integration control builds the actual `web/src/sw.ts`, forwards
 its real preview protocol, and verifies no preview HTML reaches the HTTP server.
 Compressed or oversized HTML is rejected. These observation changes and native
 command evidence remain test artifacts, separate from the original host inventory.
+For the configured root-preview navigation, the test server requests identity
+encoding upstream so production compression cannot hide the HTML from this
+observer. Other requests retain their original headers. A server that ignores
+identity negotiation and returns encoded HTML is still rejected. The original
+HTML size limit, content policies and native input predicates are unchanged.
 Install, rendering, interaction, hot reload, build, preview, and cleanup retain
 their existing matrix deadlines.
 Native cleanup shares one deadline and abort signal across all actions, reaps any
