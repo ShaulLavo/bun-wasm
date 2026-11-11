@@ -1260,18 +1260,6 @@ jobs:
       - name: Blocking JSC embedding and allocation checks
         if: needs.quality.outputs.jsc == 'true'
         run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: always() && needs.quality.outputs.jsc == 'true'
-        with:
-          name: jsc-embedding-receipts
-          path: |
-            dist/bun-jsc.wasm.build.json
-            dist/bun-jsc.wasm.embedding.json
-            dist/jsc-engine.wasm.engine.json
-            ${{ runner.temp }}/jsc/engine/engine-link.map
-          if-no-files-found: error
-
       - name: Blocking native fixture checks
         env:
           INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
@@ -1343,8 +1331,10 @@ jobs:
           path: |
             dist/*.wasm.build.json
             dist/*.wasm.engine.json
+            dist/*.wasm.embedding.json
             dist/web-guests-*.log
             ${{ runner.temp }}/jsc-prebuild.log
+            ${{ runner.temp }}/jsc/engine/engine-link.map
           if-no-files-found: error
           retention-days: 1
       - uses: ./.github/actions/save-rust-build-cache
