@@ -5,7 +5,7 @@ import { parseCheck, type NativeProfile } from "./test-checks";
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
   if (check.owner === "native") return [`${check.path}/`];
-  if (check.owner === "browser-guest") return check.profile ? [check.path] : [];
+  if (check.owner === "browser-guest") return [check.path].concat(check.inputs);
   return check.owner === "runtime" ? [check.path] : [];
 }
 

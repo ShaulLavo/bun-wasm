@@ -72,7 +72,7 @@ jobs:
           (cd sandbox && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
           (cd site && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
       - name: Publish the completed dependency cache before consumer jobs
-        if: steps.bun-dependencies.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .ci-bun-cache
@@ -149,7 +149,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -188,7 +188,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -201,7 +201,7 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
@@ -229,7 +229,7 @@ jobs:
           source env.sh
           time bun scripts/build-wasi-sysroot.ts
       - name: Save the verified sysroot cache
-        if: steps.sysroot-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
@@ -387,6 +387,7 @@ jobs:
           bun-version: 1.4.4
           node-version: '26'
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -401,7 +402,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
-        if: steps.rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -431,7 +432,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -470,7 +471,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -483,12 +484,12 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -514,6 +515,12 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasm-tools-bin"
           mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - name: Save completed wasm-tools setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         id: wasmtime-cache
         with:
@@ -543,7 +550,7 @@ jobs:
           mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
-        if: steps.wasmtime-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -780,6 +787,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+      - uses: ./.github/actions/save-rust-build-cache
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   rust:
@@ -826,6 +837,7 @@ jobs:
           bun-version: 1.4.4
           node-version: '26'
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -840,7 +852,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
-        if: steps.rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -866,7 +878,7 @@ jobs:
       - name: Install pinned CMake and Ninja
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
-        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -905,7 +917,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
-        if: steps.sdk.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -918,12 +930,12 @@ jobs:
       - name: Install pinned Binaryen
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
-        if: steps.binaryen-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -949,6 +961,12 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasm-tools-bin"
           mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - name: Save completed wasm-tools setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         id: wasmtime-cache
         with:
@@ -978,7 +996,7 @@ jobs:
           mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
-        if: steps.wasmtime-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -1300,6 +1318,10 @@ jobs:
             ${{ runner.temp }}/jsc-prebuild.log
           if-no-files-found: error
           retention-days: 1
+      - uses: ./.github/actions/save-rust-build-cache
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   package:
@@ -1713,6 +1735,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - uses: ./.github/actions/rust-build-cache
+        id: rust-objects
         if: needs.quality.outputs.shared-native == 'true'
       - uses: actions/cache/restore@v4
         if: needs.quality.outputs.shared-native == 'true'
@@ -1722,7 +1745,7 @@ jobs:
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_TARGET_DIR }}/shared-native
-          key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
+          key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts', 'spidermonkey/**', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
           restore-keys: |
             shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-
       - name: Prepare the shared native source dependencies
@@ -1795,6 +1818,116 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program-jsc/
           if-no-files-found: error
           retention-days: 1
+      - name: Install the SpiderMonkey producer tools
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-cbindgen-cache
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Prepare pinned cbindgen
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          CBINDGEN_CACHE_HIT: ${{ steps.shared-cbindgen-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
+            CARGO_TARGET_DIR="$CARGO_TARGET_DIR/shared-native/cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
+          fi
+          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
+      - name: Save pinned cbindgen
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-cbindgen-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: ${{ steps.shared-cbindgen-cache.outputs.cache-primary-key }}
+      - name: Identify shared SpiderMonkey native inputs
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-spidermonkey-inputs
+        run: |
+          source env.sh
+          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/shared" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
+          inputs=$({
+            printf 'profile=shared-group\n'
+            sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a" "$WASI_SDK_PATH/bin/clang++" "$CARGO_HOME/bin/cbindgen"
+            /usr/bin/clang --version
+            /usr/bin/clang++ --version
+            rustc -vV
+            llvm-readobj --version
+            python3 --version
+            autoconf2.13 --version
+          } | sha256sum | cut -d' ' -f1)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.shared-native == 'true'
+        id: shared-spidermonkey-cache
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: spidermonkey-shared-group-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-spidermonkey-inputs.outputs.hash }}-${{ hashFiles('spidermonkey/**', 'crates/bunwasm-spidermonkey/**', 'Cargo.lock', 'rust-toolchain.toml', 'env.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml') }}
+      - name: Produce or verify the shared SpiderMonkey library once
+        if: needs.quality.outputs.shared-native == 'true'
+        env:
+          JOBS: "2"
+          CAGE: ""
+        run: |
+          source env.sh
+          source_tree="$SPIDERMONKEY_BUILD_DIR/firefox"
+          if [[ ! -d "$source_tree/.git" ]]; then
+            git init -q "$source_tree"
+            git -C "$source_tree" remote add origin https://github.com/mozilla-firefox/firefox.git
+          fi
+          # Fetch's sparse closure needs lazy blobs on a fresh runner, not only a retained tree.
+          git -C "$source_tree" config remote.origin.promisor true
+          git -C "$source_tree" config remote.origin.partialclonefilter blob:none
+          # The recipe stages fresh headers; only its incremental objects and patched source persist.
+          rm -rf -- "$SPIDERMONKEY_BUILD_DIR/native"
+          # Mach checks vendored packages against its invoking Python's packages.
+          # Exclude runner tools and any packages left by a restored environment.
+          python3 -m venv --clear --without-pip "$RUNNER_TEMP/spidermonkey-python"
+          export PATH="$RUNNER_TEMP/spidermonkey-python/bin:$PATH"
+          bash spidermonkey/build-shared-group.sh
+      - name: Produce the shared SpiderMonkey profile once
+        id: shared-spidermonkey-producer
+        if: needs.quality.outputs.shared-native == 'true'
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source env.sh
+          bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey
+      - name: Retain the matched shared SpiderMonkey program for qualification
+        if: ${{ always() && steps.shared-spidermonkey-producer.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-spidermonkey-program
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/program-spidermonkey/
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/spidermonkey/inputs.json
+            ${{ env.CARGO_TARGET_DIR }}/shared-native/spidermonkey/engine-link.map
+            ${{ env.SPIDERMONKEY_BUILD_DIR }}/receipt/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Consume the shared SpiderMonkey native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Save the verified shared SpiderMonkey source and native work
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-spidermonkey-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: ${{ steps.shared-spidermonkey-cache.outputs.cache-primary-key }}
+      - name: Shared SpiderMonkey cache result
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "shared SpiderMonkey exact cache hit=${{ steps.shared-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.shared-spidermonkey-cache.outputs.cache-matched-key }}"
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -1807,6 +1940,11 @@ jobs:
       - name: Shared profile cache result
         if: needs.quality.outputs.shared-native == 'true'
         run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
+      - uses: ./.github/actions/save-rust-build-cache
+        if: needs.quality.outputs.shared-native == 'true'
+        with:
+          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
+          key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
   web:
@@ -1846,7 +1984,7 @@ jobs:
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed Web compiler setup
-        if: steps.web-rustup-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.web-rustup-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -1988,6 +2126,9 @@ jobs:
         env:
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
+          # Whether the rust job built the JSC pair into that site: a JSC check fails on a
+          # selected producer's missing pair and has nothing to run for an unselected one.
+          BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
           TMPDIR: ${{ runner.temp }}
         run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts

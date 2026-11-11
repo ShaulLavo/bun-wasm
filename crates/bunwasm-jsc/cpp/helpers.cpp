@@ -42,9 +42,11 @@
 #include "SourceProvider.h"
 #include "VM.h"
 #include "Options.h"
+#include "Parser.h"
 #include "SimpleTypedArrayController.h"
 #include "WASIMemoryTelemetry.h"
 #include <wtf/URL.h>
+#include <cstdlib>
 #include <string>
 
 using namespace JSC;
@@ -224,6 +226,25 @@ static bool sampleCoreAllocator(BunjscCoreAllocatorSample& sample)
     return true;
 }
 
+// BUN_WASM_JSC_PARSER_RESERVE (docs/stack-limits.md): a whole string of one to four decimal
+// digits from 512 through 2048, rounded up to a multiple of 16. Anything else returns 0, which
+// keeps the parser's 2048-byte default: an invalid value is never clamped into range.
+static unsigned parserReserveSetting(const char* text)
+{
+    if (!text)
+        return 0;
+    unsigned value = 0;
+    size_t digits = 0;
+    for (; text[digits]; ++digits) {
+        if (digits == 4 || text[digits] < '0' || text[digits] > '9')
+            return 0;
+        value = value * 10 + static_cast<unsigned>(text[digits] - '0');
+    }
+    if (!digits || value < 512 || value > 2048)
+        return 0;
+    return (value + 15) & ~15u;
+}
+
 extern "C" {
 
 // A global context whose global object has the module loader hooks above.
@@ -247,6 +268,10 @@ JSGlobalContextRef bunjsc_create_context()
         JSC::Options::useSuperSampler() = false;
         JSC::Options::useTextMarkers() = false;
         JSC::Options::useProfiler() = false;
+        // The only write of the parser's reserve: once per side instance, with this member's
+        // environment, before its only VM exists and so before any parse.
+        if (unsigned reserve = parserReserveSetting(getenv("BUN_WASM_JSC_PARSER_RESERVE")))
+            JSC::setWasmParserReserve(reserve);
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());

@@ -15,14 +15,18 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
+# The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
+CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Conditional', 'Block', 'Call', 'Function')
+               for parser_pass in ('Compile', 'Call') for width in ('8', '16')]
 MODES = ['plain', 'getter', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
-         'ternary', 'statement',
+         'ternary', 'statement', 'awaitchain',
          'regexpnc', 'lookahead', 'proxychain', 'isarray', 'bound', 'join', 'flat', 'tostring', 'async',
-         'promise', 'console', 'require']
+         'promise', 'console', 'require'] + CHAIN_MODES
 
 # Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
 # Each require level is a generated file, so the chain stays far above any real package depth and no higher.
-MAX = {'bound': 2000, 'require': 512}
+# A parser chain stays far past any budget's capacity and small enough to remain a parser test.
+MAX = {'bound': 2000, 'require': 512, **{mode: 4096 for mode in CHAIN_MODES}}
 REQUIRE_SCRATCH = '/stack-depth-scratch'
 REQUIRE_LEAF_ROOT = '/stack-depth-leaf'
 
@@ -44,7 +48,7 @@ def require_chain(stack, args, parser):
                     '--env', f'STACK_DEPTH_LEAF={REQUIRE_LEAF_ROOT}/{args.leaf}']
 
 
-SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'regexpnc', 'lookahead'}
+SYNTAX_MODES = {'parse', 'block', 'arrow', 'unary', 'power', 'ternary', 'statement', 'awaitchain', 'regexpnc', 'lookahead', *CHAIN_MODES}
 
 
 def accepted(mode, outcome):
@@ -113,6 +117,7 @@ def main():
     parser.add_argument('--launcher', type=Path, default=Path(os.environ.get('BUN_WASM_LAUNCHER', str(Path(os.environ.get('CARGO_TARGET_DIR', '/work/tmp/bun-wasm-target')) / 'release/bun-wasm'))), help='bun-wasm launcher binary for --host launcher')
     parser.add_argument('--stack-kib', type=int, help="host wasm call stack (native launcher, or the Node host's Worker stack)")
     parser.add_argument('--budget-kib', type=int, help="QuickJS stack budget passed as BUN_WASM_STACK_KIB")
+    parser.add_argument('--parser-reserve', help="passed unchanged as BUN_WASM_JSC_PARSER_RESERVE; the JSC guest validates it")
     parser.add_argument('--max', type=int, default=200000, help='deepest nesting tried')
     parser.add_argument('--leaf-root', type=Path, help='host project directory, the one holding node_modules, that the require chain ends in')
     parser.add_argument('--leaf', help='module path inside --leaf-root that the last require level loads, such as node_modules/prompts/index.js')
@@ -134,6 +139,8 @@ def main():
     wasm = str(args.wasm or ROOT / 'dist' / (name + '.wasm'))
     preopen = str(ROOT / 'tests') + '::/'
     env = ['--env', 'PWD=/'] + (['--env', f'BUN_WASM_STACK_KIB={args.budget_kib}'] if args.budget_kib else [])
+    if args.parser_reserve is not None:
+        env += ['--env', f'BUN_WASM_JSC_PARSER_RESERVE={args.parser_reserve}']
     with contextlib.ExitStack() as stack:
         env += require_chain(stack, args, parser)
         if args.host == 'launcher':
@@ -144,7 +151,7 @@ def main():
             command = ['node', '--no-warnings', str(ROOT / 'web/scripts/node-host.mjs')] + flags + ['--wasm', wasm, '--dir', preopen] + env + ['--', 'run', '/stack-depth.js']
         results = {mode: capacity(command, mode, min(args.max, MAX.get(mode, args.max))) for mode in args.modes}
     print(json.dumps({'engine': args.engine, 'wasm': wasm, 'host': args.host, 'stack_kib': args.stack_kib,
-                      'budget_kib': args.budget_kib, 'leaf': args.leaf, 'results': results}))
+                      'budget_kib': args.budget_kib, 'parser_reserve': args.parser_reserve, 'leaf': args.leaf, 'results': results}))
     return int(any(row['failures'] for row in results.values()))
 
 

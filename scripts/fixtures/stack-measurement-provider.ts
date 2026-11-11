@@ -55,8 +55,13 @@ function attempt(mode: string, depth: number) {
 }
 
 export async function run(_page: unknown, command: string) {
+  if (process.env.STACK_TEST_RECORD_COMMANDS === "1") appendFileSync(join(root, "browser-commands.jsonl"), JSON.stringify(command) + "\n");
   const match = /depth\.js (\w+) (\d+)$/.exec(command);
-  if (match) return attempt(match[1]!, Number(match[2]));
+  if (match) {
+    const result = attempt(match[1]!, Number(match[2]));
+    const settings = process.env.STACK_TEST_GUEST_SETTINGS;
+    return settings === undefined ? result : { ...result, output: `settings ${settings}\n${result.output}` };
+  }
   const fixture = /bun run (stack-overflow(?:-console)?)\.js$/.exec(command);
   if (!fixture) throw new Error(`Unexpected command ${command}`);
   return { code: 0, output: readFileSync(new URL(`../../tests/fixtures/${fixture[1]}/expected.txt`, import.meta.url), "utf8") };

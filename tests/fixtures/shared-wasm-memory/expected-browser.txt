@@ -9,7 +9,10 @@ shared-wasm-memory engine roots: pass
 shared-wasm-memory: pass
 shared-wasm-memory mixed-backend rejection: pass
 shared-wasm-memory Browser budget: pass
-shared-wasm-memory Browser table and global refusal: pass
+shared-wasm-memory reservation: pass
+shared-wasm-memory binding descriptor: pass
+shared-wasm-memory table exports: pass
+shared-wasm-memory Browser global refusal: pass
 shared-wasm-memory worker refusals: pass
 shared-wasm-memory cross-worker: pass
 plain-sab: pass

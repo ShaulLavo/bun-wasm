@@ -108,7 +108,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     createRuntime: () => (runtime = { ...runtime }),
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => { loads.push(url); return { module: {}, size: 1, build: null }; },
+    loadWasm: async (url: string) => { loads.push(url); return { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null }; },
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},

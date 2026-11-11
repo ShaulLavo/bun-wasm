@@ -39,7 +39,9 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
-  "scripts/src/group-errno-wraps.sh",
+  "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
+  "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+  "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
   "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
@@ -58,8 +60,10 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
   "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
   "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts", "web/tests/shared-wasm-agent/worker.ts", "web/tests/shared-wasm-agent/lock.ts", "web/tests/shared-wasm-agent/observer.ts",
+  // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
+  "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/"];
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
 export function needsSharedNative(paths: readonly string[], inputs = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
   return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
@@ -72,7 +76,7 @@ const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
@@ -85,8 +89,12 @@ const jscFiles = new Set([
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+  // The parser reserve's host policy, executor defaults, probe and consumers (docs/stack-limits.md).
+  "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
+  "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
+  "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json",
 ]);
 
 const webGuestDirectories = [

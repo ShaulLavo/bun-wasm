@@ -38,6 +38,23 @@ test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tes
   expect(needsRust([path])).toBe(true);
 });
 
+test.each([
+  "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
+  "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
+  "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json", "tests/fixtures/parser-chain-stack/index.ts",
+  "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+])("JSC parser reserve input %s selects the JSC producer its browser check requires", path => {
+  expect(needsJsc([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
+  "tests/fixtures/shared-wasm-memory/parser-reserve-ownership.ts", "jsc/webkit-wasi.patch",
+])("parser reserve ownership input %s selects the shared-group producer", path => {
+  expect(needsSharedNative([path])).toBe(true);
+});
+
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
 test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumer bundling selects its launcher; page builds stay web-only: $paths", ({ paths }) => {
@@ -262,15 +279,15 @@ for (const path of [
   });
 }
 
-for (const path of [
-  "checks/native-stack-getter-headroom.json",
-  "tests/fixtures/stack-getter-headroom/index.ts",
-  "tests/fixtures/stack-getter-headroom/expected.txt",
-]) {
+for (const [path, fixture] of [
+  ["checks/native-stack-getter-headroom.json", "tests/fixtures/stack-getter-headroom"],
+  ["tests/fixtures/stack-getter-headroom/index.ts", ""],
+  ["tests/fixtures/stack-getter-headroom/expected.txt", ""],
+  ["checks/native-parser-literal-overflow.json", "tests/fixtures/parser-literal-overflow"],
+  ["tests/fixtures/parser-literal-overflow/index.ts", ""],
+] as const) {
   test.each(["pull_request", "push"])(`${path} retains the strict JSC stack embedding gate for %s`, event => {
-    const content = path.startsWith("checks/")
-      ? JSON.stringify({ owner: "native", path: "tests/fixtures/stack-getter-headroom" })
-      : "changed stack fixture input\n";
+    const content = fixture ? JSON.stringify({ owner: "native", path: fixture }) : "changed stack fixture input\n";
     expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
     expect(needsJsc([path])).toBe(true);
   });
@@ -396,5 +413,17 @@ for (const path of [
     const content = path.startsWith("checks/") ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") : "changed installer input\n";
     expect(needsJsc([path])).toBe(true);
     expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
+}
+
+for (const path of [
+  "spidermonkey/common.sh", "spidermonkey/fetch-spidermonkey.sh", "spidermonkey/build-shared-group.sh",
+  "spidermonkey/shared-group.ts", "spidermonkey/spidermonkey-shared-group.patch", "spidermonkey/irregexp-icu/allocator.cpp",
+  "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the existing blocking shared native gate for %s`, event => {
+    const output = sharedBrowserSelection(path, event);
+    expect(output).toStartWith("rust=true\n");
+    expect(output).toEndWith("shared_native=true");
   });
 }

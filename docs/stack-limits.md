@@ -391,6 +391,146 @@ fixed reserve would cost working depth and needs its own design. Blocks and
 conditional expressions throw. The extra accounting can reduce native-path nesting
 capacities on other hosts. No new Darwin or iOS measurement is claimed.
 
+## JSC parser reserve
+
+JSC's parser accounting refuses some real package files at the existing browser budgets. `parseStatement` and
+`parseAssignmentExpression` each reserve 2048 shadow bytes per call, and one assignment level
+really uses about 390. A chain of assignment targets, as generated CommonJS exports have
+(`exports.A = exports.B = … = void 0`), therefore stops near 100 targets at a browser's budget.
+On an earlier guest, five framework rows failed this way while loading two files: Next 15.5.6's
+`dist/compiled/webpack/bundle5.js` and `@babel/types` 7.29.11's
+`lib/builders/generated/uppercase.js`.
+
+`BUN_WASM_JSC_PARSER_RESERVE` is the number of shadow bytes those two functions reserve. The
+default is 2048. The other 20 reserve sites, `parseAwaitExpression`, `StackBounds`, the hard and
+soft limits, the exception reserve and every budget do not read it. QuickJS and the host engine
+ignore it.
+
+- **Accepted values.** A whole string of one to four decimal digits from 512 through 2048,
+  rounded up to a multiple of 16. Unset, empty, a sign, whitespace, a decimal point, trailing
+  text, zero, a value outside the range and five or more digits all keep 2048. An invalid value
+  is never clamped, because 2048 is the only value with safety evidence on every host.
+- **Initialization.** The patched `Parser.cpp` stores the discount from 2048 in one
+  zero-initialized variable, so zero-filled side data means 2048 before any initializer runs. Our
+  adapter (`crates/bunwasm-jsc/cpp/helpers.cpp`) parses the environment value in the existing
+  `JSC::initialize` callback and calls the one setter at most once, before the side's only VM
+  exists. The recursive path only loads the variable and subtracts. A guest that changes its own
+  environment later changes nothing.
+- **Ownership.** Each member has its own engine side data, in a shared-memory group too, so the
+  value belongs to one member. A guest `Worker` copies its parent's environment and so inherits the
+  value; an explicit `env` reaches only the child.
+
+A larger reserve stops the parser earlier, so it is never less safe and never loads more. That
+makes the choice one decision per host family instead of a search: take the largest value on a
+64-byte grid from 512 to 1984 at which both real files load with 16 KiB less than the host's
+budget, then test only that value on the real host, cold and warm, at the budget and at 1.25
+times it. If it fails, that family has no qualified setting and keeps 2048. Nothing lower is
+tried, and no other guard or budget moves.
+
+### Host selection
+
+The executor (`web/src/engine-stack-budget.ts`) runs in a worker and sees the user agent and
+whether the engine is V8. A worker cannot read touch points, and iPadOS Safari in desktop mode
+sends a Macintosh user agent, so the page reports its platform, vendor, and `navigator.maxTouchPoints` in the run request's `stackHost` field.
+Both engine policies use that one field. QuickJS retains its positively observed desktop Safari rule above.
+
+| Host | JSC budget | Parser reserve |
+| --- | ---: | --- |
+| V8 (Chrome, Edge, Node) | 800 KiB | Default |
+| Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below |
+| Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured |
+| macOS Safari: `Macintosh`, `Version/` and `Safari/`, no other browser or mobile token, and the page reported zero touch points | 192 KiB | Default. Not measured: no Mac run was part of this work |
+| iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one |
+| Android Firefox, a Macintosh Safari identity with no touch-point fact, anything unknown | 192 KiB | Default |
+
+A family without its own passing measurement keeps the default, and the catch-all never carries
+a reduced value. A qualified Safari value would also require at least the measured Safari
+version. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify nothing.
+
+The executor adds each key only when the request lacks it, independently of the other: an explicit
+or empty budget never suppresses the reserve default, and the reverse. Only JSC receives an
+automatic parser reserve. Explicit caller environment values remain unchanged.
+
+### Measurements
+
+Taken on November 10, 2026 on one JSC pair: `jsc-engine.wasm` sha256 `49cf6156…2bfdaf`, on the
+native launcher and in Firefox 157.0 and Chromium 156 on Linux. The launcher, the site's
+decompressed copy and the bytes the browser fetched had that same hash.
+
+The default is unchanged. The deepest chained assignment that loads, counted in a function body's
+full parse, is 98 targets at 192 KiB, 105 at 208 and 353 at 800: the same as with the constant
+reservation. The compile-only pass allows 107, 114 and 381. 8-bit and 16-bit sources agree.
+
+Capacity follows the value. At 192 KiB, by parser pass:
+
+| Reserve | Assignment, compile | Assignment, full parse | Block, compile | Block, full parse |
+| ---: | ---: | ---: | ---: | ---: |
+| 2048 | 107 | 98 | 95 | 93 |
+| 1024 | 196 | 171 | 157 | 154 |
+| 512 | 333 | 268 | 233 | 227 |
+
+Every rejected form gave exactly the default's capacities, 1000 behaved as 1008, and 1009 as 1024.
+
+The two real files, loaded alone from an empty stack on the launcher:
+
+| Budget | Reserve | Babel `uppercase.js` | Next `bundle5.js` |
+| ---: | ---: | --- | --- |
+| 192 KiB | 2048 | `RangeError` | `RangeError` |
+| 208 KiB | 2048 | loads | `RangeError` |
+| 192 KiB (208 minus 16) | 960 and below | loads | loads |
+| 192 KiB (208 minus 16) | 1024 and above | loads | `RangeError` |
+| 176 KiB (192 minus 16) | 832 and below | loads | loads |
+| 176 KiB (192 minus 16) | 896 through 1856 | loads | `RangeError` |
+
+So the candidate is 960 for desktop Firefox on Linux. The same rule gives 832 for the 192 KiB
+hosts, which is recorded here and not shipped: no Safari or device run tested it.
+
+Firefox 157.0 on Linux at 960, through the repaired sweep: 26 recursion paths and 20 parser
+chains, each chain searched so that interior depths run too. At the
+host's 208 KiB and at 260 KiB, warm in one page and cold in a fresh browser context per attempt,
+every attempted depth completed or threw its expected catchable error and the guest continued.
+Chained assignments reach 191 targets in the full parse and 220 in the compile pass at 208 KiB.
+
+Nothing outside the two parser functions moved. On the launcher at 208 KiB, the default and 960
+gave identical capacities for getters (36), Proxy traps (32), `JSON.stringify` (39,999), the
+reviver (4,500), flattening (329), unary chains (253), both regexp shapes (119), Proxy chains,
+bound functions, `join`, `toString` reentry, async and plain recursion. Source shapes that pass
+through the two functions rose, as intended: nested blocks 100 to 171, conditional chains 105 to
+191. An `await` chain rose by exactly two levels at every budget from 192 to 800 KiB (118 to 120
+at 208). This fixed offset is consistent with smaller enclosing parser frames. The number of
+those frames is not established by the measurement. The recursive charge and per-level cost of
+`parseAwaitExpression` are unchanged.
+
+Chromium 156 on Linux at the default reserve is unchanged: all 46 paths at 800 and at 1000 KiB,
+warm and cold, with getters at 142 and chained assignments at 353.
+
+A value belongs to one host family because the host stack behind the guard differs. In Chromium,
+1024 at V8's own 800 KiB budget lets the parser nest further than V8's real stack allows: the
+same sweep fails five paths there. Nested blocks trap past 518 levels and nested calls past 413
+in the full parse, where the default stops them at 330 and 315, and the guest dies with V8's own
+`RangeError` where no JavaScript `catch` runs. V8 therefore keeps the default, and the browser
+check tries reduced values only at 192 KiB, where the nesting stays below what every browser
+already parses at its own budget.
+
+The explicit-value ownership control ran on a shared-group JSC pair in Chromium and Firefox,
+through the executor, at 192 KiB. A parent at 1536 kept 125 targets before and after a Worker
+child at 1024 reached 171 in the same memory group. The permanent control separates an explicit
+guest default of 2048 from an absent key that receives the host's policy. Firefox's host default
+is 960, so that child parses deeper than a 1024 parent. A child without an explicit environment
+inherits its parent's value. Each case measures the parent again after its child exits.
+Capacity actions start in a resumed promise job so the first sample does not retain module-loader
+frames that disappear while the child runs. Parent capacity equality remains exact on every engine.
+
+The two original overflow fixtures receive the same literal tuple as the sweep. A cold run
+opens a new browser context for each fixture too. A completed probe is rejected if an explicit
+requested setting is missing or differs from what the guest reports.
+
+This lowers one guard on one measured host family. It is not a claim that any framework now runs
+there: later phases can fail for other reasons. Files loaded through `require` also pass Bun's own
+transpiler first. Its recursion has no stack guard in the guest and does not read this setting: a
+chain of about 24,000 assignment targets traps the native launcher's 16 MiB host stack there,
+before and after this change.
+
 ## Historical nested require measurements
 
 This common-loader snapshot predates the native-call dispatcher split, parser
@@ -550,6 +690,22 @@ BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
 sets the host stack independently of the linked shadow stack.
 
+The parser reserve has its own commands. `--parser-reserve` and `JSC_PARSER_RESERVE` pass a
+value unchanged, and `STACK_KIB` sets the budget of a browser sweep. Every probe run prints the
+settings its guest was given, and the sweep reports them:
+
+```sh
+bun scripts/jsc-parser-reserve.ts controls dist/bun-jsc.wasm                 # the blocking gate's tuples, on the Node host
+bun scripts/jsc-parser-reserve.ts capacities dist/bun-jsc.wasm --launcher "$CARGO_TARGET_DIR/release/bun-wasm" 192 192:1024
+bun scripts/jsc-parser-reserve.ts threshold dist/bun-jsc.wasm --launcher "$CARGO_TARGET_DIR/release/bun-wasm" \
+  --budget-kib 208 --root <project> --file <path in project>=<sha256> --file <path>=<sha256>
+python3 scripts/measure-stack.py --engine jsc --budget-kib 208 --parser-reserve 960
+(cd web && ENGINES=jsc JSC_PARSER_RESERVE=960 node tests/browser-stack.mjs --measure --cold firefox)
+(cd web && ENGINES=jsc STACK_KIB=260 JSC_PARSER_RESERVE=960 node tests/browser-stack.mjs --measure --cold firefox)
+(cd web && bun tests/browser-jsc-parser-reserve.ts chromium firefox)          # defaults, executor contract, instances
+scripts/test.sh --no-build --engine jsc parser-chain-stack
+```
+
 The `require` path writes its chain of modules into a private scratch directory and
 removes it. `--leaf-root` and `--leaf` end the chain in a real installed package, and
 the result is how many levels fit above it. A package that cannot load alone is
@@ -582,3 +738,18 @@ qualification. Probe inputs, accepted errors, fixture output and deadlines remai
 unchanged. `checks/web-quickjs-stack-policy.json` tests this browser command with
 an injected provider without running a guest. Changes to the executor policy,
 probe, or fixture select the existing guest producer.
+
+`checks/browser-guest-jsc-parser-reserve.json` registers the parser reserve check on the same
+site, in Chromium and Firefox: the host's defaults, the rows of the executor contract, a
+differential between two values at one budget, three instances alive at once with different
+values, and the served side's hash against the bytes the browser fetched. It needs the JSC pair,
+so the same inputs select the JSC producer, and CI tells the check whether that producer was
+selected: a selected producer's missing pair fails. The WebKit leg runs the same check on
+Playwright WebKit, which selects the macOS Safari row and so keeps the default.
+
+The shared-group consumer (`checks/browser-guest-shared-wasm-memory.json`) runs the
+parent-and-Worker ownership case in each memory group, beside its existing isolation checks.
+The JSC embedding gate (`scripts/jsc-embedding.ts`) runs the tuples on its matched pair: the
+default at 192, 208 and 800 KiB, every rejected form, 512, 1024 and 2048, rounding, and each
+shipped value at its host's budget. It also runs `parser-chain-stack`, requiring JSC to refuse
+the deeper chain. The original 800 KiB control on a 1 MiB Node Worker stack is unchanged.

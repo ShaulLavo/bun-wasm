@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { acceptedStackOutcome, stackOutcome } from "./stack-measurement.ts";
+import { acceptedStackOutcome, guestStackSettings, stackOutcome, type GuestStackSettings } from "./stack-measurement.ts";
 
 let scratchToClean: string | undefined;
 afterAll(() => { if (scratchToClean) rmSync(scratchToClean, { recursive: true, force: true }); });
@@ -16,6 +16,7 @@ const provider = new URL("./fixtures/stack-measurement-provider.ts", import.meta
 
 function command(kind: "browser" | "python", scenario: string, options: {
   cold?: boolean; output?: string; mode?: string; code?: number; repeat?: boolean; leaf?: boolean; maximum?: number;
+  budget?: string; parserReserve?: string; guestSettings?: GuestStackSettings; recordCommands?: boolean;
 } = {}) {
   const { cold = false, output, mode = "plain", code = 0, repeat = false, leaf = false, maximum } = options;
   const directory = mkdtempSync(join(scratch, `${kind}-${scenario}-`));
@@ -27,7 +28,10 @@ function command(kind: "browser" | "python", scenario: string, options: {
     leaf ? ["--leaf-root", directory, "--leaf", "leaf.cjs"] : [], [mode], repeat ? [mode] : []);
   const result = Bun.spawnSync(kind === "browser" ? browser : python, {
     cwd: root,
-    env: { ...process.env, ENGINES: "jsc", BUN_WASM_SCRATCH_ROOT: directory, STACK_TEST_ROOT: directory, STACK_TEST_SCENARIO: scenario, STACK_TEST_OUTPUT: output, STACK_TEST_STATUS: String(code) },
+    env: { ...process.env, ENGINES: "jsc", STACK_KIB: options.budget, JSC_PARSER_RESERVE: options.parserReserve,
+      STACK_TEST_GUEST_SETTINGS: options.guestSettings === undefined ? undefined : JSON.stringify(options.guestSettings),
+      STACK_TEST_RECORD_COMMANDS: options.recordCommands ? "1" : undefined,
+      BUN_WASM_SCRATCH_ROOT: directory, STACK_TEST_ROOT: directory, STACK_TEST_SCENARIO: scenario, STACK_TEST_OUTPUT: output, STACK_TEST_STATUS: String(code) },
     stdout: "pipe", stderr: "pipe", timeout: 10000,
   });
   return { result, directory, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
@@ -199,5 +203,61 @@ for (const entry of [
     expect(run.exitCode).toBe(2);
     expect(run.stdout.toString()).toBe("");
     expect(run.stderr.toString()).toContain(entry.message);
+  });
+}
+
+
+function browserCommands(directory: string): string[] {
+  return readFileSync(join(directory, "browser-commands.jsonl"), "utf8").trim().split("\n").map(line => {
+    const parsed: unknown = JSON.parse(line);
+    if (typeof parsed !== "string") throw new Error("Invalid recorded browser command");
+    return parsed;
+  });
+}
+
+function actualCommandSettings(command: string): GuestStackSettings {
+  const end = command.indexOf("bun run ");
+  expect(end).toBeGreaterThanOrEqual(0);
+  const read = 'console.log(JSON.stringify({budget:process.env.BUN_WASM_STACK_KIB??null,parserReserve:process.env.BUN_WASM_JSC_PARSER_RESERVE??null}))';
+  const result = Bun.spawnSync(["sh", "-c", `${command.slice(0, end)}"$STACK_TEST_BUN" -e '${read}'`], {
+    env: { ...process.env, STACK_TEST_BUN: process.execPath, BUN_WASM_STACK_KIB: undefined, BUN_WASM_JSC_PARSER_RESERVE: undefined },
+    stdout: "pipe", stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+  const settings = guestStackSettings(`settings ${result.stdout.toString().trim()}`);
+  if (!settings) throw new Error("No shell environment result");
+  return settings;
+}
+
+for (const parserReserve of ["1024 ", " 1024", "", "1024'quoted"]) {
+  test(`browser entry preserves the literal parser override ${JSON.stringify(parserReserve)}`, () => {
+    const settings = { budget: "192", parserReserve };
+    const run = command("browser", "safe", { budget: "192", parserReserve, guestSettings: settings, recordCommands: true });
+    expect(run.result.exitCode).toBe(0);
+    const commands = browserCommands(run.directory);
+    expect(actualCommandSettings(commands[0]!)).toEqual(settings);
+    const summary: unknown = JSON.parse(run.stdout.split("\n").find(line => line.includes('"settings":'))!);
+    expect(summary).toMatchObject({ settings: { guests: [settings] } });
+  });
+}
+
+test("browser margin probes and both original fixtures receive the same tuple", () => {
+  const settings = { budget: "260", parserReserve: "960" };
+  const run = command("browser", "safe", { cold: true, budget: "260", parserReserve: "960", guestSettings: settings, recordCommands: true });
+  expect(run.result.exitCode).toBe(0);
+  const commands = browserCommands(run.directory);
+  const fixtures = commands.filter(value => /bun run stack-overflow(?:-console)?\.js$/.test(value));
+  expect(fixtures).toHaveLength(2);
+  for (const value of [commands[0]!].concat(fixtures)) expect(actualCommandSettings(value)).toEqual(settings);
+  const contexts = readFileSync(join(run.directory, "cleanup.log"), "utf8").split("\n").filter(value => value === "context");
+  expect(contexts).toHaveLength(commands.length + 1);
+});
+
+for (const guestSettings of [undefined, { budget: "208", parserReserve: "960" }, { budget: "260", parserReserve: "1024" }]) {
+  test(`browser entry rejects mismatched or missing requested settings ${JSON.stringify(guestSettings)}`, () => {
+    const run = command("browser", "safe", { budget: "260", parserReserve: "960", guestSettings });
+    expect(run.result.exitCode).not.toBe(0);
+    expect(run.stdout).toContain("settings-mismatch");
+    expect(readFileSync(join(run.directory, "cleanup.log"), "utf8")).toContain("session\n");
   });
 }

@@ -4,10 +4,11 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
+import { nodeHost, parserReserveControls } from "./jsc-parser-reserve";
 import { parseCheck } from "./test-checks";
 
 const root = resolve(import.meta.dir, "..");
-const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/jsc-embedding/growable-memory"];
+const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/fixtures/parser-literal-overflow", "tests/jsc-embedding/growable-memory"];
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 function git(...args: string[]): string {
@@ -51,12 +52,25 @@ export function stackFixture() {
   return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
+/** The parser chain fixture on this pair: JSC must refuse its deeper chain with a catchable RangeError. */
+export function parserChainFixture() {
+  const manifest = "native-parser-chain-stack.json";
+  const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+  if (check.owner !== "native") throw new Error("JSC parser chain fixture needs its native check owner");
+  return { path: check.path, hostOptions: ["--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
+}
+
 function testFixtures(artifact: string): void {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-embedding-"));
   try {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
     const stack = stackFixture();
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
+    const chain = parserChainFixture();
+    runFixture(artifact, chain.path, scratch, chain.hostOptions);
+    // The parser reserve at every host budget, its rejected forms and each shipped value (docs/stack-limits.md).
+    for (const record of parserReserveControls(nodeHost(artifact))) console.log(JSON.stringify(record));
+    console.log("PASS JSC parser reserve tuples");
     for (const command of handshakeCommands(artifact)) runHandshake(command, scratch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });

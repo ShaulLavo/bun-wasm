@@ -18,8 +18,10 @@ import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
 import { appendFile } from "node:fs/promises";
+import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 
 export interface Options {
+  profile?: PlaygroundProfile;
   signal?: AbortSignal;
   nativeAdmission?: NativeAdmission;
   reactStartupUrl?: string;
@@ -37,7 +39,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
+    const allowed = ["profile", "root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -45,16 +47,20 @@ export function options(args: readonly string[]): Options {
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
+  const profile = playgroundProfile(values.get("profile") ?? null);
+  const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
+  for (const engine of selectedEngines) requireProfileEngine(engine, profile);
   const iphoneControlUrl = values.get("iphone-control-url"), iphoneAgentCommand = values.get("iphone-agent-command");
   if (iphoneControlUrl || iphoneAgentCommand) {
     if (!iphoneControlUrl || !iphoneAgentCommand || !values.get("device-udid") || values.has("iphone-endpoint")) throw new Error("Visible iPhone mode requires control URL, bound command and device UDID, without SafariDriver");
     validateIphoneControl(iphoneControlUrl, iphoneAgentCommand);
   }
   return {
+    profile,
     nativeAdmission: nativeAdmissionOptions(values),
     reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
     root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
-    browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selected(values.get("engines") ?? engines.join(","), engines),
+    browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selectedEngines,
     frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
     deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"), iphoneControlUrl, iphoneAgentCommand,
@@ -88,7 +94,7 @@ export async function initialReport(config: Options): Promise<Report> {
   const files = await assetIdentity(config.root);
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: deadlinePolicy(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
+  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: deadlinePolicy(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: unknown = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
@@ -103,9 +109,11 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-export function playgroundURL(base: string, framework: Framework, engine: Engine): string {
+export function playgroundURL(base: string, framework: Framework, engine: Engine, profile: PlaygroundProfile = "split"): string {
+  requireProfileEngine(engine, profile);
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
+  url.searchParams.set("profile", profile);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
@@ -116,7 +124,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const framework = frameworks.find(framework => framework.id === cell.framework);
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
   const port = framework.rootPreview ? await availablePort() : 5173;
-  return execute({ box: cell, framework, port, url: playgroundURL(base, framework, cell.engine), timeoutMs: config.timeoutMs, buildTimeoutMs: deadlinePolicy(config.timeoutMs).buildTimeouts[cell.framework], installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
+  return execute({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), timeoutMs: config.timeoutMs, buildTimeoutMs: deadlinePolicy(config.timeoutMs).buildTimeouts[cell.framework], installTimeoutMs: config.installTimeouts[cell.framework] ?? config.timeoutMs, signal,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, config.timeoutMs) : nativeTransport(cell, config),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);

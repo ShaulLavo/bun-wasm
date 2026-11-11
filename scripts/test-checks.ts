@@ -9,7 +9,7 @@ export type NativeProfile = "split" | "shared-group";
 type Check = { path: string; localRuntime: boolean; batch: string } & (
   | { owner: "native-probe"; inputs: string[] }
   | { owner: "native"; profile?: "shared-group"; inputs?: never }
-  | { owner: "browser-guest"; profile?: "shared-group"; inputs?: never }
+  | { owner: "browser-guest"; profile?: "shared-group"; inputs: string[] }
   | { owner: Exclude<Owner, "native-probe" | "native" | "browser-guest">; inputs?: never; profile?: never }
 );
 const root = resolve(import.meta.dir, "..");
@@ -22,6 +22,12 @@ function hasProfile(owner: string): boolean {
 function parseOwner(value: unknown): Owner {
   for (const owner of owners) if (value === owner) return owner;
   throw new Error(`Unknown check owner: ${String(value)}`);
+}
+
+function inputFiles(inputs: unknown, file: string): string[] {
+  if (!Array.isArray(inputs) || inputs.length === 0 || !inputs.every(input => typeof input === "string" && /^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(input) && !input.split("/").includes(".."))) throw new Error(`Invalid check input files: ${file}`);
+  if (new Set(inputs).size !== inputs.length) throw new Error(`Duplicate check inputs: ${file}`);
+  return inputs;
 }
 
 export function parseCheck(value: unknown, file: string): Check {
@@ -39,15 +45,17 @@ export function parseCheck(value: unknown, file: string): Check {
   if (typeof localRuntime !== "boolean" || (localRuntime && owner !== "runtime" && owner !== "web")) throw new Error(`Invalid local runtime selection: ${file}`);
   const batch = "batch" in value ? value.batch : "default";
   if (typeof batch !== "string" || (batch !== "default" && (owner !== "web" || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
+  if (owner === "browser-guest") {
+    const inputs = "inputs" in value ? inputFiles(value.inputs, file) : [];
+    if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };
+    return { owner, path, localRuntime, batch, inputs };
+  }
   if (owner !== "native-probe") {
-    if ("inputs" in value) throw new Error(`Only native-probe checks declare input files: ${file}`);
+    if ("inputs" in value) throw new Error(`Only native-probe and browser-guest checks declare input files: ${file}`);
     if (owner === "native" && profile === "shared-group") return { owner, path, localRuntime, batch, profile };
-    if (owner === "browser-guest" && profile === "shared-group") return { owner, path, localRuntime, batch, profile };
     return { owner, path, localRuntime, batch };
   }
-  const inputs = "inputs" in value ? value.inputs : undefined;
-  if (!Array.isArray(inputs) || inputs.length === 0 || !inputs.every(input => typeof input === "string" && /^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(input) && !input.split("/").includes(".."))) throw new Error(`Invalid native-probe input files: ${file}`);
-  if (new Set(inputs).size !== inputs.length) throw new Error(`Duplicate native-probe inputs: ${file}`);
+  const inputs = inputFiles("inputs" in value ? value.inputs : undefined, file);
   return { owner, path, localRuntime, batch, inputs };
 }
 

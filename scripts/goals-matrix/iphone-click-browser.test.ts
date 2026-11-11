@@ -13,6 +13,7 @@ async function clickControl(engine: BrowserType): Promise<void> {
     await page.setContent('<button onclick="document.querySelector(\'output\').textContent=\'1\'">Increment</button><output>0</output>');
     await page.evaluate(() => { globalThis.__goalsIphoneDocument = { nonce: "task", timeOrigin: performance.timeOrigin, url: location.href }; });
     const before = await page.evaluate<ReturnType<typeof armIphoneClick>>(`(${armIphoneClick.toString()})("button","output")`);
+    if (!before.ready) throw new Error("Fixture counter did not hydrate");
     trace.armed(before, "1");
     await page.getByRole("button", { name: "Increment" }).click();
     trace.observing();

@@ -1,10 +1,94 @@
+// The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
+export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
+  ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
+/** The chains that recurse through exactly one of JSC's two reserved parser functions per level: assignment and statement. */
+export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Assign|Block)/.test(mode));
+/** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
+export const chainMaximum = 4096;
 const stackModes = [
   "plain", "getter", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
-  "power", "ternary", "statement", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
+  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
   "async", "promise", "console",
-];
-const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"]);
-const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "regexpnc", "lookahead"]);
+].concat(chainModes);
+// Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
+const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"].concat(chainModes));
+const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead"].concat(chainModes));
+
+function deepestAttempt(mode: string): number {
+  // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
+  if (mode === "bound") return 2000;
+  return mode.startsWith("chain") ? chainMaximum : 200000;
+}
+
+export interface GuestStackSettings { readonly budget: string | null; readonly parserReserve: string | null }
+
+
+function stackEnvironmentValue(key: string, value: string | null): string {
+  if (value === null) return "";
+  return `${key}='${value.replaceAll("'", "'\\''")}' `;
+}
+
+/** Preserve each explicit override literally, including empty strings and whitespace. */
+export function stackEnvironmentPrefix(settings: GuestStackSettings): string {
+  return stackEnvironmentValue("BUN_WASM_STACK_KIB", settings.budget)
+    + stackEnvironmentValue("BUN_WASM_JSC_PARSER_RESERVE", settings.parserReserve);
+}
+
+/** The probe's `settings` line: the stack environment its guest was given. Null when it printed none, as after a trap. */
+export function guestStackSettings(output: string): GuestStackSettings | null {
+  const line = output.split(/\r?\n/).find(entry => entry.startsWith("settings "));
+  if (!line) return null;
+  const parsed: unknown = JSON.parse(line.slice("settings ".length));
+  if (!parsed || typeof parsed !== "object" || !("budget" in parsed) || !("parserReserve" in parsed)) throw new Error("Malformed guest stack settings");
+  const { budget, parserReserve } = parsed;
+  if ((budget !== null && typeof budget !== "string") || (parserReserve !== null && typeof parserReserve !== "string")) throw new Error("Malformed guest stack settings");
+  return { budget, parserReserve };
+}
+
+function capacityRecord(parsed: unknown): Record<string, number> {
+  if (!parsed || typeof parsed !== "object") throw new Error("Malformed chain capacities");
+  const capacities: Record<string, number> = {};
+  for (const [mode, value] of Object.entries(parsed)) {
+    if (!chainModes.includes(mode) || typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`Malformed chain capacity ${mode}`);
+    capacities[mode] = value;
+  }
+  if (Object.keys(capacities).length !== chainModes.length) throw new Error("Missing chain capacities");
+  return capacities;
+}
+
+function taggedLine(output: string, tag: string): unknown {
+  const lines = output.split(/\r?\n/).filter(line => line.startsWith(`${tag} `));
+  if (lines.length !== 1) throw new Error(`Expected one ${tag} line, found ${lines.length}`);
+  return JSON.parse(lines[0]!.slice(tag.length + 1));
+}
+
+/** The `capacities` line a `chainCapacity` run prints: one whole number per parser chain. */
+export function chainCapacities(output: string): Record<string, number> {
+  return capacityRecord(taggedLine(output, "capacities"));
+}
+
+export interface ChainOwnership {
+  readonly before: Record<string, number>;
+  readonly child: { readonly settings: GuestStackSettings; readonly capacities: Record<string, number> };
+  readonly after: Record<string, number>;
+}
+
+/**
+ * The `ownership` line a `chainWorker` run prints: the parent's capacities before its Worker child
+ * starts and after it exits, and the child's own validated `chainCapacity` transcript.
+ */
+export function chainOwnership(output: string, depth: number): ChainOwnership {
+  const parsed = taggedLine(output, "ownership");
+  if (!parsed || typeof parsed !== "object" || !("before" in parsed) || !("after" in parsed) || !("child" in parsed)) throw new Error("Malformed chain ownership");
+  const child = parsed.child;
+  if (!child || typeof child !== "object" || !("code" in child) || !("output" in child) || typeof child.output !== "string") throw new Error("Malformed chain ownership child");
+  // The probe encodes the child's transcript: a terminal trims the spaces that end a wrapped row.
+  const transcript = decodeURIComponent(child.output);
+  const outcome = stackOutcome({ code: typeof child.code === "number" ? child.code : null, output: transcript }, "chainCapacity", depth);
+  const settings = guestStackSettings(transcript);
+  if (outcome !== "completed" || !settings) throw new Error(`The Worker child did not complete: ${outcome}\n${transcript}`);
+  return { before: capacityRecord(parsed.before), child: { settings, capacities: chainCapacities(transcript) }, after: capacityRecord(parsed.after) };
+}
 
 type Failure = { depth: number; outcome: string };
 type Row = { host: string; mode: string; at_max: string; capacity?: number; beyond?: string; failures: Failure[] };
@@ -36,6 +120,21 @@ export function stackOutcome(
   return acceptedStackOutcome(mode, outcome) ? outcome : `unexpected:${caught[2]}`;
 }
 
+
+/** An explicitly requested tuple must match what the guest actually received. */
+export function observeStackOutcome({ result, mode, depth, requested, nativeFirefox = false }: {
+  result: Parameters<typeof stackOutcome>[0]; mode: string; depth: number;
+  requested: GuestStackSettings; nativeFirefox?: boolean;
+}): { outcome: string; settings: GuestStackSettings | null } {
+  const settings = guestStackSettings(result.output);
+  const outcome = stackOutcome(result, mode, depth, nativeFirefox);
+  if (!acceptedStackOutcome(mode, outcome)) return { outcome, settings };
+  for (const key of ["budget", "parserReserve"] as const) {
+    if (requested[key] !== null && requested[key] !== settings?.[key]) return { outcome: "settings-mismatch", settings };
+  }
+  return { outcome, settings };
+}
+
 async function measurePath(attempt: Attempt, host: string, mode: string): Promise<Row> {
   const failures: Failure[] = [];
   async function trial(depth: number) {
@@ -43,8 +142,7 @@ async function measurePath(attempt: Attempt, host: string, mode: string): Promis
     if (!acceptedStackOutcome(mode, outcome)) failures.push({ depth, outcome });
     return outcome;
   }
-  // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
-  let high = mode === "bound" ? 2000 : 200000;
+  let high = deepestAttempt(mode);
   const row: Row = { host, mode, at_max: await trial(high), failures };
   if (!searched.has(mode) || row.at_max === "completed") return row;
   let low = 0;
