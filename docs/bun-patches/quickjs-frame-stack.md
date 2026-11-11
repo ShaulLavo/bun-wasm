@@ -93,11 +93,12 @@ with pushing, popping and the callee test left as calls, call-heavy loops ran
 therefore forced inline. What a chunk boundary, a refusal or an emptied chunk
 needs stays in `js_frame_push_chunk` and `js_frame_pop_chunk`, out of line.
 
-Measured in the produced guest on the native launcher, five paired rounds
-with about one percent of spread: calls between ordinary functions in a loop
-are within two percent of the engine before the change, in either direction.
-Plain recursion is 8 percent slower, and callbacks entered from native code
-(`map`, `reduce`) 12 percent: those pay for the record without saving a C
+Before the allocator-bound correction, five paired rounds in the produced
+guest on the native launcher had about one percent of spread. Calls between
+ordinary functions in a loop were within two percent of the engine before
+the change, in either direction. Plain recursion was 8 percent slower, and
+callbacks entered from native code (`map`, `reduce`) 12 percent: those pay
+for the record without saving a C
 call. That remainder is accepted here, not hidden.
 
 ## The frame limit
@@ -373,6 +374,14 @@ mutual, method and tail chains 5,000 deep with zero to five arguments at the
 same budgets, catches unbounded recursion and recursion through a native
 function, and continues. Both run on every engine with one expected output and
 set the budgets only where QuickJS's parser compiles the source.
+
+On November 11, 2026, the corrected normal split guest reached 34,746 plain
+frames and 34,752 promise callbacks on the native launcher at 32 and 36 KiB
+with a 512 KiB host stack, and at its 4096 KiB default. One more raised the
+expected RangeError and continued. All 26 maintained recursion inputs and
+the supplemental native routes kept their supported safety outcomes, with
+no depth below the paired baseline. These are produced-pair measurements,
+not the bare-engine depth above or shared-group qualification.
 
 During development the same driver ran under AddressSanitizer and
 UndefinedBehaviorSanitizer, and the runtime's embedded modules compiled to

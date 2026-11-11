@@ -106,9 +106,10 @@ the top-level one too, in a Worker whose thread Node creates with a 32 MB stack
 host stays one process, so killing it ends the guest, and `ulimit -s` does not matter.
 On 2026-10-16 the launcher still caught every path with a budget one and a half
 times as large (6144 KiB). That margin no longer holds for QuickJS: measured on
-2026-11-10, a 6144 KiB budget with the launcher's default host stack traps on plain
-calls, getters, constructors, `call`, `apply` and array callbacks, on the build
-before the frame stack as well as after it. The launcher's own 4096 KiB default
+2026-11-11, a 6144 KiB budget with the launcher's default host stack traps on
+getters, constructors, `call`, `apply` and array callbacks, on the build
+before the frame stack as well as after it. Plain calls trap only before the
+frame stack. The launcher's own 4096 KiB default
 still catches every measured path ([ordinary call frames](#ordinary-call-frames)).
 On the Node host the stack was shrunk instead: with the 6144 KiB default and a
 21 MB Worker stack (32/1.5), all 25 paths still threw or completed on QuickJS and
@@ -222,10 +223,12 @@ function no longer makes a C call
 ([frame stack](bun-patches/quickjs-frame-stack.md)). Two limits replace the
 one:
 
-- **The frame limit** bounds the storage JavaScript calls hold: 4 MiB of
-  runtime-owned frame records, the same on every host. A plain recursive call
-  costs about 121 bytes, so 34,721 of them fit, at a 32 KiB budget as at
-  4096 KiB. One more throws the same catchable `RangeError`.
+- **The frame limit** bounds the allocator-declared backing held by ordinary
+  frame segments, with a 4 MiB default and maximum. The qualified split
+  allocator charges 64 KiB per default segment, including allocator overhead.
+  A plain recursive call costs about 121 bytes, so 34,746 of them fit, at a
+  32 KiB budget as at 4096 KiB. One more throws the same catchable `RangeError`.
+  The shared-group profile is not qualified by these split measurements.
 - **The native budget** still bounds every call that re-enters the interpreter
   from C: constructors, `call` and `apply`, accessors, proxies, native
   callbacks such as `Array.prototype.map`, and generator and async functions.
@@ -235,8 +238,9 @@ A function's size is no longer depth. A function with 5,300 captured locals
 runs at 32 KiB (`tests/fixtures/stack-frame-storage`); before, its frame alone
 exceeded the budget.
 
-Measured on November 10, 2026 on the native launcher, comparing the QuickJS
-side with the statement parser change against this one. The first two budgets
+Measured on November 11, 2026 on the native launcher, comparing the QuickJS
+side with the statement parser change against the corrected split frame
+allocator. Both sides use the same core and launcher. The first two budgets
 ran with the host Wasm stack cut to 512 KiB, the third with the launcher's
 defaults. Each number is the deepest nesting that completed; one level more
 threw `RangeError` and the program continued. The first seven rows are
@@ -245,8 +249,8 @@ same shape for routes that script does not cover.
 
 | Path | 32 KiB before | after | 36 KiB before | after | 4096 KiB before | after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Plain calls | 100 | 34,721 | 113 | 34,721 | 13,789 | 34,721 |
-| Promise callback | 108 | 34,727 | 121 | 34,727 | 13,797 | 34,727 |
+| Plain calls | 100 | 34,746 | 113 | 34,746 | 13,789 | 34,746 |
+| Promise callback | 108 | 34,752 | 121 | 34,752 | 13,797 | 34,752 |
 | Nested `require` | 27 | 57 | 31 | 67 | over 512 | over 512 |
 | Getter | 76 | 77 | 86 | 88 | 10,480 | 10,481 |
 | Proxy trap | 45 | 46 | 51 | 52 | 6,238 | 6,239 |
@@ -273,7 +277,7 @@ counting for each native entry, while the entry's host frames shrank less: about
 therefore reserves 48 bytes. With only 16, the guard allowed 11,913
 `Reflect.construct` levels at 4096 KiB where the launcher's 16 MiB host stack
 holds 11,520, and that recursion trapped; `tests/fixtures/stack-overflow` caught
-it. With 48 the guard stops it at 10,920 levels, about 15.2 MiB of host stack,
+it. With 48 the guard stops it at 10,920 levels, about 15 MiB of host stack,
 where the build before used 15.8 MiB at 10,481. On every route in the table the
 host stack in use when the guard refuses at 4096 KiB is lower than before. That
 is a wasmtime measurement of one launcher build. It is not a browser result:
