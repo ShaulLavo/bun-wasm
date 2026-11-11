@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { chromium, webkit } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const read = (name: string) => readFileSync(new URL(name, directory), "utf8");
@@ -10,11 +10,11 @@ function factory(name: string) {
   return transpiler.transformSync(`globalThis.factory = ${read(name)};`).replace("globalThis.factory =", "").trim().replace(/;$/, "");
 }
 const factories = { stack_trace: factory("stack_trace.ts"), stack_capability: factory("stack_capability.ts"), inspect: read("inspect.js") };
-const initialize = `
+const initialize = (engine: string) => `
 const nativeError = Error;
 const nativeCapture = Error.captureStackTrace;
 const factories = Object.fromEntries(Object.entries(${JSON.stringify(factories)}).map(([name, source]) => [name, (0, eval)("(" + source + ")")]));
-const runtime = (${bootstrap})({ engine: "host", loadPolyfill: name => factories[name], mapPosition: () => undefined, preparedSourceName: () => undefined });
+const runtime = (${bootstrap})({ engine: ${JSON.stringify(engine)}, loadPolyfill: name => factories[name], mapPosition: () => undefined, preparedSourceName: () => undefined });
 globalThis.stackTest = { nativeError, nativeCapture, runtime };
 `;
 const depd = `
@@ -80,9 +80,24 @@ result.restored = Error.prepareStackTrace === saved.value;
 return result;
 `;
 
-for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]] as const) {
-  test(`${name} host supports the depd capture and structured formatter contract`, async () => {
-    const browser = await engine.launch({ headless: true });
+const awaitingCaller = `
+const saved = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+Error.prepareStackTrace = (error, sites) => sites;
+function capture() { const holder = {}; Error.captureStackTrace(holder, capture); return holder.stack; }
+async function resumedLeaf() { await 0; return capture(); }
+async function awaitingParent() { return await resumedLeaf(); }
+return awaitingParent().then(sites => ({
+  leaf: [sites[0].getFunctionName(), sites[0].isAsync()],
+  awaiting: sites.filter(site => site.isAsync()).map(site => site.getFunctionName().endsWith("awaitingParent")),
+})).finally(() => Object.defineProperty(Error, "prepareStackTrace", saved));
+`;
+
+// Firefox is SpiderMonkey. Under the guest's engine name it runs the adapter against the
+// native text capture the SpiderMonkey guest has, which ignores the formatter.
+const engines = [["webkit", webkit, "host"], ["chromium", chromium, "host"], ["firefox", firefox, "host"], ["firefox", firefox, "spidermonkey"]] as const;
+for (const [name, launcher, engine] of engines) {
+  test(`${name} ${engine} supports the depd capture and structured formatter contract`, async () => {
+    const browser = await launcher.launch({ headless: true });
     try {
       const page = await browser.newPage();
       const errors: string[] = [];
@@ -90,7 +105,7 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]] as con
       await page.addScriptTag({ content: `globalThis.probeContracts = (function () {${probeContracts}\n})()` });
       const probes = await page.evaluate(() => Reflect.get(globalThis, "probeContracts"));
       expect(probes).toEqual(Array.from({ length: 3 }, () => ({ supported: name === "chromium", restored: true, hook: true })));
-      await page.addScriptTag({ content: initialize });
+      await page.addScriptTag({ content: initialize(engine) });
       await page.route("http://stack.test/depd-capture.js", route => route.fulfill({ contentType: "text/javascript", body: `globalThis.stackResult = (function () {${depd}\n})()` }));
       await page.addScriptTag({ url: "http://stack.test/depd-capture.js" });
       const result = await page.evaluate(() => Reflect.get(globalThis, "stackResult"));
@@ -101,6 +116,10 @@ for (const [name, engine] of [["webkit", webkit], ["chromium", chromium]] as con
       expect(errors).toEqual([]);
       const contracts = await page.evaluate(() => Reflect.get(globalThis, "stackContracts"));
       expect(contracts).toEqual({ nativeError: true, nativeCapture: name === "chromium", nativeSites: name === "chromium", structured: name === "chromium", errorIdentity: true, receiver: true, lazy: true, memoized: true, defaultStack: true, descriptors: true, constructorOpt: "caller", missingConstructor: 0, restored: true });
+      await page.route("http://stack.test/awaiting.js", route => route.fulfill({ contentType: "text/javascript", body: `globalThis.stackAwaiting = (function () {${awaitingCaller}\n})()` }));
+      await page.addScriptTag({ url: "http://stack.test/awaiting.js" });
+      expect(await page.evaluate(() => Reflect.get(globalThis, "stackAwaiting"))).toEqual({ leaf: ["resumedLeaf", false], awaiting: [true] });
+      expect(errors).toEqual([]);
     } finally { await browser.close(); }
   }, 30_000);
 }
