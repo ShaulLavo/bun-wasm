@@ -107,7 +107,10 @@ async function captureFailure(transport: Transport, options: Execution, results:
       diagnostic = `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
       diagnostic = await angularDiagnostic(transport, path, deadline);
     }, 2000);
-  } catch { if (!text) return; }
+  } catch {
+    if (!text) return;
+    if (options.box.engine === "browser" && !diagnostic) diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
+  }
   const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
   const failed = results.find(result => result.status === "fail");
   if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
@@ -144,13 +147,21 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
 
 async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<void> {
   let output: string;
-  try { output = await bounded(async () => await terminal(transport) + (failureLog?.diagnostic ?? await browserTrapLog(transport, options.box.engine)), 2_000); }
+  let transcript: string | undefined;
+  try { output = await bounded(async () => {
+    transcript = await terminal(transport);
+    return transcript + (failureLog?.diagnostic ?? await browserTrapLog(transport, options.box.engine));
+  }, 2_000); }
   catch (error) {
     if (failureLog?.saved) return;
-    const transcript = completedTranscript(results);
-    output = failureLog?.text ?? `Final terminal observation unavailable: ${String(error)}\n\n${transcript ?? "No completed command transcript was available."}`;
+    output = finalLogFallback(transcript, options.box.engine, results, failureLog, error);
   }
   await bounded(() => options.saveLog(output), 2_000);
+}
+
+function finalLogFallback(transcript: string | undefined, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
+  if (transcript !== undefined) return transcript + (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "");
+  return failureLog?.text ?? `Final terminal observation unavailable: ${String(error)}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;
 }
 
 function completedTranscript(results: readonly PhaseResult[]): string | undefined {

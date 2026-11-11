@@ -32,7 +32,12 @@ growth quantum, usable remaining capacity, fragmentation, browser memory
 accounting and refusal reason remain unknown. No guest bytes are dumped.
 
 The goals matrix saves these snapshots on failure and during its existing final
-log capture before closing the page. A Browser worker positive control grows a
+log capture before closing the page. Missing hooks and failed or timed-out reads
+are recorded as unavailable. Collection shares the existing observation budgets
+and preserves an available terminal transcript when diagnostics time out.
+A Browser worker positive control grows a
 minimal real Wasm memory and traps through the production host wrapper. It checks
 the saved log after normal cleanup. Separate controls preserve the thrown error's
-identity and keep unknown and imported-memory limits distinct.
+identity and keep unknown and imported-memory limits distinct. The imported
+control declares eight pages and constructs its actual memory with a four-page
+factory maximum. Telemetry keeps the unobservable factory maximum null.
