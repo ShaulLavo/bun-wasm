@@ -156,8 +156,8 @@ function coldProducerTarget(target: string): void {
   symlinkSync("native", join(target, "release/deps/link"));
   chmodSync(join(target, "release/deps"), 0o750);
   utimesSync(join(target, "release/deps"), 1234567890.125, 1234567890.125);
-  mkdirSync(join(target, "split-common"));
-  writeFileSync(join(target, "split-common/unlisted"), "must not be handed off\n");
+  mkdirSync(join(target, "unrelated"));
+  writeFileSync(join(target, "unrelated/unlisted"), "must not be handed off\n");
 }
 function targetArchive(bundle: string): string[] {
   const listing = execFileSync("tar", ["--posix", "-tf", "-"], { input: execFileSync("zstd", ["-dc", join(bundle, "target.tar.zst")]), encoding: "utf8" });
@@ -232,7 +232,8 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
       expect(readFileSync(join(root, "repo/target", file), "utf8")).toBe(`producer ${file}\n`);
     }
     expect(archived).toEqual(expect.arrayContaining(coldProducerFiles));
-    expect(archived.filter(path => path.startsWith("split-common") || path.startsWith("wasm32-wasip1/release"))).toEqual([]);
+    expect(archived.filter(path => path.startsWith("unrelated") || path.startsWith("wasm32-wasip1/release"))).toEqual([]);
+    expect(existsSync(join(root, "repo/target/unrelated"))).toBe(false);
     expect(existsSync(join(root, "repo/target/split-common"))).toBe(false);
     expect(git(join(root, "repo/vendor/bun"), "rev-parse", "HEAD")).toBe(expectedHead);
     expect(git(join(root, "repo/vendor/bun"), "config", "--local", "--list")).not.toContain("extraheader");
@@ -250,7 +251,7 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
 test("typed target topology separates producer-written roots from cache-restored roots", () => {
   const roots = (presence: string) => nativeTargetRoots.filter(root => root.presence === presence).map(root => root.path);
   expect(roots("required")).toEqual([".ci-input-times.json", "debug", "release", "wasm32-wasip1/debug", "tls-probe"]);
-  expect(roots("optional")).toEqual(["wasm32-wasip1/release"]);
+  expect(roots("optional")).toEqual(["wasm32-wasip1/release", "split-common", "tools-optimized"]);
   expect(nativeTargetRoots.map(root => root.path)).not.toContain(".");
 });
 
@@ -263,6 +264,51 @@ test("a warm producer hands off cache-restored guest outputs", () => {
     const imported = invoke("rust", unpackName, changes);
     expect(imported.status, imported.stderr).toBe(0);
     expect(readFileSync(join(root, "repo/target/wasm32-wasip1/release/bun.wasm"), "utf8")).toBe("restored guest\n");
+  });
+});
+
+test("a warm producer preserves cached core, QuickJS and tools outputs with their Cargo state", () => {
+  fixture((root, env, invoke) => {
+    const files = ["bun-core.wasm", "bun-core.wasm.core.json", "core-target/wasm32-wasip1/release/deps/core.rlib", "quickjs/engine.wasm", "quickjs/engine.wasm.engine.json", "quickjs/target/wasm32-wasip1/release/deps/quickjs.rlib"];
+    for (const path of files) {
+      const absolute = join(root, "repo/target/split-common", path);
+      mkdirSync(join(absolute, ".."), { recursive: true });
+      writeFileSync(absolute, `restored ${path}\n`);
+    }
+    mkdirSync(join(root, "repo/target/tools-optimized"));
+    writeFileSync(join(root, "repo/target/tools-optimized/bun-tools.wasm"), "optimized tools\n");
+    const changes = prepareImport(root, env, invoke);
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status, imported.stderr).toBe(0);
+    for (const path of files) expect(readFileSync(join(root, "repo/target/split-common", path), "utf8")).toBe(`restored ${path}\n`);
+    expect(readFileSync(join(root, "repo/target/tools-optimized/bun-tools.wasm"), "utf8")).toBe("optimized tools\n");
+  });
+});
+
+test("the source checkpoint keeps the patched and pinned trees without upstream history", () => {
+  fixture((root, env, invoke) => {
+    const bun = join(root, "repo/vendor/bun");
+    const ancestor = git(bun, "rev-parse", "HEAD");
+    git(bun, "commit", "--allow-empty", "-qm", "pinned base");
+    const base = git(bun, "rev-parse", "HEAD");
+    const verifier = join(root, "repo/scripts/sync-bun.sh");
+    writeFileSync(verifier, readFileSync(verifier, "utf8").replace(`BUN_COMMIT=${ancestor}`, `BUN_COMMIT=${base}`));
+    writeFileSync(join(bun, "source"), "patched source\n");
+    git(bun, "commit", "-qam", "patched head");
+    const head = git(bun, "rev-parse", "HEAD");
+    const patches = join(root, "repo/patches/bun");
+    mkdirSync(patches, { recursive: true });
+    writeFileSync(join(patches, "0001-fixture.patch"), git(bun, "format-patch", "--stdout", `${base}..${head}`) + "\n");
+    const unused = execFileSync("git", ["-C", bun, "hash-object", "-w", "--stdin"], { input: "unneeded cached history", encoding: "utf8" }).trim();
+    const changes = prepareImport(root, env, invoke);
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(git(bun, "rev-parse", "HEAD")).toBe(head);
+    expect(git(bun, "show", `${base}:source`)).toBe("public source");
+    expect(git(bun, "show", "HEAD:source")).toBe("patched source");
+    for (const object of [ancestor, unused]) expect(spawnSync("git", ["-C", bun, "cat-file", "-e", object]).status).not.toBe(0);
+    expect(git(bun, "status", "--porcelain")).toBe("");
+    expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
   });
 });
 

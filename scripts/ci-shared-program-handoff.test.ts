@@ -106,7 +106,8 @@ test("exports use exactly the selected engine producers and never add a receipt 
   expect(producers[2]!.run).toBe('source env.sh\nbun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey\n');
   const engines: string[] = exports.map(output => output.engine);
   for (const engine of engines.concat(["spidermonkey"])) {
-    expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "uses", "with"]);
+    expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "timeout-minutes", "uses", "with"]);
+    expect(uploadFor(engine)["timeout-minutes"]).toBe(5);
   }
 });
 

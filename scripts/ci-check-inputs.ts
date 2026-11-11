@@ -22,7 +22,7 @@ function treeEntry(entry: string) {
 
 export function nativeCheckInputsAt(ref: string, profile?: NativeProfile): string[] {
   if (/^0{40}$/.test(ref)) return [];
-  const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8" });
+  const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8", timeout: 5_000 });
   const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
   if (!directory) return [];
   if (directory.path !== "checks" || directory.mode !== "040000" || directory.kind !== "tree") throw new Error(`Unsafe check directory at ${ref}`);
@@ -31,7 +31,7 @@ export function nativeCheckInputsAt(ref: string, profile?: NativeProfile): strin
     const regular = manifest.kind === "blob" && (manifest.mode === "100644" || manifest.mode === "100755");
     if (!regular || !/^checks\/[a-z0-9-]+\.json$/.test(manifest.path)) throw new Error(`Unsafe check manifest at ${ref}: ${manifest.path}`);
   }
-  const blobs = execFileSync("git", ["cat-file", "--batch"], { input: manifests.map(manifest => manifest.object).join("\n") + "\n" });
+  const blobs = execFileSync("git", ["cat-file", "--batch"], { input: manifests.map(manifest => manifest.object).join("\n") + "\n", timeout: 5_000 });
   let offset = 0;
   return manifests.flatMap(manifest => {
     const end = blobs.indexOf(10, offset);
