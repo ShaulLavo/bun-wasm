@@ -19,7 +19,7 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
   try {
     browser = await chromium.launch({ headless: true });
     const binding = await origins.bind({}, 5173, {
-      fetch: () => new Response('<!doctype html><html><body><h1>original</h1><button onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>', { headers: { "content-type": "text/html" } }),
+      fetch: () => new Response('<!doctype html><html><body><h1>original</h1><button disabled onclick="this.textContent=\'Count 1\'">Count 0</button></body></html>', { headers: { "content-type": "text/html" } }),
       upgrade: (_request, socket) => { socket.destroy(); }, close() {},
     });
     bus.configure("host", owner.url.href);
@@ -30,6 +30,8 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     bus.configure("preview", binding.origin + "/");
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000);
     await waitReady(bus, "preview");
+    expect(await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000)).toMatchObject({ ready: false, before: "Count 0" });
+    await bus.execute("preview", "document.querySelector('button').disabled = false", 3000);
     const before = await bus.execute("preview", `(${armIphoneClick.toString()})("button", "button")`, 3000);
     expect(before).toMatchObject({ before: "Count 0", label: "Count 0" });
     await bus.execute("preview", "document.querySelector('button').click()", 3000);
