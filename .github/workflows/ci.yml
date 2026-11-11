@@ -1624,6 +1624,7 @@ jobs:
       - name: Configure private shared JSC build path
         run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
           name: shared-prebuild.tar
           path: ${{ runner.temp }}/shared-prebuild-transfer
@@ -1746,6 +1747,7 @@ jobs:
           manifest=$(bun scripts/ci-spidermonkey-prebuild.ts write "$SPIDERMONKEY_BUILD_DIR" "$SM_NATIVE_INPUTS")
           echo "manifest-sha256=$manifest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         with:
           name: shared-spidermonkey-prebuild
           path: |
@@ -1810,6 +1812,7 @@ jobs:
       - name: Reuse the production playground for shared profile checks
         if: needs.quality.outputs.shared-native == 'true'
         uses: actions/download-artifact@v4
+        timeout-minutes: 5
         with:
           name: browser-guest-site
           path: ${{ runner.temp }}/shared-playground-site
@@ -2087,6 +2090,7 @@ jobs:
           echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         if: needs.quality.outputs.shared-native == 'true'
         with:
           name: shared-spidermonkey-prebuild
