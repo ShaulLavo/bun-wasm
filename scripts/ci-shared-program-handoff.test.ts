@@ -98,11 +98,15 @@ test("QuickJS is retained before its consumers or the later JSC producer can fai
   }
 });
 
-test("exports reuse only the two existing profile producers and never add a receipt writer", () => {
+test("exports use exactly the selected engine producers and never add a receipt writer", () => {
+  const producers = exports.map(output => namedStep(output.producer))
+    .concat([namedStep("Produce the shared SpiderMonkey profile once")]);
   expect(allSteps.filter(step => typeof step.run === "string" && step.run.includes("scripts/build-native-profile.ts")))
-    .toEqual(exports.map(output => namedStep(output.producer)));
-  for (const output of exports) {
-    expect(Object.keys(uploadFor(output.engine)).sort()).toEqual(["if", "name", "uses", "with"]);
+    .toEqual(producers);
+  expect(producers[2]!.run).toBe('source env.sh\nbun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey\n');
+  const engines: string[] = exports.map(output => output.engine);
+  for (const engine of engines.concat(["spidermonkey"])) {
+    expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "uses", "with"]);
   }
 });
 
