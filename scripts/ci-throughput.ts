@@ -30,7 +30,8 @@ function run(value: unknown) {
 }
 function job(value: unknown) {
   const item = record(value);
-  return { id: number(item.id), run: number(item.run_id), name: text(item.name), status: text(item.status), conclusion: item.conclusion, created: time(item.created_at), started: optionalTime(item.started_at), completed: optionalTime(item.completed_at) };
+  const runner = item.runner_id === null ? 0 : number(item.runner_id);
+  return { id: number(item.id), run: number(item.run_id), name: text(item.name), status: text(item.status), conclusion: item.conclusion, created: time(item.created_at), started: runner ? optionalTime(item.started_at) : undefined, completed: optionalTime(item.completed_at) };
 }
 function percentile(values: readonly number[], fraction: number): number | null {
   if (!values.length) return null;
@@ -48,15 +49,17 @@ export function measureThroughput(value: unknown, start: string, end: string) {
   const inWindow = (timestamp: number) => timestamp >= windowStart && timestamp < windowEnd;
   const finished = runs.filter(item => item.status === "completed" && inWindow(item.updated));
   const hours = (windowEnd - windowStart) / 3_600_000;
-  const started = jobs.flatMap(item => item.started !== undefined && inWindow(item.started) ? [{ ...item, started: item.started }] : []);
+  const admitted = jobs.flatMap(item => item.started !== undefined ? [{ ...item, started: item.started }] : []);
+  const invalid = admitted.filter(item => item.completed === undefined ? item.status !== "in_progress" : item.completed < item.started);
+  const valid = admitted.filter(item => item.completed === undefined ? item.status === "in_progress" : item.completed >= item.started);
+  const started = valid.filter(item => inWindow(item.started));
   const queue = started.map(item => Math.max(0, (item.started - item.created) / 1000));
   const queued = jobs.filter(item => item.status === "queued" && item.started === undefined);
   const running = jobs.filter(item => item.status === "in_progress");
-  const completed = jobs.flatMap(item => item.completed !== undefined && item.started !== undefined && inWindow(item.completed) ? [{ ...item, started: item.started, completed: item.completed }] : []);
-  const invalid = completed.filter(item => item.completed < item.started);
-  const valid = completed.filter(item => item.completed >= item.started);
+  const completed = valid.flatMap(item => item.completed !== undefined && inWindow(item.completed) ? [{ ...item, completed: item.completed }] : []);
   return {
     observedAt: new Date(observed).toISOString(), window: { start, end, hours },
+    workflowRateBasis: "Workflow updated_at completion proxy; successful runs may skip native checks.",
     completedRuns: finished.filter(item => item.conclusion !== "cancelled").length,
     cancelledRuns: finished.filter(item => item.conclusion === "cancelled").length,
     completedRunsPerHour: finished.filter(item => item.conclusion !== "cancelled").length / hours,
@@ -65,8 +68,8 @@ export function measureThroughput(value: unknown, start: string, end: string) {
     queueSeconds: { samples: queue.length, p50: percentile(queue, 0.5), p95: percentile(queue, 0.95), max: queue.length ? queue.reduce((max, value) => Math.max(max, value), 0) : null },
     queuedJobs: queued.map(item => ({ id: item.id, run: item.run, name: item.name, waitingAtLeastSeconds: Math.max(0, (observed - item.created) / 1000) })),
     runningJobs: running.map(item => ({ id: item.id, run: item.run, name: item.name })),
-    runnerMinutes: valid.reduce((sum, item) => sum + (item.completed - item.started) / 60_000, 0),
-    jobSeconds: valid.map(item => ({ id: item.id, run: item.run, name: item.name, seconds: (item.completed - item.started) / 1000 })),
+    runnerMinutes: valid.reduce((sum, item) => sum + Math.max(0, Math.min(item.completed ?? observed, windowEnd) - Math.max(item.started, windowStart)) / 60_000, 0),
+    completedJobSeconds: completed.map(item => ({ id: item.id, run: item.run, name: item.name, seconds: (item.completed - item.started) / 1000 })),
     invalidJobTimes: invalid.map(item => item.id),
     coverage: { runs: runs.length, jobs: jobs.length },
   };
