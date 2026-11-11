@@ -1,3 +1,4 @@
+import type { ProgramMemoryProfile } from "../../web/src/program-profile";
 import { cleanupTimeoutMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
@@ -8,6 +9,7 @@ export interface Execution {
   box: Box;
   framework: Framework;
   url: string;
+  profile?: ProgramMemoryProfile;
   port?: number;
   timeoutMs: number;
   installTimeoutMs?: number;
@@ -58,7 +60,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       transport = await creation;
       capabilities = transport.capabilities;
       await transport.navigate(options.url);
-      return ready(transport, options.box.engine, options.timeoutMs);
+      return ready(transport, options.box.engine, options.timeoutMs, options.profile);
     }, options.signal);
     if (!transport) throw new Error("Transport not created");
     await lifecycle(transport, options, results);

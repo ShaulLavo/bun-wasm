@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initialReport, options, run } from "./run";
+import { writePreparedSiteInventory } from "./prepared-site";
 import { deadlinePolicy } from "./deadlines";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
@@ -194,6 +195,7 @@ async function stageUnitHost(root: string, framework: string): Promise<void> {
   await writeFile(join(root, "index.html"), `globalThis.__bunwasmBuilds=${builds};`);
   await writeFile(join(root, "goals-host-source.json"), JSON.stringify({ commit: "0".repeat(40), dirty: true }));
   await writeFile(join(root, `${framework}.json`), "{}");
+  await writePreparedSiteInventory(root);
 }
 test.each(["nuxt", "astro"])("the real runner and WebDriver transport apply the override only to %s's install in a local unit fixture", async id => {
   const framework = frameworks.find(item => item.id === id);

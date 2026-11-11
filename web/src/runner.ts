@@ -7,7 +7,8 @@ import { programLinkPlan } from "../../src/assets.js";
 // and the sandbox (../sandbox/).
 
 import type { ProcessRuntime } from "../../src/process-runtime.js";
-import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { loadEngineProgram, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
@@ -44,6 +45,7 @@ function physicalStop(worker: Worker, returned: () => void, stopped: () => void)
 
 export interface RunOptions {
   engine: Engine;
+  profile?: ProgramMemoryProfile;
   module: WebAssembly.Module;
   /** Arguments after `bun`; a Preview1 root's complete argv. */
   args: string[];
@@ -87,6 +89,7 @@ function slotsMode(): RunRequest["slots"] {
 }
 
 const registeredPrograms = new WeakMap<ProcessRuntime, Set<string>>();
+const runtimeProfiles = new WeakMap<ProcessRuntime, ProgramMemoryProfile>();
 
 /** A Preview1 root is a generic program: it gets a snapshot of the caller's exact argv and
  * environment. Only a Bun root gets its engine executable as argv[0], PATH and BUNWASM_EXEC_PATH. */
@@ -123,14 +126,14 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
   }
 }
 
-function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
+function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module, profile: ProgramMemoryProfile): void {
   const engines: readonly Engine[] = pairedEngines;
   for (const engine of engines.concat(["browser"], selected === "spidermonkey" ? [selected] : [])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
     const module = engine === selected && adapter !== "preview1" ? selectedModule
-      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+      : () => loading ??= loadEngineProgram(engine, profile, () => {}).then(result => result.module);
     registerEngineCommands(subprocess, programs, engine, module);
   }
 }
@@ -164,6 +167,11 @@ function releaseNotifications(bridge: NotificationBridge | undefined): void {
 
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
+  const profile = options.profile ?? (isSharedGroupCore(options.module) ? "shared-group" : "split");
+  if (options.adapter !== "preview1") verifyMemoryProfile(options.module, profile);
+  const registeredProfile = runtimeProfiles.get(options.runtime);
+  if (registeredProfile && registeredProfile !== profile) throw new TypeError("A Bun runtime cannot switch program memory profiles");
+  runtimeProfiles.set(options.runtime, profile);
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
   const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
   let helper: RuntimeNetworkHelper | undefined;
@@ -340,7 +348,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     let programs = registeredPrograms.get(options.runtime);
     if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
     if (!subprocess) throw new Error("Bun process controller did not initialize");
-    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module);
+    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module, profile);
   } catch (error) {
     sharedRoute?.close();
     releaseRootConsumer();

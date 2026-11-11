@@ -5,7 +5,8 @@ import { createRuntime, type Runtime } from "waffle";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { parseMemoryProfile, requireProfileEngine, type ProgramMemoryProfile } from "../program-profile";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -36,6 +37,7 @@ const HOST_VERSIONS = {};
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
+  readonly profile: ProgramMemoryProfile;
   readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
@@ -59,6 +61,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
+    this.profile = parseMemoryProfile(this.params.get("profile"));
+    requireProfileEngine(this.engine, this.profile);
   }
 
   get status(): Status {
@@ -251,7 +255,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       }).catch(console.error);
     });
 
-    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects } });
+    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: this.profile } });
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
@@ -260,7 +264,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
     const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
-      return await loadWasm(wasmUrl, (text) => this.setStatus(text));
+      return await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
     } catch (err) {
       const { script, wasm } = ENGINES[this.engine];
       return new Error(err instanceof WasmMissing

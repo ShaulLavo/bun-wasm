@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Engine } from "./catalog";
-import { engineFiles, registeredEngineGroups } from "./engines";
+import { profileEngineFiles, registeredEngineGroups } from "./engines";
+import { profileAsset, type ProgramMemoryProfile } from "../../web/src/program-profile";
+import { programProfile } from "../../src/engine-kind";
 function hashes(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preparation error: expected an engine fingerprint map");
   const entries = Object.entries(value);
@@ -26,9 +28,13 @@ async function stagedEngine(root: string, names: readonly string[]): Promise<{ n
   if (staged.length && missing.length) throw new Error(`Preparation error: Missing engine assets: ${missing.join(", ")}`);
   return staged;
 }
-export async function preflight(root: string, engines: readonly Engine[]): Promise<void> {
+export async function preflight(root: string, engines: readonly Engine[], profile: ProgramMemoryProfile = "split"): Promise<void> {
   const staged: { name: string; data: Uint8Array }[] = [];
-  for (const engine of engines) staged.push(...await stagedEngine(root, engineFiles(engine)));
+  for (const engine of engines) {
+    const files = await stagedEngine(root, profileEngineFiles(engine, profile));
+    if (profile === "shared-group" && !files.length) throw new Error(`Preparation error: Missing ${engine} ${profile} assets`);
+    staged.push(...files);
+  }
   if (!staged.length) return;
   const index = await readFile(join(root, "index.html"), "utf8");
   const embedded = /globalThis\.__bunwasmBuilds\s*=\s*(\{[^;]*?\})\s*;/.exec(index)?.[1];
@@ -41,13 +47,29 @@ export async function preflight(root: string, engines: readonly Engine[]): Promi
   }
 }
 async function writeStagedEngine(source: string, directory: string, names: readonly string[]): Promise<void> {
-  for (const { name, data } of await stagedEngine(source, names)) await writeFile(join(directory, name), data);
+  for (const { name, data } of await stagedEngine(source, names)) await Bun.write(join(directory, name), data);
 }
 export async function withStagedAssets<T>(source: string, build: (directory: string) => Promise<T>): Promise<T> {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-assets-"));
   try {
     await mkdir(scratch, { recursive: true });
     for (const names of registeredEngineGroups().concat([["bun-tools.wasm"]])) await writeStagedEngine(source, scratch, names);
+    for (const engine of ["quickjs", "jsc"] as const) await stageSharedEngine(source, scratch, engine);
     return await build(scratch);
   } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+
+async function stageSharedEngine(source: string, scratch: string, engine: "quickjs" | "jsc"): Promise<void> {
+  const files = await stagedEngine(source, profileEngineFiles(engine, "shared-group"));
+  if (!files.length) return;
+  const directory = join(scratch, `shared-${engine}`);
+  const names = programProfile(engine);
+  await mkdir(directory);
+  for (const file of files) {
+    const name = file.name === profileAsset(names.core, "shared-group") ? "bun.wasm" : names.side;
+    await writeFile(join(directory, name), file.data);
+  }
+  for (const name of ["bun-core.wasm.core.json", `${names.side}.engine.json`, "source.txt"]) {
+    await cp(join(source, profileAsset(`receipts/${engine}/${name}`, "shared-group")), join(directory, name));
+  }
 }

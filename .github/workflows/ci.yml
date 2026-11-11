@@ -1557,6 +1557,15 @@ jobs:
         run: |
           test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
           chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+      - name: Reuse the production playground for shared profile checks
+        if: needs.quality.outputs.shared-native == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: browser-guest-site
+          path: ${{ runner.temp }}/shared-playground-site
+      - name: Select the existing playground site for shared profile checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-playground-site" >> "$GITHUB_ENV"
       - name: Configure private shared sysroot paths
         run: |
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
