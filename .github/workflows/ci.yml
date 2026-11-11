@@ -334,7 +334,7 @@ jobs:
           source env.sh
           bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
           mkdir "$bundle"
-          tar --posix -C "$(dirname "$JSC_BUILD_DIR")" -cf - "$(basename "$JSC_BUILD_DIR")" | zstd -T0 -q -o "$bundle/prebuild.tar.zst"
+          bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" split "$bundle/prebuild.tar.zst"
           tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
           cp "$RUNNER_TEMP/jsc-prebuild.log" "$bundle/jsc-prebuild.log"
           {
@@ -1523,7 +1523,7 @@ jobs:
           members=(sysroot.tar.zst)
           tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
           if [[ "$SHARED_NATIVE" == true ]]; then
-            tar --posix -C "$(dirname "$JSC_BUILD_DIR")" -cf - "$(basename "$JSC_BUILD_DIR")" | zstd -T0 -q -o "$bundle/prebuild.tar.zst"
+            bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" shared-group "$bundle/prebuild.tar.zst"
             members+=(prebuild.tar.zst)
           fi
           {

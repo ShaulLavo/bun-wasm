@@ -755,7 +755,9 @@ test("split engine producers reuse one common core and retain both pair receipts
   const paths = workflowString(workflowField(nativeWorkflowStep("name", "Configure private JSC build paths"), "run"));
   expect(paths).toContain('JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine');
   expect(jsc.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
-  expect(rust).toContain("dist/jsc-engine.wasm.engine.json");
+  expect(rust).not.toContain("name: jsc-embedding-receipts");
+  expect(rust).toContain("name: web-guest-fixture-receipts");
+  expect(rust).toContain("dist/*.wasm.embedding.json");
   expect(rust).toContain("${{ runner.temp }}/jsc/engine/engine-link.map");
   expect(rust).toContain("dist/*.wasm.engine.json");
 });

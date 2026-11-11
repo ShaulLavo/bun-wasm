@@ -95,6 +95,13 @@ test("native handoff roots alone select producer and consumer engine gates", () 
   expect(needsJsc(paths)).toBe(true);
 });
 
+test("JSC artifact inventory changes select ordinary and shared consumers", () => {
+  const paths = ["scripts/ci-jsc-artifact.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
+});
+
 test.each(["src/index.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
@@ -256,6 +263,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 });
 
 for (const path of [
+  "scripts/ci-jsc-artifact.ts",
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
