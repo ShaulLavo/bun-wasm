@@ -86,6 +86,14 @@ split patch, recipe files and admitted split archive are not changed.
   shared program for separate interpreter and portable-baseline tests. Each retains the original
   test and Browser-driver deadline. The existing shared CI producer supplies both tests; no
   additional common core, library or side is built.
+- `scripts/ci-spidermonkey-prebuild.ts`: an original CI transfer adapter. The library recipe
+  runs in a separate 30-minute prebuild job after the existing shared sysroot producer. It
+  retains the recipe's Python isolation and upstream, command, object and header checks.
+  Only `native/`, `receipt/` and a file manifest reach the existing SharedPIC owner. The
+  manifest binds the run, checkout, recipe bytes, native tools, sysroot and transferred bytes.
+  SharedPIC requires producer success, verifies the manifest, then links the side against its
+  existing common core and atomics libc++. Every native and Browser consumer keeps its clock.
+  The exact native cache has no prefix restore and saves only on successful main pushes.
 
 ## Limits
 

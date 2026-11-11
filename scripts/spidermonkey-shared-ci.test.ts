@@ -9,9 +9,10 @@ import { discoverChecks, selectChecks } from './test-checks.ts';
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  web:\n')[0]!;
+const libraryProducer = workflow.split('\n  shared-spidermonkey-prebuild:\n')[1]!.split('\n  shared-sysroot:\n')[0]!;
 
 function step(name: string): string {
-  const result = shared.split(`      - name: ${name}\n`)[1]?.split('\n      - ')[0];
+  const result = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - ')[0];
   assert(result, `missing workflow step: ${name}`);
   return result;
 }
@@ -60,10 +61,10 @@ test('SM has one library producer and one side consumer and never builds another
 });
 
 test('SM caches exact source and native work and replays patch and library verification on a hit', () => {
-  const cache = shared.split('        id: shared-spidermonkey-cache\n')[1]!.split('\n      - ')[0]!;
+  const cache = libraryProducer.split('        id: shared-spidermonkey-cache\n')[1]!.split('\n      - ')[0]!;
   expect(cache).toContain('path: ${{ runner.temp }}/spidermonkey/shared');
-  expect(cache).toContain('spidermonkey-shared-group-v1-');
-  for (const input of ['steps.shared-spidermonkey-inputs.outputs.hash', 'spidermonkey/**', 'crates/bunwasm-spidermonkey/**', 'rust-toolchain.toml', 'Cargo.lock', 'scripts/src/program-profile.ts']) expect(cache).toContain(input);
+  expect(cache).toContain('spidermonkey-shared-group-v2-');
+  for (const input of ['steps.shared-spidermonkey-inputs.outputs.hash', 'steps.shared-spidermonkey-inputs.outputs.recipes']) expect(cache).toContain(input);
   expect(cache).not.toContain('restore-keys:');
   const producer = step('Produce or verify the shared SpiderMonkey library once');
   expect(producer).toContain('config remote.origin.promisor true');
