@@ -54,6 +54,14 @@ not claim a new six-way qualification, current-head cold hosted production,
 framework, Safari device or phone acceptance. The parent owns independent Browser
 review and normal ready CI. PR 600 remains draft until that review passes.
 
+The parser-reserve source merge exposed a first-search measurement difference on
+portable baseline. Every parent measured assignment-compile capacity 334 on its
+first search and 336 on an immediate second search before creating any Worker.
+It stayed at 336 after the Worker. Capacity and ownership modes now run the whole
+measurement loop once at zero depth before recording requested-depth searches.
+Strict before/after and parent/child comparisons stay intact. The integrated
+Chromium interpreter and PBL ownership controls both pass on the retained pair.
+
 The Mozilla fetch initializes its exact-pin sparse tree as a Git promisor
 remote, so lazy source blobs work on fresh hosted runners. The recipe owns
 patch application and readback. CI never resets or cleans the patched tree.

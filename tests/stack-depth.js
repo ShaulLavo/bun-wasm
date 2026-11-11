@@ -134,7 +134,7 @@ function workerEnvironment() {
 actions.chainWorker = async () => {
   const { Worker } = require('node:worker_threads');
   await Promise.resolve();
-  // Enter the whole measurement loop once before comparing contexts, including its PBL frame.
+  // Run the whole measurement loop once before comparing contexts.
   chainCapacities(0);
   const before = chainCapacities();
   const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
