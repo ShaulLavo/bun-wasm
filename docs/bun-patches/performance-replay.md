@@ -20,3 +20,34 @@ The historical callback field `readBytes` counts JavaScript string code units,
 not independently measured UTF-8 bytes. The short file-list hash is a comparison
 check, not SHA-256 provenance. New captures compare the full sorted result and
 warning lists, all callback counts, and empty stub use.
+
+`real-guest.ts` adapts the original diagnostic
+`next-finalization/probes/nft-repro.cjs`. Its entry and ignore selection follows
+Next 15.5.6's `next/dist/build/collect-build-traces.js` and
+`next/dist/build/webpack/plugins/next-trace-entrypoints-plugin.js`, as distributed
+in the pinned npm package. It preserves real guest path, filesystem and module
+calls, removes timing-only analysis bookkeeping, and records complete sorted
+file/ESM lists and stable warning name/code/message fields. It adds an executable
+arithmetic/path positive control in the same guest context. Next package source
+and lock identities belong in each caller's hashed installed-input manifest.
+
+The pure replay fixture adds the same arithmetic control and a result marker,
+emits full file/ESM and warning lists, and rejects stub use even when the traced
+code catches the stub's exception. Its historical short-hash/count check stays
+in place alongside the maintained runner's complete external output oracle.
+`replay-small.json` has four original tiny module bodies, not Next source, and
+exists only to test callback, output-drift and missing-input behavior cheaply.
+
+The maintained profile classifier adapts the audit's original
+`tools/profile-boundaries.ts`. It uses the saved profile's actual sample entries,
+validates a complete node tree, caches subtree counts, rejects absent captures,
+and uses node unions for overlapping inclusive totals. It distinguishes useful
+Wasm callee samples from JavaScript/wrapper samples before reentry. The classifier
+does not collect profiles or change the browser observer.
+
+The Rust counter replaces the audit's original `tools/icount.c` using Linux
+`perf_event_open`, `wait4` and child-subreaper interfaces. It adds counter error
+rejection, per-event enabled/running metadata, fixed multiplexing rejection,
+explicit affinity selection on hybrid CPUs, and descendant cleanup. It uses no
+upstream copied implementation or additional dependency. None of these tools is
+linked into the guest or listed in the package release payload.

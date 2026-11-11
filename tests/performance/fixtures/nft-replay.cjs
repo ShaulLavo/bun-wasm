@@ -23,7 +23,7 @@ const say = inShell ? print : text => console.log(text);
 const [mode, fixturePath] = hostArgs;
 // `load` is replay without the trace: it reads the fixture and loads the modules, then stops. Its
 // counters are the start-up cost to subtract from a replay run.
-if (!["record", "replay", "load"].includes(mode) || !fixturePath) throw new Error("usage: nft-harness.js record|replay|load FIXTURE");
+if (!["control", "replay", "load"].includes(mode) || !fixturePath) throw new Error("usage: nft-replay.cjs control|replay|load FIXTURE");
 if (mode === "record" && inShell) throw new Error("record needs the bun-wasm guest");
 
 const polyfills = {
@@ -218,15 +218,20 @@ function replayInputs() {
 }
 
 async function main() {
-  const loadStarted = Date.now();
+  if (mode === "control") {
+    let value = 0;
+    for (let index = 0; index < 100000; index++) value = (value + index) | 0;
+    if (value !== 704982704) throw new Error("positive control failed");
+    say("BUN_WASM_PERF_RESULT " + JSON.stringify({ mode, value }));
+    return;
+  }
   const inputs = mode === "record" ? liveInputs() : replayInputs();
   const { nodeFileTrace } = shimRequire("next/dist/compiled/@vercel/nft");
   const picomatch = shimRequire("next/dist/compiled/picomatch");
   const path = shimRequire("path");
   const isIgnored = picomatch(fixture.ignores, { contains: true, dot: true });
   const counts = { readFile: 0, readBytes: 0, readlink: 0, stat: 0, ignore: 0 };
-  if (mode === "load") { say(JSON.stringify({ mode, shell: inShell, loadMs: Date.now() - loadStarted, modules: Object.keys(fixture.modules).length })); return; }
-  const started = Date.now();
+  if (mode === "load") { say("BUN_WASM_PERF_RESULT " + JSON.stringify({ mode, modules: Object.keys(fixture.modules).length, entries: fixture.entries, ignores: fixture.ignores })); return; }
   const result = await nodeFileTrace(fixture.entries, {
     base: root, processCwd: root, mixedModules: true, cache: { analysisCache: new Map() },
     async readFile(file) { counts.readFile++; const text = await inputs.readFile(file); counts.readBytes += text.length; return text; },
@@ -241,8 +246,12 @@ async function main() {
     hostRequire("fs").writeFileSync(fixturePath, JSON.stringify(fixture));
   }
   const matches = mode === "record" || JSON.stringify(outcome) === JSON.stringify(fixture.expected);
-  say(JSON.stringify({ mode, shell: inShell, loadMs: started - loadStarted, traceMs: Date.now() - started, matchesFixture: matches,
-    ...outcome, modules: Object.keys(fixture.modules).length, stubUse: fixture.stubUse }));
+  const warnings = Array.from(result.warnings, warning => ({ name: warning.name, code: warning.code || null, message: warning.message }));
+  warnings.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  say("BUN_WASM_PERF_RESULT " + JSON.stringify({ mode, fileList: files, esmFileList: Array.from(result.esmFileList).sort(), warnings,
+    counts: { readFile: counts.readFile, readStringLength: counts.readBytes, readlink: counts.readlink, stat: counts.stat, ignore: counts.ignore },
+    entries: fixture.entries, ignores: fixture.ignores, modules: Object.keys(fixture.modules).length, stubUse: fixture.stubUse }));
+  if (Object.keys(fixture.stubUse).length) throw new Error("unexpected stub use");
   if (!matches) throw new Error("replay result differs from the recorded trace");
 }
 
