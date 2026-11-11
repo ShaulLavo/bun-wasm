@@ -10,8 +10,9 @@ dirname, extname, isAbsolute, normalize, join, and parse algorithms run on
 The previous partial Node POSIX implementation in `src/js/path.js` is removed.
 
 `crates/bunwasm-runtime/src/node_path.rs` and `src/js/path.ts` are **Host feature**
-original adapters. After public validation and coercion, a captured
-`String.prototype.isWellFormed` intrinsic selects owned UTF-8 strings for
+original adapters. After public validation and coercion, the
+`String.prototype.isWellFormed` intrinsic, captured before user code in
+`src/js/bootstrap.js`, selects owned UTF-8 strings for
 well-formed inputs. Rust converts them with `encode_utf16` and checks every output
 with `String::from_utf16`. Bun's algorithms still run on `u16` slices. If any
 relevant input contains an unpaired surrogate, the entire call uses lossless
@@ -57,6 +58,15 @@ Windows separators, matching `src/js/node/path.ts` at the same revision.
 | [`scripts/generate-node-path.ts`](#node-path) | Port | Extract Bun's relative-path computation with guest-resolved paths supplied by the adapter. |
 | [`vendor/bun/src/runtime/node/path.rs`](#node-path) | Port | Adapt the public path argument traversal and validation order to the JavaScript boundary. |
 | [`crates/bunwasm-runtime/src/js/path.ts`](#node-path) and `src/node_path.rs` | Host feature | Original adapters for JavaScript validation, guest cwd, and lossless UTF-16 transport. |
+
+`tests/fixtures/node-path-transport` records 10,958 path results, object fields,
+errors and coercion/cwd observations in both namespaces. Its oracle comes from
+the unchanged adapter at `b351c86d7576a2411f6d7a46d1fec9d8da60485b`.
+Run with `--snapshot --record` to emit complete results for a byte comparison;
+ordinary runs assert their SHA-256. Coverage includes malformed surrogates,
+suffix boundaries, BOM/NUL, long paths and allocation-heavy repeated calls.
+`node-path-intrinsic` replaces the public intrinsic in eval before requiring
+`node:path`, checking that the bootstrap capture remains trusted.
 
 [Parent context](bun-patch-series.md).
 

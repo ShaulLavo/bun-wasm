@@ -1,1 +1,1 @@
-The oracle is captured from the unchanged guest path adapter, including Bun-specific coercion and Windows behavior.
+The oracle is captured from the unchanged guest path adapter at b351c86d7576a2411f6d7a46d1fec9d8da60485b, including Bun-specific coercion and Windows behavior. Use --snapshot --record for a full before/after byte comparison. Do not update from native Node or Bun.
