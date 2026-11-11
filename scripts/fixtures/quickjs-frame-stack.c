@@ -125,6 +125,7 @@ static JSContext *other_context;
 static char *heap_base, *heap_brk, *heap_end;
 static Header *heap_free;
 static size_t mapped_ever, mapped_now; /* through this file's mmap and munmap */
+static int mapping_fails;              /* this file's mmap refuses */
 static long page_size_answer;
 
 static void check(int ok, const char *label)
@@ -145,7 +146,7 @@ extern long __sysconf(int name);
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset)
 {
-    void *p = (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
+    void *p = mapping_fails ? MAP_FAILED : (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
     if (p != MAP_FAILED) {
         mapped_ever += length;
         mapped_now += length;
@@ -1364,8 +1365,34 @@ static void default_callbacks(void)
     check(JS_DefaultMallocBound(NULL, SIZE_MAX) == 0 && JS_DefaultMallocBound(NULL, SIZE_MAX - 4096) == 0, "a size whose mapping would wrap has no bound");
     d->js_free(NULL, small);
     d->js_free(NULL, NULL);
-    if (HOST_WATCH)
-        check(mapped_now == now, "every mapping was returned to the system");
+    if (!HOST_WATCH)
+        return;
+    /* a request with a bound is a mapping or nothing: libc never stands in */
+    small = d->js_malloc(NULL, 100);
+    memset(small, 0x5a, 100);
+    mapping_fails = 1;
+    check(d->js_malloc(NULL, 70000) == NULL, "a large request fails when its mapping fails");
+    check(d->js_calloc(NULL, 2, 40000) == NULL, "and so does a large calloc");
+    check(d->js_realloc(NULL, small, 80000) == NULL, "and a realloc across the threshold");
+    mapping_fails = 0;
+    check(small[0] == 0x5a && small[99] == 0x5a && d->js_malloc_usable_size(small) >= 100, "which leaves the old block as it was");
+    d->js_free(NULL, small);
+    check(mapped_now == now, "every mapping was returned to the system");
+}
+
+/* A segment whose mapping fails is an out-of-memory error with nothing
+   charged, and the next call works. */
+static void default_mapping_failure(JSRuntime *rt, JSContext *ctx)
+{
+    size_t live, committed;
+
+    check(trim_to(rt, DEFAULT_LIMIT), "storage is trimmed before mappings start failing");
+    mapping_fails = 1;
+    check(outcome(ctx, SHALLOW, 42) == NO_MEMORY, "a segment that cannot be mapped fails the call as out of memory");
+    mapping_fails = 0;
+    usage(rt, &live, &committed);
+    check(live == 0 && committed == 0 && memory.frame_live == 0 && held_agrees(rt), "and is charged nothing");
+    check(outcome(ctx, SHALLOW, 42) == DONE, "calls work once mappings succeed");
 }
 
 /* Large blocks of a default runtime that are not frame storage keep
@@ -1447,6 +1474,8 @@ static void contract_on(const Profile *chosen)
     }
     if (chosen == &default_profile)
         default_large_blocks(rt, ctx);
+    if (chosen == &default_profile && HOST_WATCH)
+        default_mapping_failure(rt, ctx);
     check(memory.over_limit == 0, "no frame block ever left the allocator holding more than the limit");
     check(memory.over_declared == 0, "no frame block made the allocator acquire more than it declared");
     check(memory.untracked == 0, "every frame block was watched");

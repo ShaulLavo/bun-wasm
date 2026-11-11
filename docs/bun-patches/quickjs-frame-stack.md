@@ -342,7 +342,9 @@ the allocator's callbacks. Separate runtimes check custom callbacks that
 declare nothing, an allocator that reports no block sizes, callbacks over
 glibc's malloc, which now run no call and ask malloc for no frame block, and
 an unreadable page size. The default callbacks are checked on their own for
-alignment, mapping size, `calloc`, `realloc` across the threshold and release.
+alignment, mapping size, `calloc`, `realloc` across the threshold, release,
+and a mapping that fails: the request fails, a `realloc` leaves its old block
+intact, and a segment is an out-of-memory error with nothing charged.
 
 `scripts/check-quickjs-frame-wasi.ts` builds the bare engine with
 `scripts/fixtures/quickjs-frame-wasi.c` for wasm32 against the split-profile
