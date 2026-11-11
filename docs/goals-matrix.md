@@ -16,6 +16,44 @@ Keep the WASM delivery source separate from the playground source commit.
 Preparation records the built host source in `goals-host-source.json`. Continuation
 compares every staged host, worker, template and guest file, not just WASM bytes.
 
+To add an ordinary SpiderMonkey interpreter pair from a separate producer, pass
+its directory and existing JSON source record when preparing the same delivery:
+
+```sh
+source env.sh
+TMPDIR=/work/tmp bun /work/heavy-runner/current/run.js --class build goals-sm-prepare -- \
+	bun scripts/goals-matrix/prepare.ts /absolute/delivery \
+	--spidermonkey=/absolute/ordinary-pair \
+	--spidermonkey-source=/absolute/component-sources.json
+```
+
+The directory must contain `bun-spidermonkey.wasm` and
+`spidermonkey-engine.wasm`, each plain or gzip compressed with a `.gz` suffix.
+Both files come from this directory. Missing files fail before the build, even
+when the delivery contains another SpiderMonkey pair. Other engine inputs stay
+in the delivery. No guest rebuild is needed. Use ordinary interpreter artifacts,
+not shared-profile cores or sides.
+
+Preparation records the unchanged delivery manifest, the separate source record,
+and the selected pair's byte hashes in `web/dist/goals-asset-sources.json`. Keep
+each component's actual source in that record when core and side differ. The
+existing shell-pin check and host fingerprint checks still apply. For a bounded
+Chrome campaign, run Hono first, then append Vite React with the same clean source:
+
+```sh
+bun /work/heavy-runner/current/run.js --class browser goals-sm-hono -- \
+	bun scripts/goals-matrix/run.ts --browsers=chrome --engines=spidermonkey \
+	--frameworks=hono --asset-source="$PWD/web/dist/goals-asset-sources.json" \
+	--output=/absolute/campaign
+bun /work/heavy-runner/current/run.js --class browser goals-sm-vite -- \
+	bun scripts/goals-matrix/run.ts --browsers=chrome --engines=spidermonkey \
+	--frameworks=vite-react --asset-source="$PWD/web/dist/goals-asset-sources.json" \
+	--output=/absolute/campaign --resume
+```
+
+Discovery only establishes prerequisites. Inspect `TABLE.json` for actual phase
+results and cleanup. Unselected boxes remain pending.
+
 Run all 208 boxes. Hermes is parked and excluded from this matrix:
 
 ```sh
