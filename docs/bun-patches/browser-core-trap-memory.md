@@ -3,7 +3,7 @@
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `src/program-memory.ts`, `web/src/memory-telemetry.ts`, executor and launchers | Original adapter | Preserve core memory limit provenance and publish host facts at a Browser native-call trap through the existing snapshot transport. |
-| `web/src/engine-host.js`, `engine-host.d.ts` | Original adapter | Add a synchronous observer at the existing `bunwasm_call` boundary, then rethrow the same error. |
+| `web/src/engine-host.js`, `engine-host.d.ts`, `web/src/wasm-call-trap.ts` | Original adapter | Add a synchronous observer at the existing `bunwasm_call` boundary, then rethrow the same error. |
 | `scripts/goals-matrix/browser-memory.ts`, `execute.ts` | Original adapter | Save retained Browser trap snapshots in the existing matrix terminal log before page cleanup. |
 
 Both cleanup paths preserve an available terminal transcript when the optional
@@ -17,6 +17,10 @@ WebKit or other upstream implementation is copied. The existing raw engine
 loader is JavaScript because unbundled Node host workflows import its source
 directly. Its minimal hook calls the TypeScript diagnostic helper. No generated
 JavaScript or guest rebuild is needed.
+
+The raw loader's callback wrapper is dependency-free so unbundled Node workflows
+do not import the Browser telemetry graph. The existing clean-copy Node host and
+module-preparation benchmark checks include that TypeScript source.
 
 The observer runs only when `bunwasm_call` throws a `WebAssembly.RuntimeError`.
 It reads the current core `memory.buffer.byteLength` without calling guest

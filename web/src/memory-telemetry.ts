@@ -175,13 +175,6 @@ export function beginMemorySnapshot(engine: TelemetryEngine, id: string, command
   return { ...identity, buffer: channel, coreMemoryLimits };
 }
 
-/** Host facts only: never reenter a trapping guest to read allocator or engine counters. */
-export function reportWasmCallTrap(observer: ((error: WebAssembly.RuntimeError, index: number) => void) | undefined, error: unknown, index: number): void {
-  if (!(error instanceof WebAssembly.RuntimeError)) return;
-  try { observer?.(error, index); }
-  catch { /* Diagnostics must preserve the original trap. */ }
-}
-
 export function publishBrowserCallTrap(instance: WebAssembly.Instance, index: number, transport: MemoryTelemetryTransport, post: (message: { type: "bun-memory"; snapshot: MemorySnapshot }) => void): void {
   const memory = instance.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) return;

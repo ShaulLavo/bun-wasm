@@ -11,7 +11,7 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
-import { reportWasmCallTrap } from "./memory-telemetry.ts";
+import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
