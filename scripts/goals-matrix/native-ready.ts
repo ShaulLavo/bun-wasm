@@ -1,7 +1,6 @@
 import { readFileSync, watch, type FSWatcher } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { bounded } from "./bounded";
-import { parseTimeout } from "./deadlines";
 import { CommandExitError, withSignals } from "./lifetime";
 
 interface ReadyMessage { iphoneControl: string; productOrigin: string }
@@ -59,6 +58,12 @@ export async function waitNativeReady(options: NativeReadyOptions, observe: (dir
   } finally { for (const watcher of watchers) watcher.close(); }
 }
 
+function parseObservationTimeout(value: string): number {
+  const timeoutMs = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) throw new Error("timeout-ms must be an integer from 1 through 2147483647");
+  return timeoutMs;
+}
+
 function cliOptions(args: string[]): NativeReadyOptions {
   const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 2) {
@@ -68,7 +73,7 @@ function cliOptions(args: string[]): NativeReadyOptions {
   }
   const logFile = values.get("--log-file"), exitFile = values.get("--exit-file"), timeout = values.get("--timeout-ms");
   if (!logFile || !exitFile || !timeout) throw new Error("Require log-file, exit-file and timeout-ms");
-  return { logFile, exitFile, errorFile: values.get("--error-file"), timeoutMs: parseTimeout(timeout) };
+  return { logFile, exitFile, errorFile: values.get("--error-file"), timeoutMs: parseObservationTimeout(timeout) };
 }
 
 if (import.meta.main) {

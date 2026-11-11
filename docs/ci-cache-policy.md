@@ -18,9 +18,16 @@ required roots that every producer run writes, and guest outputs that exist only
 after a warm cache restore. A missing required root fails packing. Its original
 main-only v2 final save uses the original restore hit/matched-key outputs passed
 from the quality producer. All primary and compatibility key inputs stay intact.
+Warm transfers include the common core, QuickJS side and their Cargo targets,
+plus tools optimizer output. Their existing input and byte checks still apply.
+Tools reuse also checks the raw Wasm, optimizer binary, flags and output hash,
+then writes a fresh guest receipt against the current source inputs.
 The handoff queries Git only for tracked `node_modules` fixture paths, not the
 entire source inventory. Public tracked fixtures survive without buffering all
 upstream path names. Untracked installs and credential files stay excluded.
+The Bun Git transfer keeps the patched HEAD and pinned base with both complete
+trees, so the consumer can verify and replay the patch series. Other history and
+refs stay out. Archives use two Zstandard workers with a 128 MiB matching window.
 
 The sysroot and JSC prebuild caches are restored and saved only by the
 `JSC C/C++ prebuild` job. It hands both trees to the native job as a one-day run

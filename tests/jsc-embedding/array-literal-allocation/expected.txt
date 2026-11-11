@@ -1,0 +1,4 @@
+first call: caught RangeError: Out of memory
+second call: built 10000 0 7
+fresh array per call: true
+guest survived
