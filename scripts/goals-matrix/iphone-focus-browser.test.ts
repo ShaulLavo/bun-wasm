@@ -1,8 +1,62 @@
 import { expect, test } from "bun:test";
-import { chromium, webkit } from "playwright";
-import { presentIphonePreview } from "./iphone-browser";
+import { chromium, webkit, type BrowserType } from "playwright";
+import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
+import { IphoneBus } from "./iphone-bus";
+import { observeIphoneResponse } from "./iphone-server";
+import { createIphoneTransport } from "./iphone-transport";
+
+async function pendingLoadFocus(engine: BrowserType): Promise<void> {
+  const bus = new IphoneBus("/__goals_iphone/" + "e".repeat(64));
+  const requested = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let ownerOrigin = "";
+  let controlOrigin = "";
+  const close: Array<() => void | Promise<void>> = [() => bus.close()];
+  const serveOwner = async (request: Request): Promise<Response> => {
+    const path = new URL(request.url).pathname;
+    if (path === "/held.png") {
+      requested.resolve();
+      await release.promise;
+      return new Response(null, { status: 404 });
+    }
+    const html = path === "/preview"
+      ? '<!doctype html><body><button>Count 0</button><img src="/held.png"></body>'
+      : '<!doctype html><body><input id="editor"></body>';
+    return observeIphoneResponse(new Response(html, { headers: { "content-type": "text/html" } }), request, bus, controlOrigin);
+  };
+  try {
+    const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => bus.handle(request, ownerOrigin) });
+    close.push(() => control.stop(true));
+    controlOrigin = control.url.origin;
+    const owner = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: serveOwner });
+    close.push(() => owner.stop(true));
+    ownerOrigin = owner.url.origin;
+    const browser = await engine.launch({ headless: true });
+    close.push(() => browser.close());
+    bus.configure("host", owner.url.href);
+    const page = await browser.newPage();
+    await page.goto(owner.url.href);
+    await page.waitForFunction(() => document.title.startsWith("Goals "));
+    await page.locator("#editor").focus();
+    const transport = await createIphoneTransport({ control: control.url.origin + bus.path, agent: "/unused/agent-device", deviceUDID: "focus-test", timeoutMs: 1000 });
+    await transport.openPreview(owner.url.origin + "/preview");
+    await requested.promise;
+    const arm = `(${armIphoneClick.toString()})("button", "button")`;
+    expect(await transport.evaluate(arm)).toMatchObject({ ready: false, before: "Count 0" });
+    expect(await transport.evaluate("typeof globalThis.__goalsIphoneClick")).toBe("undefined");
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe("editor");
+    release.resolve();
+    await page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: 1000 });
+    expect(await transport.evaluate(arm)).toMatchObject({ ready: true, before: "Count 0" });
+    await transport.closePreview();
+  } finally {
+    release.resolve();
+    await Promise.allSettled(close.map(async finish => finish()));
+  }
+}
 
 for (const engine of [chromium, webkit]) {
+  test(`enabled native counter waits for pending load focus in ${engine.name()}`, () => pendingLoadFocus(engine), 10000);
   test(`new native preview takes focus from the owner editor in ${engine.name()}`, async () => {
     const browser = await engine.launch({ headless: true });
     try {

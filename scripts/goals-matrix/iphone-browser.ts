@@ -58,6 +58,7 @@ export function armIphoneClick(button: string, clicked: string): IphoneClickArm 
   const before = document.querySelector(clicked)?.textContent?.trim() ?? "";
   if (!target || target.disabled) return { ready: false, before };
   if (!/\b0\b/.test(before)) throw new Error(`iPhone counter must start at zero, received ${before}`);
+  if (!document.hasFocus()) return { ready: false, before };
   target.scrollIntoView({ block: "center" });
   const box = target.getBoundingClientRect();
   if (document.visibilityState !== "visible" || document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) !== target) throw new Error("iPhone counter is not visibly hittable");
