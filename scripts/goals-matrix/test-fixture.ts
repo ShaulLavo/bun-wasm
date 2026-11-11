@@ -44,7 +44,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
       if (selector === framework.button || selector === framework.clicked) return counter;
       return { textContent: message };
     } },
-    playground: { fs: filesystem, shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
+    playground: { profile: "split", fs: filesystem, shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
       editor: { async open() {}, async save() {}, view },
       term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
     },
