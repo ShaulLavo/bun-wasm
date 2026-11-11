@@ -16,6 +16,7 @@ import { createNodeProcess } from "../web/scripts/node-process.ts";
 import { createMemoryReader, recordMemorySnapshot } from "../web/src/memory-telemetry.ts";
 import { engineEnvironment } from "../src/executable-paths.ts";
 import { isEngine, loadWasm, WasmMissing } from "../web/src/engine-loader.ts";
+import { stageSharedPrograms } from "./stage-program-profiles";
 
 const kind = "spidermonkey";
 
@@ -317,10 +318,10 @@ test("the actual optional web staging hashes and compresses both tiny SpiderMonk
     const end = source.indexOf("await buildShellAssets", start);
     if (start < 0 || end < 0) throw new Error("Missing web asset copy boundary");
     const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(start, end));
-    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", `return (async () => {${code}; return engineBuilds;})();`);
+    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", `return (async () => {${code}; return engineBuilds;})();`);
     const builds = await stage(Bun, existsSync, join, dirname, resolve, statSync, out, root, {
       env: { SPIDERMONKEY_WASM: join(root, programProfile(kind).core) },
-    }, join(root, "missing-quickjs.wasm"));
+    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }));
     expect(Object.keys(builds).sort()).toEqual(["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"]);
     for (const name of [programProfile(kind).core, programProfile(kind).side]) {
       const raw = readFileSync(join(root, name));
