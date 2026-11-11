@@ -31,25 +31,50 @@ function processOutcome(result: Pick<Bun.SyncSubprocess, "exitCode" | "signalCod
 
 function runControls(root: string, args: readonly string[] = []) {
   const trace = join(root, "compiler.trace");
+  const temporary = mkdtempSync(join(root, "tmp/control-"));
   writeFileSync(trace, "");
   const started = performance.now();
-  const result = Bun.spawnSync([process.execPath, "test", "./scripts/spidermonkey-semantics.test.ts"].concat(args), {
-    cwd: root,
-    env: { ...process.env, TMPDIR: join(root, "tmp"), PATH: `${join(root, "bin")}:${process.env.PATH}`, BUN_WASM_SM_COMPILER_TRACE: trace },
-    timeout: 30_000,
-  });
-  return {
-    ...processOutcome(result),
-    elapsedMs: performance.now() - started,
-    output: result.stdout.toString() + result.stderr.toString(),
-    leftovers: readdirSync(join(root, "tmp")),
-    compilerTrace: readFileSync(trace, "utf8"),
-    compilerCommands: { cxx: readFileSync(join(root, "bin/c++"), "utf8"), rustup: readFileSync(join(root, "bin/rustup"), "utf8") },
-  };
+  let pid: number | undefined;
+  try {
+    const result = Bun.spawnSync([process.execPath, "test", "./scripts/spidermonkey-semantics.test.ts"].concat(args), {
+      cwd: root,
+      detached: true,
+      env: { ...process.env, TMPDIR: temporary, PATH: `${join(root, "bin")}:${process.env.PATH}`, BUN_WASM_SM_COMPILER_TRACE: trace },
+      timeout: 30_000,
+    });
+    pid = result.pid;
+    return {
+      ...processOutcome(result),
+      elapsedMs: performance.now() - started,
+      output: result.stdout.toString() + result.stderr.toString(),
+      leftovers: readdirSync(temporary),
+      compilerTrace: readFileSync(trace, "utf8"),
+      compilerCommands: { cxx: readFileSync(join(root, "bin/c++"), "utf8"), rustup: readFileSync(join(root, "bin/rustup"), "utf8") },
+    };
+  } finally {
+    try { stopCompilerGroup(pid); }
+    finally { rmSync(temporary, { recursive: true, force: true }); }
+  }
+}
+
+function stopCompilerGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try { process.kill(-pid, "SIGKILL"); }
+  catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+  }
 }
 
 function expectCompleted(result: ReturnType<typeof runControls>, exitCode: number): void {
   expect(result, JSON.stringify(result, null, 2)).toMatchObject({ exitCode, signalCode: null, timedOut: false, maxBufferExceeded: false });
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+    return false;
+  }
 }
 
 // These child suites compile real extracted controls, so prepare them outside test timers too.
@@ -88,7 +113,14 @@ function prepareRegressionControls() {
     compilerWrapper(join(root, "bin"), "c++", "sleep 1");
     compilerWrapper(join(root, "bin"), "rustup", "exit 7");
     const failedBuild = runControls(root);
-    return { slow, compileElapsedMs, wrongBorrow, filtered, failedBuild };
+    compilerWrapper(join(root, "bin"), "c++", 'printf "%s\\n" "$$" > "$BUN_WASM_SM_COMPILER_TRACE.pid"\nkill -KILL "$PPID"\nexec sleep 30');
+    compilerWrapper(join(root, "bin"), "rustup", "");
+    const interrupted = runControls(root);
+    const interruptedTemporaryEntries = readdirSync(join(root, "tmp"));
+    compilerWrapper(join(root, "bin"), "c++", "");
+    const afterInterruption = runControls(root);
+    const interruptedCompilerAlive = processExists(Number(readFileSync(join(root, "compiler.trace.pid"), "utf8")));
+    return { slow, compileElapsedMs, wrongBorrow, filtered, failedBuild, interrupted, interruptedTemporaryEntries, interruptedCompilerAlive, afterInterruption };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -142,4 +174,14 @@ test("setup results preserve explicit subprocess timeout outcomes", () => {
   expect(outcome.signalCode).not.toBeNull();
   expect(outcome.exitCode).not.toBe(0);
   expect(outcome.maxBufferExceeded).toBe(false);
+});
+
+test("an interrupted setup removes its temporary files and compiler without contaminating the next control", () => {
+  expect(controls.interrupted.signalCode).toBe("SIGKILL");
+  expect(controls.interrupted.timedOut).toBe(false);
+  expect(controls.interrupted.leftovers.length).toBeGreaterThan(0);
+  expect(controls.interruptedTemporaryEntries).toEqual([]);
+  expect(controls.interruptedCompilerAlive).toBe(false);
+  expectCompleted(controls.afterInterruption, 0);
+  expect(controls.afterInterruption.leftovers).toEqual([]);
 });
