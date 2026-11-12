@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { Transport } from "./transport";
 import { ownedCommand } from "./lifetime";
 import { until } from "./playground";
-import { armIphoneClick, iphonePreviewFocus, iphonePreviewLoad, presentIphonePreview } from "./iphone-browser";
+import { armIphoneClick, iphonePreviewLoad, presentIphonePreview } from "./iphone-browser";
 import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
@@ -20,6 +20,10 @@ export function nativeButtonRef(snapshot: string, label: string): string {
 }
 type Row = Record<string, unknown>;
 const attached = (row: Row): boolean => typeof row.timeOrigin === "number" && row.visible === true;
+function presentedFocus(row: Row, presentation: string): boolean {
+  const focus = row.previewFocus;
+  return focus !== null && typeof focus === "object" && "presentation" in focus && focus.presentation === presentation && "focused" in focus && focus.focused === true;
+}
 type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void>;
 /**
  * One deadline for opening a preview. Each stage polls short reads, and starts none after the
@@ -87,14 +91,16 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     return await execute(role, source, timeoutMs, observation) as T;
   }
   // Every presentation change ends the wait on the previous frame and withdraws its focus record.
-  async function present(url: string | null): Promise<AbortSignal> {
+  async function present(url: string | null): Promise<{ signal: AbortSignal; presentation: string | null }> {
     role = "host";
     focused = false;
     opening.abort(new Error("iPhone preview presentation changed"));
     opening = new AbortController();
     const signal = AbortSignal.any([opening.signal, cleaning.signal]);
-    await evaluate(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
-    return signal;
+    const presentation = await evaluate<unknown>(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
+    if (presentation !== null && typeof presentation !== "string") throw new Error("Invalid iPhone presentation identity");
+    if (url !== null && !presentation) throw new Error("Missing iPhone presentation identity");
+    return { signal, presentation };
   }
   async function close(timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -108,6 +114,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   return {
     capabilities,
     beginCleanup() {
+      focused = false;
       observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs;
       cleaning.abort(new Error("iPhone cleanup began before the preview opened"));
     },
@@ -125,11 +132,12 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     async openPreview(url) {
       const wait = previewDeadline(config.timeoutMs);
       await request("preview/configure", { url });
-      const signal = await present(url);
+      const { signal, presentation } = await present(url);
+      if (presentation === null) throw new Error("Missing iPhone presentation identity");
       // The owner role stays free for terminal and diagnostic reads until the preview document completes.
       await wait(signal, "document", async left => object(await request("preview/state", undefined, left) ?? {}), attached);
       await wait(signal, "load", async left => object(await execute("preview", `(${iphonePreviewLoad.toString()})()`, left, true)), row => row.loaded === true);
-      await wait(signal, "focus", async left => object(await execute("host", `(${iphonePreviewFocus.toString()})()`, left)), row => row.focused === true);
+      await wait(signal, "focus", async left => object(await request("host/state", undefined, left) ?? {}), row => presentedFocus(row, presentation));
       signal.throwIfAborted();
       role = "preview";
       focused = true;

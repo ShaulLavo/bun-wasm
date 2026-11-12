@@ -27,12 +27,11 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     if (path.endsWith("/configure")) return Response.json(arm.url);
-    if (path.endsWith("/state")) return Response.json({ ...arm, visible: true, userAgent: "iPhone Safari" });
+    if (path.endsWith("/state")) return Response.json({ ...arm, visible: true, userAgent: "iPhone Safari", previewFocus: { presentation: "frame-id", presented: true, focused: true } });
     const row = object(await request.json());
     if (typeof row.source !== "string") throw new Error("Missing click expression");
-    if (row.source.includes("function presentIphonePreview")) return Response.json(null);
+    if (row.source.includes("function presentIphonePreview")) return Response.json("frame-id");
     if (row.source.includes("function iphonePreviewLoad")) return Response.json({ loaded: true, readyState: "complete" });
-    if (row.source.includes("function iphonePreviewFocus")) return Response.json({ presented: true, focused: true });
     sources.push(row.source);
     if (row.source.includes("function armIphoneClick")) return Response.json(arms[Math.min(arming++, arms.length - 1)]);
     if (observation === "pending") await release.promise;

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { object } from "./evidence";
 import { createIphoneTransport } from "./iphone-transport";
+import { IphoneBus } from "./iphone-bus";
 
 type Row = Record<string, unknown>;
 type Script = { states: Row[]; loads: Row[]; focuses: Row[] };
@@ -9,20 +10,38 @@ const configured = { url, nonce: "preview-nonce", visible: false };
 const attached = { ...configured, visible: true, timeOrigin: 10 };
 const loading = { loaded: false, readyState: "interactive" };
 const complete = { loaded: true, readyState: "complete" };
-const unfocused = { presented: true, focused: false };
-const focusedFrame = { presented: true, focused: true };
+const unfocused = { presented: true, focused: false, presentation: "frame-id" };
+const focusedFrame = { presented: true, focused: true, presentation: "frame-id" };
 const unhydrated = { ready: false, before: "0" };
+
+test("observer polls validate focus records and configuration clears cached state", () => {
+  const bus = new IphoneBus("/__goals_iphone/" + "f".repeat(64));
+  try {
+    bus.configure("host", url);
+    const page = bus.state("host");
+    if (!page) throw new Error("Missing owner fixture");
+    const observation = { url, nonce: page.nonce, timeOrigin: 1, visible: true };
+    bus.poll("host", { ...observation, previewFocus: focusedFrame }, new URL(url).origin);
+    expect(bus.state("host")?.previewFocus).toEqual(focusedFrame);
+    expect(() => bus.poll("host", { ...observation, previewFocus: { ...focusedFrame, presentation: 1 } }, new URL(url).origin)).toThrow("Invalid iPhone focus record");
+    bus.configure("host", url);
+    expect(bus.state("host")?.previewFocus).toBeUndefined();
+  } finally { bus.close(); }
+});
 
 /** A scripted controller: each list answers in order and then repeats its last row. */
 async function withControl(script: Script, timeoutMs: number, action: (transport: Awaited<ReturnType<typeof createIphoneTransport>>, log: string[]) => Promise<void>): Promise<void> {
   const log: string[] = [];
   const next = (rows: Row[]): Row | undefined => rows.length > 1 ? rows.shift() : rows[0];
   const answers: Record<string, () => unknown> = {
-    presentIphonePreview: () => null, iphonePreviewLoad: () => next(script.loads), iphonePreviewFocus: () => next(script.focuses), armIphoneClick: () => unhydrated,
+    presentIphonePreview: () => "frame-id", iphonePreviewLoad: () => next(script.loads), armIphoneClick: () => unhydrated,
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const route = new URL(request.url).pathname.split("/").slice(3).join("/");
-    if (request.method === "GET") { log.push(route); return Response.json(next(script.states)); }
+    if (request.method === "GET") {
+      log.push(route);
+      return Response.json(route === "host/state" ? { previewFocus: next(script.focuses) } : next(script.states));
+    }
     const row = object(await request.json());
     if (route === "preview/configure") { log.push(route); return Response.json(url); }
     const name = Object.keys(answers).find(candidate => String(row.source).includes("function " + candidate));
@@ -35,7 +54,7 @@ async function withControl(script: Script, timeoutMs: number, action: (transport
   finally { await transport.close(); await server.stop(true); }
 }
 
-test("opening a preview waits in the preview document and reads the owner only to confirm focus", async () => {
+test("opening a preview waits in the preview document and reads cached owner focus", async () => {
   const script = { states: [configured, configured, attached], loads: [loading, loading, complete], focuses: [unfocused, focusedFrame] };
   await withControl(script, 2000, async (transport, log) => {
     await transport.openPreview(url);
@@ -43,7 +62,7 @@ test("opening a preview waits in the preview document and reads the owner only t
       "preview/configure", "host/execute presentIphonePreview",
       "preview/state", "preview/state", "preview/state",
       "preview/execute iphonePreviewLoad observation", "preview/execute iphonePreviewLoad observation", "preview/execute iphonePreviewLoad observation",
-      "host/execute iphonePreviewFocus", "host/execute iphonePreviewFocus",
+      "host/state", "host/state",
     ]);
   });
 });
@@ -69,9 +88,27 @@ test("a preview that attaches but never completes loading never reads owner focu
 
 test("a loaded preview whose frame was never focused expires without native input", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [unfocused] }, 300, async (transport, log) => {
-    await expect(transport.openPreview(url)).rejects.toThrow(`iPhone preview focus did not finish within 300 ms; last observation: ${JSON.stringify(unfocused)}`);
+    await expect(transport.openPreview(url)).rejects.toThrow(`iPhone preview focus did not finish within 300 ms; last observation: ${JSON.stringify({ previewFocus: unfocused })}`);
     await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
     expect(log.some(entry => entry.includes("armIphoneClick"))).toBe(false);
+  });
+});
+
+test("cached focus for a previous presentation cannot admit native input", async () => {
+  await withControl({ states: [attached], loads: [complete], focuses: [{ ...focusedFrame, presentation: "previous-frame" }] }, 200, async (transport, log) => {
+    await expect(transport.openPreview(url)).rejects.toThrow("preview focus did not finish");
+    await expect(transport.nativeClick!("button", "output", 100)).rejects.toThrow("not focused after load");
+    expect(log.some(entry => entry.includes("armIphoneClick"))).toBe(false);
+  });
+});
+
+test("cleanup withdraws native input after a completed opening", async () => {
+  await withControl({ states: [attached], loads: [complete], focuses: [focusedFrame] }, 1000, async (transport, log) => {
+    await transport.openPreview(url);
+    await transport.beginCleanup?.();
+    const completed = log.length;
+    await expect(transport.nativeClick!("button", "output", 100)).rejects.toThrow("not focused after load");
+    expect(log).toHaveLength(completed);
   });
 });
 

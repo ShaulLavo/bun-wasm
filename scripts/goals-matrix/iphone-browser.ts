@@ -2,7 +2,7 @@ type BrowserTask = { id: number; source: string; deadline: number };
 declare global { var __goalsIphoneDocument: { nonce: string; url: string; timeOrigin: number } | undefined; }
 
 // Serialized into the test page, independently of the application bundles.
-export function installIphoneObserver(endpoint: string, nonce: string): void {
+export function installIphoneObserver(endpoint: string, nonce: string, readFocus: typeof iphonePreviewFocus): void {
   const key = { nonce, url: location.href, timeOrigin: performance.timeOrigin };
   globalThis.__goalsIphoneDocument = key;
   let stopped = false;
@@ -27,7 +27,7 @@ export function installIphoneObserver(endpoint: string, nonce: string): void {
     if (stopped || pending) return;
     pending = true;
     try {
-      const value = await send("poll", { visible: document.visibilityState === "visible", userAgent: navigator.userAgent });
+      const value = await send("poll", { visible: document.visibilityState === "visible", userAgent: navigator.userAgent, previewFocus: readFocus() });
       if (value !== null) await execute(parse(value));
     } catch { stopped = true; clearInterval(timer); }
     finally { pending = false; }
@@ -42,16 +42,22 @@ export function installIphoneObserver(endpoint: string, nonce: string): void {
 
 // Returns at once. The frame keeps its own load-and-focus record, so a preview that never
 // loads cannot hold the owner's single observer command.
-export function presentIphonePreview(url: string | null): void {
+export function presentIphonePreview(url: string | null): string | null {
   document.getElementById("__goalsIphonePreview")?.remove();
-  if (!url) return;
+  if (!url) return null;
   const frame = document.createElement("iframe");
   frame.id = "__goalsIphonePreview";
   frame.title = "Goals framework preview";
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:white";
   frame.src = url;
-  frame.addEventListener("load", () => { frame.focus(); frame.dataset.goalsFocused = "true"; }, { once: true });
+  const presentation = crypto.getRandomValues(new Uint32Array(4)).join("-");
+  frame.dataset.goalsPresentation = presentation;
+  frame.addEventListener("load", () => {
+    if (document.getElementById("__goalsIphonePreview") !== frame) return;
+    frame.focus(); frame.dataset.goalsFocused = "true";
+  }, { once: true });
   document.body.appendChild(frame);
+  return presentation;
 }
 
 // Read in the preview document: its completion is what fires the owner frame's load event.
@@ -60,9 +66,9 @@ export function iphonePreviewLoad(): { loaded: boolean; readyState: DocumentRead
 }
 
 // Read in the owner document: true only after the current frame's load listener focused it.
-export function iphonePreviewFocus(): { presented: boolean; focused: boolean } {
+export function iphonePreviewFocus(): { presented: boolean; focused: boolean; presentation: string | null } {
   const frame = document.getElementById("__goalsIphonePreview");
-  return { presented: frame !== null, focused: frame?.dataset.goalsFocused === "true" };
+  return { presented: frame !== null, focused: frame?.dataset.goalsFocused === "true", presentation: frame?.dataset.goalsPresentation ?? null };
 }
 
 type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };

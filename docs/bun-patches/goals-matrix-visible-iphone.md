@@ -41,9 +41,11 @@ the frame and returns. The frame's own load listener focuses it and records that
 the frame element, so the record is discarded with the frame. Opening then waits
 under one deadline, in three stages of short reads: the preview observer attaches
 and is visible, the preview document reports `readyState` complete through
-read-only observations in the preview role, and the owner confirms the frame's
-focus record. Only that last confirmation uses the owner role, after the document
-has completed. No read starts after the deadline, after cleanup begins, or after the
+read-only observations in the preview role, and cached owner state confirms the
+frame's focus record. Regular owner polls publish that record with a fresh
+presentation identity. The controller never enqueues an owner command to confirm
+focus, so cancellation there cannot block failure-time terminal reads. A record
+from an earlier presentation cannot admit input. No read starts after the deadline, after cleanup begins, or after the
 presentation changes, and an expiry names its stage and last observation. The
 transport accepts native input only between a completed opening and the next
 presentation change, so an expired or cancelled opening cannot arm or press even

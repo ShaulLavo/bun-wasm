@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { armIphoneClick } from "./iphone-browser";
-import { withHeldPreview, type Hold } from "./iphone-load-fixture";
+import { withHeldPreview, type HeldPreview, type Hold } from "./iphone-load-fixture";
+import { execute } from "./execute";
+import { frameworks, type Framework } from "./catalog";
+import { withPlayground } from "./test-fixture";
+import type { Transport } from "./transport";
 
 // Shaped like the executor's terminal read: an owner-page promise that settles on a later task.
 const diagnostic = 'new Promise(resolve => setTimeout(() => resolve(document.querySelector("#editor").id), 0))';
@@ -78,4 +82,53 @@ for (const engine of [chromium, webkit]) {
   }
   test(`an expired preview load frees the owner channel and refuses late native input in ${engine.name()}`, () => expiredLoadRefusesInput(engine), 20000);
   test(`closing the transport cancels a held preview load without later control traffic or input in ${engine.name()}`, () => closingCancelsHeldLoad(engine), 20000);
+  for (const scenario of ["held-timeout", "focus-cancel"] as const) {
+    test(`executor ${scenario} preserves current owner diagnostics in ${engine.name()}`, () => executionFailure(engine, scenario), 15000);
+  }
+}
+
+async function executionFailure(engine: BrowserType, scenario: "held-timeout" | "focus-cancel"): Promise<void> {
+  const framework = frameworks.find(row => row.id === "sveltekit");
+  if (!framework) throw new Error("Missing SvelteKit fixture");
+  await withPlayground(framework, 0, fixture => withHeldPreview(engine, "document", 5000, held => runFailureFixture(framework, fixture, held, scenario)));
+}
+
+async function runFailureFixture(framework: Framework, fixture: Transport, held: HeldPreview, scenario: "held-timeout" | "focus-cancel"): Promise<void> {
+  const { page, bus, transport, preview, requested, release, deviceCommands } = held;
+  const abort = new AbortController();
+  const logs: string[] = [];
+  let failed = false;
+  await page.evaluate('globalThis.playground = { term: { write: (_text, done) => setTimeout(done, 0), buffer: { active: { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => "Error: current dev diagnostic" }) } } } };');
+  const state = bus.state.bind(bus);
+  bus.state = role => {
+    const value = state(role);
+    if (scenario === "focus-cancel" && role === "host" && value?.previewFocus?.focused) abort.abort(new Error("Phase cancelled at focus acknowledgement"));
+    return value;
+  };
+  const original = bus.execute.bind(bus);
+  bus.execute = (role, source, timeoutMs, observation) => {
+    const pending = original(role, source, timeoutMs, observation);
+    if (scenario === "focus-cancel" && source.includes("function iphonePreviewFocus")) abort.abort(new Error("Phase cancelled at focus acknowledgement"));
+    return pending;
+  };
+  const facade: Transport = { ...transport, navigate: fixture.navigate,
+    evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => {
+      if (failed) return transport.evaluate<T>(source, options);
+      return fixture.evaluate<T>(source.includes("function transcript") ? JSON.stringify("completed install transcript") : source, options);
+    },
+    async openPreview() {
+      failed = true;
+      const opening = transport.openPreview(preview);
+      await requested;
+      if (scenario === "focus-cancel") release();
+      await opening;
+    },
+  };
+  const result = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
+    url: "http://fixture/?engine=browser", timeoutMs: scenario === "held-timeout" ? 1000 : 5000, signal: abort.signal,
+    createTransport: async () => facade, saveLog: async text => { logs.push(text); },
+  });
+  expect(result).toMatchObject({ status: "fail", phase: "render" });
+  expect(logs.join("\n")).toContain("Error: current dev diagnostic");
+  expect(deviceCommands()).toEqual([]);
 }
