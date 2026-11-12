@@ -44,8 +44,14 @@ trap 'exit 143' TERM
 inputs=$(mktemp "$TMPDIR/bun-jsc-engine-inputs-XXXXXX")
 bun "$root/scripts/guest-engine-receipt.ts" inputs jsc "${profile_argument[@]}" > "$inputs"
 side="$out/engine.wasm"
+# No side leaves this producer unless its interpreter keeps the measured guarded frame
+# (docs/stack-limits.md): every native reentry path's depth depends on it.
+check_interpreter_frame() {
+  bun "$root/scripts/jsc-cloop-frame.ts" check "$side"
+}
 if [[ -e "$side" || -e "$side.engine.json" ]]; then
   bun "$root/scripts/guest-engine-receipt.ts" verify "$side" "$inputs"
+  check_interpreter_frame
   printf 'JSC engine: verified unchanged origin %s\n' "$side"
   exit 0
 fi
@@ -76,4 +82,5 @@ fi
 "$root/jsc/finalize.sh" "$out/engine.implicit.wasm" "$out/engine.spilled.wasm"
 node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side" "${explicit_profile[@]}"
 wasm-tools validate "$side"
+check_interpreter_frame
 bun "$root/scripts/guest-engine-receipt.ts" write "$side" "$inputs"

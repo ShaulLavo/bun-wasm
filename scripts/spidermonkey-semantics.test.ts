@@ -1,24 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { definition, nativeControls } from "./spidermonkey-native-controls";
+
 const shim = readFileSync("crates/bunwasm-spidermonkey/cpp/engine.cpp", "utf8");
 const adapter = readFileSync("crates/bunwasm-engine-spidermonkey/src/vm.rs", "utf8");
-
-function definition(source: string, signature: string): string {
-  const start = source.indexOf(signature);
-  if (start < 0) throw new Error(`Missing ${signature}`);
-  const body = source.indexOf("{", start);
-  let depth = 1;
-  let end = body;
-  while (depth > 0 && ++end < source.length) {
-    if (source[end] === "{") depth++;
-    if (source[end] === "}") depth--;
-  }
-  if (depth !== 0) throw new Error(`Unclosed ${signature}`);
-  return source.slice(start, end + 1);
-}
 
 test("dynamic imports load their dependency graph before finishing the native import", () => {
   expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module)");
@@ -83,84 +71,40 @@ test("native promise reactions validate primitives and bypass public promise hoo
   expect(reaction).not.toContain("JS_GetProperty");
 });
 
+function compilerProgress(label: string, event: string): void {
+  const trace = process.env.BUN_WASM_SM_COMPILER_TRACE;
+  if (!trace) return;
+  try { appendFileSync(`${trace}.progress`, `${Date.now()} ${label} ${event}\n`); }
+  catch { /* A trace failure must preserve the compiler outcome. */ }
+}
+
 async function buildControl(command: string[], output: string): Promise<string> {
   const build = Bun.spawn(command, { stdout: "ignore", stderr: "pipe" });
-  const [stderr, exitCode] = await Promise.all([new Response(build.stderr).text(), build.exited]);
+  const label = command[0]!;
+  compilerProgress(label, `spawned ${build.pid}`);
+  const stderrDone = new Response(build.stderr).text().then(text => {
+    compilerProgress(label, `stderr-eof ${text.length}`);
+    return text;
+  });
+  const exited = build.exited.then(code => {
+    compilerProgress(label, `exited ${code} ${build.signalCode ?? "-"}`);
+    return code;
+  });
+  const [stderr, exitCode] = await Promise.all([stderrDone, exited]);
   expect(stderr).toBe("");
   expect(exitCode).toBe(0);
   return output;
-}
-
-async function compileCommonjsControl(root: string): Promise<string> {
-  const input = join(root, "lines.cpp");
-  const output = join(root, "lines");
-  writeFileSync(input, String.raw`#include <cassert>
-#include <cstring>
-#include <string>
-#include <string_view>
-#include <cstdint>
-${definition(shim, "bool commonjs_body(")}
-${definition(shim, "std::string commonjs_source(")}
-int main() {
-  const std::string prefix = "(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\n";
-  const std::string source = prefix + "return this;\n// body unchanged" + "\n})";
-  std::string_view body;
-  assert(commonjs_body(source.data(), source.size(), -1, &body));
-  assert(body == "return this;\n// body unchanged");
-  assert(body.data() == source.data() + prefix.size());
-  const std::string adjusted = commonjs_source(source.data(), source.size(), body);
-  assert(adjusted.size() == source.size() - 1);
-  assert(adjusted.substr(prefix.size() - 1, body.size()) == body);
-  assert(adjusted.substr(0, prefix.size() - 1) == prefix.substr(0, prefix.size() - 1));
-  assert(adjusted.substr(adjusted.size() - 3) == "\n})");
-  assert(!commonjs_body(source.data(), source.size(), -2, &body));
-  assert(!commonjs_body(source.data(), source.size(), 0, &body));
-  assert(!commonjs_body(source.data(), source.size(), 17, &body));
-  assert(!commonjs_body("42", 2, -1, &body));
-  assert(!commonjs_body(source.data() + 1, source.size() - 1, -1, &body));
-  assert(!commonjs_body(source.data(), source.size() - 1, -1, &body));
-  const std::string empty = prefix + "\n})";
-  assert(commonjs_body(empty.data(), empty.size(), -1, &body));
-  assert(body.empty());
-}
-`);
-  return buildControl(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", input, "-o", output], output);
-}
-
-async function compileFinalizerControl(root: string): Promise<string> {
-  const source = `use std::{cell::RefCell, collections::HashMap, rc::Rc};
-thread_local! {
-    static NATIVES: RefCell<HashMap<u32, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
-    static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-}
-${definition(adapter, "fn drop_dead_natives()")}
-struct Reenter;
-impl Drop for Reenter {
-    fn drop(&mut self) { NATIVES.with(|natives| { natives.borrow_mut().insert(2, Rc::new(|| {})); }); }
-}
-fn main() {
-    let owned = Reenter;
-    NATIVES.with(|natives| { natives.borrow_mut().insert(1, Rc::new(move || { let _ = &owned; })); });
-    DEAD.with(|dead| dead.borrow_mut().push(1));
-    drop_dead_natives();
-    NATIVES.with(|natives| assert!(natives.borrow().contains_key(&2)));
-    DEAD.with(|dead| assert!(dead.borrow().is_empty()));
-    drop_dead_natives();
-}
-`;
-  const input = join(root, "finalizer.rs");
-  const output = join(root, "finalizer");
-  writeFileSync(input, source);
-  return buildControl(["rustup", "run", "stable", "rustc", "--edition=2024", input, "-o", output], output);
 }
 
 // Compiler startup belongs to module setup, not either five-second runtime test.
 async function compileControls() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-semantics-"));
   try {
-    const [commonjs, finalizer] = await Promise.allSettled([
-      compileCommonjsControl(root), compileFinalizerControl(root),
-    ]);
+    const [commonjs, finalizer] = await Promise.allSettled(nativeControls(root).map(control => {
+      writeFileSync(control.input, control.source);
+      return buildControl(control.command, control.output);
+    }));
+    if (!commonjs || !finalizer) throw new Error("Missing native controls");
     if (commonjs.status === "rejected") throw commonjs.reason;
     if (finalizer.status === "rejected") throw finalizer.reason;
     return { commonjs: readFileSync(commonjs.value), finalizer: readFileSync(finalizer.value) };
