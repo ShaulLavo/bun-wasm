@@ -19,3 +19,10 @@ The focused regression holds a real HTTP command open with a 90-second deadline,
 requests interrupted cleanup, and verifies that deletion and a second session
 finish without waiting for that command. It also checks the queued operations
 reject rather than execute against a deleted session.
+
+Ordinary commands now carry a finite phase admission. The serial queue retains
+its dispatched command while a caller stops awaiting at its deadline. A queued
+command that loses admission is withdrawn. Every subsequent WebDriver send after
+an internal await checks admission again. A newly created preview handle remains
+owned for session teardown even if cancellation prevents selecting or navigating
+it. Failure cleanup and session deletion remain unguarded resource release.

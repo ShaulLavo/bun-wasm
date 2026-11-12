@@ -4,6 +4,24 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { bounded } from "../goals-matrix/bounded";
 import { launchProcess } from "./lifecycle-process";
+import { scoped, type Transport } from "../goals-matrix/transport";
+import { Scope } from "../goals-matrix/scope";
+
+test("scoped observation retains the browser root and rejects sends after closure", async () => {
+  let requests = 0;
+  const noop = async () => {};
+  const transport: Transport = { capabilities: {}, processRoot: process.pid, navigate: noop,
+    async evaluate() { requests++; throw new Error("sent"); }, openPreview: noop, useHost: noop, usePreview: noop, closePreview: noop, close: noop };
+  const scope = Scope.open(1000);
+  const page = scoped(transport, scope);
+  try {
+    expect(page.processRoot).toBe(process.pid);
+    await expect(page.evaluate("0")).rejects.toThrow("sent");
+    scope.close();
+    expect(() => page.evaluate("0")).toThrow("Scope closed");
+    expect(requests).toBe(1);
+  } finally { scope.close(); }
+});
 
 test("failed native controls stop polling and exit without an external deadline", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-observer-failure-"));

@@ -1,4 +1,4 @@
-import type { Transport } from "./transport";
+import type { ScopedTransport } from "./transport";
 
 async function browserTrapFacts(): Promise<string> {
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
@@ -14,7 +14,7 @@ async function browserTrapFacts(): Promise<string> {
 }
 
 /** Read the retained trap observations while the owned host page is still available. */
-export async function browserTrapLog(transport: Pick<Transport, "useHost" | "evaluate">, engine: string): Promise<string> {
+export async function browserTrapLog(transport: Pick<ScopedTransport, "useHost" | "evaluate">, engine: string): Promise<string> {
   if (engine !== "browser") return "";
   try {
     await transport.useHost();

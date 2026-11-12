@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
 import { createPlaywrightTransport } from "./transport";
@@ -9,7 +10,7 @@ test("the real Firefox transport enforces the calibrated Browser cell navigation
   let transport: Awaited<ReturnType<typeof createPlaywrightTransport>> | undefined;
   try {
     transport = await createPlaywrightTransport("firefox", limits.timeoutMs);
-    await expect(transport.navigate(server.url.href)).rejects.toThrow(`Timeout ${limits.timeoutMs}ms exceeded`);
+    await expect(withScoped(transport, page => page.navigate(server.url.href))).rejects.toThrow(`Timeout ${limits.timeoutMs}ms exceeded`);
   } finally {
     stalled.resolve(new Response("owned fixture stopped"));
     await transport?.close();

@@ -80,6 +80,8 @@ and guest file inventories remain alongside browser runs. Native stdout and
 stderr remain alongside native runs. Missing outputs have null sizes with
 reasons. Polling endpoints carry observation brackets, not a fixed error bound.
 The native endpoint observes process closure; it is not a kernel exit timestamp.
+Browser requests use separate preparation and measurement deadline scopes. Cleanup
+has an independent deadline and still runs after measurement cancellation.
 `execution.json` preserves each acquired observation even if the adapter throws;
 unreached observations remain unavailable with a reason. Each invocation has its
 own environment and host-verification record under `invocations/`. The original

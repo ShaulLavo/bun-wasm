@@ -1,8 +1,10 @@
+import { withScoped, withAdmission } from "./scope-fixture";
 import { afterEach, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createContext, runInContext, type Context } from "node:vm";
 import { createSafariTransport, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
+import { Scope } from "./scope";
 
 type Call = { method: string; path: string; body: Record<string, unknown> };
 type FixtureOptions = {
@@ -158,10 +160,10 @@ test("awaits delayed expressions and parses nested, null, and undefined results"
   const driver = fixture();
   const transport = await driver.connect();
   try {
-    const value = await transport.evaluate<{ answer: number; nested: unknown[] }>('new Promise(resolve => setTimeout(() => resolve({ answer: 42, nested: [null, true, "unicode ☃"] }), 25))');
+    const value = await withScoped(transport, page => page.evaluate<{ answer: number; nested: unknown[] }>('new Promise(resolve => setTimeout(() => resolve({ answer: 42, nested: [null, true, "unicode ☃"] }), 25))'));
     expect(value).toEqual({ answer: 42, nested: [null, true, "unicode ☃"] });
-    expect(await transport.evaluate("null")).toBeNull();
-    expect(await transport.evaluate("undefined")).toBeNull();
+    expect(await withScoped(transport, page => page.evaluate("null"))).toBeNull();
+    expect(await withScoped(transport, page => page.evaluate("undefined"))).toBeNull();
     expect(driver.calls.at(-1)?.body.args).toEqual(["undefined"]);
     expect(driver.calls.at(-1)?.path).toEndWith("/execute/async");
   } finally { await transport.close(); }
@@ -170,12 +172,12 @@ test("awaits delayed expressions and parses nested, null, and undefined results"
 test("propagates synchronous, rejected-promise, syntax, and JSON serialization errors without poisoning later commands", async () => {
   const transport = await fixture().connect();
   try {
-    await expect(transport.evaluate('(() => { throw new Error("sync failure"); })()')).rejects.toThrow("sync failure");
-    await expect(transport.evaluate('new Promise((_, reject) => setTimeout(() => reject(new Error("delayed failure")), 10))')).rejects.toThrow("delayed failure");
-    await expect(transport.evaluate("(()")).rejects.toThrow("SyntaxError");
-    await expect(transport.evaluate("1n")).rejects.toThrow(/BigInt/);
-    await expect(transport.evaluate("(() => { const v = {}; v.self = v; return v; })()")).rejects.toThrow(/circular|cyclic/i);
-    expect(await transport.evaluate<number>("6 * 7")).toBe(42);
+    await expect(withScoped(transport, page => page.evaluate('(() => { throw new Error("sync failure"); })()'))).rejects.toThrow("sync failure");
+    await expect(withScoped(transport, page => page.evaluate('new Promise((_, reject) => setTimeout(() => reject(new Error("delayed failure")), 10))'))).rejects.toThrow("delayed failure");
+    await expect(withScoped(transport, page => page.evaluate("(()"))).rejects.toThrow("SyntaxError");
+    await expect(withScoped(transport, page => page.evaluate("1n"))).rejects.toThrow(/BigInt/);
+    await expect(withScoped(transport, page => page.evaluate("(() => { const v = {}; v.self = v; return v; })()"))).rejects.toThrow(/circular|cyclic/i);
+    expect(await withScoped(transport, page => page.evaluate<number>("6 * 7"))).toBe(42);
   } finally { await transport.close(); }
 });
 
@@ -183,31 +185,31 @@ test("host and retained preview survive serialized alternation, and usePreview n
   const driver = fixture();
   const transport = await driver.connect();
   try {
-    await transport.navigate("http://fixture.test/editor");
-    await transport.evaluate('globalThis.editor = "alive"');
-    await transport.openPreview("http://fixture.test/app");
-    await transport.evaluate("globalThis.documentIdentity = 123");
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.evaluate('globalThis.editor = "alive"'));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+    await withScoped(transport, page => page.evaluate("globalThis.documentIdentity = 123"));
     const before = driver.calls.length;
     const results = await Promise.all([
-      transport.evaluate('new Promise(resolve => setTimeout(() => resolve(globalThis.documentIdentity), 20))'),
-      transport.useHost(), transport.evaluate("globalThis.editor"), transport.usePreview(), transport.evaluate("globalThis.documentIdentity"),
+      withScoped(transport, page => page.evaluate('new Promise(resolve => setTimeout(() => resolve(globalThis.documentIdentity), 20))')),
+      withScoped(transport, page => page.useHost()), withScoped(transport, page => page.evaluate("globalThis.editor")), withScoped(transport, page => page.usePreview()), withScoped(transport, page => page.evaluate("globalThis.documentIdentity")),
     ]);
     expect(results).toEqual([123, undefined, "alive", undefined, 123]);
     const alternation = driver.calls.slice(before);
     expect(alternation.filter(call => call.path.endsWith("/window")).map(call => call.body.handle)).toEqual(["host", "preview-1"]);
     expect(alternation.some(call => call.path.endsWith("/url") || call.path.endsWith("/window/new"))).toBe(false);
-    await transport.openPreview("http://fixture.test/replacement");
-    expect(await transport.evaluate("globalThis.documentIdentity")).toBeNull();
+    await withScoped(transport, page => page.openPreview("http://fixture.test/replacement"));
+    expect(await withScoped(transport, page => page.evaluate("globalThis.documentIdentity"))).toBeNull();
     expect(driver.windows.size).toBe(2);
     expect(driver.calls.filter(call => call.path.endsWith("/window/new"))).toHaveLength(1);
-    await transport.useHost();
-    expect(await transport.evaluate("globalThis.editor")).toBe("alive");
-    await transport.closePreview();
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate("globalThis.editor"))).toBe("alive");
+    await withScoped(transport, page => page.closePreview());
     expect(driver.selected).toBe("host");
     expect(driver.windows.size).toBe(1);
-    await expect(transport.usePreview()).rejects.toThrow("no preview");
-    await transport.closePreview();
-    await transport.openPreview("http://fixture.test/next");
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("no preview");
+    await withScoped(transport, page => page.closePreview());
+    await withScoped(transport, page => page.openPreview("http://fixture.test/next"));
     expect(driver.windows.has("preview-2")).toBe(true);
   } finally { await transport.close(); }
 });
@@ -216,7 +218,7 @@ test("failed preview navigation closes only the owned preview and restores host"
   const driver = fixture({ intercept: call => call.path.endsWith("/url") ? failure("navigation failed") : undefined });
   const transport = await driver.connect();
   try {
-    await expect(transport.openPreview("http://fixture.test/broken")).rejects.toThrow("navigation failed");
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/broken"))).rejects.toThrow("navigation failed");
     expect(driver.windows.has("host")).toBe(true);
     expect(driver.windows.size).toBe(1);
     expect(driver.selected).toBe("host");
@@ -233,7 +235,7 @@ test("preview failure preserves its first error and cleanup failures in order", 
   } });
   const transport = await driver.connect();
   try {
-    const error = await capturedFailure(transport.openPreview("http://fixture.test/broken"));
+    const error = await capturedFailure(withScoped(transport, page => page.openPreview("http://fixture.test/broken")));
     assert.ok(error instanceof AggregateError);
     expect(error.errors.map(String)).toEqual([expect.stringContaining("navigation failed"), expect.stringContaining("preview delete failed")]);
     expect(driver.selected).toBe("host");
@@ -248,9 +250,9 @@ test("closePreview reports close and host-switch failures while session deletion
     if (call.body.handle === "host") return failure("host switch failed");
   } });
   const transport = await driver.connect();
-  await transport.openPreview("http://fixture.test/app");
+  await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
   failCleanup = true;
-  const error = await capturedFailure(transport.closePreview());
+  const error = await capturedFailure(withScoped(transport, page => page.closePreview()));
   assert.ok(error instanceof AggregateError);
   expect(error.errors.map(String)).toEqual([expect.stringContaining("window close failed"), expect.stringContaining("host switch failed")]);
   await transport.close();
@@ -292,7 +294,7 @@ test("a malformed new-window handle cannot cause host deletion", async () => {
   const driver = fixture({ intercept: call => call.path.endsWith("/window/new") ? reply({ handle: "host" }) : undefined });
   const transport = await driver.connect();
   try {
-    await expect(transport.openPreview("http://fixture.test/app")).rejects.toThrow("host handle");
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/app"))).rejects.toThrow("host handle");
     expect(driver.calls.some(call => call.path.endsWith("/window") && call.method === "DELETE")).toBe(false);
   } finally { await transport.close(); }
 });
@@ -301,7 +303,7 @@ test("bounds never-settling promises and stalled HTTP commands", async () => {
   const driver = fixture();
   const transport = await driver.connect({ timeoutMs: 50 });
   try {
-    await expect(transport.evaluate("new Promise(() => {})")).rejects.toThrow();
+    await expect(withScoped(transport, page => page.evaluate("new Promise(() => {})"))).rejects.toThrow();
   } finally { await transport.close(); }
   const stalled = fixture({ intercept: async call => {
     if (!call.path.endsWith("/execute/async")) return;
@@ -309,7 +311,7 @@ test("bounds never-settling promises and stalled HTTP commands", async () => {
     return reply({ ok: true, json: "42" });
   } });
   const second = await stalled.connect({ timeoutMs: 50 });
-  try { await expect(second.evaluate("42")).rejects.toThrow(); }
+  try { await expect(withScoped(second, page => page.evaluate("42"))).rejects.toThrow(); }
   finally { await second.close(); }
   expect(driver.deleted).toBe(true);
   expect(stalled.deleted).toBe(true);
@@ -318,10 +320,10 @@ test("bounds never-settling promises and stalled HTTP commands", async () => {
 test("close waits for queued commands, sends DELETE once, and rejects new operations", async () => {
   const driver = fixture();
   const transport = await driver.connect();
-  const evaluating = transport.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 20))");
+  const evaluating = withScoped(transport, page => page.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 20))"));
   const closed = transport.close();
   expect(transport.close()).toBe(closed);
-  await expect(transport.useHost()).rejects.toThrow("closed");
+  await expect(withScoped(transport, page => page.useHost())).rejects.toThrow("closed");
   expect(await evaluating).toBe(42);
   await closed;
   expect(driver.calls.at(-1)?.method).toBe("DELETE");
@@ -339,9 +341,9 @@ test("interrupted cleanup deletes a stalled session before its command timeout a
     return reply({ ok: true, json: "42" });
   } });
   const transport = await driver.connect({ timeoutMs: 90000 });
-  const evaluating = capturedFailure(transport.evaluate("42"));
+  const evaluating = capturedFailure(withScoped(transport, page => page.evaluate("42")));
   while (!started) await Bun.sleep(1);
-  const queued = capturedFailure(transport.useHost());
+  const queued = capturedFailure(withScoped(transport, page => page.useHost()));
   try {
     const closing = transport.close(true);
     await Promise.race([closing, Bun.sleep(1000).then(() => { throw new Error("Session deletion waited behind stalled command"); })]);
@@ -377,7 +379,7 @@ test("reports malformed protocol and evaluation responses instead of returning f
   for (const response of invalidResponses) {
     const driver = fixture({ intercept: call => call.path.endsWith("/execute/async") ? response() : undefined });
     const transport = await driver.connect();
-    try { await expect(transport.evaluate("42")).rejects.toThrow(); }
+    try { await expect(withScoped(transport, page => page.evaluate("42"))).rejects.toThrow(); }
     finally { await transport.close(); }
     expect(driver.deleted).toBe(true);
   }
@@ -422,16 +424,61 @@ test.each(["safari", "iphone-safari"] as const)("%s session cleanup retains its 
 test("cleanup updates the WebDriver script deadline only when an independent allowance is supplied", async () => {
   const ordinary = fixture();
   const direct = await ordinary.connect({ timeoutMs: 100 });
-  await direct.beginCleanup();
+  await withAdmission(async admission => direct.beginCleanup?.(admission));
   expect(ordinary.calls.filter(call => call.path.endsWith("/timeouts")).at(-1)?.body).toEqual({ script: 100, pageLoad: 100, implicit: 0 });
   await direct.close();
 
   const driver = fixture();
   const transport = await driver.connect({ timeoutMs: 100, cleanupTimeoutMs: 1000 });
   try {
-    await expect(transport.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))")).rejects.toThrow();
-    await transport.beginCleanup();
-    expect(await transport.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))")).toBe(42);
+    await expect(withScoped(transport, page => page.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))"))).rejects.toThrow();
+    await withAdmission(async admission => transport.beginCleanup?.(admission));
+    expect(await withScoped(transport, page => page.evaluate("new Promise(resolve => setTimeout(() => resolve(42), 200))"))).toBe(42);
     expect(driver.calls.filter(call => call.path.endsWith("/timeouts")).at(-1)?.body).toEqual({ script: 1000, pageLoad: 1000, implicit: 0 });
   } finally { await transport.close(); }
+});
+
+test("a late Safari preview window is retained for teardown without selection or navigation", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const driver = fixture({ intercept: async call => {
+    if (!call.path.endsWith("/window/new")) return;
+    entered.resolve(); await release.promise;
+    return reply({ handle: "late-preview" });
+  } });
+  const transport = await driver.connect();
+  const scope = Scope.open(1000);
+  try {
+    const opening = transport.openPreview("http://fixture.test/late", scope);
+    await entered.promise;
+    scope.close(new Error("phase cancelled"));
+    await expect(opening).rejects.toThrow("phase cancelled");
+    const closing = transport.close();
+    release.resolve();
+    await closing;
+    expect(driver.calls.filter(call => call.path.endsWith("/url"))).toEqual([]);
+    expect(driver.calls.filter(call => call.path.endsWith("/window") && call.method === "POST")).toEqual([]);
+    expect(driver.deleted).toBe(true);
+  } finally { release.resolve(); scope.close(); await transport.close(true); }
+});
+
+test("a queued Safari command withdraws on expiry while the dispatched command remains owned", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const driver = fixture({ intercept: async call => {
+    if (!call.path.endsWith("/execute/async")) return;
+    entered.resolve(); await release.promise;
+    return reply({ ok: true, json: "42" });
+  } });
+  const transport = await driver.connect();
+  const scope = Scope.open(1000), queuedScope = Scope.open(1000);
+  try {
+    const evaluating = transport.evaluate("42", scope);
+    await entered.promise;
+    const queued = transport.navigate("http://fixture.test/withdrawn", queuedScope);
+    queuedScope.close(new Error("queued phase ended"));
+    await expect(queued).rejects.toThrow("queued phase ended");
+    release.resolve();
+    expect(await evaluating).toBe(42);
+    await transport.close();
+    expect(driver.calls.filter(call => call.path.endsWith("/url"))).toEqual([]);
+  } finally { release.resolve(); scope.close(); queuedScope.close(); await transport.close(true); }
 });

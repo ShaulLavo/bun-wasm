@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Transport } from "../goals-matrix/transport";
+import type { ScopedTransport } from "../goals-matrix/transport";
 import { command } from "../goals-matrix/playground";
 import { observeProcess } from "./observe-process";
 
@@ -22,7 +22,7 @@ export async function finishObservation(started: Awaited<ReturnType<typeof start
     return result;
   }
 }
-export async function startupControls(transport: Transport, output: string, timeoutMs: number, requiresPreparation: boolean) {
+export async function startupControls(transport: ScopedTransport, output: string, timeoutMs: number, requiresPreparation: boolean) {
   const fixture = await readFile("scripts/performance/fixtures/sharing-startup.ts", "utf8");
   await transport.evaluate(`playground.fs.writeFile('/home/user/.perf-startup.ts', ${JSON.stringify(fixture)})`);
   const controls: { mode: string; status: string; reason: string | null; result: unknown; observation: unknown; observerCoverage: ReturnType<typeof observerCoverage>; preparations: ReturnType<typeof preparationEvents> }[] = [];
@@ -66,7 +66,7 @@ function parseRecord(text: string): unknown {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-async function startupLatency(transport: Transport, output: string, timeoutMs: number) {
+async function startupLatency(transport: ScopedTransport, output: string, timeoutMs: number) {
   try {
     const result = await command(transport, "bun .perf-startup.ts starts", timeoutMs);
     if (!result || typeof result !== "object" || !("output" in result) || typeof result.output !== "string" || !result.output.includes("PERF_STARTS") || !result.output.includes("PERF_TRIVIAL_NESTED")) throw new Error("Trivial child/nested output missing");

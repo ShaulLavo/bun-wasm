@@ -4,6 +4,7 @@ import { launchProcess } from "./lifecycle-process";
 import { startObservation, finishObservation } from "./sharing-controls";
 import { bounded } from "../goals-matrix/bounded";
 import type { Transport } from "../goals-matrix/transport";
+import { Scope } from "../goals-matrix/scope";
 
 export async function nativeObserverControls(executable: string, root: string, env: NodeJS.ProcessEnv, output: string, signal: AbortSignal) {
   const controls: { mode: string; exitCode: number | null; reason: string | null }[] = [];
@@ -15,18 +16,20 @@ export async function previewObserverControl(transport: Transport, output: strin
   const observation = await startObservation(transport.processRoot, "Native preview browser subprocess tree; JavaScript page/worker CPU control; native server and controller excluded");
   const budgetMs = Math.min(timeoutMs, 5000);
   const deadlineMs = performance.now() + budgetMs;
+  const scope = Scope.open(budgetMs, signal);
   let reason: string | null = null;
   try {
-    await bounded(() => transport.evaluate(`(async () => {
+    await scope.run(admission => transport.evaluate(`(async () => {
       const spin = () => { const end = performance.now() + 500; while (performance.now() < end) Math.sqrt(Math.random()); };
       spin();
       const url = URL.createObjectURL(new Blob(['(' + spin.toString() + ')();postMessage("done")'], {type:'text/javascript'}));
       const worker = new Worker(url);
       try { await new Promise((resolve, reject) => { worker.onmessage = resolve; worker.onerror = reject; }); }
       finally { worker.terminate(); URL.revokeObjectURL(url); }
-    })()`), budgetMs, signal);
+    })()`, admission));
   } catch (error) { reason = String(error); }
   finally {
+    scope.close();
     const observationReason = await checkObservation(observation, join(output, "preview-observer-control.json"));
     reason ??= observationReason;
   }
