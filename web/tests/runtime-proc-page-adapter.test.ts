@@ -66,6 +66,7 @@ test("the four ordered rows and original query flags remain complete", () => {
   expect(() => runtimeProcAdapter.policy.listIds({ ids: runtimeProcIds.slice(1) })).toThrow();
   expect(() => runtimeProcAdapter.policy.check("unknown", { result: success(), errors: [] })).toThrow();
   expect(runtimeProcAdapter.policy.requireResult).toBe(true);
+  expect(inventory.map(row => row.console)).toEqual(Array.from({ length: 4 }, () => "fail-on-error"));
 });
 
 test("allocation ACK precedes invoking or importing the original runner", async () => {

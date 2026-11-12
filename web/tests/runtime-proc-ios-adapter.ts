@@ -12,6 +12,7 @@ export const runtimeProcAdapter: SuiteAdapter<RuntimeProcRequest> = {
     id: runtimeProcIds[index]!, label: `${row.scenario}/${row.mode}`,
     request: run => ({ databaseName: runtimeProcFilesystemName(run) }),
     query: () => runtimeProcQuery(row),
+    console: "fail-on-error",
   })),
   policy: {
     listIds(value) {

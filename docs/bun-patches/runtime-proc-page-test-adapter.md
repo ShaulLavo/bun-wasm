@@ -30,10 +30,12 @@ result. A disposal failure still replaces provisional success.
 Hosted list and finish never import that fixture or replace Worker. Each case
 awaits an allocation ACK for exactly `bun-runtime-proc-${run}` before importing
 and invoking it. Sequential rows reuse that name after original runtime disposal.
-Finish calls the shared exact-ledger storage cleanup. Native page error and
-unhandled rejection listeners preserve observed messages, and a page-owned
-console.error observer also forwards late console failures to the shared reporter
-until document retirement. Shared host observation remains active throughout.
+Finish calls the shared exact-ledger storage cleanup. Page error and unhandled
+rejection listeners preserve observed messages. All four ordinary rows declare
+`console: "fail-on-error"` through published Waffle 0.0.126, source
+`e0815bd8668d90ad32718dc54a3393c1e5c1d68f`, using its public `ownedDatabase`
+allocation policy. Its Console observer covers page and worker errors through
+document retirement. The page does not replace `console.error`.
 
 Asset preparation uses the existing `processBundle("runtime-proc", out)` through
 the same cancellable, joined subprocess helper used by the process command.
@@ -47,6 +49,8 @@ ordered inventory, original finalizer ordering and failure, and frozen fixture
 preservation. `checks/web-browser-runtime-proc-page-hosted.json` assigns real
 Chromium and WebKit hosted controls to the existing browser owner. They run all
 four rows, verify owned storage deletion and a foreign database sentinel, reject
-host assertion failures, and reject a console failure after provisional success.
+host assertion failures, and reject page and worker-only console failures after
+provisional success. Worker controls require an actual dedicated-worker Console
+origin, a passing original guest oracle, and no infrastructure failure.
 They verify session, launcher, listener, storage and scratch cleanup. These local
 browser controls do not claim native iPhone acceptance.
