@@ -20,7 +20,7 @@ CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Condit
                for parser_pass in ('Compile', 'Call') for width in ('8', '16')]
 MODES = ['plain', 'getter', 'computedgetter', 'ajvnames', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
          'ternary', 'statement', 'awaitchain',
-         'regexpnc', 'lookahead', 'proxychain', 'isarray', 'bound', 'join', 'flat', 'tostring', 'async',
+         'regexpnc', 'lookahead', 'proxychain', 'isarray', 'bound', 'boundcall', 'join', 'flat', 'tostring', 'async',
          'promise', 'console', 'require'] + CHAIN_MODES
 # Modes that need an input the default sweep does not have: `ajv` reads an installed package.
 OPTIONAL_MODES = ['ajv']

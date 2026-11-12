@@ -41,6 +41,9 @@ ok caller with many locals
 ok overflow caught inside a bound target
 ok unbounded bound recursion
 ok recovery after overflow
+ok a bound call without room for its arguments
+ok the refused target never ran
+ok a bound call after the refusal
 ok nested Babel print through bound callbacks
 ok bound async target
 continued

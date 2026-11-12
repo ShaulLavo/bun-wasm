@@ -170,6 +170,14 @@ const unbounded = (function (this: unknown): number { unboundedRuns++; return 1 
 const unboundedSelf = unbounded.bind(null);
 check("unbounded bound recursion", thrown(unboundedSelf), "RangeError");
 check("recovery after overflow", unboundedRuns > 20 && boundAdd(5) === 15 && twice(4) === "r:1,2,4", true);
+// Room for the passed arguments but not for a second copy with the bound ones: the call is
+// refused before the target runs, and the next one works.
+let refusedRuns = 0;
+const refusedTarget = (function (this: unknown, ...values: unknown[]): number { refusedRuns++; return values.length; }).bind(null, 1, 2, 3, 4) as Variadic;
+const crowded = new Array<number>(400_000).fill(1);
+check("a bound call without room for its arguments", thrown(() => refusedTarget(...crowded)), "RangeError");
+check("the refused target never ran", refusedRuns, 0);
+check("a bound call after the refusal", refusedTarget(5), 5);
 
 // Babel's printer (lib/printer.js, @babel/generator 7.29.14): print() calls exactSource() with
 // printMethod.bind(this, node, parent), and that callback prints the children. BOUND_CALL_BABEL_DEPTH

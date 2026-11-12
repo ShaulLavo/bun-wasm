@@ -2107,10 +2107,10 @@ index 7187af71..f78f579a 100644
  
  .osrReturnPoint:
      getterSetterOSRExitReturnPoint(op_get_by_id, size)
-diff --git i/Source/JavaScriptCore/bytecode/BytecodeList.rb w/Source/JavaScriptCore/bytecode/BytecodeList.rb
+diff --git a/Source/JavaScriptCore/bytecode/BytecodeList.rb b/Source/JavaScriptCore/bytecode/BytecodeList.rb
 index fab0e74..79215b0 100644
---- i/Source/JavaScriptCore/bytecode/BytecodeList.rb
-+++ w/Source/JavaScriptCore/bytecode/BytecodeList.rb
+--- a/Source/JavaScriptCore/bytecode/BytecodeList.rb
++++ b/Source/JavaScriptCore/bytecode/BytecodeList.rb
 @@ -1554,6 +1554,7 @@ op :wasm_trampoline_wasm_ipint_tail_call
  op :wasm_throw_from_slow_path_trampoline
  op :wasm_throw_from_fault_handler_trampoline_reg_instance
@@ -2126,10 +2126,10 @@ index fab0e74..79215b0 100644
 +op :llint_cloop_did_return_from_js_44
  
  end_section :CLoopReturnHelpers
-diff --git i/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp w/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 index 1eec7af..0f2d00c 100644
---- i/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
-+++ w/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 @@ -51,6 +51,7 @@
  #include "JSAsyncFunction.h"
  #include "JSAsyncGenerator.h"
@@ -2225,10 +2225,10 @@ index 1eec7af..0f2d00c 100644
  LLINT_SLOW_PATH_DECL(slow_path_new_object)
  {
      LLINT_BEGIN();
-diff --git i/Source/JavaScriptCore/llint/LLIntSlowPaths.h w/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.h b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
 index 4c6effe..bf13e7d 100644
---- i/Source/JavaScriptCore/llint/LLIntSlowPaths.h
-+++ w/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.h
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
 @@ -44,6 +44,9 @@ extern "C" UGPRPair SYSV_ABI llint_unlinked_call(CallFrame*, CallLinkInfo*) REFE
  void* handleUnlinkedCall(VM&, CallFrame* calleeFrame);
  extern "C" UGPRPair SYSV_ABI llint_virtual_call(CallFrame*, CallLinkInfo*) REFERENCED_FROM_ASM WTF_INTERNAL;
@@ -2239,10 +2239,10 @@ index 4c6effe..bf13e7d 100644
  extern "C" void SYSV_ABI llint_write_barrier_slow(CallFrame*, JSCell*) REFERENCED_FROM_ASM WTF_INTERNAL;
  
  #define LLINT_SLOW_PATH_DECL(name) \
-diff --git i/Source/JavaScriptCore/llint/LowLevelInterpreter.asm w/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
 index 4367c72..15d2be3 100644
---- i/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
-+++ w/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
 @@ -2720,6 +2720,15 @@ op(llint_internal_function_construct_trampoline, macro ()
      internalFunctionCallTrampoline(InternalFunction::m_functionForConstruct)
  end)
@@ -2259,10 +2259,10 @@ index 4367c72..15d2be3 100644
  # t0 is callee
  # t2 is CallLinkInfo*
  # The C++ function's frame goes where the last callee at this depth had its own, and clears only what is below itself: see
-diff --git i/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm w/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
 index f78f579..239fe22 100644
---- i/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
-+++ w/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
 @@ -2866,6 +2866,44 @@ macro nativeCallTrampoline(executableOffsetToFunction)
      jmp _llint_throw_from_slow_path_trampoline
  end
@@ -2308,10 +2308,10 @@ index f78f579..239fe22 100644
  macro internalFunctionCallTrampoline(offsetOfFunction)
      functionPrologue()
      storep 0, CodeBlock[cfr]
-diff --git i/Source/JavaScriptCore/runtime/VM.cpp w/Source/JavaScriptCore/runtime/VM.cpp
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
 index 0409be0..907158a 100644
---- i/Source/JavaScriptCore/runtime/VM.cpp
-+++ w/Source/JavaScriptCore/runtime/VM.cpp
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
 @@ -959,6 +959,18 @@ static Ref<NativeJITCode> jitCodeForCallTrampoline(Intrinsic intrinsic)
          });
          return result.get();
