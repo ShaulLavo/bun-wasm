@@ -58,6 +58,10 @@ export function sourceV8(sharedObjects: SharedObjects): { serialize(value: unkno
   } };
   return factory("v8")(internal);
 }
+/** The runtime's own group-lane wrapper over a set of lane natives. */
+export function sourceLanes(wasm: object): BunWasm.GroupLanes {
+  return factory("worker_lane")({ native: { wasm } });
+}
 export function sourceChannel(host: object): Channel {
   return factory("worker_channel")({ native: host, concatBytes: (arrays: Uint8Array[]) => Buffer.concat(arrays) }).open(3, 4);
 }

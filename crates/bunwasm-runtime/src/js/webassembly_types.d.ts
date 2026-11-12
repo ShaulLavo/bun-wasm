@@ -24,24 +24,34 @@ declare namespace BunWasm {
     withdrawShared(token: number): number;
     laneLedger(): number;
     laneJoin(ledger: number, cell: number, generation: number): boolean;
-    laneCreate(): [slot: number, generation: number];
-    laneCell(): [index: number, generation: number];
-    laneTransferEpoch(slot: number, generation: number, side: number): number;
-    laneTransfer(slot: number, generation: number, side: number, kind: number, first: number, second: number, third: number): void;
-    laneAdopt(slot: number, generation: number, side: number, epoch: number, version: number): boolean;
-    laneReserve(slot: number, generation: number, side: number, text: string): number;
-    laneCommit(id: number): boolean;
-    laneAbort(id: number): void;
+    /** These three and `laneCensus` cross the allocating bridge and may throw; a word native settles what they left. */
+    laneReserve(slot: number, generation: number, side: number, text: string): void;
     laneDrain(slot: number, generation: number, side: number, limit: number): [frames: string[], more: boolean, terminal: boolean];
-    laneCloseRead(slot: number, generation: number, side: number): void;
-    laneCloseEnd(slot: number, generation: number, side: number): boolean;
-    lanePeerClosed(slot: number, generation: number, side: number): boolean;
-    laneEnd(slot: number, generation: number, side: number): [state: number, version: number];
-    laneSever(slot: number, generation: number, side: number): void;
-    laneExited(cell: number, generation: number): void;
-    laneSweep(full: boolean): void;
+    laneRefusal(): string;
     laneCensus(): GroupLaneCensus | null;
-    laneClosures(): number;
+    /**
+     * Word natives from here on: numbers in, one number out, and neither the call nor the return
+     * can throw. A flag is 0 or 1; a refusable one returns -1 and `laneRefusal` says why.
+     */
+    /** `slot * 2 ** 28 + generation`, or -1. */
+    laneCreate(): number;
+    /** `index * 2 ** 28 + generation`, or -1. */
+    laneCell(): number;
+    laneTransferEpoch(slot: number, generation: number, side: number): number;
+    laneTransfer(slot: number, generation: number, side: number, kind: number, first: number, second: number, third: number): number;
+    laneAdopt(slot: number, generation: number, side: number, epoch: number, version: number): number;
+    laneCommit(slot: number, generation: number, side: number): number;
+    laneAbort(slot: number, generation: number, side: number): number;
+    laneDrained(slot: number, generation: number, side: number): number;
+    laneCloseRead(slot: number, generation: number, side: number): number;
+    laneCloseEnd(slot: number, generation: number, side: number): number;
+    lanePeerClosed(slot: number, generation: number, side: number): number;
+    /** `version * 16 + state`. */
+    laneEnd(slot: number, generation: number, side: number): number;
+    laneSever(slot: number, generation: number, side: number): number;
+    laneExited(cell: number, generation: number): number;
+    laneSweep(full: boolean): number;
+    laneEpochs(): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;
     instantiate(id: number, bindings: (number | bigint | null | WasmReference | { kind: 'callback'; id: number })[], invocation?: number): number;

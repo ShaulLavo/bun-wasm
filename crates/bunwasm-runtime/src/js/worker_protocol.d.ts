@@ -35,7 +35,7 @@ declare namespace BunWasm {
   type LaneCell = [index: number, generation: number];
   interface GroupLaneFrame { commit(): boolean; abort(): void; }
   interface GroupLaneDrain { frames: string[]; more: boolean; terminal: boolean; }
-  /** One owned end of a group lane. Every call is memory only except `reserve`, which may allocate. */
+  /** One owned end of a group lane. `reserve`, `drain` and `transferEpoch` can throw, leaving nothing unsettled; the rest cannot. */
   interface GroupSharedLane {
     readonly ref: GroupLaneRef;
     readonly side: 0 | 1;
@@ -62,8 +62,8 @@ declare namespace BunWasm {
     sweep(full: boolean): void;
     end(ref: GroupLaneRef, side: 0 | 1): [state: number, version: number];
     sever(ref: GroupLaneRef, side: 0 | 1): void;
-    /** Bumped by each end a cascade or a release closes; the root rescans its records on a change. */
-    closures(): number;
+    /** The sum of every end's epoch, which rises with each closure; the root rescans its records on a change. */
+    epochs(): number;
     /** Ledger counts for tests (`internal/bunwasm/group-lanes`); null before this member has a ledger. */
     census(): GroupLaneCensus | null;
   }

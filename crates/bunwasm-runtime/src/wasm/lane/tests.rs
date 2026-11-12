@@ -1616,15 +1616,176 @@ fn late_versions_and_severs_from_an_earlier_use_are_ignored() {
 }
 
 #[test]
-fn closures_count_cascade_and_release_closings() {
+fn the_epoch_sum_rises_with_every_end_transition() {
     let group = Group::new(64);
     let root = Peer::root(&group);
     let r = root.lanes();
+    let seen = Cell::new(r.epochs());
+    let rose = |what: &str| {
+        let now = r.epochs();
+        assert!(now > seen.replace(now), "{what} left the sum unchanged");
+    };
     let carrier = r.create_lane().unwrap();
     let carried = r.create_lane().unwrap();
-    let before = r.closures();
+    rose("creating lanes");
     r.transfer(carried, 1, Custody::Lane(carrier, 1));
+    rose("a transfer");
     r.close_read(carrier, 1);
     assert_eq!(r.end_state(carried, 1).0, end::CLOSED);
-    assert_eq!(r.closures(), before + 1, "the cascade counts its closing");
+    rose("a cascade closing");
+    let cell = r.create_cell().unwrap();
+    let worker = root.child();
+    assert!(worker.lanes().register(cell));
+    let epoch = r.transfer_epoch(carried, 0).unwrap();
+    r.transfer(carried, 0, Custody::Cell(cell));
+    assert!(worker.lanes().adopt(carried, 0, epoch, 1));
+    rose("an adoption");
+    r.exited(cell);
+    rose("a death declaration");
+    worker.release();
+    r.sweep(Sweep::Full);
+    rose("a release");
+    r.close_end(carrier, 0);
+    rose("a close");
+}
+
+/// Memory for a guest the host ends before its `stop`th access. The panic stands for that end:
+/// nothing the guest still had to do happens.
+struct Killed<'a> {
+    inner: &'a Buffer,
+    stop: usize,
+    seen: Cell<usize>,
+}
+
+impl Memory for Killed<'_> {
+    fn size(&self) -> u64 {
+        self.inner.size()
+    }
+    fn raw(&self, at: u32, len: u32) -> *mut u8 {
+        assert_ne!(self.seen.replace(self.seen.get() + 1), self.stop, "killed");
+        self.inner.raw(at, len)
+    }
+}
+
+#[test]
+fn a_finalizer_killed_at_any_access_leaves_no_closure_unannounced_and_no_lane_behind() {
+    let mut closed_by_the_dead = 0;
+    for stop in 0.. {
+        let group = Group::new(64);
+        let root = Peer::root(&group);
+        let finalizer = root.child();
+        let r = root.lanes();
+        let carrier = r.create_lane().unwrap();
+        let carried = r.create_lane().unwrap();
+        r.transfer(carried, 1, Custody::Lane(carrier, 1));
+        r.close_end(carried, 0);
+        // The carrier's reader stopped for good and no cascade has run yet.
+        r.mem.put(r.dir_at(carrier.slot, 1) + READER_CLOSED, 1);
+        let before = r.epochs();
+        let killed = Killed {
+            inner: &group.mem,
+            stop,
+            seen: Cell::new(0),
+        };
+        let dying = Lanes {
+            mem: &killed,
+            host: &finalizer.guest,
+            ledger: root.ledger,
+            tag: finalizer.tag,
+        };
+        let survived = catch_unwind(AssertUnwindSafe(|| dying.cascade())).is_ok();
+        finalizer.release();
+        // The root reads the end words only. A closed end has already changed their sum, with
+        // no later write by the member that closed it.
+        let closed = r.end_state(carried, 1).0 == end::CLOSED;
+        assert_eq!(
+            r.epochs() != before,
+            closed,
+            "stop {stop}: a closure and its announcement are one store"
+        );
+        closed_by_the_dead += usize::from(closed && !survived);
+        // The next full sweep closes the end if the finalizer had not, and returns the lane
+        // even when the finalizer died between its terminal swap and the lane's release.
+        r.sweep(Sweep::Full);
+        assert_eq!(r.end_state(carried, 1).0, end::CLOSED, "stop {stop}");
+        assert!(r.live(carried).is_none(), "stop {stop}: the lane was left");
+        r.close_end(carrier, 0);
+        r.close_end(carrier, 1);
+        assert_settled(&root);
+        if survived {
+            break;
+        }
+    }
+    assert!(
+        closed_by_the_dead > 0,
+        "no stop fell after the terminal swap"
+    );
+}
+
+#[test]
+fn a_staged_frame_whose_reply_was_lost_is_settled_under_its_end() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let fence = r.dir_at(lane.slot, 1) + WRITING;
+    let mut unsettled = Unsettled::default();
+    // The reply to this call never reached its caller, which knows only the end it named.
+    unsettled.stage(&r, lane, 0, &frame(0, 40_000)).unwrap();
+    assert_eq!(r.mem.load(fence), 1);
+    unsettled.abort(&r, lane, 0);
+    assert_eq!(r.mem.load(fence), 0, "the abort found the frame by its end");
+    assert!(take(&r, lane, 1).is_empty(), "nothing became visible");
+    // A caller that staged twice has one frame: the earlier one is abandoned first.
+    unsettled.stage(&r, lane, 0, &frame(1, 40_000)).unwrap();
+    unsettled.stage(&r, lane, 0, &frame(2, 40_000)).unwrap();
+    assert!(unsettled.commit(&r, lane, 0), "the armed reader is due a wake");
+    assert_eq!(take(&r, lane, 1), [frame(2, 40_000)]);
+    assert!(!unsettled.commit(&r, lane, 0), "a frame commits once");
+    // An end that moves or closes takes its staged frame with it and frees the fence.
+    unsettled.stage(&r, lane, 0, &frame(3, 40_000)).unwrap();
+    let epoch = unsettled.transfer_epoch(&r, lane, 0).unwrap();
+    unsettled.transfer(&r, lane, 0, Custody::Tag(root.tag));
+    assert_eq!(r.mem.load(fence), 0);
+    assert!(unsettled.is_empty());
+    assert!(r.adopt(lane, 0, epoch, 1));
+    unsettled.stage(&r, lane, 0, &frame(4, 40_000)).unwrap();
+    unsettled.close_end(&r, lane, 0);
+    assert_eq!(r.mem.load(fence), 0);
+    r.close_end(lane, 1);
+    assert!(unsettled.is_empty());
+    assert_settled(&root);
+}
+
+#[test]
+fn a_drained_batch_is_handed_out_again_until_it_is_acknowledged() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let text = |index| String::from_utf8(frame(index, 100)).unwrap();
+    for index in 0..3 {
+        post(&r, lane, 0, &frame(index, 100));
+    }
+    let mut unsettled = Unsettled::default();
+    let first = unsettled.receive(&r, lane, 1, 2).unwrap();
+    assert_eq!((first.frames.clone(), first.more), (vec![text(0), text(1)], true));
+    // The reply carrying that batch was lost. The next call returns it again, not what follows.
+    assert_eq!(unsettled.receive(&r, lane, 1, 1024).unwrap(), first);
+    // Frames held here are in neither the lane nor the port, so the end may not move yet.
+    assert_eq!(
+        unsettled.transfer_epoch(&r, lane, 1),
+        Err(Refusal::Undelivered)
+    );
+    unsettled.acknowledge(lane, 1);
+    assert!(unsettled.transfer_epoch(&r, lane, 1).is_ok());
+    assert_eq!(unsettled.receive(&r, lane, 1, 1024).unwrap().frames, [text(2)]);
+    unsettled.acknowledge(lane, 1);
+    assert!(unsettled.receive(&r, lane, 1, 1024).unwrap().frames.is_empty());
+    assert!(unsettled.is_empty(), "an empty batch holds nothing back");
+    // A reader that closes drops what it never took.
+    post(&r, lane, 0, &frame(3, 100));
+    unsettled.receive(&r, lane, 1, 8).unwrap();
+    unsettled.close_read(&r, lane, 1);
+    assert!(unsettled.is_empty());
 }

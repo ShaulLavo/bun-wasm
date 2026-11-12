@@ -52,11 +52,11 @@ function spawnPipes(pid: number, trace: Trace, direct = false) {
 }
 
 type Runtime = ReturnType<typeof sourcePorts>;
-function group() {
+function group(options: { beforeDetach?: () => void } = {}) {
   const model = createGroupLaneModel();
   const trace: Trace = [];
   const rootLanes = model.member(1);
-  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes) });
+  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), beforeDetach: options.beforeDetach });
   cleanup.add(() => root.__fixtureShutdown());
   let next = 2;
   /** Starts a child whose workerData is `data`, carrying `transfer` and its parent port. */
@@ -165,6 +165,83 @@ test("a refused lane reservation throws DataCloneError before anything detaches"
   expect(received?.message).toEqual({ buffer: new ArrayBuffer(32) });
 });
 
+for (const when of ["before", "after"] as const) {
+  test(`a reservation that fails ${when} the core staged it moves nothing and leaves no gap`, () => {
+    const { model, root, spawn } = group();
+    const { child, port } = spawn();
+    const extra = new root.MessageChannel();
+    const buffer = new ArrayBuffer(32);
+    port.postMessage("first");
+    model.control.fault = { native: "laneReserve", when };
+    expect(() => port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(expect.objectContaining({ name: "DataCloneError" }));
+    expect(model.control.fault).toBeNull();
+    // The buffer is attached, the port is still this thread's and no frame is staged.
+    expect(buffer.byteLength).toBe(32);
+    expect(model.control.staged).toBe(0);
+    extra.port2.postMessage("still here");
+    expect(root.receiveMessageOnPort(extra.port1)?.message).toBe("still here");
+    port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]);
+    expect(buffer.byteLength).toBe(0);
+    // A failed post that had counted itself would leave the receiver waiting for its sequence.
+    expect(child.receiveMessageOnPort(child.parentPort)?.message).toBe("first");
+    const second = child.receiveMessageOnPort(child.parentPort)?.message as { buffer: ArrayBuffer; port: SourcePort };
+    expect(second.buffer).toEqual(new ArrayBuffer(32));
+    second.port.postMessage("carried");
+    expect(root.receiveMessageOnPort(extra.port1)?.message).toBe("carried");
+    expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+  });
+
+  test(`a receive whose drain fails ${when} the core read the lane loses and repeats nothing`, () => {
+    const { model, spawn } = group();
+    const { child, port } = spawn();
+    for (const value of [1, 2, 3]) port.postMessage(value);
+    model.control.fault = { native: "laneDrain", when };
+    expect(() => child.receiveMessageOnPort(child.parentPort)).toThrow("core data allocation failed");
+    expect(model.control.fault).toBeNull();
+    const got: unknown[] = [];
+    for (let item = child.receiveMessageOnPort(child.parentPort); item; item = child.receiveMessageOnPort(child.parentPort)) got.push(item.message);
+    expect(got).toEqual([1, 2, 3]);
+    expect(model.control.drained).toBe(3);
+  });
+}
+
+test("a port holding frames it read and never took cannot move until it takes them", () => {
+  const { model, root, spawn } = group();
+  const pair = new root.MessageChannel();
+  const first = spawn({ port: pair.port1 }, [pair.port1]);
+  const second = spawn({ port: pair.port2 }, [pair.port2]);
+  const sender = carried(first.child.workerData);
+  const receiver = carried(second.child.workerData);
+  sender.postMessage("kept");
+  const prepared = second.child.codec.prepare({ port: receiver }, [receiver]);
+  model.control.fault = { native: "laneDrain", when: "after" };
+  expect(() => second.child.receiveMessageOnPort(receiver)).toThrow("core data allocation failed");
+  // The frame is in neither the lane nor the port, so the port's next owner would never see it.
+  // A transfer prepared earlier stops at its last check before detachment; a new one is refused.
+  expect(() => prepared.commit()).toThrow(expect.objectContaining({ name: "DataCloneError" }));
+  expect(() => second.child.parentPort.postMessage({ port: receiver }, [receiver])).toThrow(expect.objectContaining({ name: "DataCloneError" }));
+  expect(second.child.receiveMessageOnPort(receiver)?.message).toBe("kept");
+  second.child.parentPort.postMessage({ port: receiver }, [receiver]);
+  const moved = root.receiveMessageOnPort(second.port)?.message as { port: SourcePort };
+  sender.postMessage("after the move");
+  expect(root.receiveMessageOnPort(moved.port)?.message).toBe("after the move");
+});
+
+test("between detachment and its return, postMessage calls only natives that cannot fail", () => {
+  let detached = -1;
+  const made = group({ beforeDetach: () => { detached = made.model.control.calls.length; } });
+  const { child, port } = made.spawn();
+  const extra = new made.root.MessageChannel();
+  const buffer = new ArrayBuffer(32);
+  port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]);
+  const after = made.model.control.calls.slice(detached);
+  // The carried end goes in flight and the frame is published: two word natives. A reserve,
+  // a drain or a refusal lookup here would be a call that can throw after detachment.
+  expect(detached).toBeGreaterThan(0);
+  expect(after).toEqual(["laneTransfer", "laneCommit"]);
+  expect(child.receiveMessageOnPort(child.parentPort)?.message).toMatchObject({ buffer: new ArrayBuffer(32) });
+});
+
 test("a closed peer's committed messages arrive in order and then the port closes", async () => {
   const { spawn } = group();
   const { child, port } = spawn();
@@ -211,8 +288,8 @@ test("a worker exit closes its ends and the parent's port sees the lane end", as
  * A port carried to a receiver that never reads it, whose peer lives in a third guest that is
  * idle: nothing reaches that peer except what the root sends after it retires the record.
  */
-async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof group>["spawn"]>, lanes: BunWasm.GroupLanes) => void) {
-  const { root, rootLanes, trace, spawn } = group();
+async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof group>["spawn"]>, lanes: BunWasm.GroupLanes, model: ReturnType<typeof group>["model"]) => void) {
+  const { model, root, rootLanes, trace, spawn } = group();
   const pair = new root.MessageChannel();
   const holder = spawn({ port: pair.port1 }, [pair.port1], true);
   const receiver = spawn();
@@ -223,7 +300,7 @@ async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof
   root.step();
   receiver.port.postMessage({ port: pair.port2 }, [pair.port2]);
   const records = root.__fixtureOwners().length;
-  finish(receiver, rootLanes);
+  finish(receiver, rootLanes, model);
   const toHolder = () => trace.filter(item => item.from === `parent to ${holder.pid}` && item.text.includes("port-close"));
   expect(toHolder()).toHaveLength(0);
   // An ordinary step: the sweep, then the retirement of records whose lane end closed.
@@ -242,6 +319,16 @@ test("the root retires a carried port whose receiver died unread and closes its 
 
 test("the root retires a carried port whose receiver closed unread and closes its idle peer", async () => {
   await carriedToIdlePeer(receiver => receiver.child.parentPort.close());
+});
+
+test("the root retires a carried port closed by a member that died without another word", async () => {
+  // Another member closes the carried end and stops there: it sends nothing and writes nothing
+  // but the end words. Those are what the root reads at its next step.
+  await carriedToIdlePeer((receiver, _lanes, model) => {
+    const finalizer = model.member(99);
+    finalizer.ledger();
+    finalizer.exited(receiver.cell);
+  });
 });
 
 test("a rescan keeps ports that are open or still in flight", () => {

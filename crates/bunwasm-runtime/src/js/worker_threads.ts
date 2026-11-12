@@ -32,8 +32,8 @@
   let orphaned = false;
   /** A full lane sweep is owed to the next event-loop step (after a `gone` or a parent EOF). */
   let fullSweepDue = false;
-  /** The ledger's closure counter at the root's last broker rescan. */
-  let seenClosures = 0;
+  /** The group's end-epoch sum at the root's last broker rescan. */
+  let seenEpochs = 0;
   // Shared-group engines carry port messages in group memory (worker_lane.ts); others use pipes.
   const groupLanes = internal.sharedObjects?.groupLanes;
   /** lane.rs end states. */
@@ -274,12 +274,14 @@
    * At the root, after the sweep: a cascade or a release can close an end whose owner sends no
    * frame, such as a port carried in a frame its dead receiver never read. Retire those records
    * and close their peers, which also wakes an idle peer's loop. Ends in flight, open or closed
-   * by an exit report keep their records.
+   * by an exit report keep their records. The rescan is due whenever any end changed state: that
+   * is read from the end words themselves, so a member that closed an end and died at once has
+   * still announced it. The sum is read before the scan, so a closure during it is seen next step.
    */
   function retireClosedLanes() {
-    const closures = groupLanes!.closures();
-    if (closures === seenClosures) return;
-    seenClosures = closures;
+    const epochs = groupLanes!.epochs();
+    if (epochs === seenEpochs) return;
+    seenEpochs = epochs;
     for (const [id, endpoint] of owners) {
       if (!endpoint.lane) continue;
       const [state] = groupLanes!.end({ slot: endpoint.lane[0], generation: endpoint.lane[1] }, endpoint.lane[2]);
@@ -521,7 +523,8 @@
     /**
      * Reserves a frame on this end's group lane. Its commit is the native publication alone and
      * reports whether the peer was idle; `postMessage` sends the wake hint after it has counted
-     * the message, so nothing but stores runs between detachment and publication.
+     * the message. The transfer of each carried end and the frame's commit or abort are word
+     * natives, so no native call between detachment and the count can throw.
      */
     #groupFrame(io: BunWasm.GroupSharedLane, packet: Record<string, unknown>): BunWasm.GroupLaneFrame {
       return io.reserve(JSON.stringify(packet));
@@ -579,7 +582,12 @@
       const lane = value.#laneRecord();
       return {
         snapshot,
-        validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
+        validate() {
+          if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer");
+          // Checked again right before detachment: the end must still be this thread's at that
+          // epoch, with no frames read for this thread and not yet taken.
+          if (group && groupLane && group.transferEpoch() !== groupLane.epoch) throw cloneError("MessagePort changed during transfer");
+        },
         publish(toward?: string) {
           if (!internal.sharedObjects?.routes?.enabled) return;
           const { queue: _queue, lane: _lane, ...metadata } = snapshot;

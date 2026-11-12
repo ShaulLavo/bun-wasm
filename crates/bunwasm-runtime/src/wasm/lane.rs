@@ -18,6 +18,7 @@
 //! on a fake group that models member release, member and group pins and handle probes.
 //! See `docs/worker-threads.md` ("Group lanes") and
 //! `docs/bun-patches/original-adapter-group-lane.md`.
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::SeqCst};
 
 pub(crate) const PAGE: u32 = 65_536;
@@ -50,9 +51,6 @@ const VERSION: u32 = 1;
 const H_MAGIC: u32 = 0;
 const H_VERSION: u32 = 4;
 const H_PIN: u32 = 8;
-/// Bumped after a cascade or a release closes an end, so the root rescans its broker records.
-/// A change hint only: no guest decrements it or derives a count from it.
-const H_CLOSURES: u32 = 12;
 /// Bumped by every death declaration, so every guest runs a full sweep after one.
 const H_DEATHS: u32 = 16;
 /// Bytes in Released slots, which a sweep trims to `POOL_LIMIT`.
@@ -282,6 +280,8 @@ pub(crate) enum Refusal {
     NotOwned,
     /// A generation or epoch would wrap.
     Exhausted,
+    /// The end holds frames it read and this thread has not taken yet.
+    Undelivered,
     /// The lane failed validation; its reading direction is now closed.
     Corrupt(&'static str),
 }
@@ -296,13 +296,17 @@ impl std::fmt::Display for Refusal {
             Refusal::TooLarge => write!(f, "Worker message exceeds 64 MiB"),
             Refusal::NotOwned => write!(f, "MessagePort lane end is not owned by this thread"),
             Refusal::Exhausted => write!(f, "MessagePort lane identity is exhausted"),
+            Refusal::Undelivered => write!(
+                f,
+                "MessagePort lane holds received messages this thread has not taken"
+            ),
             Refusal::Corrupt(what) => write!(f, "MessagePort lane is corrupt: {what}"),
         }
     }
 }
 
 /// A lane by ledger slot and the generation of its current use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LaneRef {
     pub slot: u32,
     pub generation: u32,
@@ -548,6 +552,20 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     }
 
     // ---- Slots: claim, create, release, clean ----
+
+    /// Runs an allocation, and once more after a full sweep when the ledger or the host refused.
+    pub(crate) fn retrying<T>(
+        &self,
+        allocate: impl Fn(&Self) -> Result<T, Refusal>,
+    ) -> Result<T, Refusal> {
+        match allocate(self) {
+            Err(Refusal::Ledger | Refusal::Host(_)) => {
+                self.sweep(Sweep::Full);
+                allocate(self)
+            }
+            other => other,
+        }
+    }
 
     /// Claims a slot of `len` bytes in one table, reusing a Released one first. The returned
     /// slot is claimed by this member, names a group pin and is detached.
@@ -873,13 +891,15 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         }
     }
 
-    fn closed_one(&self) {
-        self.mem.add(self.ledger + H_CLOSURES, 1);
-    }
-
-    /// The counter the root compares before rescanning its lane-backed broker records.
-    pub(crate) fn closures(&self) -> u32 {
-        self.mem.load(self.ledger + H_CLOSURES)
+    /// The sum of every end's epoch, which the root compares before rescanning its lane-backed
+    /// broker records. An end's epoch rises in the same store that changes its state, so this
+    /// rises with every closure in the group and no closing member has a second write to make:
+    /// one that dies right after its terminal swap has already changed the sum.
+    pub(crate) fn epochs(&self) -> u64 {
+        self.slots(true)
+            .flat_map(|at| [at + END, at + END + SIDE])
+            .map(|at| u64::from(self.mem.get(at).count))
+            .sum()
     }
 
     /// Begins closing this end: stop reading, dispose of what the direction holds.
@@ -1019,7 +1039,6 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         };
         self.release_unfenced(lane, side);
         self.lane_death(slot);
-        self.closed_one();
         true
     }
 
@@ -1178,6 +1197,10 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
             for side in 0..2 {
                 pending |= self.release_end(slot, side, probes, full);
             }
+            // A finalizer that died after its terminal swap left the lane's storage behind.
+            if full {
+                self.lane_death(slot);
+            }
         }
         if full {
             self.release_cells(probes);
@@ -1214,7 +1237,6 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         };
         self.release_unfenced(lane, side);
         self.lane_death(slot);
-        self.closed_one();
         false
     }
 
@@ -1835,16 +1857,171 @@ impl Probes {
     }
 }
 
+/// Frames one end read from group memory, kept until JavaScript has taken them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Received {
+    pub frames: Vec<String>,
+    pub more: bool,
+    pub terminal: bool,
+}
+
+impl TryFrom<Drain> for Received {
+    type Error = Refusal;
+
+    fn try_from(drain: Drain) -> Result<Self, Refusal> {
+        let frames = drain
+            .frames
+            .into_iter()
+            .map(|frame| String::from_utf8(frame).map_err(|_| Refusal::Corrupt("frame text")))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            frames,
+            more: drain.more,
+            terminal: drain.terminal,
+        })
+    }
+}
+
+/// What one member holds between a call whose reply can be lost on its way to JavaScript and
+/// the word call that settles it. Staging and draining change group memory and then return
+/// through the allocating bridge. Their effect stays here under the end's own name, so the
+/// caller can settle it without anything the lost reply carried, and an end that closes or
+/// moves takes its entries with it.
+#[derive(Default)]
+pub(crate) struct Unsettled {
+    staged: BTreeMap<(LaneRef, u32), Staged>,
+    received: BTreeMap<(LaneRef, u32), Received>,
+}
+
+impl Unsettled {
+    /// Stages `text` for the peer of this end. A frame staged earlier and never settled is
+    /// abandoned first, so an end has at most one.
+    pub(crate) fn stage<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+        text: &[u8],
+    ) -> Result<(), Refusal> {
+        self.abort(lanes, lane, side);
+        let staged = lanes.retrying(|lanes| lanes.reserve(lane, side, text))?;
+        self.staged.insert((lane, side), staged);
+        Ok(())
+    }
+
+    /// Publishes this end's staged frame. True when a wake hint is due.
+    pub(crate) fn commit<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) -> bool {
+        self.staged
+            .remove(&(lane, side))
+            .is_some_and(|staged| lanes.commit(staged))
+    }
+
+    pub(crate) fn abort<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) {
+        if let Some(staged) = self.staged.remove(&(lane, side)) {
+            lanes.abort(staged);
+        }
+    }
+
+    /// Reads up to `limit` frames, or hands out again the batch nobody acknowledged. The copy
+    /// kept here is what makes a lost reply harmless.
+    pub(crate) fn receive<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+        limit: usize,
+    ) -> Result<Received, Refusal> {
+        if let Some(batch) = self.received.get(&(lane, side)) {
+            return Ok(batch.clone());
+        }
+        let batch = Received::try_from(lanes.drain(lane, side, limit)?)?;
+        if !batch.frames.is_empty() {
+            self.received.insert((lane, side), batch.clone());
+        }
+        Ok(batch)
+    }
+
+    /// JavaScript has the batch `receive` returned.
+    pub(crate) fn acknowledge(&mut self, lane: LaneRef, side: u32) {
+        self.received.remove(&(lane, side));
+    }
+
+    /// As [`Lanes::transfer_epoch`], and refused while frames read for this thread wait here:
+    /// they are in neither the lane nor the port's snapshot, so the next owner would miss them.
+    pub(crate) fn transfer_epoch<M: Memory + ?Sized, H: Host + ?Sized>(
+        &self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) -> Result<u32, Refusal> {
+        if self.received.contains_key(&(lane, side)) {
+            return Err(Refusal::Undelivered);
+        }
+        lanes.transfer_epoch(lane, side)
+    }
+
+    pub(crate) fn transfer<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+        custody: Custody,
+    ) {
+        self.abort(lanes, lane, side);
+        lanes.transfer(lane, side, custody);
+    }
+
+    pub(crate) fn close_read<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) {
+        self.acknowledge(lane, side);
+        lanes.close_read(lane, side);
+    }
+
+    pub(crate) fn close_end<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) -> bool {
+        self.abort(lanes, lane, side);
+        self.acknowledge(lane, side);
+        lanes.close_end(lane, side)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.staged.is_empty() && self.received.is_empty()
+    }
+}
+
 /// The guest binding: this member's group memory, its `runtime_shm` imports and the natives
 /// `worker_lane.ts` wraps. Raw group addresses stay inside these natives.
+///
+/// Every native that changes group memory is a word native, whose call and return cannot fail,
+/// except `laneReserve` and `laneDrain`, which carry text. Those two leave their effect in
+/// [`Unsettled`] and a word native settles it.
 #[cfg(bun_wasm_shared_group)]
 pub(crate) mod guest {
     use super::*;
     use crate::{
-        data::{Args, NativeError, NativeResult, Val},
+        data::{Args, NativeError, NativeResult, Val, WORD_ARGS},
         natives::Table,
     };
-    use std::{cell::RefCell, collections::BTreeMap};
+    use std::cell::RefCell;
 
     #[link(wasm_import_module = "runtime_shm")]
     unsafe extern "C" {
@@ -1906,66 +2083,106 @@ pub(crate) mod guest {
         tag: u32,
         deaths: u32,
         /// This member's last sweep left ClosedDead ends waiting for their guests' release.
-        pending: bool,
-        next: u32,
-        staged: BTreeMap<u32, Staged>,
+        awaiting: bool,
+        unsettled: Unsettled,
+        /// Why this member's last refusable word native was refused, for `laneRefusal`.
+        refusal: Option<Refusal>,
     }
 
     thread_local! {
         static STATE: RefCell<State> = RefCell::default();
     }
 
+    type Member<'a> = Lanes<'a, Group, Shm>;
+    type Words = [u32; WORD_ARGS];
+
+    /// The result of a refused word native; `laneRefusal` then says why.
+    const REFUSED: i64 = -1;
+    const UNINITIALIZED: &str = "MessagePort lanes are not initialized in this thread";
+
     fn refused(error: Refusal) -> NativeError {
         NativeError::error(error.to_string())
     }
 
-    /// Runs `f` on this member's lanes. No state borrow survives into it.
-    fn with<T>(f: impl FnOnce(&Lanes<'_, Group, Shm>) -> T) -> Result<T, NativeError> {
-        let (ledger, tag) = STATE.with(|state| {
-            let state = state.borrow();
-            (state.ledger, state.tag)
-        });
-        if ledger == 0 {
-            return Err(NativeError::error(
-                "MessagePort lanes are not initialized in this thread",
-            ));
-        }
-        Ok(f(&Lanes {
-            mem: &Group,
-            host: &Shm,
-            ledger,
-            tag,
-        }))
+    /// Runs `f` on this member's lanes and unsettled calls; `None` before it has a ledger.
+    /// Nothing `f` reaches touches this state again: lanes call only the host.
+    fn lanes<T>(f: impl FnOnce(&Member<'_>, &mut Unsettled) -> T) -> Option<T> {
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.ledger == 0 {
+                return None;
+            }
+            let lanes = Lanes {
+                mem: &Group,
+                host: &Shm,
+                ledger: state.ledger,
+                tag: state.tag,
+            };
+            Some(f(&lanes, &mut state.unsettled))
+        })
     }
 
-    fn lane(args: &Args<'_>, first: usize) -> Result<(LaneRef, u32), NativeError> {
-        let side = args.u32(first + 2)?;
+    fn with<T>(f: impl FnOnce(&Member<'_>, &mut Unsettled) -> T) -> Result<T, NativeError> {
+        lanes(f).ok_or_else(|| NativeError::error(UNINITIALIZED))
+    }
+
+    /// As [`lanes`], for the end a word native names in its first three words.
+    fn on_end<T>(
+        words: &Words,
+        f: impl FnOnce(&Member<'_>, &mut Unsettled, LaneRef, u32) -> T,
+    ) -> Option<T> {
+        let lane = LaneRef {
+            slot: words[0],
+            generation: words[1],
+        };
+        lanes(|lanes, unsettled| f(lanes, unsettled, lane, words[2]))
+    }
+
+    /// The result of a word native that can be refused: its value, or [`REFUSED`] with the
+    /// reason kept for `laneRefusal`.
+    fn refusable(result: Option<Result<i64, Refusal>>) -> i64 {
+        let refusal = match result {
+            Some(Ok(value)) => return value,
+            Some(Err(refusal)) => Some(refusal),
+            None => None,
+        };
+        STATE.with(|state| state.borrow_mut().refusal = refusal);
+        REFUSED
+    }
+
+    /// Two numbers in one word result: `low` is a generation, which fits 28 bits.
+    fn packed(high: u32, low: u32) -> i64 {
+        (i64::from(high) << 28) | i64::from(low)
+    }
+
+    fn lane(args: &Args<'_>) -> Result<(LaneRef, u32), NativeError> {
+        let side = args.u32(2)?;
         Ok((
             LaneRef {
-                slot: args.u32(first)?,
-                generation: args.u32(first + 1)?,
+                slot: args.u32(0)?,
+                generation: args.u32(1)?,
             },
             side,
         ))
     }
 
-    fn pair(first: u32, second: u32) -> Val {
-        Val::Array(vec![Val::from(first), Val::from(second)])
-    }
-
-    /// The group's first member: its tag, then the ledger every worker inherits.
+    /// The group's first member: its tag, then the ledger every worker inherits. A call whose
+    /// reply was lost is answered again from what it stored.
     fn ledger() -> NativeResult {
-        let existing = STATE.with(|state| state.borrow().ledger);
+        let (existing, tag) = STATE.with(|state| {
+            let state = state.borrow();
+            (state.ledger, state.tag)
+        });
         if existing != 0 {
             return Ok(Val::from(existing));
         }
-        let tag = create_tag(&Shm).map_err(refused)?;
+        let tag = match tag {
+            0 => create_tag(&Shm).map_err(refused)?,
+            tag => tag,
+        };
+        STATE.with(|state| state.borrow_mut().tag = tag);
         let ledger = create_ledger(&Group, &Shm).map_err(refused)?;
-        STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            state.tag = tag;
-            state.ledger = ledger;
-        });
+        STATE.with(|state| state.borrow_mut().ledger = ledger);
         Ok(Val::from(ledger))
     }
 
@@ -1985,210 +2202,238 @@ pub(crate) mod guest {
             index: args.u32(1)?,
             generation: args.u32(2)?,
         };
-        with(|lanes| Val::Bool(lanes.register(cell)))
+        with(|lanes, _| Val::Bool(lanes.register(cell)))
     }
 
-    /// An allocation refused for want of ledger slots sweeps once and retries.
-    fn retry<T>(
-        f: impl Fn(&Lanes<'_, Group, Shm>) -> Result<T, Refusal>,
-    ) -> Result<T, NativeError> {
-        with(|lanes| match f(lanes) {
-            Err(Refusal::Ledger | Refusal::Host(_)) => {
-                lanes.sweep(Sweep::Full);
-                f(lanes)
-            }
-            other => other,
-        })?
-        .map_err(refused)
-    }
-
+    /// Stages a frame under its end's name and returns nothing the caller needs: if this reply
+    /// is lost, `laneAbort` for the same end still finds the frame.
     fn reserve(args: Args<'_>) -> NativeResult {
-        let (lane, side) = lane(&args, 0)?;
+        let (lane, side) = lane(&args)?;
         let text = args.str(3)?.as_bytes();
-        let staged = retry(|lanes| lanes.reserve(lane, side, text))?;
-        Ok(Val::from(STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            state.next = state.next.wrapping_add(1).max(1);
-            let id = state.next;
-            state.staged.insert(id, staged);
-            id
-        })))
+        with(|lanes, unsettled| unsettled.stage(lanes, lane, side, text))?.map_err(refused)?;
+        Ok(Val::Undefined)
     }
 
-    fn take(args: &Args<'_>) -> Result<Option<Staged>, NativeError> {
-        let id = args.u32(0)?;
-        Ok(STATE.with(|state| state.borrow_mut().staged.remove(&id)))
-    }
-
+    /// Returns the frames this end read. They stay with the end until `laneDrained`, so a call
+    /// whose reply was lost returns the same frames again.
     fn drain(args: Args<'_>) -> NativeResult {
-        let (lane, side) = lane(&args, 0)?;
+        let (lane, side) = lane(&args)?;
         let limit = args.u32(3)? as usize;
-        let drain = with(|lanes| lanes.drain(lane, side, limit))?.map_err(refused)?;
-        let mut frames = Vec::with_capacity(drain.frames.len());
-        for frame in drain.frames {
-            let text =
-                String::from_utf8(frame).map_err(|_| refused(Refusal::Corrupt("frame text")))?;
-            frames.push(Val::Str(text));
-        }
+        let batch = with(|lanes, unsettled| unsettled.receive(lanes, lane, side, limit))?
+            .map_err(refused)?;
         Ok(Val::Array(vec![
-            Val::Array(frames),
-            Val::Bool(drain.more),
-            Val::Bool(drain.terminal),
+            Val::Array(batch.frames.into_iter().map(Val::Str).collect()),
+            Val::Bool(batch.more),
+            Val::Bool(batch.terminal),
         ]))
     }
 
-    fn custody(args: &Args<'_>) -> Result<Custody, NativeError> {
-        let (kind, first, second, third) = (args.u32(3)?, args.u32(4)?, args.u32(5)?, args.u32(6)?);
-        match kind {
-            0 => Ok(Custody::Lane(
+    /// Why the last refusable word native was refused.
+    fn refusal() -> NativeResult {
+        let refusal = STATE.with(|state| state.borrow_mut().refusal.take());
+        Ok(Val::Str(refusal.map_or_else(
+            || UNINITIALIZED.to_owned(),
+            |refusal| refusal.to_string(),
+        )))
+    }
+
+    /// The custody a transfer names in its words after the end.
+    fn custody(words: &Words, tag: u32) -> Custody {
+        let reference = (words[4], words[5]);
+        match words[3] {
+            0 => Custody::Lane(
                 LaneRef {
-                    slot: first,
-                    generation: second,
+                    slot: reference.0,
+                    generation: reference.1,
                 },
-                third & 1,
-            )),
-            1 => Ok(Custody::Cell(CellRef {
-                index: first,
-                generation: second,
-            })),
-            _ => Ok(Custody::Tag(STATE.with(|state| state.borrow().tag))),
+                words[6] & 1,
+            ),
+            1 => Custody::Cell(CellRef {
+                index: reference.0,
+                generation: reference.1,
+            }),
+            _ => Custody::Tag(tag),
         }
     }
 
     /// Sweeps on every event-loop step; a death anywhere in the group makes the next one full.
-    fn sweep(full: bool) -> Result<(), NativeError> {
-        if STATE.with(|state| state.borrow().ledger) == 0 {
-            return Ok(());
-        }
-        with(|lanes| {
+    fn sweep(full: bool) {
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if state.ledger == 0 {
+                return;
+            }
+            let lanes = Lanes {
+                mem: &Group,
+                host: &Shm,
+                ledger: state.ledger,
+                tag: state.tag,
+            };
             let deaths = lanes.deaths();
-            let (seen, pending) = STATE.with(|state| {
-                let mut state = state.borrow_mut();
-                (std::mem::replace(&mut state.deaths, deaths), state.pending)
-            });
+            let seen = std::mem::replace(&mut state.deaths, deaths);
             let level = if full || deaths != seen {
                 Sweep::Full
-            } else if pending {
+            } else if state.awaiting {
                 Sweep::Dead
             } else {
                 Sweep::Trim
             };
-            let pending = lanes.sweep(level);
-            STATE.with(|state| state.borrow_mut().pending = pending);
-        })
+            state.awaiting = lanes.sweep(level);
+        });
+    }
+
+    fn create(_: &Words) -> i64 {
+        let lane = lanes(|lanes, _| lanes.retrying(|lanes| lanes.create_lane()));
+        refusable(lane.map(|lane| lane.map(|lane| packed(lane.slot, lane.generation))))
+    }
+
+    fn cell(_: &Words) -> i64 {
+        let cell = lanes(|lanes, _| lanes.retrying(|lanes| lanes.create_cell()));
+        refusable(cell.map(|cell| cell.map(|cell| packed(cell.index, cell.generation))))
+    }
+
+    fn transfer_epoch(words: &Words) -> i64 {
+        refusable(on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.transfer_epoch(lanes, lane, side).map(i64::from)
+        }))
+    }
+
+    fn transfer(words: &Words) -> i64 {
+        on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.transfer(lanes, lane, side, custody(words, lanes.tag))
+        });
+        0
+    }
+
+    fn adopt(words: &Words) -> i64 {
+        let adopted = on_end(words, |lanes, _, lane, side| {
+            lanes.adopt(lane, side, words[3], words[4])
+        });
+        i64::from(adopted == Some(true))
+    }
+
+    fn commit(words: &Words) -> i64 {
+        let wake = on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.commit(lanes, lane, side)
+        });
+        i64::from(wake == Some(true))
+    }
+
+    fn abort(words: &Words) -> i64 {
+        on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.abort(lanes, lane, side)
+        });
+        0
+    }
+
+    fn drained(words: &Words) -> i64 {
+        on_end(words, |_, unsettled, lane, side| {
+            unsettled.acknowledge(lane, side)
+        });
+        0
+    }
+
+    fn close_read(words: &Words) -> i64 {
+        on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.close_read(lanes, lane, side)
+        });
+        0
+    }
+
+    fn close_end(words: &Words) -> i64 {
+        let wake = on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.close_end(lanes, lane, side)
+        });
+        i64::from(wake == Some(true))
+    }
+
+    fn peer_closed(words: &Words) -> i64 {
+        let closed = on_end(words, |lanes, _, lane, side| lanes.peer_closed(lane, side));
+        i64::from(closed != Some(false))
+    }
+
+    /// The end's state in the low four bits and its recorded version above them.
+    fn end_state(words: &Words) -> i64 {
+        let (state, version) = on_end(words, |lanes, _, lane, side| lanes.end_state(lane, side))
+            .unwrap_or((end::CLOSED, 0));
+        (i64::from(version) << 4) | i64::from(state)
+    }
+
+    fn sever(words: &Words) -> i64 {
+        on_end(words, |lanes, _, lane, side| lanes.sever(lane, side));
+        0
+    }
+
+    fn exited(words: &Words) -> i64 {
+        let cell = CellRef {
+            index: words[0],
+            generation: words[1],
+        };
+        lanes(|lanes, _| lanes.exited(cell));
+        sweep(true);
+        0
+    }
+
+    fn epochs(_: &Words) -> i64 {
+        lanes(|lanes, _| lanes.epochs() as i64).unwrap_or(0)
+    }
+
+    fn census() -> NativeResult {
+        let Some(census) = lanes(|lanes, _| lanes.census()) else {
+            return Ok(Val::Null);
+        };
+        let fields = [
+            ("liveLanes", census.live_lanes),
+            ("openEnds", census.open_ends),
+            ("inFlight", census.in_flight),
+            ("deadEnds", census.dead_ends),
+            ("linkedSegments", census.linked_segments),
+            ("cells", census.cells),
+            ("busy", census.busy),
+            ("pooled", census.pooled),
+            ("pooledBytes", census.pooled_bytes),
+            ("pins", census.pins),
+            ("awaiting", census.awaiting),
+        ];
+        Ok(Val::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), Val::from(value)))
+                .collect(),
+        ))
     }
 
     pub(crate) fn install(table: &mut Table) {
         table.add("wasm.laneLedger", |_| ledger());
         table.add("wasm.laneJoin", join);
-        table.add("wasm.laneCreate", |_| {
-            let lane = retry(|lanes| lanes.create_lane())?;
-            Ok(pair(lane.slot, lane.generation))
-        });
-        table.add("wasm.laneCell", |_| {
-            let cell = retry(|lanes| lanes.create_cell())?;
-            Ok(pair(cell.index, cell.generation))
-        });
-        table.add("wasm.laneTransferEpoch", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            Ok(Val::from(
-                with(|lanes| lanes.transfer_epoch(lane, side))?.map_err(refused)?,
-            ))
-        });
-        table.add("wasm.laneTransfer", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            let custody = custody(&a)?;
-            with(|lanes| lanes.transfer(lane, side, custody))?;
-            Ok(Val::Undefined)
-        });
-        table.add("wasm.laneAdopt", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            let (epoch, version) = (a.u32(3)?, a.u32(4)?);
-            Ok(Val::Bool(with(|lanes| {
-                lanes.adopt(lane, side, epoch, version)
-            })?))
-        });
         table.add("wasm.laneReserve", reserve);
-        table.add("wasm.laneCommit", |a| {
-            let Some(staged) = take(&a)? else {
-                return Ok(Val::Bool(false));
-            };
-            Ok(Val::Bool(with(|lanes| lanes.commit(staged))?))
-        });
-        table.add("wasm.laneAbort", |a| {
-            if let Some(staged) = take(&a)? {
-                with(|lanes| lanes.abort(staged))?;
-            }
-            Ok(Val::Undefined)
-        });
         table.add("wasm.laneDrain", drain);
-        table.add("wasm.laneCloseRead", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            with(|lanes| lanes.close_read(lane, side))?;
-            Ok(Val::Undefined)
-        });
-        table.add("wasm.laneCloseEnd", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            Ok(Val::Bool(with(|lanes| lanes.close_end(lane, side))?))
-        });
-        table.add("wasm.lanePeerClosed", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            Ok(Val::Bool(with(|lanes| lanes.peer_closed(lane, side))?))
-        });
-        table.add("wasm.laneEnd", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            let (state, version) = with(|lanes| lanes.end_state(lane, side))?;
-            Ok(pair(state, version))
-        });
-        table.add("wasm.laneSever", |a| {
-            let (lane, side) = lane(&a, 0)?;
-            with(|lanes| lanes.sever(lane, side))?;
-            Ok(Val::Undefined)
-        });
-        table.add("wasm.laneExited", |a| {
-            let cell = CellRef {
-                index: a.u32(0)?,
-                generation: a.u32(1)?,
-            };
-            with(|lanes| lanes.exited(cell))?;
-            sweep(true)?;
-            Ok(Val::Undefined)
-        });
-        table.add("wasm.laneClosures", |_| {
-            if STATE.with(|state| state.borrow().ledger) == 0 {
-                return Ok(Val::from(0u32));
-            }
-            Ok(Val::from(with(|lanes| lanes.closures())?))
-        });
-        table.add("wasm.laneCensus", |_| {
-            if STATE.with(|state| state.borrow().ledger) == 0 {
-                return Ok(Val::Null);
-            }
-            let census = with(|lanes| lanes.census())?;
-            let fields = [
-                ("liveLanes", census.live_lanes),
-                ("openEnds", census.open_ends),
-                ("inFlight", census.in_flight),
-                ("deadEnds", census.dead_ends),
-                ("linkedSegments", census.linked_segments),
-                ("cells", census.cells),
-                ("busy", census.busy),
-                ("pooled", census.pooled),
-                ("pooledBytes", census.pooled_bytes),
-                ("pins", census.pins),
-                ("awaiting", census.awaiting),
-            ];
-            Ok(Val::Object(
-                fields
-                    .into_iter()
-                    .map(|(name, value)| (name.to_string(), Val::from(value)))
-                    .collect(),
-            ))
-        });
-        table.add("wasm.laneSweep", |a| {
-            sweep(a.bool(0))?;
-            Ok(Val::Undefined)
-        });
+        table.add("wasm.laneRefusal", |_| refusal());
+        table.add("wasm.laneCensus", |_| census());
+        let words: [(&str, crate::data::WordFn); 16] = [
+            ("wasm.laneCreate", create),
+            ("wasm.laneCell", cell),
+            ("wasm.laneTransferEpoch", transfer_epoch),
+            ("wasm.laneTransfer", transfer),
+            ("wasm.laneAdopt", adopt),
+            ("wasm.laneCommit", commit),
+            ("wasm.laneAbort", abort),
+            ("wasm.laneDrained", drained),
+            ("wasm.laneCloseRead", close_read),
+            ("wasm.laneCloseEnd", close_end),
+            ("wasm.lanePeerClosed", peer_closed),
+            ("wasm.laneEnd", end_state),
+            ("wasm.laneSever", sever),
+            ("wasm.laneExited", exited),
+            ("wasm.laneEpochs", epochs),
+            ("wasm.laneSweep", |words| {
+                sweep(words[0] != 0);
+                0
+            }),
+        ];
+        for (name, function) in words {
+            table.add_word(name, function);
+        }
     }
 }
 
