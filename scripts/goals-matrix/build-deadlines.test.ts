@@ -3,9 +3,9 @@ import { deadlinePolicy, validateDeadlines, sameDeadlines } from "./deadlines";
 import { frameworks } from "./catalog";
 import { options } from "./run";
 
-test("the measured Next build budget leaves every other framework and phase at 90 seconds", () => {
+test("an explicit uniform control keeps the original Next build exception", () => {
   const config = options(["--asset-source=unit"]);
-  expect(config.timeoutMs).toBe(90_000);
+  expect(config.timeoutMs).toBeUndefined();
   const policy = deadlinePolicy(90_000);
   for (const framework of frameworks) {
     expect(policy.installTimeouts[framework.id]).toBe(90_000);
