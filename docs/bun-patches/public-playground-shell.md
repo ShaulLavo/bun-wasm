@@ -31,6 +31,15 @@ edited draft with Ctrl+E, Ctrl+U, and Ctrl+K, including multiline zsh drafts.
 The runtime and program tuple is recorded in `scripts/waffle-release-inputs.json`;
 the shell builder uses the same exact bash-web revision as both applications.
 
+The shell pin `53e61e7a7310cd2335ca57b5a19f5f4d5644ff26` includes bash-web's
+startup-diagnostic fix from `de97536116ed2e55174dda4b4ff99ad7d4c8810a`.
+Its unchanged `shell/engine/src/runtime.rs`, `runtime/wasi.rs`, `process.rs`
+and `interpreter.rs` copy up to 4,096 UTF-8 bytes from the existing
+`runtime_proc.spawn_error` import before wait/reap. The normal terminal receives
+the original nested startup cause after the errno message. Diagnostic publication
+is awaited without changing errno, exit status, command acceptance or cleanup.
+These are maintained upstream implementations, consumed without local patches.
+
 The new shell revision delegates `env` to the published Waffle coreutils family.
 `scripts/build-bash-web-shell.sh` builds only the shell and stages the matching
 family `env.wasm`; the existing receipt still hashes both staged guests.
