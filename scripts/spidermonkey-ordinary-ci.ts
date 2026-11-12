@@ -31,6 +31,12 @@ function directoryFiles(root: string, prefix = ""): string[] {
   });
 }
 
+export function ordinaryToolVersions(version = output) {
+  // Git fetches the pinned revision; its version cannot change the compiled inputs.
+  return ["/usr/bin/clang", "/usr/bin/clang++", "rustc", "cargo", "llvm-readobj", "python3", "autoconf2.13", "make"]
+    .map(tool => ({ tool, version: version(tool, tool === "rustc" ? ["-vV"] : ["--version"]) }));
+}
+
 export function ordinaryNativeIdentity(env = process.env) {
   const sdk = required(env, "WASI_SDK_PATH");
   const sysroot = required(env, "BUN_WASM_SYSROOT");
@@ -41,8 +47,7 @@ export function ordinaryNativeIdentity(env = process.env) {
   const recipes = ["env.sh", "rust-toolchain.toml", "spidermonkey/unresolved-symbols.json", "scripts/spidermonkey-ordinary-ci.ts"];
   const tools = ["clang", "clang++", "clang++.cfg", "llvm-ar", "llvm-nm", "wasm-ld"].map(name => fileIdentity(join(sdk, "bin", name)))
     .concat([fileIdentity(join(cargo, "bin/cbindgen"))]);
-  const versions = ["/usr/bin/clang", "/usr/bin/clang++", "rustc", "cargo", "llvm-readobj", "python3", "autoconf2.13", "make", "git"]
-    .map(tool => ({ tool, version: output(tool, tool === "rustc" ? ["-vV"] : ["--version"]) }));
+  const versions = ordinaryToolVersions();
   return { schema: 1, profile: "split", mozillaRevision: pin, native: nativeInputs(), recipes: recipes.map(path => fileIdentity(join(repository, path))),
     sdk: tools, sysroot: { path: sysroot, files: directoryIdentity(sysroot) }, noeh, versions };
 }
