@@ -1,0 +1,69 @@
+# Shared-group MessagePort lanes
+
+Classification: original runtime adapter. No upstream implementation was copied. Node's and
+Bun's `worker_threads` semantics are the behavior reference; the Browser engine's own lane
+(`web/src/shared-objects/lane.ts`) is the protocol reference for frame order, close records and
+custody, and none of its code is reused.
+
+## Files
+
+- `crates/bunwasm-runtime/src/wasm/lane.rs`: the lane format and algorithm, written against two
+  small traits (`Memory`, `Host`) so its unit tests (`lane/tests.rs`) run the same code on a fake
+  group that follows both hosts' region, pin, release and group-end rules.
+- `crates/bunwasm-runtime/src/wasm.rs`: registers the `wasm.lane*` natives in shared-group builds.
+- `crates/bunwasm-runtime/src/js/worker_lane.ts`: wraps the natives as `sharedObjects.groupLanes`.
+- `crates/bunwasm-runtime/src/js/bootstrap.js`: installs `groupLanes` in the shared-group service.
+- `crates/bunwasm-runtime/src/js/worker_threads.ts`, `worker_codec.ts`, `worker_protocol.d.ts`:
+  ports use a group lane when the service has one.
+
+## Imports
+
+The core imports `runtime_shm.shm_create`, `shm_attach`, `shm_detach`, `shm_pin`, `shm_unpin` and
+`shm_route_group`. The last is new in both hosts: it hands a pin the caller owns to its group,
+which then holds it until the group ends, and any launched member may unpin it. The native
+launcher's operation is in `crates/bunwasm-host/src/shm.rs`; Waffle provides the same operation
+from the release that carries it. There is no fallback for a host without it. The lane imports no
+`runtime_proc.getpid` and makes no `runtime_nested` call.
+
+## Format
+
+- Ledger: one group-pinned 128 KiB region per group, created by the group's first member before it
+  reserves a worker and passed to every worker in `BUNWASM_WORKER_INIT`. A 256-byte header, 512
+  lane slots of 128 bytes and 2,040 small slots of 32 bytes (spill segments and worker cells).
+- Every slot starts with an aligned 64-bit claim word: the claimant's member tag in the high half,
+  then a 28-bit generation and a 4-bit phase. A tag is a 4-byte region the member holds for life;
+  the host frees it at member release, so a failed `shm_attach` on a tag means that member is gone.
+  Claiming, cleaning and freeing are compare-and-swap on the whole word, so the claimant is never a
+  separate write. Generations never repeat and refuse before they would wrap.
+- Each lane slot also holds, per side, a 64-bit end word (owner tag, 28-bit epoch, state), the
+  version recorded at adoption and the custody of an end in flight; per direction, reader-closed,
+  the writer fence, severed and armed. Epochs are not reset when a slot is reused.
+- Lane region: magic and version, a 32-byte block per direction (write, read, tail, cursor) and two
+  65,472-byte rings. Ring cursors run modulo twice the ring size. Records are a length word and
+  UTF-8 bytes, or a 16-byte descriptor naming a spill segment by slot and generation.
+- Segment region: magic, capacity, committed, next, sealed and read, then length-prefixed frames up
+  to 64 MiB each.
+
+## Rules
+
+- Staging may allocate and call the host, and refuses with `DataCloneError` before detachment.
+  Commit is stores only, with one publication point: the ring cursor, a segment's committed or next
+  word, or the ring cursor after sealing.
+- Receiving is atomic loads, stores and copies on group memory. It validates every cursor, length,
+  slot and address before use and closes the direction on corruption, never writing through an
+  address that failed validation.
+- A slot that names a pin is handed to the group only after the ledger names the pin. Cleaning
+  keeps the slot exclusive until unpin settles; a later member recovers a dead cleaner's slot and
+  accepts only "bad pin" as already absent.
+- Storage a guest may still touch is freed only after that guest gave it up while running or the
+  host released it. An exit report closes a guest's ends logically and waits for the release.
+
+## Tests
+
+`lane/tests.rs` covers every commit store against a concurrent reader, aborts and refusals, wrap
+of the non-power-of-two period, spill chains and reuse with no host call, role handover, the
+custody cascade against adoption, the writer fence, exit reports before release, retained
+members, death at every creation host step, dead cleaners, two concurrent sweepers, group pins
+surviving the first member and a two-thread writer and reader. `scripts/worker-group-lanes.test.ts`
+runs the real runtime JavaScript over relay-mode Waffle pipes with a small model of the native
+contract, as a codec and topology control.
