@@ -154,6 +154,7 @@ async function unsupportedData(page: Page, base: string): Promise<void> {
 export async function quotaRefusalScenario(browser: Browser, base: string): Promise<void> {
   const context = await browser.newContext();
   traceStorage(context);
+  const evidence: Record<string, unknown> = { browser: browser.version(), initialCap: 512 * 1024 * 1024, fullCap: 1024 };
   try {
     const page = await context.newPage();
     await page.goto(new URL("engine-builds.json", base).href);
@@ -163,13 +164,20 @@ export async function quotaRefusalScenario(browser: Browser, base: string): Prom
     await openTemplate(page, base, "vanilla");
     const saved = await page.evaluate(() => sandbox.editor.view.state.doc.toString());
     await edit(page, "src/main.ts", saved.replace("Hello from vanilla TypeScript", "Saved before quota"));
+    const before = await page.evaluate(() => ({ filesystem: sandbox.fs.state.status, started: sandbox.started?.() ?? null, editorPath: sandbox.editor.path, pending: sandbox.editor.hasPending, state: sandbox.editor.saveState }));
+    evidence.before = before;
+    assert.equal(before.filesystem, "ready");
+    assert.equal(before.started, true);
+    assert.equal(before.pending, false);
     const control = `sandbox-quota-control-${Date.now()}`;
     await createQuotaControl(page, control);
     await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize: 1024 });
     // Chromium retains an earlier bucket space grant for up to 30 seconds.
     await page.waitForTimeout(31_000);
-    assert.equal(await refusedControlWrite(page, control), "QuotaExceededError", "control write did not prove full-origin refusal");
-    const before = page.url();
+    const nativeFailure = await refusedControlWrite(page, control);
+    evidence.nativeFailure = nativeFailure;
+    assert.equal(nativeFailure, "QuotaExceededError", "control write did not prove full-origin refusal");
+    const beforeUrl = page.url();
     const result = await page.evaluate(async () => {
       const editor = sandbox.editor;
       editor.setText(editor.view.state.doc.toString().replace("Saved before quota", "Unsaved after quota"));
@@ -177,21 +185,30 @@ export async function quotaRefusalScenario(browser: Browser, base: string): Prom
       try { await editor.flushAll(); } catch (failure) { error = String(failure); }
       return { error, pending: editor.hasPending, state: editor.saveState, text: editor.view.state.doc.toString() };
     });
+    evidence.save = result;
+    evidence.after = await diagnostic(page);
     assert.ok(result.error, "full-origin save unexpectedly succeeded");
     assert.equal(result.pending, true, "failed edit was forgotten");
     assert.equal(result.state.kind, "error");
     assert.match(result.text, /Unsaved after quota/);
-    assert.equal(page.url(), before, "storage failure navigated away");
+    assert.equal(page.url(), beforeUrl, "storage failure navigated away");
     assert.equal(await stored(page, "hono"), true, "failed snapshot preservation deleted the idle workspace");
     assert.equal(await stored(page, "vanilla"), true, "active workspace was removed");
     assert.match(await page.locator("#status").textContent() ?? "", /Keep this page open/);
     assert.match(await page.locator("#storage-status").textContent() ?? "", /installs were kept/);
     assert.equal(await page.locator("#restart").textContent(), "Retry");
+    evidence.passed = true;
   } catch (error) {
     const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
+    evidence.error = String(error);
+    evidence.pages = pages;
     console.error(JSON.stringify({ error: String(error), pages }, null, 2));
     throw error;
-  } finally { await context.close(); }
+  } finally {
+    const report = process.env.BUN_WASM_STORAGE_REPORT;
+    try { if (report) await Bun.write(`${report.replace(/\.json$/, "")}-refusal.json`, JSON.stringify(evidence, null, 2)); }
+    finally { await context.close(); }
+  }
 }
 
 async function createQuotaControl(page: Page, name: string): Promise<void> {

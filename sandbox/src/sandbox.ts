@@ -173,7 +173,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private storageResult(report: EvictionReport): void {
     this.storageNotice = report.kept.map(item => {
       const label = item.template === this.project.id ? this.project.label : item.template;
-      return `${label}: ${errorText(item.error)}`;
+      const reason = item.error instanceof DOMException ? `${item.error.name}${item.error.message ? `: ${item.error.message}` : ""}` : errorText(item.error);
+      return `${label}: ${reason}`;
     }).join("; ");
     if (this.storageNotice) this.storageNotice = `Some idle installs were kept. ${this.storageNotice}`;
     this.changed();
