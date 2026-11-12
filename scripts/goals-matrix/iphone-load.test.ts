@@ -87,6 +87,10 @@ for (const [cause, message] of [["cleanup", "iPhone cleanup began before the pre
       await Bun.sleep(250);
       expect(log).toHaveLength(settled);
       await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+      if (cause !== "cleanup") return;
+      // Cleanup is final: a later opening presents its frame but never waits on it.
+      await expect(transport.openPreview(url)).rejects.toThrow(message);
+      expect(log.slice(settled)).toEqual(["preview/configure", "host/execute presentIphonePreview"]);
     });
   });
 }
