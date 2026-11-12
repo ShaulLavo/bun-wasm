@@ -69,16 +69,17 @@ test("server rows record elapsed ready and page-load times", async () => {
   };
   const probe = { context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }), goto: async () => ({ ok: () => true, status: () => 200 }), close: async () => {} };
   const pages = [preview, probe];
+  const output = mkdtempSync(join(tmpdir(), "bun-wasm-server-timings-"));
   let clock = 0;
   const now = spyOn(performance, "now").mockImplementation(() => clock += 100);
   try {
     const result = await serverCommand({
       page, context: { newPage: async () => pages.shift() }, app: { id: "timing-fixture" }, engine: "jsc",
       command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } },
-      options: { timeout: 1000, output: tmpdir() }, terminalText: async () => "",
+      options: { timeout: 1000, output }, terminalText: async () => "",
     });
     expect(result).toMatchObject({ status: "pass", timings: { readyMs: 100, pageLoadMs: 100 } });
-  } finally { now.mockRestore(); }
+  } finally { now.mockRestore(); rmSync(output, { recursive: true, force: true }); }
 });
 
 test("the recorder asks for ordinary JSON only for Next dist-tags", () => {

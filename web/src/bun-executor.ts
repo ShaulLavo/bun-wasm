@@ -261,7 +261,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
       checkStack?.();
       const originalImports = context.wasi.imports;
-      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
+      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true, bindings);
       try { group.initialize(); checkStack?.(); }
       finally { context.wasi.imports = originalImports; }
       reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics, group.entry.exports.memory ?? group.memory);
