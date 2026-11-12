@@ -117,7 +117,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     const session = helper;
     dispatch = message => dispatchBunNetwork(session, message);
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
-    const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job));
+    const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job), module);
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,

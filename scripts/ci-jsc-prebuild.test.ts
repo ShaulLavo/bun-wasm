@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
+import { excludedJscRoots, excludedJscSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
 
 // The JSC C/C++ prebuild runs in its own job and hands one verified archive to the
 // native job. These tests pin the job graph, the shared setup and the hand-off.
@@ -183,6 +184,8 @@ function harness(temp = "temp"): Harness {
   const repo = join(root, "repo");
   mkdirSync(join(repo, "jsc"), { recursive: true });
   copyFileSync(new URL("../env.sh", import.meta.url), join(repo, "env.sh"));
+  mkdirSync(join(repo, "scripts"));
+  copyFileSync(new URL("./ci-jsc-artifact.ts", import.meta.url), join(repo, "scripts/ci-jsc-artifact.ts"));
   // The real stamp check needs the WebKit toolchain; the stub records each call and
   // rejects a missing or wrong stamp, so the hand-off's own checks stay real.
   writeFileSync(join(repo, "jsc/common.sh"), [
@@ -210,14 +213,13 @@ function seedProducerTrees(h: Harness) {
   const prebuild = h.env.JSC_BUILD_DIR!;
   const sysroot = join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched");
   const sdk = join(h.env.WASM_TOOLS!, "wasi-sdk/share/wasi-sysroot/include/c++");
-  mkdirSync(join(prebuild, "build/jsc/lib"), { recursive: true });
+  seedJscArtifact(prebuild);
   mkdirSync(join(prebuild, "webkit/.git"), { recursive: true });
   mkdirSync(join(sysroot, "lib/wasm32-wasip1"), { recursive: true });
   mkdirSync(join(sysroot, "include"), { recursive: true });
   mkdirSync(sdk, { recursive: true });
   writeFileSync(join(prebuild, "build/jsc/.bunwasm-inputs"), "expected-inputs");
   writeFileSync(join(prebuild, "build/jsc/lib/libJavaScriptCore.a"), "archive\0bytes");
-  writeFileSync(join(prebuild, "build/jsc/CMakeCache.txt"), `CMAKE_TOOLCHAIN_FILE:FILEPATH=${prebuild}/inputs/wasi-jsc.cmake\n`);
   writeFileSync(join(prebuild, "webkit/.git/HEAD"), "3d3257150c40a1aabdc5f8b48d5b33d0413674cb\n");
   writeFileSync(join(prebuild, "jsc.wasm"), "wasm", { mode: 0o755 });
   symlinkSync("lib/libJavaScriptCore.a", join(prebuild, "build/jsc/libJavaScriptCore.link"));
@@ -254,10 +256,15 @@ function bash(h: Harness, script: string, env: Record<string, string> = {}) {
 function produceTransfer(h: Harness): { digest: string; prebuild: string[]; sysroot: string[] } {
   seedProducerTrees(h);
   const sysrootPath = join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched");
-  const before = { prebuild: snapshot(h.env.JSC_BUILD_DIR!), sysroot: snapshot(sysrootPath) };
+  const producerSnapshot = snapshot(h.env.JSC_BUILD_DIR!);
+  const before = { prebuild: producerSnapshot.filter(line => !excludedJscRoots.some(path => line.startsWith(`${path} `) || line.startsWith(`${path}/`))), sysroot: snapshot(sysrootPath) };
   const result = bash(h, run(producer, packageName));
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
+  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(producerSnapshot);
+  expect(result.stdout).toContain('"excluded_regular_file_bytes":');
+  expect(result.stdout).toContain('"jsc_artifact_compressed_bytes":');
+  expect(readdirSync(bundle(h)).some(name => name.startsWith("jsc-inventory-"))).toBe(false);
   const digest = /^manifest-sha256=([0-9a-f]{64})\n$/.exec(readFileSync(h.env.GITHUB_OUTPUT!, "utf8"))?.[1];
   if (!digest) throw new Error("Package step did not report a manifest digest");
   // A fresh runner: only the direct downloaded transfer exists before unpacking.
@@ -316,7 +323,7 @@ for (const [label, job] of [["native quality", checkpoint], ["Rust", native]] sa
   }));
 }
 
-test("the imported prebuild and sysroot are the producer's exact trees at the same absolute paths", () => withHarness(h => {
+test("the imported compact prebuild preserves qualified trees at the same absolute paths", () => withHarness(h => {
   const produced = produceTransfer(h);
   expect(execFileSync("tar", ["--posix", "-tf", transfer(h)], { encoding: "utf8" })).toBe("prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest\n");
   expect(execFileSync("tar", ["--posix", "-xOf", transfer(h), "manifest"], { encoding: "utf8" }).split("\n").slice(0, 4)).toEqual([
@@ -326,6 +333,7 @@ test("the imported prebuild and sysroot are the producer's exact trees at the sa
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
   expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
+  for (const path of excludedJscSentinels) expect(existsSync(join(h.env.JSC_BUILD_DIR!, path))).toBe(false);
   expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
   expect(readFileSync(join(h.temp, "jsc-prebuild.log"), "utf8")).toBe("prebuild log\n");
   expect(existsSync(bundle(h))).toBe(false);
@@ -504,6 +512,7 @@ test("packaging fails and reports no digest when a tree is missing or the archiv
   mkdirSync(bin);
   writeFileSync(join(bin, "tar"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
   const failed = bash(h, run(producer, packageName), { PATH: `${bin}:${h.env.PATH}` });
-  expect(failed.status).toBe(2);
+  expect(failed.status).not.toBe(0);
   expect(readFileSync(h.env.GITHUB_OUTPUT!, "utf8")).toBe("");
+  expect(readdirSync(bundle(h)).some(name => name.startsWith("jsc-inventory-"))).toBe(false);
 }));
