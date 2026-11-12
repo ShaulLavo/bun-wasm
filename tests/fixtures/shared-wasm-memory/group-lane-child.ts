@@ -80,19 +80,28 @@ function burst() {
   data.port.close();
 }
 
-/** Posts, confirms the post through the gate, then blocks for good until it is killed. */
+/**
+ * Failure bound for the lifetime modes only: a worker its case never kills, or an exchange that
+ * stalls, ends with an error instead of outliving the fixture. It never makes a receive succeed.
+ */
+const STALL_MS = 120_000;
+function stalled(word: Int32Array, index: number, value: number) {
+  if (Atomics.wait(word, index, value, STALL_MS) === 'timed-out') throw new Error(`${data.mode}: stalled for ${STALL_MS} ms`);
+}
+
+/** Posts, confirms the post through the gate, then blocks until it is killed. */
 function postThenBlock(port: { postMessage(value: unknown): void }) {
   for (let index = 0; index < (data.count || 1); index++) port.postMessage({ task: text(data.size, data.seed + index) });
   const gate = new Int32Array(data.gate);
   open(gate, 0);
-  Atomics.wait(gate, 3, 0);
+  stalled(gate, 3, 0);
 }
 
-/** Never reads: confirms it holds its port, then blocks for good until it is killed. */
+/** Never reads: confirms it holds its port, then blocks until it is killed. */
 function holdUnread() {
   const gate = new Int32Array(data.gate);
   open(gate, 0);
-  Atomics.wait(gate, 3, 0);
+  stalled(gate, 3, 0);
 }
 
 /**
@@ -104,7 +113,7 @@ function pingPong() {
   const turn = new Int32Array(data.gate);
   let received = 0;
   for (let step = data.side; step < data.count; step += 2) {
-    for (let now = Atomics.load(turn, 0); now !== step; now = Atomics.load(turn, 0)) Atomics.wait(turn, 0, now);
+    for (let now = Atomics.load(turn, 0); now !== step; now = Atomics.load(turn, 0)) stalled(turn, 0, now);
     if (step > 0) {
       const message = receiveMessageOnPort(data.port);
       check(message !== undefined, `step ${step}: the previous message is readable at the first receive`);
