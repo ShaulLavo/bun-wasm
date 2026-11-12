@@ -95,7 +95,7 @@ function envelope(value: unknown): value is MemoryProcessEnvelope {
   if (!Array.isArray(value.runtimes) || value.runtimes.length > 272 || !value.runtimes.every(census)) return false;
   if (!Array.isArray(value.censuses) || value.censuses.length > 16 || !value.censuses.every(cleanupCensus)) return false;
   const loss = value.loss;
-  return record(loss) && [loss.active, loss.terminal, loss.runtimes, loss.censuses, loss.outputCensuses, loss.outputWorkerRows].every(counter);
+  return record(loss) && [loss.active, loss.terminal, loss.runtimes, loss.censuses, loss.outputCensuses, loss.outputWorkerRows, loss.outputProcesses].every(counter);
 }
 function cleanupCensus(value: unknown): boolean {
   return census(value) && "boundary" in value && value.boundary === "adapter-cleanup" && "telemetryId" in value && opaqueId(value.telemetryId);
@@ -110,7 +110,7 @@ function projectObservation(value: MemoryProcessEnvelope): MemoryProcessEnvelope
   return { schema: 1, time: value.time, sharedBuffers: value.sharedBuffers, incomplete: value.incomplete, processes,
     runtimes: value.runtimes.map(projectCensus), censuses: value.censuses.map(row => ({ ...projectCensus(row), boundary: row.boundary, telemetryId: row.telemetryId })),
     loss: { active: value.loss.active, terminal: value.loss.terminal, runtimes: value.loss.runtimes,
-      censuses: value.loss.censuses, outputCensuses: value.loss.outputCensuses, outputWorkerRows: value.loss.outputWorkerRows } };
+      censuses: value.loss.censuses, outputCensuses: value.loss.outputCensuses, outputWorkerRows: value.loss.outputWorkerRows, outputProcesses: value.loss.outputProcesses } };
 }
 function projectOutcome(value: MemoryOutcome): MemoryOutcome {
   if (value.kind === "pending") return { kind: "pending" };

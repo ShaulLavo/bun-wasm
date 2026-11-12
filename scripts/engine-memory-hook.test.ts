@@ -451,7 +451,8 @@ test.each(["length", "json", "shape"])("corrupt %s channel is nonthrowing, detac
 test.each(["id", "commandId", "engine", "commandSequence", "incarnation"])("terminal channel validates %s before accepting a frame", field => {
   const f = observationFixture();
   const value: MemorySnapshot = { ...f.reader.finish() };
-  Reflect.set(value, field, field === "commandSequence" || field === "incarnation" ? value.commandSequence + 1 : "wrong-identity");
+  const invalid = field === "commandSequence" ? value.commandSequence + 1 : field === "incarnation" ? (value.incarnation ?? 0) + 1 : "wrong-identity";
+  Reflect.set(value, field, invalid);
   writeSyntheticFrame(f.transport.buffer, value);
   endMemorySnapshot(f.id, cleanExit);
   expect(processObservation(f.id)).toMatchObject({ status: "invalid", sample: null });
@@ -565,4 +566,14 @@ test("worker and serialized output bounds retain explicit loss, unknown bytes an
   expect(result.censuses.every(row => row.workers.length <= memoryObservationLimits.workers)).toBe(true);
   expect(result.runtimes.some(row => row.unknownBytes > 0)).toBe(true);
   expect(result.runtimes.flatMap(row => row.workers).every(row => row.engine === null)).toBe(true);
+});
+test("legacy caller labels cannot expose paths or defeat the bounded observation projection", () => {
+  const id = "/private/caller/path".repeat(1000);
+  beginMemorySnapshot("spidermonkey", id);
+  endMemorySnapshot(id);
+  const result = retainedMemoryProcesses();
+  expect(result.loss.outputProcesses).toBeGreaterThan(0);
+  const serialized = JSON.stringify(result);
+  expect(serialized).not.toContain("/private/caller/path");
+  expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(memoryObservationLimits.outputBytes);
 });

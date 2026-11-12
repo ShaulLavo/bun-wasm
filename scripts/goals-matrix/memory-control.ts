@@ -90,7 +90,9 @@ function assertChildObservation(observation: MemoryProcessEnvelope, parent: Memo
   assert.ok(failure.wasmCapacityAfterBytes !== null && failure.wasmCapacityAfterBytes > 0);
   const census = observation.censuses.find(item => item.runtimeId === parent.binding?.runtimeId && item.telemetryId === row.id);
   assert.ok(census && census.state === "observed" && census.truncated === 0 && census.unknownBytes === 0, "complete adapter-cleanup census");
+  assert.equal(census.knownSampledBytesSubtotal, census.workers.reduce((sum, worker) => sum + (worker.bytes ?? 0), 0), "known sampled subtotal matches the retained rows");
   assert.ok(census.time >= row.endedAt && census.sequence > row.endSequence);
+  assert.ok(parent.endSequence === null || parent.endSequence > census.sequence, "parent cleanup had not been observed at the child census");
   for (const processPid of [child.pid, parent.binding.pid]) {
     const observedWorker: MemoryCensus["workers"][number] | undefined = census.workers.find(item => item.pid === processPid);
     assert.ok(observedWorker && observedWorker.bytes !== null && observedWorker.bytes > 0, "child and still-live parent have known worker samples");

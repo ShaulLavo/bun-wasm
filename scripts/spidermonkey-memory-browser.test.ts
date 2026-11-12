@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, webkit, type Browser, type Page } from "playwright";
-import { buildSite, verifySite } from "./browser-guest-site";
+import { buildSite, verifySite, type SiteIdentity } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { preflight } from "./goals-matrix/preparation";
 import { verifyPreparedSiteInventory } from "./goals-matrix/prepared-site";
@@ -21,11 +21,16 @@ async function verifyLocalPreparedSite(site: string): Promise<string> {
   await verifyPreparedSiteInventory(site);
   const source = JSON.parse(readFileSync(join(site, "goals-host-source.json"), "utf8"));
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  expect(execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim(), "local host source must be clean and match its prepared inventory").toBe("");
   expect(source).toMatchObject({ commit: head, dirty: false, profile: "split" });
   const sources = readFileSync(join(site, "goals-asset-sources.json"), "utf8");
   const inventory = readFileSync(join(site, "goals-site-inventory.json"), "utf8");
   for (const file of pairFiles) expect(inventory).toContain(file + ".gz");
   return JSON.stringify({ source, sources, inventory });
+}
+function requirePairInventory(identity: SiteIdentity | string): void {
+  if (typeof identity === "string") return;
+  for (const file of pairFiles) expect(identity.files[file + ".gz"], "both ordinary SM assets are required").toBeTruthy();
 }
 
 for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
@@ -41,7 +46,7 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
     const task = session("bun-wasm-sm-memory-");
     try {
       const before = localPrepared ? await verifyLocalPreparedSite(site) : provided ? verifySite(directory) : buildSite(directory);
-      if (typeof before !== "string") for (const file of pairFiles) expect(before.files[file + ".gz"], "both ordinary SM assets are required").toBeTruthy();
+      requirePairInventory(before);
       const builds = JSON.parse(readFileSync(join(site, "engine-builds.json"), "utf8"));
       for (const file of pairFiles) expect(builds[file], "both ordinary SM engine fingerprints are required").toMatch(/^[a-f0-9]{64}$/);
       await preflight(site, ["spidermonkey"], "split");
@@ -75,12 +80,14 @@ async function scenario(browser: Browser, url: string): Promise<void> {
       const result = await command(page, memoryControlCommand(), 120000);
       expect(result).toHaveProperty("code", 0);
       if (!result || typeof result !== "object" || !("output" in result) || typeof result.output !== "string") throw Error("Missing real control transcript");
+      console.log(JSON.stringify({ transcript: result.output }));
       const log = await engineMemoryLog(page, "spidermonkey");
       const marker = "SpiderMonkey process memory observation:\n";
       expect(log).toContain(marker);
       const observation = decodeMemoryObservation(JSON.parse(log.slice(log.indexOf(marker) + marker.length)));
+      console.log(JSON.stringify({ observation }));
       const control = assertMemoryControl(result.output, observation);
-      console.log(JSON.stringify({ control, observation }));
+      console.log(JSON.stringify({ control }));
     }, 240000);
   } finally { await context.close(); }
 }

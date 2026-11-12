@@ -18,6 +18,8 @@ function syntheticProcess(pid: number, parentPid: number): MemoryProcessRow {
 }
 function syntheticControl(): { output: string; observation: MemoryProcessEnvelope } {
   const parent = syntheticProcess(1, 0), ok = syntheticProcess(2, 1), fail = syntheticProcess(3, 1);
+  parent.endedAt = 50;
+  parent.endSequence = 50;
   fail.outcome = { kind: "observed", value: { kind: "exited", code: 70, status: 70 << 8 } };
   if (!fail.sample) throw Error("synthetic fixture requires a sample");
   fail.sample.frozenAllocatorFailure = { bytes: memoryControlBytes, category: "libc.calloc", previousUsableBytes: null,
@@ -28,7 +30,7 @@ function syntheticControl(): { output: string; observation: MemoryProcessEnvelop
     censuses: [{ runtimeId: "synthetic-runtime", telemetryId: fail.id, boundary: "adapter-cleanup", time: 21, sequence: 40, state: "observed",
       truncated: 0, unknownBytes: 0, knownSampledBytesSubtotal: 33554432, aliasing: "uncertain", workers: [1, 3].map(pid => ({ pid, parentPid: pid === 1 ? 0 : 1,
         rootPid: 1, job: 1, directory: `synthetic-directory-${pid}`, bytes: 16777216, engine: "spidermonkey" })) }],
-    loss: { active: 0, terminal: 0, runtimes: 0, censuses: 0, outputCensuses: 0, outputWorkerRows: 0 }, incomplete: false } };
+    loss: { active: 0, terminal: 0, runtimes: 0, censuses: 0, outputCensuses: 0, outputWorkerRows: 0, outputProcesses: 0 }, incomplete: false } };
 }
 function failingChild(observation: MemoryProcessEnvelope): MemoryProcessRow {
   const row = observation.processes[2];
@@ -56,6 +58,8 @@ const corruptions: [string, (value: MemoryProcessEnvelope) => void][] = [
   ["failed outcome read", value => { failingChild(value).outcome = { kind: "unavailable", reason: "read-failed" }; }],
   ["truncated census", value => { const census = value.censuses[0]; if (census) census.truncated = 1; }],
   ["missing parent sample", value => { const census = value.censuses[0]; if (census) census.workers = census.workers.filter(worker => worker.pid !== 1); }],
+  ["already-cleaned parent", value => { const parent = value.processes[0]; if (parent) parent.endSequence = 1; }],
+  ["synthetic zero subtotal", value => { const census = value.censuses[0]; if (census) census.knownSampledBytesSubtotal = 0; }],
 ];
 test.each(corruptions)("synthetic red control rejects %s", (_name, corrupt) => {
   const fixture = syntheticControl();
@@ -121,15 +125,17 @@ test("manifests select the real split browser producer once with precise product
   expect(source).not.toContain("test.skip");
 });
 
-test.each([false, true])("synthetic startup failure saves observations before cleanup, owned = %s", async owned => {
+test.each([[false, false], [true, false], [false, true], [true, true]])("synthetic startup failure saves before cleanup, owned = %s, stalled = %s", async (owned, stalled) => {
   const framework = frameworks[0];
   if (!framework) throw Error("missing framework fixture");
   let closed = false;
   const saves: string[] = [];
+  const diagnostic = Promise.withResolvers<void>();
   const fixture = syntheticControl();
   const transport: Transport = { capabilities: { synthetic: true }, async navigate() { throw Error("synthetic original startup failure"); },
     async useHost() {}, async usePreview() {}, async openPreview() {}, async closePreview() {},
     async evaluate<T>(expression: string): Promise<T> {
+      if (stalled && expression.includes("retainedProcessFacts")) await diagnostic.promise;
       return runInNewContext(expression, { __bunMemoryProcesses: () => fixture.observation,
         playground: { term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
           shell: { running: false }, previews: { serves: () => false } } });
@@ -138,7 +144,13 @@ test.each([false, true])("synthetic startup failure saves observations before cl
   const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "spidermonkey" }, url: "http://synthetic/", timeoutMs: 1000,
     async createTransport() { return transport; }, async saveLog(text) { expect(closed).toBe(false); saves.push(text); } });
   expect(result).toMatchObject({ status: "fail", phase: "startup" });
+  if (result.status !== "fail") throw Error("expected synthetic startup failure");
+  expect(result.error).toContain("synthetic original startup failure");
   expect(closed).toBe(true);
-  expect(saves.join("\n")).toContain('"state":"failed-request"');
+  expect(saves.join("\n")).toContain(stalled ? '"reason":"observation-budget"' : '"state":"failed-request"');
   expect(result.attempts[0]?.phases.find(phase => phase.phase === "cleanup")?.status).toBe("pass");
+  const saved = saves.slice();
+  diagnostic.resolve();
+  await Bun.sleep(0);
+  expect(saves).toEqual(saved);
 }, 10000);

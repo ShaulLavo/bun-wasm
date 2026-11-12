@@ -239,7 +239,8 @@ function isMemorySnapshot(value: object): value is MemorySnapshot {
   const support: unknown = Reflect.get(value, "libcTelemetry");
   if (support !== undefined && (!support || typeof support !== "object"
     || !["read", "unsupported"].includes(Reflect.get(support, "allocator")) || !["read", "unsupported"].includes(Reflect.get(support, "failure")))) return false;
-  return counters !== null && typeof counters === "object" && Object.keys(counters).length <= 1024 && Object.values(counters).every(isCounter);
+  return counters !== null && typeof counters === "object" && Object.keys(counters).length <= 1024
+    && Object.keys(counters).every(key => key.length <= 128) && Object.values(counters).every(isCounter);
 }
 function isCounter(value: unknown): value is number | null {
   return value === null || typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -247,7 +248,7 @@ function isCounter(value: unknown): value is number | null {
 function isFailure(value: unknown): value is FailedAllocation | null {
   if (value === null) return true;
   return typeof value === "object" && "bytes" in value && isCounter(value.bytes)
-    && "category" in value && typeof value.category === "string";
+    && "category" in value && typeof value.category === "string" && value.category.length <= 128;
 }
 function isFrozenAllocatorFailure(value: unknown): value is FrozenAllocatorFailure | null {
   if (value === null) return true;
@@ -299,7 +300,7 @@ export interface MemoryProcessEnvelope {
   processes: MemoryProcessRow[];
   runtimes: MemoryCensus[];
   censuses: CleanupCensus[];
-  loss: { active: number; terminal: number; runtimes: number; censuses: number; outputCensuses: number; outputWorkerRows: number };
+  loss: { active: number; terminal: number; runtimes: number; censuses: number; outputCensuses: number; outputWorkerRows: number; outputProcesses: number };
   incomplete: boolean;
 }
 const processes = new Map<string, ProcessObservation>();
@@ -320,18 +321,21 @@ function beginProcessObservation(id: string, engine: Engine): void {
 export function registerMemoryProcess(engine: Engine, id: string, runtime: { readonly disposed: boolean },
   process: { pid: number; parentPid: number; job: number }, service: Pick<ProcessService, "workerMemory">): void {
   try {
+    if (!opaqueObservationId(id)) { observationLoss.active++; return; }
     const runtimeId = memoryRuntimeId(runtime);
     beginProcessObservation(id, engine);
     const row = processes.get(id);
     if (row) row.binding = { runtimeId, pid: process.pid, parentPid: process.parentPid, job: process.job };
     services.set(runtimeId, { runtime: new WeakRef(runtime), service: new WeakRef(service) });
-    if (services.size > memoryObservationLimits.runtimes) {
-      const oldest = services.keys().next().value;
-      if (oldest !== undefined) services.delete(oldest);
-      observationLoss.runtimes++;
-    }
+    trimRuntimeServices();
     trimProcessObservations();
   } catch { /* Diagnostics cannot change launch admission. */ }
+}
+function trimRuntimeServices(): void {
+  if (services.size <= memoryObservationLimits.runtimes) return;
+  const oldest = services.keys().next().value;
+  if (oldest !== undefined) services.delete(oldest);
+  observationLoss.runtimes++;
 }
 
 function observationError(id: string, status: "invalid" | "read-failed"): void {
@@ -423,12 +427,16 @@ function runtimeCensus(runtimeId: string): MemoryCensus {
     const workers = service.workerMemory();
     base.state = "observed";
     base.truncated = Math.max(0, workers.length - memoryObservationLimits.workers);
-    base.workers = workers.slice(0, memoryObservationLimits.workers).map(worker => ({ pid: worker.pid, parentPid: worker.parentPid,
-      rootPid: worker.rootPid, job: worker.job, directory: worker.directory.slice(0, 128), bytes: worker.bytes, engine: workerEngine(runtimeId, worker.pid) }));
+    base.workers = workers.slice(0, memoryObservationLimits.workers).map(worker => censusWorker(runtimeId, worker));
     base.unknownBytes = base.workers.filter(worker => worker.bytes === null).length;
     base.knownSampledBytesSubtotal = base.workers.reduce((sum, worker) => sum + (worker.bytes ?? 0), 0);
     return base;
   } catch { return { ...base, state: "read-failed", workers: [], knownSampledBytesSubtotal: null }; }
+}
+function censusWorker(runtimeId: string, worker: ReturnType<ProcessService["workerMemory"]>[number]): MemoryWorker {
+  if (!/^[A-Za-z0-9:._-]{1,128}$/.test(worker.directory)) throw new TypeError("Invalid worker memory identity");
+  return { pid: worker.pid, parentPid: worker.parentPid, rootPid: worker.rootPid, job: worker.job,
+    directory: worker.directory, bytes: worker.bytes, engine: workerEngine(runtimeId, worker.pid) };
 }
 
 function retainCleanupCensus(runtimeId: string, telemetryId: string): void {
@@ -458,9 +466,11 @@ function projectFrozenFailure(value: FrozenAllocatorFailure | null): FrozenAlloc
 /** Synchronous cached samples plus registered service reads. Never requests a guest sample. */
 export function retainedMemoryProcesses(): MemoryProcessEnvelope {
   const result: MemoryProcessEnvelope = { schema: 1, time: Date.now(), sharedBuffers: typeof SharedArrayBuffer === "function",
-    processes: [], runtimes: [], censuses: [], loss: { ...observationLoss, outputCensuses: 0, outputWorkerRows: 0 }, incomplete: true };
+    processes: [], runtimes: [], censuses: [], loss: { ...observationLoss, outputCensuses: 0, outputWorkerRows: 0, outputProcesses: 0 }, incomplete: true };
   try {
-    result.processes = Array.from(processes.values(), projectProcess);
+    const rows = Array.from(processes.values());
+    result.processes = rows.filter(row => opaqueObservationId(row.id)).map(projectProcess);
+    result.loss.outputProcesses = rows.length - result.processes.length;
     const ids = new Set(Array.from(services.keys()).concat(result.processes.flatMap(row => row.binding ? [row.binding.runtimeId] : [])));
     result.runtimes = Array.from(ids, runtimeCensus);
     result.censuses = structuredClone(censuses);
@@ -469,11 +479,16 @@ export function retainedMemoryProcesses(): MemoryProcessEnvelope {
       result.loss.outputCensuses++;
     }
     trimOutputWorkers(result);
-    result.incomplete = Object.values(result.loss).some(Boolean) || result.processes.some(row => !row.binding || row.status !== "sampled")
+    while (serializedBytes(result) > memoryObservationLimits.outputBytes && result.processes.length) {
+      result.processes.shift();
+      result.loss.outputProcesses++;
+    }
+    result.incomplete = services.size === 0 || Object.values(result.loss).some(Boolean) || result.processes.some(row => !row.binding || row.status !== "sampled")
       || result.runtimes.concat(result.censuses).some(census => census.state !== "observed" || census.truncated > 0 || census.unknownBytes > 0);
   } catch { /* A partially available observation still attributes nothing outside its rows. */ }
   return result;
 }
+function opaqueObservationId(id: string): boolean { return /^[A-Za-z0-9:._-]{1,128}$/.test(id); }
 function serializedBytes(value: MemoryProcessEnvelope): number { return new TextEncoder().encode(JSON.stringify(value)).byteLength; }
 function trimOutputWorkers(result: MemoryProcessEnvelope): void {
   for (const runtime of result.runtimes) {

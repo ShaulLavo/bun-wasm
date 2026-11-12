@@ -102,8 +102,8 @@ assumed cause.
 
 ## Approved next host contract
 
-This contract is not implemented by the frozen host. It requires a separate
-host revision and real runtime qualification, with no guest or engine rebuild.
+This supervisor-complete contract is not implemented. The bounded launcher
+getter above is a separate observation and makes no complete inventory claim.
 
 The caller binds a measurement root when it launches the command. `startRun`
 accepts that `memoryRootId` and returns it on its handle. The caller retains the
@@ -138,8 +138,8 @@ one shared headroom budget. The full raw list remains available, including
 unrelated commands.
 
 The hook already validates this envelope. It makes no claim that an unqualified
-host implements it. The frozen host continues to return an array, which has no
-authoritative inventory and therefore produces unknown aggregate counters.
+host implements it. The legacy snapshot getter still returns an array, which
+has no authoritative inventory and therefore produces unknown aggregate counters.
 
 ## Replay real observations
 
