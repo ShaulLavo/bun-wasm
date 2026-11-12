@@ -128,3 +128,24 @@ test("an engine download that finished with an error can be retried", async () =
     expect(page.loads).toHaveLength(2);
   } finally { await page.cleanup(); }
 });
+
+test("startup rejection cannot turn ownership loss into a storage retry", async () => {
+  const page = await models(undefined, sources);
+  page.fixture.fs.mkdirp = async () => {
+    page.fixture.fs.ownershipLost = true;
+    page.fixture.fs.onOwnershipLost?.();
+    throw new Error("This workspace was opened in another tab. Reload to continue here.");
+  };
+  const sandbox = new page.Sandbox("?mode=fast");
+  try {
+    sandbox.start();
+    await turn();
+    method<() => void>(sandbox, "terminalOpened")();
+    await turn();
+    expect(sandbox.failure).toBe("startup");
+    expect(sandbox.status.text).toContain("This workspace was opened in another tab");
+    expect(await page.renderSandbox(sandbox)).toContain(">Reload</button>");
+    sandbox.restart();
+    expect(page.boundary.location.reloads).toBe(1);
+  } finally { await page.cleanup(); }
+});

@@ -34,3 +34,5 @@ cannot hide another document's failed save. Storage retries share an engine
 download already in progress. A terminal filesystem startup failure can be
 retried by manual page reload only before any editor document, text or pending
 save exists; active source remains in the current page.
+Ownership loss remains terminal and retains Reload even when the pending startup
+request rejects afterward; it cannot be recategorized as a storage Retry.

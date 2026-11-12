@@ -154,10 +154,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private launchPersistent(): void {
     const pending = this.startPersistent().catch(error => {
-      this.failure = "storage";
-      const action = this.canReloadStartup() ? "Retry reloads this page." : "Keep this page open and retry.";
-      this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
-      this.changed();
+      if (this.workspace?.fs.ownershipLost) {
+        this.fail("startup", error);
+      } else {
+        this.failure = "storage";
+        const action = this.canReloadStartup() ? "Retry reloads this page." : "Keep this page open and retry.";
+        this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
+        this.changed();
+      }
       this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
     }).finally(() => { if (this.startup === pending) this.startup = undefined; });
     this.startup = pending;
