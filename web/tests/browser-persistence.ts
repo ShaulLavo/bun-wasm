@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
 import { browserBuildConfig } from "../../scripts/browser-build";
+import { installQuotaControl } from "./persistence-quota-host";
 
 let scratch: string | undefined, server: ReturnType<typeof Bun.serve> | undefined;
 let browser: Browser | undefined, launch: Promise<Browser> | undefined;
@@ -40,6 +41,48 @@ async function call(page: Page, method: string, ...args: unknown[]): Promise<any
   return page.evaluate(({ method, args }) => (globalThis as any).persistenceHarness[method](...args), { method, args });
 }
 async function direct(page: Page, command: string, args?: unknown): Promise<any> { return call(page, "direct", command, args); }
+async function runStorageCases(browser: Browser, listing: Page) {
+  const registered: string[] = await direct(listing, "storageTestNames", { storage });
+  const filter = process.env.PERSIST_STORAGE_FILTER;
+  const selected = registered.filter(label => !filter || label.includes(filter));
+  assert.ok(selected.length > 0, "selected storage contract suite must execute cases");
+  const executed: string[] = [];
+  for (const label of selected) {
+    const context = await browser.newContext();
+    try {
+      const page = await ready(context);
+      await installQuotaControl(context, page,
+        label === "idle workspace full origin open and read" || label.startsWith("checkpoint failure"));
+      executed.push(await direct(page, "storageTest", { storage, label }));
+      console.log(`PASS ${storage}: ${label}`);
+    } finally { await context.close(); }
+  }
+  assert.deepEqual(executed, selected, "execute every selected storage case exactly once");
+  if (!filter) assert.deepEqual(executed, registered, "execute every registered storage case");
+  return { registered, selected, executed };
+}
+
+async function checkQuotaControl(browser: Browser) {
+  const context = await browser.newContext();
+  try { return await checkNativeQuota(context); }
+  finally { await context.close(); }
+}
+
+async function checkNativeQuota(context: BrowserContext) {
+  const page = await ready(context);
+  const { cdp } = await installQuotaControl(context, page, true);
+  assert.ok(cdp, "native quota regression requires Chromium CDP");
+  await direct(page, "quotaOpen", "quota-control");
+  assert.equal(await direct(page, "quotaControl", "cap"), true);
+  const rejected = await direct(page, "quotaWrite", "quota-control");
+  assert.equal(rejected, "QuotaExceededError", "real IndexedDB must reject a native write");
+  assert.equal(await direct(page, "quotaControl", "reset"), true);
+  const reset = await direct(page, "quotaWrite", "quota-control");
+  assert.equal(reset, "committed", "the same write must commit after quota reset");
+  await cdp.detach();
+  await assert.rejects(direct(page, "quotaControl", "cap"), /detached|closed/i);
+  return { rejected, reset, hostErrorPropagated: true };
+}
 async function checkPayloadAccounting(page: Page, prefix: string, databases: string[]) {
   assert.equal(storage, "indexeddb", "payload accounting uses IndexedDB only");
   const database = `${prefix}-payload-accounting`;
@@ -109,6 +152,11 @@ try {
         report.browsers.push(row);
 
         try {
+          if (process.env.PERSIST_QUOTA_CONTROL === "1") {
+            row.quotaControl = await checkQuotaControl(browser!);
+            console.log(`${name}: ${JSON.stringify(row.quotaControl)}`);
+            return;
+          }
           if (process.env.PERSIST_PAYLOAD_ACCOUNTING === "1") {
             row.payloadAccounting = await checkPayloadAccounting(page, prefix, databases);
             row.checks.push("indexeddb-chunked-payload-accounting-index-reopen-and-positive-read");
@@ -117,9 +165,8 @@ try {
             return;
           }
           if (!pageOnly) {
-            row.storageTests = await direct(page, "storageTests", { storage, filter: process.env.PERSIST_STORAGE_FILTER });
-            assert.ok(row.storageTests.length > 0, "selected storage contract suite must execute cases");
-            assert.deepEqual(row.storageTests, await direct(page, "storageTestNames", { storage, filter: process.env.PERSIST_STORAGE_FILTER }), "execute every registered storage case");
+            row.storageInventory = await runStorageCases(browser!, page);
+            row.storageTests = row.storageInventory.executed;
           }
           if (!storageOnly) {
             const checkDurability = async () => {
