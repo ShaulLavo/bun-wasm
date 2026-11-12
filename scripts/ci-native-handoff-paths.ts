@@ -13,4 +13,6 @@ export const nativeTargetRoots = [
   { path: "wasm32-wasip1/debug", presence: "required", purpose: "WASI clippy outputs, including the TLS WASI BoringSSL record" },
   { path: "tls-probe", presence: "required", purpose: "sealed TLS probe handoff the Rust job verifies and runs" },
   { path: "wasm32-wasip1/release", presence: "optional", purpose: "guest outputs restored from the Rust job's cache; a cold producer never builds them" },
+  { path: "split-common", presence: "optional", purpose: "restored common core, QuickJS side, receipts and their Cargo targets reused by the Rust job" },
+  { path: "tools-optimized", presence: "optional", purpose: "validated tools optimizer output restored from the final native cache" },
 ] as const satisfies readonly NativeHandoffRoot[];
