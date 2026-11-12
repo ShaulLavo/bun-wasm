@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chromium, webkit, type BrowserType } from "playwright";
+import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { withHeldPreview, type HeldPreview } from "./iphone-load-fixture";
 import { withPlayground } from "./test-fixture";
 import { execute } from "./execute";
@@ -143,36 +143,51 @@ async function delayedReceipt(engine: BrowserType): Promise<void> {
   });
 }
 
+function heldPageCreation(preview: Page, stage: "close" | "creation", entered: () => void, release: Promise<void>, state: { creations: number }) {
+  return { async newPage() {
+    state.creations++;
+    if (stage !== "creation" && state.creations !== 2) return preview;
+    entered();
+    await release;
+    return preview;
+  } };
+}
+
+async function prepareExistingPreview(transport: Transport): Promise<void> {
+  const scope = Scope.open(3000);
+  try { await transport.openPreview("about:blank", scope); }
+  finally { scope.close(); }
+}
+
 async function latePlaywrightStep(engine: BrowserType, stage: "close" | "creation"): Promise<void> {
   const browser = await engine.launch({ headless: true });
-  const scope = Scope.open(3000), next = Scope.open(3000);
+  let scope: Scope | undefined, next: Scope | undefined;
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const holdClose = async () => { entered.resolve(); await release.promise; };
   try {
     const context = await browser.newContext(), host = await context.newPage(), preview = await context.newPage();
     await host.setContent("<title>owner</title>");
-    let creations = 0, navigations = 0;
-    const transport = createPageTransport({ async newPage() {
-      creations++;
-      if (stage === "creation" || creations === 2) { entered.resolve(); await release.promise; }
-      return preview;
-    } }, host, {}, 3000, 3000, () => browser.close());
+    const state = { creations: 0, navigations: 0 };
+    const transport = createPageTransport(heldPageCreation(preview, stage, entered.resolve, release.promise, state), host, {}, 3000, 3000, () => browser.close());
     if (stage === "close") {
-      await transport.openPreview("about:blank", next);
-      preview.close = async () => { entered.resolve(); await release.promise; };
+      await prepareExistingPreview(transport);
+      preview.close = holdClose;
     }
-    preview.goto = async () => { navigations++; return null; };
+    preview.goto = async () => { state.navigations++; return null; };
+    scope = Scope.open(3000);
+    next = Scope.open(3000);
     const opening = transport.openPreview("http://unused.invalid/", scope);
-    await entered.promise;
+    await Promise.race([entered.promise, opening]);
     scope.close(new Error("phase cancelled"));
     await expect(opening).rejects.toThrow("phase cancelled");
     release.resolve();
     // The held operation resumes before this read, which also proves the active page stayed owned.
     expect(await transport.evaluate("document.title", next)).toBe(stage === "close" ? "" : "owner");
-    expect(creations).toBe(1);
-    expect(navigations).toBe(0);
+    expect(state.creations).toBe(1);
+    expect(state.navigations).toBe(0);
     await transport.close();
     expect(context.pages()).toHaveLength(0);
-  } finally { release.resolve(); scope.close(); next.close(); await browser.close(); }
+  } finally { release.resolve(); scope?.close(); next?.close(); await browser.close(); }
 }
 
 async function cancelledArm(engine: BrowserType): Promise<void> {
