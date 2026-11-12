@@ -2225,8 +2225,8 @@ diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h b/Source/Jav
 +        void openStatementSpineBlock(RegisterID* dst, BlockNode*);
 +        void openStatementSpineIf(RegisterID* dst, IfElseNode*);
 +        void emitStatementSpineChild(RegisterID* dst, StatementNode*);
-+        void advanceStatementSpineBlock();
-+        void advanceStatementSpineIf();
++        void emitStatementSpineCompletionLoad(RegisterID* dst);
++        void finishStatementSpineStep();
          unsigned m_yieldPoints { 0 };
          bool m_needsGeneratorification { false };
  
@@ -2252,7 +2252,7 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
  }
  
  // ------------------------------ EmptyStatementNode ---------------------------
-@@ -4485,40 +4475,173 @@ bool IfElseNode::tryFoldBreakAndContinue(BytecodeGenerator& generator, Statement
+@@ -4485,40 +4475,174 @@ bool IfElseNode::tryFoldBreakAndContinue(BytecodeGenerator& generator, Statement
  
  void IfElseNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
  {
@@ -2373,38 +2373,24 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 +    enterStatementSpineNode(dst, child);
 +}
 +
-+// SourceElements::emitBytecode, one statement per step, then the block's close.
-+ALWAYS_INLINE void BytecodeGenerator::advanceStatementSpineBlock()
++NEVER_INLINE void BytecodeGenerator::emitStatementSpineCompletionLoad(RegisterID* dst)
++{
++    emitLoad(dst, jsUndefined());
++}
++
++// A record with no child left: a block closes (the end of BlockNode::emitBytecode), and an `if`
++// takes its step after a branch (IfElseNode::emitBytecode after each emitNodeInTailPosition).
++// Out of line, like the openers: this step emits no node, and the loop's frame, which stays under
++// every native child, keeps none of its locals.
++NEVER_INLINE void BytecodeGenerator::finishStatementSpineStep()
 +{
 +    StatementSpineRecord& record = m_statementSpine.last();
-+    StatementNode* statement = record.next;
-+    if (!statement) {
++    if (record.kind == StatementSpineRecord::Kind::Block) {
 +        BlockNode* block = static_cast<BlockNode*>(record.node);
 +        if (record.hasUsingScope)
 +            endUsingBodyScope();
 +        popLexicalScope(block);
 +        m_statementSpine.removeLast();
-+        return;
-+    }
-+    record.next = statement->next();
-+    RegisterID* dst = record.dst;
-+    if (!shouldBeConcernedWithCompletionValue()) {
-+        emitStatementSpineChild(ignoredResult(), statement);
-+        return;
-+    }
-+    if (statement == record.lastWithCompletionValue)
-+        emitLoad(dst, jsUndefined());
-+    emitStatementSpineChild(dst, statement);
-+}
-+
-+// IfElseNode::emitBytecode after its condition: a pending branch, then the step after it.
-+ALWAYS_INLINE void BytecodeGenerator::advanceStatementSpineIf()
-+{
-+    StatementSpineRecord& record = m_statementSpine.last();
-+    IfElseNode* ifNode = static_cast<IfElseNode*>(record.node);
-+    if (StatementNode* branch = record.next) {
-+        record.next = nullptr;
-+        emitStatementSpineChild(record.dst, branch);
 +        return;
      }
  
@@ -2413,6 +2399,7 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 -    if (m_elseBlock) {
 -        generator.emitProfileControlFlow(m_ifBlock->endOffset() + (m_ifBlock->isBlock() ? 1 : 0));
 -        generator.emitNodeInTailPosition(dst, m_elseBlock);
++    IfElseNode* ifNode = static_cast<IfElseNode*>(record.node);
 +    if (record.kind == StatementSpineRecord::Kind::IfThen) {
 +        if (!record.didFoldIfBlock && ifNode->m_elseBlock)
 +            emitJump(*m_statementSpine.last().afterElse);
@@ -2440,10 +2427,24 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 +    size_t base = m_statementSpine.size();
 +    enterStatementSpineNode(dst, root);
 +    while (m_statementSpine.size() > base) {
-+        if (m_statementSpine.last().kind == StatementSpineRecord::Kind::Block)
-+            advanceStatementSpineBlock();
-+        else
-+            advanceStatementSpineIf();
++        StatementSpineRecord& record = m_statementSpine.last();
++        StatementNode* child = record.next;
++        if (!child) {
++            finishStatementSpineStep();
++            continue;
++        }
++        RegisterID* childDst = record.dst;
++        if (record.kind != StatementSpineRecord::Kind::Block)
++            record.next = nullptr; // An `if` branch is emitted once.
++        else {
++            // SourceElements::emitBytecode, one statement per turn.
++            record.next = child->next();
++            if (!shouldBeConcernedWithCompletionValue())
++                childDst = ignoredResult();
++            else if (child == record.lastWithCompletionValue)
++                emitStatementSpineCompletionLoad(childDst);
++        }
++        emitStatementSpineChild(childDst, child);
 +    }
  }
  
