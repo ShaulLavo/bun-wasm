@@ -246,6 +246,7 @@ export interface StorageRun {
   readonly storage: StorageEstimate & { readonly databases: readonly (string | undefined)[] };
   readonly eviction: unknown;
   readonly runtime: unknown;
+  readonly diagnostic?: unknown;
 }
 
 export async function accumulation(context: BrowserContext, base: string, templates: readonly string[]): Promise<StorageRun[]> {
@@ -261,7 +262,8 @@ export async function accumulation(context: BrowserContext, base: string, templa
       const storage = await page.evaluate(async () => ({ ...await navigator.storage.estimate(), databases: (await indexedDB.databases()).map(database => database.name) }));
       const eviction = await page.evaluate(() => performance.getEntriesByName("bunwasm:storage-reclaim").map(entry => entry.toJSON()));
       const runtime = await page.evaluate(() => typeof sandbox === "undefined" ? null : { filesystem: { ...sandbox.fs.state, error: sandbox.fs.state.error?.message }, started: sandbox.started?.() ?? null, editorPath: sandbox.editor.path, pending: sandbox.editor.hasPending });
-      rows.push({ template, elapsedMs: Math.round(performance.now() - started), status, error, storage, eviction, runtime });
+      const details = error ? await diagnostic(page) : undefined;
+      rows.push({ template, elapsedMs: Math.round(performance.now() - started), status, error, storage, eviction, runtime, diagnostic: details });
       if (error) break;
     }
   } finally { await page.close(); }
