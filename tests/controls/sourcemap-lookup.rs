@@ -82,6 +82,10 @@ fn timed(map: &sourcemap::SourceMap, label: &str, queries: impl Iterator<Item = 
 }
 
 fn main() {
+    println!(
+        "SourceMap state: {} bytes",
+        std::mem::size_of::<sourcemap::SourceMap>()
+    );
     composition();
     for suffix in [0, 8192, 131072] {
         let map = sourcemap::SourceMap::new("AAAA".to_owned() + &";AAAA".repeat(suffix));
@@ -94,9 +98,22 @@ fn main() {
     }
     let map = sourcemap::SourceMap::new("AAAA,".repeat(131072));
     assert_eq!(measured(&map, 1, 1), Some((1, 1)));
+    timed(&map, "dense repeated position", (0..100000).map(|_| (1, 1)));
+    timed(
+        &map,
+        "dense alternating columns",
+        (0..100).map(|i| (1, 1 + i % 2)),
+    );
     let map = sourcemap::SourceMap::new("AAAA".to_owned() + &";AAAA".repeat(8192));
     timed(&map, "forward", (1..=8193).map(|line| (line, 1)));
-    timed(&map, "repeated late position", (0..100000).map(|_| (8193, 1)));
-    timed(&map, "alternating first/last", (0..100).map(|i| (if i % 2 == 0 { 1 } else { 8193 }, 1)));
+    timed(
+        &map,
+        "repeated late position",
+        (0..100000).map(|_| (8193, 1)),
+    );
+    timed(
+        &map,
+        "alternating first/last",
+        (0..100).map(|i| (if i % 2 == 0 { 1 } else { 8193 }, 1)),
+    );
 }
-

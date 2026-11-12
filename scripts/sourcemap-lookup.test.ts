@@ -16,11 +16,12 @@ test("source-map lookup preserves positions without allocating decoded maps", ()
     const fixture = readFileSync(new URL("../tests/controls/sourcemap-lookup.rs", import.meta.url), "utf8");
     const input = join(scratch, "control.rs");
     writeFileSync(input, fixture.replace("// PRODUCTION_POSITION_MAP", modules.slice(start, end)));
-    for (const mode of ["unit", "allocation"]) {
+    for (const mode of ["debug", "release", "allocation"]) {
       const binary = join(scratch, mode);
-      const flags = mode === "unit" ? ["--test"] : ["-O"];
-      const entry = mode === "unit" ? join(scratch, "sourcemap.rs") : input;
-      const compiled = Bun.spawnSync(["rustc", "--edition=2024", "-D", "warnings"].concat(flags, [entry, "-o", binary]), {
+      const flags = mode === "allocation" ? [] : ["--test"];
+      const optimization = mode === "debug" ? [] : ["-O"];
+      const entry = mode === "allocation" ? input : join(scratch, "sourcemap.rs");
+      const compiled = Bun.spawnSync(["rustc", "--edition=2024", "-D", "warnings"].concat(flags, optimization, [entry, "-o", binary]), {
         stdout: "pipe", stderr: "pipe", timeout: 30_000,
       });
       expect(compiled.stderr.toString()).toBe("");
