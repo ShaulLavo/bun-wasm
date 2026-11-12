@@ -1,0 +1,46 @@
+ok no bound arguments
+ok one bound argument
+ok three bound arguments
+ok five bound arguments
+ok five bound arguments and none passed
+ok strict target, primitive this
+ok sloppy target, primitive this
+ok strict target, undefined this
+ok sloppy target, undefined this
+ok arity shortage fills undefined
+ok bound length
+ok bound name
+ok thousands of passed arguments
+ok bound function of a bound function
+ok native target
+ok native target with this
+ok bound native target
+ok new on a bound class
+ok new on a bound class gives its instance
+ok new.target is the target
+ok class target without new
+ok throw reaches the caller's catch
+ok stack names the target, then its caller
+ok stack hides the bound frame
+ok finally runs before the outer catch
+ok a bound function catches its bound callee's throw
+ok first call of a site
+ok hot linked call
+ok closure call over bound functions
+ok polymorphic call
+ok spread call
+ok apply with an array
+ok call
+ok tail calls through a bound function
+ok bound callback from map
+ok bound comparator
+ok bound replacer
+ok bound getter
+ok first calls under allocation
+ok caller with many locals
+ok overflow caught inside a bound target
+ok unbounded bound recursion
+ok recovery after overflow
+ok nested Babel print through bound callbacks
+ok bound async target
+continued
