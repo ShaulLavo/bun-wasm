@@ -1,4 +1,4 @@
-import { chromium, firefox, type Browser, type Page } from "playwright";
+import { chromium, firefox, type Browser, type Page, type CDPSession } from "playwright";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { evaluatePage, type Transport } from "../goals-matrix/transport";
@@ -67,17 +67,21 @@ async function trace(browser: Browser, output: string) {
   return async () => {
     await session.send("Tracing.end");
     const handle = await bounded(() => completed, 60000);
-    const parts: string[] = [];
     try {
-      let eof = false;
-      while (!eof) {
-        const part = await bounded(() => session.send("IO.read", { handle }), 15000);
-        if (part.base64Encoded) throw new Error("Unexpected encoded trace stream");
-        parts.push(part.data); eof = part.eof ?? false;
-      }
-      await writeFile(join(output, "chrome-trace.json"), parts.join(""));
+      await writeFile(join(output, "chrome-trace.json"), await readTrace(session, handle));
       await writeFile(join(output, "chrome-targets.json"), JSON.stringify(targets));
       await writeFile(join(output, "chrome-annotation-errors.json"), JSON.stringify(annotationErrors));
     } finally { await session.send("IO.close", { handle }); await session.detach(); }
   };
+}
+
+async function readTrace(session: CDPSession, handle: string) {
+  const parts: string[] = [];
+  let eof = false;
+  while (!eof) {
+    const part = await bounded(() => session.send("IO.read", { handle }), 15000);
+    if (part.base64Encoded) throw new Error("Unexpected encoded trace stream");
+    parts.push(part.data); eof = part.eof ?? false;
+  }
+  return parts.join("");
 }
