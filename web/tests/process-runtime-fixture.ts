@@ -20,6 +20,7 @@ import type { ProcessRuntime } from "../../src/process-runtime.js";
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
+  sharedMemory?: ProcessRuntime["sharedMemory"];
 } = {}): ProcessRuntime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
@@ -51,6 +52,10 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let service!: ProcessService;
   return {
     hostIdentity: null, filesystem, identities,
+    sharedMemory: options.sharedMemory ?? {
+      snapshot() { throw new Error("Shared memory snapshot unavailable in process-only fixture"); },
+      check() { throw new Error("Shared memory admission unavailable in process-only fixture"); },
+    },
     async network() {
       assertNetworkLive();
       const owner = await (networkOwner ??= createRuntimeNetwork(assertNetworkLive));

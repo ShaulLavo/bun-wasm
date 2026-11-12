@@ -42,6 +42,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     addEventListener(_type: string, listener: typeof clickListener) { clickListener = listener; },
   };
   const context = createContext({ crypto, performance, URL, TextDecoder, TextEncoder, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, AbortSignal, EventTarget, Event, location: { href: "http://fixture/?engine=browser" }, navigator: { userAgent: "goals-deadline-unit-fixture" },
+    __bunRetainedMemorySnapshots: () => [],
     __goalsFixtureNativeClick() { count++; clickListener?.({ isTrusted: true, currentTarget: counter }); clickListener = undefined; },
     document: { querySelector(selector: string) {
       if (selector === "#status") return { textContent: "Browser (native) ready" };
