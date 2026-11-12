@@ -160,6 +160,7 @@
   },
   "ignoreBinaries": [
     "flock",
+    "mkfifo",
     "unshare",
     "rustc",
     "ss",
