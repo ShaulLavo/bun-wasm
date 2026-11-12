@@ -61,8 +61,9 @@ test.each(loopControls)("two selected cells preserve evidence and resource teard
   try {
     await mkdir(join(scratch, "site"));
     await Bun.write(join(scratch, "control.ts"), loopControl(scratch, control));
-    child = Bun.spawn([process.execPath, join(scratch, "control.ts")], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const running = Bun.spawn([process.execPath, join(scratch, "control.ts")], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    child = running;
+    const [code, stdout, stderr] = await Promise.all([running.exited, new Response(running.stdout).text(), new Response(running.stderr).text()]);
     expect({ code, stderr }, stdout).toEqual({ code: 0, stderr: "" });
     const entered = (await Bun.file(join(scratch, "entered")).text()).trim().split("\n");
     expect(entered).toEqual(control.stop ? ["nuxt"] : ["nuxt", "astro"]);
