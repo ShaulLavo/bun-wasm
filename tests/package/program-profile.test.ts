@@ -207,8 +207,8 @@ test("telemetry remains unconditional for both link profiles with every allocato
   for (const flag of ["-zstack-size=8388608", "--export-table", "--growable-table"]) {
     expect(main).toContain(`cargo:rustc-link-arg-bin=bun=${flag}`);
   }
-  // Both profiles link at the one memory maximum (crates/bunwasm-cli/max-memory.txt).
-  expect(main).toMatch(/"cargo:rustc-link-arg-bin=bun=--max-memory=\{\}",\s*max_memory::MAX_MEMORY_BYTES\s*\);\s*memory_telemetry\(\);/);
+  // Each profile links at its own authority (tests/package/max-memory.test.ts), before telemetry.
+  expect(main).toMatch(/"cargo:rustc-link-arg-bin=bun=--max-memory=\{\}",\s*declared_maximum\(\)\s*\);\s*memory_telemetry\(\);/);
   const telemetry = cliBuildFunction("memory_telemetry");
   for (const name of ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"]) {
     expect(telemetry).toContain(`"${name}"`);

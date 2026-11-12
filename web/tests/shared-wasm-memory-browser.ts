@@ -14,6 +14,10 @@ import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./par
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
 const fixtureSource = join(repository, "tests/fixtures/shared-wasm-memory");
+/** The 2 GiB address-space fixture the native host also runs, staged beside the shared one. */
+const addressSpaceSource = join(repository, "tests/fixtures/shared-group-address-space");
+const ADDRESS_SPACE = "address-space";
+const ADDRESS_SPACE_ENTRY = `${ADDRESS_SPACE}/guest.ts`;
 const oxcTree = process.env[oxcTreeVariable];
 
 let selectedSpiderMonkey = false;
@@ -54,6 +58,9 @@ async function prepareSite(program: string): Promise<string> {
   if (oxcTree === undefined) {
     await Bun.write(join(out, "fixture/stack-depth.js"), Bun.file(join(repository, "tests/stack-depth.js")));
     entries.push({ kind: "file", path: "stack-depth.js" });
+    const nested = await stageFixtureTree(addressSpaceSource, join(out, "fixture", ADDRESS_SPACE));
+    entries.push({ kind: "directory", path: ADDRESS_SPACE });
+    for (const entry of nested) entries.push({ kind: entry.kind, path: `${ADDRESS_SPACE}/${entry.path}` });
   }
   await Bun.write(join(out, "fixture-manifest.json"), JSON.stringify(entries));
   await mkdir(join(out, "program"));
@@ -127,6 +134,16 @@ function assertParserReserveOwnership({ value, pageErrors, host }: EntryRun, kin
   assert.deepEqual(value.groups, [], "every group is released after its parent and child exit");
   assertRetired(value);
   assertOwnership(value.stdout ?? "", kind, host);
+}
+
+/** The same output as the native host, and every group owner retired with the page budget at zero. */
+async function assertAddressSpace({ value, pageErrors }: EntryRun): Promise<void> {
+  assert.equal(value.thrown, undefined, String(value.thrown));
+  assert.equal(value.code, 0, value.stderr ?? String(value.error));
+  assert.equal(value.stdout, await readFile(join(addressSpaceSource, "expected.txt"), "utf8"));
+  assert.deepEqual(pageErrors, []);
+  assert.deepEqual(value.groups, [], "members and regions are released after the guest and its children exit");
+  assertRetired(value);
 }
 
 async function assertClean({ value, pageErrors }: EntryRun): Promise<void> {
@@ -214,7 +231,7 @@ async function runBrowser(type: BrowserType, name: string, port: number, kind: s
     assertSpiderMonkeyReentry(await runEntry(name, port, "spidermonkey-reentry.ts"));
   }
   const override = process.env.SHARED_WASM_ENTRY;
-  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY];
+  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY, ADDRESS_SPACE_ENTRY];
   const runs = [];
   for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
@@ -225,6 +242,7 @@ async function runBrowser(type: BrowserType, name: string, port: number, kind: s
     if (oxcTree !== undefined) assertOxc(entry, run);
     else if (entry === DEBT_ENTRY) assertDebt(run);
     else if (entry === OWNERSHIP_ENTRY) assertParserReserveOwnership(run, kind);
+    else if (entry === ADDRESS_SPACE_ENTRY) await assertAddressSpace(run);
     else await assertClean(run);
   }
 }

@@ -1,0 +1,10 @@
+member cap: refused at 1 GiB true catchable true regions still admitted true
+rolldown descriptor admitted true bytes 1073741824
+second rolldown memory refused true unchanged true
+region top: file round trip true text true
+worker shares the memory true
+grow one page true grow 2000 refused true unchanged true
+latin1 near the 2 GiB end true identical true
+utf8 near the 2 GiB end true identical true
+utf16le near the 2 GiB end true identical true
+ballast intact true group within 2 GiB true

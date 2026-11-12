@@ -48,7 +48,9 @@ setup checks and completes each SDK patch, then rejects any other source changes
 
 - `jsc/common.sh`, `jsc/configure.sh`, `jsc/build.sh`, `jsc/finalize.sh`, `jsc/build-icu.sh`,
   `scripts/build-jsc.sh`: the `JSC_PROFILE=shared-group` producer.
-- `scripts/build-engine-jsc.sh`, `scripts/build-native-profile.ts`: the group side link.
+- `scripts/build-engine-jsc.sh`, `scripts/build-native-profile.ts`: the group side link, with
+  `--max-memory` at the group address space (`crates/bunwasm-cli/group-address-space.txt`). The
+  WebKit prebuild does not read that file and its input hash does not cover it.
 - `crates/bunwasm-jsc/cpp/helpers.cpp`: real SharedArrayBuffer prefix views with
   `SharedArrayBufferContents::create` over the stable region, and JS `Atomics.wait` permission.
   Nothing is copied, and old prefix views stay live after growth. `bunjsc_shared_array_buffer_data`
