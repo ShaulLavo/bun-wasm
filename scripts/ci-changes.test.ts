@@ -57,12 +57,18 @@ test.each([
 
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
-test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumer bundling selects its launcher; page builds stay web-only: $paths", ({ paths }) => {
-  const sharedConsumer = paths.includes("scripts/browser-build.ts");
-  expect(needsRust(paths)).toBe(sharedConsumer);
-  expect(needsSharedNative(paths)).toBe(sharedConsumer);
+test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumers and profile-aware page bundling select their launcher: $paths", ({ paths }) => {
+  expect(needsRust(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
   expect(needsJsc(paths)).toBe(false);
   expect(needsSharedSysroot(paths)).toBe(false);
+});
+
+test.each(["web/index.html", "web/src/playground/app.tsx"])("presentation-only page input %s does not select native producers", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+  expect(needsSharedSysroot([path])).toBe(false);
 });
 
 test.each(browserBuildFiles)("browser bundling with native inputs retains their gates: %s", path => {

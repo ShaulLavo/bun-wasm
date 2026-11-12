@@ -2,9 +2,11 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
+import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
+import { parseMemoryProfile, requireProfileEngine, type ProgramMemoryProfile } from "../../web/src/program-profile";
 import { installBunSharedObjects } from "../../src/shared-objects";
 import { BrowserPrograms } from "../../web/src/browser-programs";
-import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
+import { ENGINES, type Engine, WasmMissing, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import type { Run } from "../../web/src/runner";
@@ -51,6 +53,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** Each template has its own persistent workspace, shared across engine switches. */
   get template(): Template["id"] { return this.project.id; }
   readonly engine: Engine;
+  readonly profile: ProgramMemoryProfile;
   failure?: Failure;
   resetting = false;
   /** Project files, relative to the app directory, as of the last listing. */
@@ -95,7 +98,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.params = new URLSearchParams(search);
     this.project = selectTemplate(this.params.get("template"));
     const requested = this.params.get("engine");
-    this.engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
+    if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
+    this.engine = requested ?? DEFAULT_ENGINE;
+    this.profile = parseMemoryProfile(this.params.get("profile"));
+    requireProfileEngine(this.engine, this.profile);
   }
 
   get term(): Terminal | undefined {
@@ -207,7 +213,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` } });
+    const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` }, memoryGroups: BUN_MEMORY_GROUP_POLICY });
     const sharedObjects = installBunSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;
@@ -231,7 +237,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       changed: () => this.changed(),
     });
     Object.assign(globalThis, {
-      sandbox: { fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, engine: this.engine, template: this.template },
+      sandbox: { runtime, sharedObjects, fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, engine: this.engine, profile: this.profile, template: this.template },
     });
     return { runtime, fs, browserPrograms, editor, term, moduleScope };
   }
@@ -257,9 +263,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   private async loadEngine(): Promise<void> {
-    const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
-      this.wasm = await loadWasm(wasmUrl, (text) => this.setStatus(text));
+      this.wasm = await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
     } catch (err) {
       const missing = err instanceof WasmMissing;
       this.setStatus(missing ? `${ENGINES[this.engine].wasm} is not in this build` : `could not load bun.wasm: ${String(err)}`, "error");
@@ -311,7 +316,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       this.setServerState("starting", message);
       term.write(`\x1b[2m$\x1b[0m bun ${args.join(" ")} \x1b[2m(${ENGINES[this.engine].name})\x1b[0m\r\n`);
       this.serverTiming = { started: performance.now(), visibleStart };
-      const current = startRun({ engine: this.engine, module: wasm.module, args, env, runtime, moduleScope: scoped, network: this.network }, hooks);
+      const current = startRun({ engine: this.engine, profile: this.profile, module: wasm.module, args, env, runtime, moduleScope: scoped, network: this.network }, hooks);
       this.run = current;
       const result = await current.done;
       output.flush();
