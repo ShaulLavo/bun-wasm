@@ -188,6 +188,9 @@ test("the prebuild job saves its completed cache, and the native job imports it 
   expect(script).not.toContain("uses: actions/cache/save");
   expect(rust).toContain('tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"');
   expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
+  expect(rust).toContain("dist/*.wasm.embedding.json");
+  expect(rust).toContain("${{ runner.temp }}/jsc/engine/engine-link.map");
+  expect(rust).not.toContain("name: jsc-embedding-receipts");
   expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
 });
 

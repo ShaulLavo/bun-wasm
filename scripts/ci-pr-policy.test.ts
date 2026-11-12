@@ -78,7 +78,7 @@ test("no job runs on Boat runners", () => {
 
 test("artifact transport failures release the runner within five minutes and stay blocking", () => {
   let transfers = 0;
-  for (const value of Object.values(jobs)) {
+  for (const [jobId, value] of Object.entries(jobs)) {
     const steps = record(value).steps;
     if (!Array.isArray(steps)) throw new Error("Expected job steps");
     for (const value of steps) {
@@ -86,6 +86,9 @@ test("artifact transport failures release the runner within five minutes and sta
       if (!/^actions\/(?:upload|download)-artifact@/.test(String(step.uses))) continue;
       expect(step["timeout-minutes"]).toBe(5);
       expect(step["continue-on-error"]).toBeUndefined();
+      // The C1 lane retains its tiny first-failure packet for a week of diagnosis.
+      const retention = jobId === "web" && step.name === "Retain first C1 WebKit admission failure" ? 7 : 1;
+      if (String(step.uses).startsWith("actions/upload-artifact@")) expect(record(step.with)["retention-days"]).toBe(retention);
       transfers++;
     }
   }

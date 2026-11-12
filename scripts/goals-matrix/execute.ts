@@ -6,6 +6,7 @@ import type { Transport } from "./transport";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
+import { browserTrapLog } from "./browser-memory";
 export { bounded } from "./bounded";
 export interface Execution {
   profile?: PlaygroundProfile;
@@ -20,7 +21,8 @@ export interface Execution {
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
 }
-type FailureLog = { text: string; saved: boolean };
+type FailureLog = { text: string; diagnostic: string; saved: boolean };
+type ObservationTiming = "after server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: () => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
@@ -99,21 +101,26 @@ async function captureFailure(transport: Transport, options: Execution, results:
   try {
     await bounded(async () => {
       text = await terminal(transport);
+      diagnostic = await browserTrapLog(transport, options.box.engine);
       if (options.framework.id !== "angular" || Date.now() >= deadline) return;
       const path = namedAngularDiagnostic(text);
       if (!path) return;
-      diagnostic = `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
-      diagnostic = await angularDiagnostic(transport, path, deadline);
+      const browserDiagnostic = diagnostic;
+      diagnostic += `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
+      diagnostic = browserDiagnostic + await angularDiagnostic(transport, path, deadline);
     }, 2000);
-  } catch { if (!text) return; }
+  } catch {
+    if (!text) return;
+    if (options.box.engine === "browser" && !diagnostic) diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
+  }
   const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
   const failed = results.find(result => result.status === "fail");
   if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
   text += diagnostic;
   try {
     await bounded(() => options.saveLog(failureObservation(text)), 2000);
-    return { text, saved: true };
-  } catch { return { text, saved: false }; }
+    return { text, diagnostic, saved: true };
+  } catch { return { text, diagnostic, saved: false }; }
 }
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<unknown> {
@@ -121,8 +128,10 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup);
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.beginCleanup?.(); await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(finalObservation(await terminal(transport), results, failureLog, "after server stop")); }, 8_000); }
+  const observation = new AbortController();
+  try { await bounded(async () => { await transport.beginCleanup?.(); await transport.closePreview(); await stopServer(transport, 5_000, options.port); await saveFinalLog(transport, options, results, failureLog, observation.signal, "after server stop"); }, 8_000); }
   catch (error) { errors.push(error); }
+  finally { observation.abort(new Error("Final log observation ended")); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
@@ -140,23 +149,34 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   return evidence;
 }
 
-async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<void> {
+async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, signal?: AbortSignal, timing: ObservationTiming = "before owned transport cleanup"): Promise<void> {
   let output: string;
-  try { output = finalObservation(await bounded(() => terminal(transport), 2_000), results, failureLog, "before owned transport cleanup"); }
+  let transcript: string | undefined;
+  try { output = await bounded(async () => {
+    transcript = await terminal(transport);
+    return transcript + (failureLog?.diagnostic ?? await browserTrapLog(transport, options.box.engine));
+  }, 2_000, signal); }
   catch (error) {
+    signal?.throwIfAborted();
     if (failureLog?.saved) return;
-    const transcript = completedTranscript(results);
-    output = failureLog ? failureObservation(failureLog.text) : `Final terminal observation unavailable: ${String(error)}\n\n${transcript ?? "No completed command transcript was available."}`;
-    if (!failureLog && results.some(result => result.status === "fail")) output = `--- Failure-time terminal observation unavailable ---\n\n${output}`;
+    output = finalLogFallback(transcript, options.box.engine, results, failureLog, error);
   }
-  await bounded(() => options.saveLog(output), 2_000);
+  if (transcript === undefined && failureLog) output = failureObservation(failureLog.text);
+  else if (transcript === undefined && results.some(result => result.status === "fail")) output = `--- Failure-time terminal observation unavailable ---\n\n${output}`;
+  else output = finalObservation(output, results, failureLog, timing);
+  await bounded(() => options.saveLog(output), 2_000, signal);
+}
+
+function finalLogFallback(transcript: string | undefined, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
+  if (transcript !== undefined) return transcript + (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "");
+  return failureLog?.text ?? `Final terminal observation unavailable: ${String(error)}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;
 }
 
 function failureObservation(text: string): string {
   return `--- Failure-time terminal observation ---\n${text}\n--- End failure-time terminal observation ---\n`;
 }
 
-function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: string): string {
+function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: ObservationTiming): string {
   if (!results.some(result => result.status === "fail")) return text;
   const failure = failureLog ? failureObservation(failureLog.text) : "--- Failure-time terminal observation unavailable ---\n";
   return `${failure}\n--- Cleanup-time terminal observation (${timing}) ---\n${text}\n--- End cleanup-time terminal observation ---\n`;

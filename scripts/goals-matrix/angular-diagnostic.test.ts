@@ -7,7 +7,7 @@ import { withPlayground } from "./test-fixture";
 
 const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;
-type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean; failedRead?: "failure" | "final" | "both" };
+type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean; failedRead?: "failure" | "final" | "both"; browserMemory?: "empty" | "trap" };
 
 async function runFixture(config: Fixture = {}) {
   const framework = frameworks.find(item => item.id === (config.framework ?? "angular"));
@@ -21,6 +21,8 @@ async function runFixture(config: Fixture = {}) {
       const submit = playground.shell.submit.bind(playground.shell);
       playground.shell.submit = async text => { if (text === 'bun run dev' && diagnostic.fail !== false) { playground.shell.lastExit = 127; return; } return submit(text); };
       void 0`);
+    const snapshots = config.browserMemory === "trap" ? [{ engine: "browser", engineCounters: { browserCallTrapCapacityBytes: 131072 } }] : [];
+    if (config.browserMemory) await transport.evaluate(`globalThis.__bunMemorySnapshots = async () => ${JSON.stringify(snapshots)};`);
     const evaluate = transport.evaluate.bind(transport);
     const pending: Promise<unknown>[] = [];
     let transcripts = 0;
@@ -80,7 +82,8 @@ test.each([false, true])("retains saved failure observation when final read fail
   expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("failure-time detail") });
   expect(observed.logs.at(-1)).toContain("Failure-time terminal observation");
   expect(observed.logs.at(-1)).toContain("Error: failure-time detail\r\nraw");
-  expect(observed.result.attempts[0]?.phases.at(-1)?.status).toBe(owned ? "pass" : "fail");
+  expect(observed.result.attempts[0]?.phases.at(-1)?.status).toBe("pass");
+  expect(observed.events.at(-1)).toBe(owned ? "cleanup" : "close");
 });
 
 test("owned fallback labels both unavailable observations", async () => {
@@ -91,9 +94,12 @@ test("owned fallback labels both unavailable observations", async () => {
 });
 
 test.each([false, true])("successful terminal output remains unchanged, owned = %s", async owned => {
-  const observed = await runFixture({ owned, fail: false });
+  const observed = await runFixture({ owned, fail: false, browserMemory: "empty" });
   expect(observed.result.status).toBe("pass");
   expect(observed.logs).toEqual([reference]);
+  const unavailable = await runFixture({ owned, fail: false });
+  expect(unavailable.result.status).toBe("pass");
+  expect(unavailable.logs).toEqual([reference + "\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
 });
 
 test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
@@ -107,6 +113,16 @@ test.each([false, true])("failed Angular diagnostic survives final log save befo
   for (const log of observed.logs) expect(log).toContain("at ajv/dist/compile/codegen/index.js:181:24");
   expect(observed.events[0]).toBe("diagnostic");
   expect(observed.events.at(-1)).toBe(owned ? "cleanup" : "close");
+});
+
+test.each([false, true])("Angular capture preserves Browser trap facts when its read stalls = %s", async stalled => {
+  const observed = await runFixture({ browserMemory: "trap", stalled });
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+  expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass" });
+  for (const log of observed.logs) {
+    expect(log).toContain('"browserCallTrapCapacityBytes":131072');
+    expect(log).toContain(stalled ? "Guest Angular diagnostic unavailable" : "at ajv/dist/compile/codegen/index.js:181:24");
+  }
 });
 
 test.each([
