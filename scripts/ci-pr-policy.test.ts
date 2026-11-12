@@ -24,6 +24,36 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
   return result;
 }
 
+function checkName(job: Record<string, unknown>, event: string, draft: boolean, browser: string): string {
+  if (typeof job.name !== "string") throw new Error("Missing job name");
+  return job.name.replace(/\$\{\{([^}]+)\}\}/g, (_match, expression: string) => {
+    const evaluated = expression.replaceAll("github.event_name", JSON.stringify(event))
+      .replaceAll("github.event.pull_request.draft", String(draft))
+      .replaceAll("matrix.browser", JSON.stringify(browser));
+    const value: unknown = new Function(`return (${evaluated})`)();
+    if (typeof value !== "string") throw new Error("Expected check name text");
+    return value;
+  });
+}
+
+test("draft check names cannot satisfy ready checks on the same commit", () => {
+  const scenarios = Object.values(jobs).flatMap(value => ["chromium", "firefox", "webkit"].map(browser => ({ job: record(value), browser })));
+  const readyNames = new Set(scenarios.map(({ job, browser }) => checkName(job, "pull_request", false, browser)));
+  for (const { job, browser } of scenarios) {
+    const ready = checkName(job, "pull_request", false, browser);
+    const draft = checkName(job, "pull_request", true, browser);
+    expect(draft).toBe(`Draft / ${ready}`);
+    expect(readyNames.has(draft)).toBe(false);
+    expect(checkName(job, "push", true, browser)).toBe(ready);
+    expect(checkName(job, "workflow_dispatch", true, browser)).toBe(ready);
+  }
+  expect(readyNames).toContain("Web host");
+  expect(readyNames).toContain("Code quality");
+  expect(readyNames).toContain("Processes (chromium)");
+  expect(readyNames).toContain("Processes (firefox)");
+  expect(readyNames).toContain("Processes (webkit)");
+});
+
 test("draft PRs defer native and browser work until ready without changing push or manual checks", () => {
   const events = record(workflow.on);
   expect(record(events.pull_request).types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);

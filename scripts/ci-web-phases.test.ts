@@ -19,7 +19,7 @@ function steps(job: Record<string, unknown>) {
 }
 
 test("unit and browser phases run once in separate ten-minute jobs", () => {
-  expect(browser.name).toBe("Web host");
+  expect(browser.name).toBe("${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Web host");
   expect(browser.needs).toEqual(["quality", "web-unit"]);
   expect(unit.needs).toBe("quality");
   const all = Object.values(jobs).flatMap(job => steps(object(job)));

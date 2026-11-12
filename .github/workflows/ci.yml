@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Code quality
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Code quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -125,7 +125,7 @@ jobs:
   # Boat's public-repository allowlist cannot admit the built-in GitHub Actions bot.
 
   jsc-prebuild:
-    name: JSC C/C++ prebuild
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}JSC C/C++ prebuild
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
@@ -361,7 +361,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   native-quality:
-    name: Native quality checkpoint
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Native quality checkpoint
     needs: [quality, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
@@ -822,7 +822,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   rust:
-    name: Rust workspace tests (QuickJS host)
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Rust workspace tests (QuickJS host)
     needs: [quality, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
@@ -1447,7 +1447,7 @@ jobs:
   package:
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Browser adapter package
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Browser adapter package
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1474,7 +1474,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   shared-prebuild:
-    name: Shared PIC sysroot and JSC prebuild
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Shared PIC sysroot and JSC prebuild
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
@@ -1643,7 +1643,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   shared-spidermonkey-prebuild:
-    name: Shared SpiderMonkey library prebuild
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Shared SpiderMonkey library prebuild
     needs: [quality, shared-prebuild]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.quality.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
@@ -1859,7 +1859,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   shared-sysroot:
-    name: Shared PIC sysroot proof
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Shared PIC sysroot proof
     needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
@@ -2252,7 +2252,7 @@ jobs:
   web:
     needs: [quality, web-unit]
     if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web host
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Web host
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -2292,7 +2292,7 @@ jobs:
   web-unit:
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web host unit and types
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Web host unit and types
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -2351,7 +2351,7 @@ jobs:
   process-bundles:
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Shared process browser bundles
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Shared process browser bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -2379,7 +2379,7 @@ jobs:
   browser-process:
     needs: [quality, rust, process-bundles]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
-    name: Processes (${{ matrix.browser }})
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Processes (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -2476,7 +2476,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   update-status:
-    name: Report automated update statuses
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}Report automated update statuses
     needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-process]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
