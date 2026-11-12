@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { assertExternalOutput, checkRecordedObjectClosure, freshNativeSymbols, qualifierSource, verifyRecordedFiles } from "../spidermonkey/check-build.ts";
 import { embedHooks, checkSymbolDelta, checkUnicodeCommands, commands, installOverlay, nativeInputs, overlayFiles, symbolSets, verifyOverlay } from "../spidermonkey/native-profile.ts";
+import { checkDiagnosticMacros } from "../spidermonkey/diagnostic-profile.ts";
 
 const root = "/work/tmp/bun-wasm-native-profile-fixture";
 const irregexp = root + "/firefox/js/src/irregexp/";
@@ -305,3 +306,13 @@ test("every packed member must match the authenticated object manifest and list"
   assert.throws(() => checkRecordedObjectClosure(objects, members.slice(0, 1), manifest), /archive members differ/);
   assert.throws(() => checkRecordedObjectClosure(objects, [{ name: "one.o", bytes: Buffer.from("bad") }, members[1]!], manifest), /archive members differ/);
 }));
+
+test("effective macro gate rejects missing assertions and release crash diagnostics", () => {
+  const flags = ["MOZ_DIAGNOSTIC_ASSERT_ENABLED", "MOZ_RELEASE_ASSERT", "MOZ_CRASH", "NIGHTLY_BUILD", "__wasi__", "BUNWASM_EMBED"];
+  const text = flags.map(name => `#define ${name} 1`).join("\n");
+  checkDiagnosticMacros(text, false);
+  checkDiagnosticMacros(text + "\n#define DEBUG 1\n#define JS_CRASH_DIAGNOSTICS 1", true);
+  for (const name of flags) assert.throws(() => checkDiagnosticMacros(text.replace(`#define ${name} 1`, ""), false), /missing effective/);
+  assert.throws(() => checkDiagnosticMacros(text + "\n#define JS_CRASH_DIAGNOSTICS 1", false), /JS_CRASH_DIAGNOSTICS/);
+  assert.throws(() => checkDiagnosticMacros(text + "\n#define DEBUG 1", true), /JS_CRASH_DIAGNOSTICS/);
+});

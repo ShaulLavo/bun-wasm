@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core";
 import { createFilesystemConnection, FilesystemClient } from "waffle/fs";
 import { MemFS } from "waffle/fs/memory";
+import { prepareLinkPlan } from "waffle/link";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { initializationPair } from "../../tests/package/engine-initialization-fixture.ts";
@@ -21,8 +22,8 @@ test("Browser SpiderMonkey member stack size matches the side's bound derivation
 });
 
 async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: number; low?: number; high?: number; pointer?: number; missing?: string; unbalance?: 1 | 8; pages?: number } = {}) {
-  const source = await engineLinkPlan(initializationPair("spidermonkey", true));
-  const module = await WebAssembly.compile(source.core.source);
+  const plan = await prepareLinkPlan(await engineLinkPlan(initializationPair("spidermonkey", true)));
+  const module = plan.entryModule;
   const low = options.low ?? 65536;
   const high = options.high ?? low + STACK;
   const pointer = new WebAssembly.Global({ value: "i32", mutable: true }, options.pointer ?? high);
@@ -50,7 +51,7 @@ async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: n
   if (!(memory instanceof WebAssembly.Memory)) throw new Error("fixture memory missing");
   const connection = createFilesystemConnection();
   const control = await workerControlFixture();
-  const req: RunRequest = { controlGrant: control.grant, engine: options.engine ?? "spidermonkey", module, linkPlan: source, args: ["bun"], env: {}, trace: false, net: null, slots: "off", filesystem: connection.client,
+  const req: RunRequest = { controlGrant: control.grant, engine: options.engine ?? "spidermonkey", module, linkPlan: plan.shared, args: ["bun"], env: {}, trace: false, net: null, slots: "off", filesystem: connection.client,
     memoryGroup: { memory, control: new SharedArrayBuffer(32), reply: new SharedArrayBuffer(36), port: channel.port1, index: 0, watches: 1, parallelism: 1, stackBytes: options.stackBytes ?? STACK } };
   const executor = createBunExecutor(req);
   const context = { request: req, fs: new FilesystemClient(connection.client), isolated: true, outcome: null, runtimeState: null, identity: null, signal: AbortSignal.timeout(1000), defaultSignal() {}, post() { return true; }, finish() {}, wasi, checkActive() {}, bindMemory(memory: WebAssembly.Memory) { wasi.bindMemory(memory); } };

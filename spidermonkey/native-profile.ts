@@ -9,6 +9,13 @@ import { checkEmojiCustody, unicodeGaps } from "./emoji-sequences.ts";
 
 const recipe = dirname(fileURLToPath(import.meta.url));
 const repo = dirname(recipe);
+export const performanceProfile = {
+  promiseMetadata: "allocation-stack-and-captured-rejection-stack",
+  allocationTiming: false,
+  ordinaryResolutionCapture: false,
+  releaseCrashDiagnostics: false,
+  diagnosticAssertions: true,
+} as const;
 export const pin = "a5df22d986d4b626f771b4f8885241941601c35c";
 export const baselineHash = "a8327ca68f7052f239ac887204bac16cead4266b495d66a95a9bf80c4d4c5f26";
 export const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
@@ -52,9 +59,9 @@ function checkGeneratedCustody(): Record<string, unknown> {
 export function nativeInputs() {
   const adapter = files(join(recipe, "irregexp-icu")).map((path) => `spidermonkey/irregexp-icu/${path}`);
   const glue = files(join(repo, "crates/bunwasm-spidermonkey/src/glue")).map((path) => `crates/bunwasm-spidermonkey/src/glue/${path}`);
-  const recipes = ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in", "spidermonkey-wasi.patch", "generate-special-case.ts", "emoji-sequences.ts", "generate-emoji-sequences.ts"];
+  const recipes = ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "diagnostic-profile.ts", "mozconfig.in", "spidermonkey-wasi.patch", "generate-special-case.ts", "emoji-sequences.ts", "generate-emoji-sequences.ts"];
   return {
-    profile: { intlApi: false, irregexpUnicode: "icu4x-subset", specialCase: "selected-data-generated", finalSigma: "icu4x-case-properties", jit: false, sharedMemory: false, intlProvider: "FormatJS" },
+    profile: { performance: performanceProfile, intlApi: false, irregexpUnicode: "icu4x-subset", specialCase: "selected-data-generated", finalSigma: "icu4x-case-properties", jit: false, sharedMemory: false, intlProvider: "FormatJS" },
     unicode: { engineTables: "17.0.0", icu4xData: "18.0.0" },
     unsupported: unicodeGaps,
     u2Generation: { status: "generated", ...checkEmojiCustody(repo) },

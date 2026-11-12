@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { performanceProfile } from "./native-profile.ts";
 
 const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const digest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -32,7 +33,7 @@ function parseHeaders(path: string, expectedCount: number): { path: string; sha2
 
 function admittedInputs(admissionPath: string) {
   const admission = readRecord(admissionPath);
-  assert.equal(admission.status, "ADMITTED_FOR_CONTROLLED_N2_INPUTS");
+  assert(["ADMITTED_FOR_CONTROLLED_N2_INPUTS", "ADMITTED_CURRENT_NATIVE_GENERATION"].includes(String(admission.status)), "Unknown native admission");
   assert(admission.admitted === true, "N1 parent admission is required");
   assert(record(admission.archive) && digest(admission.archive.sha256) && positiveInteger(admission.archive.bytes));
   assert(record(admission.headers) && digest(admission.headers.manifestSha256) && positiveInteger(admission.headers.count) && digest(admission.headers.confdefsSha256));
@@ -40,8 +41,11 @@ function admittedInputs(admissionPath: string) {
   assert(record(admission.qualification) && digest(admission.qualification.sha256));
   assert(record(admission.compiledSource) && typeof admission.compiledSource.head === "string" && /^[0-9a-f]{40}$/.test(admission.compiledSource.head)
     && typeof admission.compiledSource.tree === "string" && /^[0-9a-f]{40}$/.test(admission.compiledSource.tree));
-  assert(record(admission.originalAttempt) && admission.originalAttempt.status === "FAILED", "Original N1 failure must be preserved");
-  assert(record(admission.originalBuildToolchain) && admission.originalBuildToolchain.originalCompilerProvenanceClaimed === false, "Original compiler provenance is unclaimed");
+  if (admission.status === "ADMITTED_CURRENT_NATIVE_GENERATION") verifyCurrentAdmission(admission);
+  else {
+    assert(record(admission.originalAttempt) && admission.originalAttempt.status === "FAILED", "Original N1 failure must be preserved");
+    assert(record(admission.originalBuildToolchain) && admission.originalBuildToolchain.originalCompilerProvenanceClaimed === false, "Original compiler provenance is unclaimed");
+  }
   return { admission, archive: { path: absolutePath(admission.archive.path, "archive path"), sha256: admission.archive.sha256, bytes: admission.archive.bytes },
     profile: { path: absolutePath(admission.profile.path, "profile path"), sha256: admission.profile.sha256 },
     qualification: { path: absolutePath(admission.qualification.path, "qualification path"), sha256: admission.qualification.sha256 },
@@ -51,6 +55,13 @@ function admittedInputs(admissionPath: string) {
 }
 
 function inputReceipt(input: ReturnType<typeof admittedInputs>, admissionSha256: string) {
+  if (input.admission.status === "ADMITTED_CURRENT_NATIVE_GENERATION") {
+    return { schema: 3, status: input.admission.status, parentAdmission: true, admissionSha256,
+      source: input.admission.compiledSource, qualification: input.admission.qualification,
+      archive: { path: "libspidermonkey_bunwasm.a", bytes: input.archive.bytes, sha256: input.archive.sha256 },
+      profile: { path: "native-profile.json", sha256: input.profile.sha256 },
+      headers: { count: input.headers.count, manifestSha256: input.headers.manifestSha256, confdefsSha256: input.headers.confdefsSha256 } };
+  }
   return { schema: 2, status: "ADMITTED_FOR_CONTROLLED_N2_INPUTS", parentAdmission: true, admissionSha256,
     source: input.admission.compiledSource, qualification: input.admission.qualification,
     originalAttempt: input.admission.originalAttempt, originalBuildToolchain: input.admission.originalBuildToolchain,
@@ -59,9 +70,41 @@ function inputReceipt(input: ReturnType<typeof admittedInputs>, admissionSha256:
     headers: { count: input.headers.count, manifestSha256: input.headers.manifestSha256, confdefsSha256: input.headers.confdefsSha256 } };
 }
 
+function verifyCurrentAdmission(admission: Record<string, unknown>): void {
+  assert(record(admission.qualification) && typeof admission.qualification.path === "string");
+  assert.equal(hash(admission.qualification.path), admission.qualification.sha256, "Current qualification changed");
+  const qualification = readRecord(admission.qualification.path);
+  assert.equal(qualification.gate, "N1", "Current generation needs successful N1 qualification");
+  verifyCurrentProfile(qualification);
+  assert(record(qualification.source));
+  assert.deepEqual(admission.compiledSource, { head: qualification.source.commit, tree: qualification.source.tree });
+  assert(record(admission.archive) && record(admission.headers));
+  assert.equal(admission.archive.sha256, qualification.sha256);
+  assert.equal(admission.archive.bytes, qualification.bytes);
+  assert.equal(admission.headers.confdefsSha256, qualification.confdefsSha256);
+  assert(record(qualification.headers));
+  assert.equal(admission.headers.manifestSha256, qualification.headers.sha256);
+  assert.equal(admission.headers.count, qualification.headers.count);
+}
+
+function verifyCurrentProfile(qualification: Record<string, unknown>): void {
+  assert(record(qualification.profile) && record(qualification.diagnostics));
+  assert.deepEqual(qualification.profile.performance, performanceProfile, "Wrong current performance profile");
+  assert.deepEqual(qualification.diagnostics.profile, performanceProfile, "Missing effective current diagnostics");
+  for (const name of ["library", "embedding", "debugLibrary", "debugEmbedding"]) {
+    const readback: unknown = qualification.diagnostics[name];
+    assert(record(readback) && record(readback.macros), `Missing effective ${name} macros`);
+    const debug = name.startsWith("debug");
+    assert.equal(readback.macros.JS_CRASH_DIAGNOSTICS, debug ? "1" : null);
+    assert.equal(readback.macros.DEBUG, debug ? "1" : null);
+    for (const flag of ["MOZ_DIAGNOSTIC_ASSERT_ENABLED", "BUNWASM_EMBED", "__wasi__", "NIGHTLY_BUILD"]) assert.equal(readback.macros[flag], "1");
+    for (const flag of ["MOZ_RELEASE_ASSERT", "MOZ_CRASH"]) assert(typeof readback.macros[flag] === "string" && readback.macros[flag].length > 0);
+  }
+}
+
 export function verifyEngineInputs(target: string): void {
   const receipt = readRecord(join(target, "native-inputs.json"));
-  if (receipt.schema === 3) {
+  if (receipt.schema === 3 && record(receipt.origin) && receipt.origin.kind === "fresh-library") {
     verifyFreshEngineInputs(target, receipt);
     return;
   }
@@ -83,6 +126,7 @@ export function verifyEngineInputs(target: string): void {
 function freshLibrary(target: string) {
   const library = readRecord(join(target, "fresh-library.json"));
   assert.equal(library.gate, "N1");
+  verifyCurrentProfile(library);
   assert.equal(library.revision, "a5df22d986d4b626f771b4f8885241941601c35c");
   assert.equal(library.target, "wasm32-unknown-wasip1");
   assert(digest(library.sha256) && positiveInteger(library.bytes));

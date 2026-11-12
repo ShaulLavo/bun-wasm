@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { prepareFreshEngineInputs, verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
+import { performanceProfile } from "../spidermonkey/native-profile.ts";
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const roots: string[] = [];
@@ -20,7 +21,12 @@ function fixture() {
   const header = "synthetic exported header";
   const confdefs = "#define JS_CODEGEN_NONE 1\n";
   const headers = [{ path: "jsapi.h", sha256: hash(header) }];
-  const profile = { profile: { jit: false, sharedMemory: false, intlApi: false } };
+  const profile = { profile: { jit: false, sharedMemory: false, intlApi: false, performance: performanceProfile } };
+  const macros = { JS_CRASH_DIAGNOSTICS: null, DEBUG: null, MOZ_DIAGNOSTIC_ASSERT_ENABLED: "1", BUNWASM_EMBED: "1", __wasi__: "1",
+    NIGHTLY_BUILD: "1", MOZ_RELEASE_ASSERT: "(...)", MOZ_CRASH: "(...)" };
+  const release = { macros };
+  const debug = { macros: { ...macros, JS_CRASH_DIAGNOSTICS: "1", DEBUG: "1" } };
+  const diagnostics = { profile: performanceProfile, library: release, embedding: release, debugLibrary: debug, debugEmbedding: debug };
   put(join(build, "libspidermonkey_bunwasm.a"), archive);
   put(join(build, "obj/dist/include/jsapi.h"), header);
   put(join(build, "obj/js/src/js-confdefs.h"), confdefs);
@@ -28,7 +34,7 @@ function fixture() {
   json(join(build, "receipt/native-profile.json"), profile);
   const receipt = { gate: "N1", revision: "a5df22d986d4b626f771b4f8885241941601c35c", target: "wasm32-unknown-wasip1",
     sha256: hash(archive), bytes: archive.length, headers: { count: 1, sha256: hash(readFileSync(join(build, "receipt/headers.json"))) },
-    confdefsSha256: hash(confdefs), configureStatusSha256: hash("config.status"), mozconfigSha256: hash("mozconfig"), ...profile,
+    confdefsSha256: hash(confdefs), configureStatusSha256: hash("config.status"), mozconfigSha256: hash("mozconfig"), ...profile, diagnostics,
     source: { commit: "a".repeat(40), tree: "b".repeat(40) }, recipeInputs: [{ path: "build.sh", sha256: hash("recipe") }], toolchain: [{ path: "/compiler", sha256: hash("compiler") }],
     exceptionTagSections: 0, exceptionTagImports: 0, nonPicCodeRelocations: 0, absoluteLibcStateRelocations: 0, rustStaticlibIncluded: false };
   json(join(build, "receipt/vm-library.json"), receipt);
@@ -49,6 +55,24 @@ test("fresh origin normalizes actual library, headers and profile without invent
   renameSync(f.target, moved);
   rmSync(f.build, { recursive: true });
   expect(() => verifyEngineInputs(moved)).not.toThrow();
+});
+
+test.each(["library", "embedding", "debugLibrary", "debugEmbedding"] as const)("fresh staging retains current effective %s macro gates", name => {
+  const f = fixture();
+  const readback = f.receipt.diagnostics[name];
+  const changed = { ...f.receipt, diagnostics: { ...f.receipt.diagnostics,
+    [name]: { macros: { ...readback.macros, JS_CRASH_DIAGNOSTICS: name.startsWith("debug") ? null : "1" } } } };
+  json(join(f.build, "receipt/vm-library.json"), changed);
+  expect(() => prepareFreshEngineInputs(f.build, f.target)).toThrow();
+});
+
+test("fresh staging requires current performance and effective diagnostic evidence", () => {
+  const f = fixture();
+  for (const changed of [{ diagnostics: null }, { diagnostics: { ...f.receipt.diagnostics, profile: {} } },
+    { profile: { ...f.receipt.profile, performance: {} } }]) {
+    json(join(f.build, "receipt/vm-library.json"), { ...f.receipt, ...changed });
+    expect(() => prepareFreshEngineInputs(f.build, join(f.root, hash(JSON.stringify(changed))))).toThrow();
+  }
 });
 
 test.each(["libspidermonkey_bunwasm.a", "include/jsapi.h", "js-confdefs.h", "headers.json", "native-profile.json", "fresh-library.json"])("fresh verification rejects changed %s", path => {

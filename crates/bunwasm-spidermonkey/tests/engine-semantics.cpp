@@ -159,7 +159,7 @@ void buffers() {
   Value external(bsm_external_buffer(memory, sizeof(memory)));
   install("external", external.handle);
   check(!bsm_is_detachable_buffer(external.handle), "external transfer refused");
-  Value pinned(script("globalThis.view = new Uint8Array(external); for (const name of ['transfer', 'transferToFixedLength', 'transferToImmutable']) { const fn = ArrayBuffer.prototype[name]; if (!fn) continue; let refused = false; try { Reflect.apply(fn, external, []); } catch (e) { refused = e instanceof TypeError; } if (!refused) throw new Error(name); } view[1] = 9;"));
+  Value pinned(script("globalThis.view = new Uint8Array(external); for (const name of ['transfer', 'transferToFixedLength', 'transferToImmutable']) { const fn = ArrayBuffer.prototype[name]; if (!fn) continue; let refused = false; try { Reflect.apply(fn, external, []); } catch (e) { refused = e instanceof RangeError; } if (!refused) throw new Error(name); } view[1] = 9;"));
   check(memory[1] == 9, "external bytes shared without copying");
   Value ordinary(script("globalThis.ordinary = new ArrayBuffer(4); ordinary"));
   check(!bsm_detach_external(ordinary.handle), "ordinary buffer is not external");
