@@ -68,7 +68,7 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
   | `-3` | `BADF`        | unknown or closed handle                                 |
   | `-4` | `UNSUPPORTED` | the host doesn't do this (e.g. `connect` in a browser)   |
 
-- **Nothing blocks except `poll`.** The guest's event loop calls the
+- **Only `poll` and `poll_io` block.** The guest's event loop calls the
   non-blocking functions; when everything returns `AGAIN` and no JS timer is
   due, it calls `poll(timeout)` to sleep until the host has news.
 - Text is UTF-8. Structured data is UTF-8 JSON.
@@ -95,13 +95,55 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 15   | `lookup_head` | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 16   | `listen_path` | `(path_ptr, path_len, flags) -> handle`                         |
 | 17   | `connect_path` | `(path_ptr, path_len) -> handle`                              |
+| 18   | `poll_io`    | `(subs_ptr, subs_count, timeout_ms, out_ptr) -> i32`             |
 
-Version 2 has 18 slots. Slots 0 through 13 are unchanged. Hosts that do not
+Version 2 has 19 slots. Slots 0 through 17 are unchanged. Hosts that do not
 provide lookup leave slots 14 and 15 at 0; the runtime then keeps its existing
 unsupported-capability rejection. There is no version-skew bridge.
 The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
 `child_kill`) and the signal slot no longer exist; slots after `peer_addr` were renumbered when
 they went away. Child processes and signals use the `runtime_proc` imports.
+
+### `poll_io(subs_ptr, subs_count, timeout_ms, out_ptr) -> i32`
+
+This optional Bun-owned operation waits for network news or readiness of selected
+`runtime_proc` subscriptions. Subscription and event records use the process ABI's
+16-byte little-endian layout. Both spans must hold `subs_count * 16` bytes. The
+guest owns separate input and initialized output buffers through the call and
+discards the events afterward, then pumps its normal waiters. A nonzero input
+typed-array offset is preserved. No guest callback runs inside the host wait.
+
+Return 1 means pump normal I/O. Return 0 means timeout or closed notification
+scope. `-4` means unsupported. Other errors use negative WASI errnos, including
+`-8` for an invalid descriptor, `-21` for an invalid span and `-28` for invalid
+arguments or subscription kind. The native bridge throws those other errors;
+they cannot turn into a persistent immediate-pump loop. The guest checks
+`hostCaps.poll_io` before serializing subscriptions. The current native launcher
+and headless shim accept all 19 slots and deliberately leave slot 18 zero.
+
+The browser executor arms the process word at startup only for in-guest engines
+with networking, enabled slots and a process ABI. Browser-engine, slots-off and
+no-process launches keep their existing arming. This adds one blocking waiter
+Worker per affected process. The process word is root-wide, so unrelated pipe
+activity also wakes other armed processes. Clearing subscriptions restores idle
+coverage; it does not detach that observer.
+
+Each wait samples notification generations before scanning network news once
+with `NetHost.poll(0)` and then scanning selected process subscriptions without
+consuming bytes, child status or jobs. A single absolute deadline is checked
+before every park, including after `not-equal` wakes. Zero timeout scans once;
+any negative timeout waits indefinitely. Uncovered subscriptions keep the
+notification set's existing 10 ms rescan coverage. Fatal cancellation checks
+surround parking and subscription coverage restores in `finally` on every exit.
+Handled signals remain queued for the normal guest checkpoint. Their latency
+retains the production caller's capped wait; an infinite call has no bounded
+handled-signal promise.
+
+The affected in-guest executor also routes network-only `poll` through this loop
+with empty process subscriptions. Unrelated process news causes a rescan and
+repark, never a fabricated network-ready result. Browser and other hosts keep
+their existing paths. Neither operation retains guest pointers or memory views
+after returning, and memory views refresh after memory growth.
 
 ### `poll(timeout_ms) -> i32`
 

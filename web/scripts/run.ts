@@ -65,6 +65,7 @@ if (process.env.NET !== "0") {
   helper.postMessage({ type: "init", ring });
   const host = new NetHost(ring, (req, transfer = []) => helper.postMessage(req, transfer));
   host.attach(instance.exports.memory as WebAssembly.Memory);
+  // This headless host deliberately omits poll_io: it has no armed process notification set.
   if (process.env.SLOTS === "imports") wasi.hostCall = installHostSlotsViaImport(instance, host.slots());
   else installHostSlots(instance, host.slots());
 }

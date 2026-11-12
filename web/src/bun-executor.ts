@@ -141,7 +141,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
-    async instantiated({ instance, wasi, fs, checkActive, notifications }) {
+    async instantiated({ instance, wasi, fs, checkActive, notifications, process }) {
       // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
       if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
@@ -150,9 +150,11 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       // wake on filesystem commits, which is how fs.watch learns of a write without a timer.
       if (netHost) {
         if (!notifications) throw new Error("Bun networking requires the launcher's notificationWorkerUrl");
-        const set = await notifications.arm({ network: netHost.runtime });
+        const combined = req.engine !== "browser" && process !== undefined;
+        const set = await notifications.arm({ network: netHost.runtime, ...(combined ? { process } : {}) });
         checkActive();
         netHost.runtime.attachNotifications(set, () => wasi.filesystemWatches);
+        if (combined) netHost.attachProcessWait(process, set, checkActive);
       }
       // A group member's PIE image imports the group memory instead of exporting one.
       const memory = instance.exports.memory ?? groupMemory;

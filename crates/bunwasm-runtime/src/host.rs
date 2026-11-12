@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 2;
-pub const SLOT_COUNT: usize = 18;
+pub const SLOT_COUNT: usize = 19;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -37,6 +37,7 @@ pub enum Slot {
     LookupHead = 15,
     ListenPath = 16,
     ConnectPath = 17,
+    PollIo = 18,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
@@ -58,6 +59,7 @@ pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "lookup_head",
     "listen_path",
     "connect_path",
+    "poll_io",
 ];
 
 #[repr(C)]
@@ -153,7 +155,7 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
                 std::mem::transmute::<usize, F1>(index as usize)(args[0])
             }
             Slot::ConnectPath => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
-            Slot::Fetch | Slot::LookupStart => {
+            Slot::Fetch | Slot::LookupStart | Slot::PollIo => {
                 std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
             }
             Slot::FetchHead
@@ -182,6 +184,43 @@ fn ptr_mut<T>(values: &mut [T]) -> i32 {
 
 pub fn poll(timeout_ms: i32) -> i32 {
     call(Slot::Poll, [timeout_ms, 0, 0, 0]).unwrap_or(UNSUPPORTED)
+}
+
+/// Both initialized buffers remain alive through the synchronous host call. Events are discarded;
+/// the program loop pumps every waiter after returning. Malformed lengths are never truncated.
+pub fn poll_io(subscriptions: &[u8], timeout_ms: i32) -> i32 {
+    poll_io_with(
+        subscriptions,
+        timeout_ms,
+        |subscriptions, count, timeout, events| {
+            call(
+                Slot::PollIo,
+                [ptr(subscriptions), count, timeout, ptr_mut(events)],
+            )
+            .unwrap_or(UNSUPPORTED)
+        },
+    )
+}
+
+fn poll_io_with(
+    subscriptions: &[u8],
+    timeout_ms: i32,
+    call: impl FnOnce(&[u8], i32, i32, &mut [u8]) -> i32,
+) -> i32 {
+    let Some((count, size)) = poll_io_size(subscriptions.len()) else {
+        return -28;
+    };
+    let mut events = vec![0u8; size];
+    call(subscriptions, count, timeout_ms, &mut events)
+}
+
+fn poll_io_size(length: usize) -> Option<(i32, usize)> {
+    if !length.is_multiple_of(16) {
+        return None;
+    }
+    i32::try_from(length).ok()?;
+    let count = i32::try_from(length / 16).ok()?;
+    Some((count, usize::try_from(count).ok()?.checked_mul(16)?))
 }
 
 pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
@@ -729,7 +768,8 @@ mod signal_tests {
         assert_eq!(SLOT_NAMES[15], "lookup_head");
         assert_eq!(SLOT_NAMES[16], "listen_path");
         assert_eq!(SLOT_NAMES[17], "connect_path");
-        assert_eq!(SLOT_COUNT, 18);
+        assert_eq!(SLOT_NAMES[18], "poll_io");
+        assert_eq!(SLOT_COUNT, 19);
         assert!(
             SLOT_NAMES
                 .iter()
@@ -741,6 +781,30 @@ mod signal_tests {
         assert_eq!(proc_pipe(), Err(UNSUPPORTED));
         assert_eq!(proc_poll(&[], 0), Err(UNSUPPORTED));
         assert_eq!(signal(0, 4), UNSUPPORTED);
+    }
+
+    #[test]
+    fn combined_poll_buffers_require_complete_records_and_checked_sizes() {
+        assert_eq!(poll_io_size(0), Some((0, 0)));
+        assert_eq!(poll_io_size(32), Some((2, 32)));
+        assert_eq!(poll_io_size(17), None);
+        assert_eq!(poll_io_size(i32::MAX as usize + 1), None);
+        assert_eq!(poll_io_size(usize::MAX), None);
+        assert_eq!(poll_io(&[0; 17], 0), -28);
+        assert_eq!(poll_io(&[], 0), UNSUPPORTED);
+        let input = [91u8; 48];
+        let selected = &input[16..32];
+        let result = poll_io_with(selected, 25, |bytes, count, timeout, events| {
+            assert_eq!(bytes.as_ptr(), selected.as_ptr());
+            assert_eq!(count, 1);
+            assert_eq!(timeout, 25);
+            assert_eq!(events, &[0; 16]);
+            assert_ne!(bytes.as_ptr(), events.as_ptr());
+            events.fill(3);
+            -21
+        });
+        assert_eq!(result, -21);
+        assert_eq!(input, [91; 48]);
     }
 
     #[test]

@@ -30,3 +30,29 @@ test("current mixed selector waits on selected process subscriptions with a refe
   expect(io.ioWait(100)).toBe(true);
   expect(calls).toEqual([[bytes, 100]]);
 });
+
+test("absent combined capability avoids serialization; process-only and network-only keep their paths", () => {
+  let serialized = 0, processCalls = 0;
+  const io = selector({ hostCaps: {}, procPoll: () => { processCalls++; return new Uint8Array(); } });
+  io.concatBytes = () => { serialized++; return new Uint8Array(); };
+  io.addIoWaiter({ ref: true });
+  expect(io.ioWait(0)).toBe(false);
+  io.addIoWaiter({ ref: true, subscriptions: () => new Uint8Array(16) });
+  expect(io.ioWait(0)).toBe(false);
+  expect(serialized).toBe(0);
+  const only = selector({ hostCaps: {}, procPoll: () => { processCalls++; return new Uint8Array(); } });
+  only.addIoWaiter({ ref: true, subscriptions: () => new Uint8Array(16) });
+  only.addIoWaiter({ ref: false });
+  expect(only.ioWait(0)).toBe(true);
+  expect(processCalls).toBe(1);
+});
+
+test("combined unsupported selects the network path and a native error unwinds", () => {
+  const native = { hostCaps: { poll_io: true }, hostPollIo: () => -4 };
+  const io = selector(native);
+  io.addIoWaiter({ ref: true });
+  io.addIoWaiter({ ref: true, subscriptions: () => new Uint8Array(16) });
+  expect(io.ioWait(0)).toBe(false);
+  native.hostPollIo = () => { throw new Error("poll_io errno 8"); };
+  expect(() => io.ioWait(0)).toThrow("poll_io errno 8");
+});

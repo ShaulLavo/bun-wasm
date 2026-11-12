@@ -15,7 +15,7 @@ use crate::guest::GuestMemory;
 use crate::net::{ErrorInfo, Output};
 
 const ABI_VERSION: u32 = 2;
-const SLOT_NAMES: [&str; 18] = [
+const SLOT_NAMES: [&str; 19] = [
     "poll",
     "fetch",
     "fetch_head",
@@ -34,6 +34,7 @@ const SLOT_NAMES: [&str; 18] = [
     "lookup_head",
     "listen_path",
     "connect_path",
+    "poll_io",
 ];
 
 /// Fills the networking slot table. Generic guests without the export run

@@ -267,7 +267,7 @@ test("every network slot refuses to run once the process has a fatal outcome", c
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   startEngineHost.mockImplementationOnce(async () => {
     const slots = installed[0]!;
-    const supportedSlots = SLOT_NAMES.slice();
+    const supportedSlots = SLOT_NAMES.filter(name => name !== "poll_io");
     supportedSlots.sort();
     expect(Object.keys(slots).sort()).toEqual(supportedSlots);
     expect(slots.lookup_start).toBeFunction();
@@ -356,6 +356,17 @@ test("without a networking ring no slots are installed", controlled(async () => 
   installed.length = 0;
   await run();
   expect(installed).toEqual([]);
+}));
+
+test("only networked in-guest engines publish the combined wait capability", controlled(async () => {
+  for (const engine of ["quickjs", "jsc", "spidermonkey", "browser"] as const) {
+    installed.length = 0;
+    await run({ engine, net: createRing() });
+    expect(typeof installed[0]?.poll_io).toBe(engine === "browser" ? "undefined" : "function");
+  }
+  installed.length = 0;
+  await run({ engine: "quickjs", net: createRing(), slots: "off" });
+  expect(installed).toHaveLength(0);
 }));
 
 // These tests invoke the actual linked imports. Descriptor readiness and the existing

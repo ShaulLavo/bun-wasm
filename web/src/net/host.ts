@@ -4,6 +4,17 @@ import { memoryViews, type MemoryViews } from "waffle/core";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
 import { ERROR, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { SLOT_NAMES, type SlotImpls } from "./trampoline.js";
+import type { NotificationWaitSet } from "waffle/browser/notification-wait";
+import type { ProcessABI, PollSubscription } from "waffle/proc/abi";
+import { ProcessError } from "waffle/proc";
+import { FilesystemError } from "waffle/fs/protocol";
+import { waitForIo } from "./mixed-wait.js";
+
+interface ProcessWait {
+  readonly process: ProcessABI;
+  readonly set: NotificationWaitSet;
+  checkActive(): void;
+}
 
 /** What engine-host.js takes as `net` (see engine-host.d.ts). */
 export interface EngineNet {
@@ -17,6 +28,7 @@ const decoder = new TextDecoder();
 export class NetHost {
   private memory!: MemoryViews;
   private host: RuntimeNetHost;
+  private processWait: ProcessWait | undefined;
 
   constructor(
     sab: SharedArrayBuffer,
@@ -36,10 +48,58 @@ export class NetHost {
     this.memory = memoryViews(memory);
   }
 
+  /** Only published after startup armed the process word alongside network and filesystem. */
+  attachProcessWait(process: ProcessABI, set: NotificationWaitSet, checkActive: () => void): void {
+    this.processWait = { process, set, checkActive };
+  }
+
+  private poll(timeout: number): number {
+    const sources = this.processWait;
+    if (!sources) return this.host.poll(timeout);
+    try {
+      sources.set.setProcessSubscriptions([]);
+      return waitForIo({ ...sources, networkReady: () => this.host.poll(0), processReady: () => 0 }, timeout);
+    } finally {
+      sources.set.setProcessSubscriptions([]);
+    }
+  }
+
+  private pollIo(ptr: number, count: number, timeout: number, out: number): number {
+    const sources = this.processWait;
+    if (!sources) return UNSUPPORTED;
+    try {
+      return this.processPoll(sources, ptr, count, timeout, out);
+    } catch (error) {
+      if (error instanceof ProcessError || error instanceof FilesystemError) return -error.errno;
+      throw error;
+    } finally {
+      // Idle coverage is empty. No guest pointer or view survives this call.
+      sources.set.setProcessSubscriptions([]);
+    }
+  }
+
+  private processPoll(sources: ProcessWait, ptr: number, count: number, timeout: number, out: number): number {
+    if (!Number.isInteger(count) || count < 0 || count > 0x7fffffff / 16 ||
+        !Number.isInteger(timeout) || timeout < -0x80000000 || timeout > 0x7fffffff) return -28;
+    // Reuse the process ABI's span, encoding and descriptor validation before network success.
+    const scan = () => sources.process.imports.poll!(ptr, count, 0, out);
+    const validated = scan();
+    if (validated < 0) return validated;
+    const view = this.memory.view();
+    const subscriptions: PollSubscription[] = [];
+    for (let index = 0; index < count; index++) {
+      const at = (ptr >>> 0) + index * 16;
+      subscriptions.push({ kind: view.getUint32(at, true), id: view.getUint32(at + 4, true) });
+    }
+    sources.set.setProcessSubscriptions(subscriptions);
+    return waitForIo({ ...sources, networkReady: () => this.host.poll(0), processReady: scan }, timeout);
+  }
+
   /** Translate Bun's integer/pointer ABI into ordinary strings, bytes and handles. */
   slots(): SlotImpls {
     const slots: SlotImpls = {
-      poll: (timeout) => this.host.poll(timeout),
+      poll: (timeout) => this.poll(timeout),
+      ...(this.processWait ? { poll_io: (ptr: number, count: number, timeout: number, out: number) => this.pollIo(ptr, count, timeout, out) } : {}),
       fetch: (metaPtr, metaLen, bodyPtr, bodyLen) => this.host.fetch(
         this.text(metaPtr, metaLen),
         bodyLen > 0 ? this.bytes(bodyPtr, bodyLen) : null,

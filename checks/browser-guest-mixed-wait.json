@@ -1,0 +1,14 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/mixed-wait-browser.test.ts",
+  "inputs": [
+    "crates/bunwasm-runtime/src/js/net.js",
+    "crates/bunwasm-runtime/src/host.rs",
+    "crates/bunwasm-runtime/src/natives.rs",
+    "web/src/bun-executor.ts",
+    "web/src/net/host.ts",
+    "web/src/net/mixed-wait.ts",
+    "web/src/net/trampoline.ts",
+    "tests/fixtures/mixed-io-wait/index.ts"
+  ]
+}

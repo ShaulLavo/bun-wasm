@@ -27,6 +27,7 @@ export const SLOT_NAMES = [
   "lookup_head",
   "listen_path",
   "connect_path",
+  "poll_io",
 ] as const;
 export type SlotName = (typeof SLOT_NAMES)[number];
 
@@ -50,6 +51,7 @@ const ARITY: Record<SlotName, number> = {
   lookup_head: 3,
   listen_path: 3,
   connect_path: 2,
+  poll_io: 4,
 };
 
 type SlotFunction = (...args: number[]) => number;
@@ -117,7 +119,9 @@ function slotTable(instance: WebAssembly.Instance, memory: unknown): { view: Dat
   const ptr = (slots as () => number)() >>> 0;
   const view = memoryViews(memory).view();
   if (view.getUint32(ptr, true) !== ABI_VERSION) return null;
-  return { view, ptr, count: view.getUint32(ptr + 4, true) };
+  const count = view.getUint32(ptr + 4, true);
+  if (count !== SLOT_NAMES.length) throw new Error(`Expected ${SLOT_NAMES.length} Bun host slots; got ${count}`);
+  return { view, ptr, count };
 }
 
 /**
@@ -158,6 +162,7 @@ export function installHostSlots(instance: WebAssembly.Instance, impls: SlotImpl
   const version = view.getUint32(ptr, true);
   const count = view.getUint32(ptr + 4, true);
   if (version !== ABI_VERSION) return [];
+  if (count !== SLOT_NAMES.length) throw new Error(`Expected ${SLOT_NAMES.length} Bun host slots; got ${count}`);
 
   const wanted = SLOT_NAMES.map((slot, index) => ({ slot, index, fn: impls[slot] })).filter(
     (s): s is { slot: SlotName; index: number; fn: SlotFunction } => s.fn !== undefined && s.index < count,

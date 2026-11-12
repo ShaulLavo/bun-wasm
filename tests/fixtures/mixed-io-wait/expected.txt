@@ -1,0 +1,1 @@
+mixed socket and selected child pipe: four replies, child exit

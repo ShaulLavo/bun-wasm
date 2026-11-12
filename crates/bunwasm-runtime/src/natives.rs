@@ -1622,6 +1622,17 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         Ok(st.signal(a.i32(0)?, a.i32(1)?).into())
     });
     t.add("hostPoll", |a| Ok(host::poll(a.i32(0)?).into()));
+    t.add("hostPollIo", |a| {
+        let result = host::poll_io(a.bytes(0)?, a.i32(1)?);
+        if result >= 0 || result == host::UNSUPPORTED {
+            return Ok(result.into());
+        }
+        Err(
+            NativeError::error(format!("poll_io failed with WASI errno {}", -result))
+                .prop("errno", result)
+                .prop("syscall", "poll_io"),
+        )
+    });
     t.add("hostFetch", |a| {
         let body = if a.is_missing(1) {
             &[][..]

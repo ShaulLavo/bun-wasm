@@ -321,7 +321,7 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 18);
+    assert_eq!(SLOT_NAMES.len(), 19);
     assert_eq!(
         &SLOT_NAMES[12..],
         &[
@@ -330,13 +330,56 @@ fn network_slots_have_no_child_or_signal_transport() {
             "lookup_start",
             "lookup_head",
             "listen_path",
-            "connect_path"
+            "connect_path",
+            "poll_io"
         ]
     );
     assert!(
         SLOT_NAMES
             .iter()
             .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal")
+    );
+}
+
+#[test]
+fn current_slot_table_installs_existing_calls_and_leaves_combined_wait_absent() {
+    use wasm_encoder::{
+        CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction,
+        TypeSection, ValType,
+    };
+    let mut f = Fixture::new();
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    let mut functions = FunctionSection::new();
+    functions.function(0);
+    let mut exports = ExportSection::new();
+    exports.export("bun_wasm_host_slots", ExportKind::Func, 0);
+    let mut function = Function::new([]);
+    function.instruction(&Instruction::I32Const(128));
+    function.instruction(&Instruction::End);
+    let mut code = CodeSection::new();
+    code.function(&function);
+    let mut binary = wasm_encoder::Module::new();
+    binary
+        .section(&types)
+        .section(&functions)
+        .section(&exports)
+        .section(&code);
+    let module = Module::new(f.store.engine(), binary.finish()).unwrap();
+    let instance = Instance::new(&mut f.store, &module, &[]).unwrap();
+    f.write(128, &2u32.to_le_bytes());
+    f.write(132, &19u32.to_le_bytes());
+    super::install(&mut f.store, &instance).unwrap();
+    assert_eq!(f.word(136), -1);
+    assert_eq!(f.word(136 + 18 * 4), 0);
+    assert_eq!(f.store.data().functions.len(), 16);
+    let poll = f.store.data().functions[0];
+    assert_eq!(
+        poll.typed::<i32, i32>(&f.store)
+            .unwrap()
+            .call(&mut f.store, 0)
+            .unwrap(),
+        0
     );
 }
 

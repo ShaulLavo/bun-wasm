@@ -142,6 +142,7 @@ declare namespace BunWasm {
     isWasmMemoryBuffer?(value: unknown): boolean;
     isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;
+    hostPollIo(subscriptions: Uint8Array, timeout: number): number;
   }
   /** `subscriptions` lists what the idle event loop may sleep on (procPoll format); see net.js ioWait. */
   interface IoWaiter {

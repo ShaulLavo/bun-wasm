@@ -46,17 +46,23 @@
     return n;
   };
 
-  // Sleeps in procPoll when every referenced waiter names what it waits on (runtime_proc
-  // descriptors and children); returns false when the caller should use the host poll instead.
+  // Mixed waits use the optional combined slot; process-only waits retain procPoll.
+  // False selects the network path when no process subscriptions or capability exist.
   internal.ioWait = function ioWait(timeout) {
     const watched = [];
+    let network = false;
     for (const waiter of waiters) {
       if (!waiter.ref) continue;
       const subscriptions = waiter.subscriptions && waiter.subscriptions();
-      if (!subscriptions || !subscriptions.length) return false;
-      watched.push(subscriptions);
+      if (!subscriptions || !subscriptions.length) network = true;
+      else watched.push(subscriptions);
     }
     if (!watched.length) return false;
+    if (network) {
+      if (!caps.poll_io) return false;
+      const result = native.hostPollIo(internal.concatBytes(watched), timeout);
+      return result !== -4;
+    }
     return typeof native.procPoll(internal.concatBytes(watched), timeout) !== "number";
   };
 

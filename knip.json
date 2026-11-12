@@ -94,6 +94,8 @@
         "src/preview1-worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
+        "tests/fixtures/mixed-resource-page.ts",
+        "tests/fixtures/mixed-resource-worker.ts",
         "guest-tests/*.test.ts",
         "tests/fixtures/require-esm-meta/nested/meta.ts",
         "tests/browser-*.{ts,mjs}",
