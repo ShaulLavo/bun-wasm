@@ -1,0 +1,18 @@
+tls12: TLSv1.2
+tls13: TLSv1.3
+default reject: true
+explicit ca: true
+empty ca replacement: true
+hostname reject: true
+alpn: fixture/2
+peer metadata: true
+client identity: true
+identity receiver: true
+identity error: true
+early write barrier: true
+starttls one connection: true
+abort destroy: true
+reentrant destroy: true
+half close: true
+generic duplex unsupported: true
+negative observer: armed and zero plaintext

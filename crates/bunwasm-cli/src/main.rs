@@ -1,7 +1,7 @@
 //! `bun` for wasm32-wasip1: argument parsing and wiring of the transpiler
 //! into the runtime.
 
-use bunwasm_runtime::{Entry, Options, Transpiler};
+use bunwasm_runtime::{Entry, Options, RunMode, Transpiler};
 
 const HELP: &str = "\
 Bun is a fast JavaScript runtime. This is bun.wasm: Bun's runtime on WebAssembly (WASI).
@@ -30,6 +30,7 @@ Flags:
   -v, --version                  Print version and exit
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
+      --hot                      Reload an ESM server in the same process
       --conditions <condition>   Add a package-export resolution condition
 
 Not available in bun.wasm: upgrade.
@@ -48,12 +49,31 @@ fn transpiler() -> Box<dyn Transpiler> {
 
 #[cfg(feature = "bun-transpiler")]
 mod bun_transpiler {
-    use bunwasm_runtime::{Loader, Transpiled, Transpiler};
+    use bunwasm_runtime::{Loader, RecordError, Transpiled, Transpiler};
     use bunwasm_transpiler::Loader as BunLoader;
 
     /// The browser engine (feature engine-host) runs on a host JS engine
     /// without AsyncContext: `await`s get hooks that carry AsyncLocalStorage.
     const AWAIT_HOOKS: bool = cfg!(feature = "engine-host");
+
+    /// A registration record and its mappings back to the registered source.
+    fn record(
+        out: Result<bunwasm_transpiler::Transpiled, bunwasm_transpiler::Failure>,
+    ) -> Result<Transpiled, RecordError> {
+        let out = out.map_err(compile_failure)?;
+        Ok(Transpiled {
+            code: out.code,
+            mappings: (!out.mappings.is_empty()).then_some(out.mappings),
+            ..Default::default()
+        })
+    }
+
+    fn compile_failure(failure: bunwasm_transpiler::Failure) -> RecordError {
+        match failure {
+            bunwasm_transpiler::Failure::Syntax(report) => RecordError::Syntax(report),
+            bunwasm_transpiler::Failure::Other(report) => RecordError::Other(report),
+        }
+    }
 
     fn runtime_imports(
         imports: Vec<bunwasm_transpiler::ModuleImport>,
@@ -70,6 +90,46 @@ mod bun_transpiler {
                 },
             })
             .collect()
+    }
+
+    fn compiler_loader(loader: Loader) -> BunLoader {
+        use BunLoader::{Js, Json, Json5, Jsonc, Jsx, Text, Toml, Ts, Tsx, Yaml};
+        match loader {
+            Loader::Js => Js,
+            Loader::Jsx => Jsx,
+            Loader::Ts => Ts,
+            Loader::Tsx => Tsx,
+            Loader::Json => Json,
+            Loader::Toml => Toml,
+            Loader::Yaml => Yaml,
+            Loader::Json5 => Json5,
+            Loader::Jsonc => Jsonc,
+            Loader::Text => Text,
+        }
+    }
+
+    fn preserve_source(source: &str, loader: BunLoader) -> bool {
+        loader == BunLoader::Js
+            && !(AWAIT_HOOKS
+                && (source.contains("await")
+                    || source.contains("yield")
+                    || source.contains("eval")
+                    || source.contains("\\u")))
+    }
+
+    fn runtime_output(out: bunwasm_transpiler::Transpiled) -> Transpiled {
+        use bunwasm_runtime::transpiler::ModuleKind;
+        use bunwasm_transpiler::ModuleKind as ParsedKind;
+        Transpiled {
+            code: out.code,
+            mappings: (!out.preserved && !out.mappings.is_empty()).then_some(out.mappings),
+            imports: runtime_imports(out.imports),
+            module_kind: Some(match out.module_kind {
+                ParsedKind::Script => ModuleKind::Script,
+                ParsedKind::CommonJs => ModuleKind::CommonJs,
+                ParsedKind::Esm => ModuleKind::Esm,
+            }),
+        }
     }
 
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
@@ -142,26 +202,8 @@ mod bun_transpiler {
             path: &str,
             loader: Loader,
         ) -> Result<Transpiled, String> {
-            let loader = match loader {
-                // The browser engine needs every `await` printed with its
-                // AsyncLocalStorage hooks, plain JavaScript included.
-                Loader::Js => BunLoader::Js,
-                Loader::Jsx => BunLoader::Jsx,
-                Loader::Ts => BunLoader::Ts,
-                Loader::Tsx => BunLoader::Tsx,
-                Loader::Json => BunLoader::Json,
-                Loader::Toml => BunLoader::Toml,
-                Loader::Yaml => BunLoader::Yaml,
-                Loader::Json5 => BunLoader::Json5,
-                Loader::Jsonc => BunLoader::Jsonc,
-                Loader::Text => BunLoader::Text,
-            };
-            let preserve_source = loader == BunLoader::Js
-                && !(AWAIT_HOOKS
-                    && (source.contains("await")
-                        || source.contains("yield")
-                        || source.contains("eval")
-                        || source.contains("\\u")));
+            let loader = compiler_loader(loader);
+            let preserve_source = preserve_source(source, loader);
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {
@@ -184,32 +226,53 @@ mod bun_transpiler {
             let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
                 bunwasm_transpiler::transpile_with_source_map(source, path, loader, preserve_source)
             })?;
-            use bunwasm_runtime::transpiler::ModuleKind;
-            use bunwasm_transpiler::ModuleKind as ParsedKind;
-            let module_kind = Some(match out.module_kind {
-                ParsedKind::Script => ModuleKind::Script,
-                ParsedKind::CommonJs => ModuleKind::CommonJs,
-                ParsedKind::Esm => ModuleKind::Esm,
-            });
-            Ok(Transpiled {
-                code: out.code,
-                mappings: if preserve_source {
-                    None
-                } else {
-                    Some(out.mappings)
-                },
-                imports: runtime_imports(out.imports),
-                module_kind,
-            })
+            Ok(runtime_output(out))
         }
 
-        fn register(&self, source: &str, path: &str) -> Result<Transpiled, String> {
-            let out = bunwasm_transpiler::register(source, path, BunLoader::Js)?;
-            Ok(Transpiled {
-                code: out.code,
-                mappings: (!out.mappings.is_empty()).then_some(out.mappings),
-                ..Default::default()
+        fn prepare_module(
+            &self,
+            source: &str,
+            path: &str,
+            loader: Loader,
+            intern: &mut bunwasm_runtime::import_requests::InternImport<'_>,
+        ) -> Result<Transpiled, RecordError> {
+            use bunwasm_runtime::import_requests::{ImportMode, ImportRequest};
+            let loader = compiler_loader(loader);
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+                bunwasm_transpiler::prepare_module(
+                    source,
+                    path,
+                    loader,
+                    preserve_source(source, loader),
+                    !AWAIT_HOOKS,
+                    &mut |specifier| {
+                        intern(ImportRequest {
+                            specifier,
+                            mode: ImportMode::Text,
+                        })
+                        .as_str()
+                        .to_owned()
+                    },
+                )
             })
+            .map_err(compile_failure)?;
+            Ok(runtime_output(out))
+        }
+
+        fn use_module_records(&self) {
+            bunwasm_transpiler::use_module_records();
+        }
+
+        fn register(&self, source: &str, path: &str) -> Result<Transpiled, RecordError> {
+            record(bunwasm_transpiler::register(source, path, BunLoader::Js))
+        }
+
+        fn register_module(&self, source: &str, path: &str) -> Result<Transpiled, RecordError> {
+            record(bunwasm_transpiler::register_module(
+                source,
+                path,
+                BunLoader::Js,
+            ))
         }
 
         fn module_imports(
@@ -227,25 +290,28 @@ mod bun_transpiler {
         #[cfg(feature = "bun-build")]
         fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
             use bunwasm_build::{BuildArgs, Format, SourceMap, Target};
+            let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+            let meta = bunwasm_transpiler::commonjs_metadata_name(&source);
             let args = BuildArgs {
                 entry_points: vec![path.to_owned()],
                 target: Some(Target::Bun),
                 format: Format::Cjs,
                 external: vec!["*".to_owned()],
+                define: vec![("import.meta".to_owned(), meta.clone())],
                 sourcemap: SourceMap::Inline,
                 write: false,
                 ..BuildArgs::default()
             };
-            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, || {
+            let bundle = || bunwasm_build::build(&args);
+            let namespace = || bunwasm_transpiler::with_require_esm_namespace(&meta, bundle);
+            let compile = || {
                 if AWAIT_HOOKS {
-                    bunwasm_transpiler::with_dynamic_import_referrer(path, || {
-                        bunwasm_build::build(&args)
-                    })
-                } else {
-                    bunwasm_build::build(&args)
+                    return bunwasm_transpiler::with_dynamic_import_referrer(path, namespace);
                 }
-            })
-            .map_err(|log| log.trim_end().to_owned())?;
+                namespace()
+            };
+            let out = bunwasm_transpiler::with_await_hooks(AWAIT_HOOKS, compile)
+                .map_err(|log| log.trim_end().to_owned())?;
             let code = out
                 .stdout
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
@@ -253,6 +319,11 @@ mod bun_transpiler {
             if code.is_empty() {
                 return Err(format!("bun build produced no output for {path}"));
             }
+            let code = code.replacen(
+                "(function(exports, require, module, __filename, __dirname) {",
+                &format!("(function(exports, require, module, __filename, __dirname, {meta}) {{"),
+                1,
+            );
             const MARK: &str = "\n//# sourceMappingURL=data:application/json;base64,";
             let (code, mappings) = match code.rfind(MARK) {
                 Some(at) => {
@@ -496,7 +567,7 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
-    Run(Entry, Vec<String>, Vec<String>, Vec<String>),
+    Run(Entry, Vec<String>, Vec<String>, Vec<String>, RunMode),
     Build(Vec<String>),
     Lint,
     Install(String, Vec<String>),
@@ -606,9 +677,22 @@ fn parse(args: Vec<String>, executable: &str) -> Command {
     parse_command(args, false)
 }
 
+fn run_command(
+    entry: Entry,
+    args: Vec<String>,
+    conditions: Vec<String>,
+    exec_argv: Vec<String>,
+    mode: RunMode,
+) -> Command {
+    if mode == RunMode::Hot && !matches!(&entry, Entry::File(path) if path != "-") {
+        return usage_error("--hot supports only file-based ESM server entries");
+    }
+    Command::Run(entry, args, conditions, exec_argv, mode)
+}
+
 fn node_command(args: Vec<String>) -> Command {
     match parse_command(args, true) {
-        Command::Run(Entry::File(file), args, conditions, exec_argv) => {
+        Command::Run(Entry::File(file), args, conditions, exec_argv, mode) => {
             // Node operands are files even when their names match Bun commands or package scripts.
             let path = std::env::current_dir().unwrap_or_default().join(file);
             Command::Run(
@@ -616,6 +700,7 @@ fn node_command(args: Vec<String>) -> Command {
                 args,
                 conditions,
                 exec_argv,
+                mode,
             )
         }
         command => command,
@@ -635,7 +720,7 @@ fn direct_file(file: &str) -> String {
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
-    parse_command_with_flags(args, run_file, Vec::new(), Vec::new())
+    parse_command_with_flags(args, run_file, Vec::new(), Vec::new(), RunMode::Once)
 }
 
 fn parse_command_with_flags(
@@ -643,13 +728,21 @@ fn parse_command_with_flags(
     run_file: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
+    mode: RunMode,
 ) -> Command {
     let mut rest = args.into_iter();
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
+    let mut mode = mode;
     while let Some(arg) = rest.next() {
         if run_file && (arg == "-" || !arg.starts_with('-')) {
-            return Command::Run(Entry::File(arg), rest.collect(), conditions, exec_argv);
+            return run_command(
+                Entry::File(arg),
+                rest.collect(),
+                conditions,
+                exec_argv,
+                mode,
+            );
         }
         if arg == "--conditions" {
             let Some(value) = rest.next() else {
@@ -665,7 +758,41 @@ fn parse_command_with_flags(
             exec_argv.push(arg);
             continue;
         }
+        if mode == RunMode::Hot
+            && matches!(
+                arg.as_str(),
+                "build"
+                    | "bun"
+                    | "install"
+                    | "i"
+                    | "x"
+                    | "bunx"
+                    | "create"
+                    | "init"
+                    | "lint"
+                    | "fmt"
+                    | "add"
+                    | "a"
+                    | "ci"
+                    | "remove"
+                    | "rm"
+                    | "r"
+                    | "uninstall"
+                    | "pm"
+                    | "update"
+                    | "up"
+                    | "c"
+            )
+        {
+            return usage_error("--hot supports only file-based ESM server entries");
+        }
         match arg.as_str() {
+            "--hot" => {
+                mode = RunMode::Hot;
+                exec_argv.push(arg);
+                continue;
+            }
+            "--watch" => return usage_error("--watch restart mode is not supported in bun-wasm"),
             "-v" | "--version" => {
                 println!("{}", bunwasm_runtime::BUN_VERSION);
                 return Command::Exit(0);
@@ -684,7 +811,13 @@ fn parse_command_with_flags(
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
                 };
-                return Command::Run(Entry::Eval(code), rest.collect(), conditions, exec_argv);
+                return run_command(
+                    Entry::Eval(code),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             "-p" | "--print" => {
                 let Some(code) = rest.next() else {
@@ -694,15 +827,22 @@ fn parse_command_with_flags(
                     "const __bunwasm_print = await (0, eval)({code:?}); \
                      console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
                 );
-                return Command::Run(Entry::Eval(wrapped), Vec::new(), conditions, exec_argv);
+                return run_command(
+                    Entry::Eval(wrapped),
+                    Vec::new(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             "lint" | "fmt" => return Command::Lint,
             "test" => {
-                return Command::Run(
+                return run_command(
                     Entry::Test(rest.collect()),
                     Vec::new(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "build" | "bun" => return Command::Build(rest.collect()),
@@ -712,22 +852,24 @@ fn parse_command_with_flags(
             "create" | "c" => return create_command(rest.collect()),
             "init" => return Command::Init(rest.collect()),
             "repl" => {
-                return Command::Run(
+                return run_command(
                     Entry::Eval(REPL.to_owned()),
                     rest.collect(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "exec" => {
                 let Some(script) = rest.next() else {
                     return usage_error("bun exec needs a script to run");
                 };
-                return Command::Run(
+                return run_command(
                     Entry::Eval(EXEC.to_owned()),
                     vec![script],
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
             "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
@@ -737,12 +879,20 @@ fn parse_command_with_flags(
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
-            "run" => return parse_command_with_flags(rest.collect(), true, conditions, exec_argv),
+            "run" => {
+                return parse_command_with_flags(rest.collect(), true, conditions, exec_argv, mode);
+            }
             "--" => {
                 let Some(file) = rest.next() else {
                     return usage_error("bun run needs a file to run");
                 };
-                return Command::Run(Entry::File(file), rest.collect(), conditions, exec_argv);
+                return run_command(
+                    Entry::File(file),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--smol" | "--no-install" => continue,
@@ -751,11 +901,12 @@ fn parse_command_with_flags(
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
-                return Command::Run(
+                return run_command(
                     Entry::File(direct_file(file)),
                     rest.collect(),
                     conditions,
                     exec_argv,
+                    mode,
                 );
             }
         }
@@ -821,7 +972,7 @@ fn main() {
         argv.collect()
     };
     let command = parse(args, &executable);
-    let (entry, args, conditions, exec_argv) = match command {
+    let (entry, args, conditions, exec_argv, mode) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
             eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
@@ -838,14 +989,22 @@ fn main() {
         }
         Command::X(args) => {
             match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
-                Ok((file, args)) => (Entry::File(file), args, Vec::new(), Vec::new()),
+                Ok((file, args)) => (
+                    Entry::File(file),
+                    args,
+                    Vec::new(),
+                    Vec::new(),
+                    RunMode::Once,
+                ),
                 Err(error) => {
                     eprintln!("error: {error}");
                     std::process::exit(1);
                 }
             }
         }
-        Command::Run(entry, args, conditions, exec_argv) => (entry, args, conditions, exec_argv),
+        Command::Run(entry, args, conditions, exec_argv, mode) => {
+            (entry, args, conditions, exec_argv, mode)
+        }
     };
     let code = bunwasm_runtime::run(Options {
         entry,
@@ -853,6 +1012,7 @@ fn main() {
         conditions,
         exec_argv,
         transpiler: transpiler(),
+        mode,
     });
     // The host engine runs the program after `_start` returns.
     if code == 0 && bunwasm_runtime::host_engine_ready() {
@@ -876,7 +1036,7 @@ mod tests {
                 ],
                 false,
             );
-            let Command::Run(_, _, conditions, exec_argv) = command else {
+            let Command::Run(_, _, conditions, exec_argv, _) = command else {
                 panic!("{mode} discarded runtime flags");
             };
             assert_eq!(conditions, ["custom"], "{mode}");
@@ -897,7 +1057,7 @@ mod tests {
             ],
             false,
         );
-        let Command::Run(Entry::File(entry), args, conditions, exec_argv) = command else {
+        let Command::Run(Entry::File(entry), args, conditions, exec_argv, _) = command else {
             panic!("expected a file command");
         };
         assert_eq!(entry, "entry.ts");
@@ -909,7 +1069,7 @@ mod tests {
     #[test]
     fn conditions_work_for_node_file_operands() {
         let command = node_command(vec!["--conditions=vitest".into(), "entry.ts".into()]);
-        let Command::Run(Entry::File(entry), _, conditions, exec_argv) = command else {
+        let Command::Run(Entry::File(entry), _, conditions, exec_argv, _) = command else {
             panic!("expected a node file command");
         };
         assert!(entry.ends_with("/entry.ts"));

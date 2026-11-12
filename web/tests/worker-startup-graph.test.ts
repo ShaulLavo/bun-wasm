@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
 import { initialJavaScript } from "../../scripts/runtime-size";
@@ -27,8 +27,10 @@ test("ordinary Bun worker and page startup do not eagerly load generic ownership
     for (const removed of ["web/src/subprocess.ts", "web/src/worker-pipes.ts"]) expect(everything.some(path => path.endsWith(removed))).toBe(false);
     const generic = Object.keys(outputs).find(path => path.endsWith("/preview1-worker.js"));
     expect(generic).toBeDefined();
+    expect(Object.keys(build.metafile!.inputs).some(path => path.endsWith("/preview1-executor.ts"))).toBe(true);
     const genericInputs = initialJavaScript(outputs, [generic!]).flatMap(path => Object.keys(outputs[path]!.inputs));
-    expect(genericInputs.every(path => runtime.relativeInput(path) !== undefined)).toBe(true);
+    expect(genericInputs.every(path => runtime.relativeInput(path) !== undefined || resolve(path) === new URL("../src/preview1-worker.ts", import.meta.url).pathname)).toBe(true);
+    expect(genericInputs.some(path => path.endsWith("/preview1-executor.ts") || path.endsWith("/bun-terminal.ts"))).toBe(false);
     for (const path of ["preview1-worker.js", "preview1-worker.js.map"]) {
       expect(await Bun.file(join(scratch, "dist", "__bunwasm", path)).text()).toBe(await Bun.file(join(scratch, "dist", path)).text());
     }

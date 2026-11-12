@@ -1,0 +1,1 @@
+package scripts preserve argv, environment, PATH, hooks, silence and exit status

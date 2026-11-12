@@ -47,6 +47,37 @@ pub extern "C" fn jsc_memory_telemetry_refresh() -> *const BunjscMemoryTelemetry
     jsc_memory_telemetry()
 }
 
+/// Returns the cached allocation-boundary record only. Safe after a failed allocation or trap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jsc_allocation_boundary() -> *const BunjscAllocationBoundary {
+    unsafe { bunjsc_allocation_boundary() }
+}
+
+/// `BUN_WASM_JSC_ALLOCATION_BOUNDARY=1` arms the diagnostic in this process's VM before any program
+/// code runs, under the host's per-instance `BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION`. The
+/// process stops when the generation is missing or the control allocation is not acknowledged.
+fn qualify_allocation_boundary(context: JSContextRef) {
+    let requested = std::env::var_os("BUN_WASM_JSC_ALLOCATION_BOUNDARY");
+    if requested.is_none_or(|value| value != "1") {
+        return;
+    }
+    // Zero is never a generation: the C++ arm rejects it as absent.
+    let generation = std::env::var("BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION")
+        .ok()
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    // SAFETY: the context was created by bunjsc_create_context and its API lock is held.
+    let state = unsafe { bunjsc_allocation_boundary_qualify(context, generation) };
+    if state == BUNJSC_BOUNDARY_SUBJECT_ARMED {
+        return;
+    }
+    let rejection = unsafe { (*jsc_allocation_boundary()).rejection };
+    panic!(
+        "JSC allocation boundary control not acknowledged: state {state}, rejection {rejection}"
+    );
+}
+
 fn memory_counter(bytes: u64) -> Val {
     if bytes == u64::MAX {
         return Val::Null;
@@ -92,6 +123,20 @@ impl Drop for JsVal {
 /// JavaScriptCore. A unit handle: the context is per thread (one per process).
 #[derive(Clone, Copy)]
 pub struct Jsc;
+
+/// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) type NestedEngine = Jsc;
+
+/// Publish the address of a local in the outermost frame as WTF's stack origin.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn record_stack_origin(frame: &[u8; 16]) {
+    // SAFETY: called once before the VM exists; JSC only reads this pointer afterwards.
+    unsafe {
+        bunjsc_stack_origin =
+            (std::hint::black_box(frame.as_ptr()) as usize + frame.len()) as *mut c_char
+    };
+}
 
 fn checked(exc: JSValueRef, v: JSValueRef) -> Result<JsVal, JsVal> {
     if exc.is_null() {
@@ -470,6 +515,7 @@ impl Engine for Jsc {
             // adapter enables polling only at saved interpreter trap points.
             unsafe { bunjsc_set_interrupt_handler(c, true) };
         }
+        qualify_allocation_boundary(c);
         #[cfg(test)]
         install_regression_natives(&Jsc);
         Jsc
@@ -681,6 +727,11 @@ impl Engine for Jsc {
         self.promise_state(v).is_some()
     }
 
+    fn is_module_namespace(&self, v: &JsVal) -> Option<bool> {
+        // SAFETY: the helper checks the live value under its VM lock.
+        Some(unsafe { bunjsc_is_module_namespace(ctx(), v.raw()) })
+    }
+
     fn is_proxy(&self, v: &JsVal) -> bool {
         !unsafe { bunjsc_proxy_target(ctx(), v.raw()) }.is_null()
     }
@@ -698,6 +749,39 @@ impl Engine for Jsc {
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> JsVal {
         // SAFETY: the caller keeps the bytes valid until the buffer is detached.
         JsVal::new(unsafe { bunjsc_wasm_memory_buffer(ctx(), data, length) })
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn nested_execute(&self, operation: &JsVal, callback: &JsVal) -> Result<JsVal, JsVal> {
+        crate::nested_bridge::execute(self, operation, callback)
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    unsafe fn shared_wasm_memory_buffer(
+        &self,
+        data: *mut u8,
+        length: usize,
+    ) -> Result<JsVal, JsVal> {
+        // SAFETY: the core validated this session's stable region and retains it
+        // until the member, engine roots and host instances have all stopped.
+        Ok(JsVal::new(unsafe {
+            bunjsc_shared_wasm_memory_buffer(ctx(), data, length)
+        }))
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_buffer_resource(&self, v: &JsVal) -> Option<u32> {
+        unsafe extern "C" {
+            fn bun_shared_buffer_resource(address: u32) -> u32;
+        }
+        // SAFETY: the helper checks the buffer class under the VM lock, and the core only
+        // looks the address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(
+                bunjsc_shared_array_buffer_data(ctx(), v.raw()) as usize as u32
+            )
+        };
+        (resource != 0).then_some(resource)
     }
 
     fn detach_wasm_memory_buffer(&self, v: &JsVal) -> bool {

@@ -13,15 +13,15 @@ import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import type { SpawnRequest } from "waffle/proc/types";
 import { claimOutcome, markStarted } from "waffle/proc/outcome";
 import { ExecutableFormatError, startFailure } from "waffle/proc";
-import { installCliFetch } from "./node-install-net.mjs";
+import { installCliFetch } from "./node-install-net.ts";
 import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
-import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
+import { loadNodeProgram, linkNodeProgram, parseEngineAllocationFault, startNodeProgram, type EngineAllocationFault } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
-import { isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
-import type { LinkPlanSource, LinkedGroup } from "waffle/link";
+import { pairedEngineKinds, isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
+import type { SharedLinkPlan, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 // The guest replaces globalThis.process; retain the actual native exit capability.
@@ -37,10 +37,15 @@ interface Settings {
   /** `native`: Node's AsyncLocalStorage carries guest frames. `hooks`: the printed
    * async-context hooks do, as in a browser (docs/engine-browser.md). */
   context: "native" | "hooks";
+  /** `--modules records`: no module store, so every ES module loads as a registration record,
+   * as in a browser worker (module-records.ts). Default `store`: native modules from Node's hooks. */
+  modules: "store" | "records";
+  /** `--refuse-engine-allocation MINIMUM-MAXIMUM:COUNT`: each guest's core refuses that many engine requests of that size. */
+  engineAllocationFault?: EngineAllocationFault;
 }
 interface GuestData {
   module: WebAssembly.Module;
-  linkPlan?: LinkPlanSource;
+  linkPlan?: SharedLinkPlan;
   settings: Settings;
   transport: WorkerProcessTransport;
   request?: SpawnRequest;
@@ -49,9 +54,13 @@ function contextMode(value: string | undefined): Settings["context"] {
   if (value !== "native" && value !== "hooks") throw new Error("--context requires native or hooks");
   return value;
 }
+function modulesMode(value: string | undefined): Settings["modules"] {
+  if (value !== "store" && value !== "records") throw new Error("--modules requires store or records");
+  return value;
+}
 function settings(): Settings {
   const argv = nodeProcess.argv.slice(2);
-  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native" };
+  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native", modules: "store" };
   let i = 0;
   for (; i < argv.length; i++) {
     const arg = argv[i];
@@ -59,13 +68,15 @@ function settings(): Settings {
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
     else if (arg === "--engine") {
       const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
-      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or hermes=PATH");
+      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or spidermonkey=PATH");
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
     else if (arg === "--context") result.context = contextMode(argv[++i]);
     else if (arg?.startsWith("--context=")) result.context = contextMode(arg.slice("--context=".length));
+    else if (arg === "--modules") result.modules = modulesMode(argv[++i]);
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
+    else if (arg === "--refuse-engine-allocation") result.engineAllocationFault = parseEngineAllocationFault(argv[++i]);
     else if (arg === "--dir") {
       const [host, guest = host] = argv[++i]!.split("::");
       result.preopens[guest!] = host!;
@@ -87,11 +98,11 @@ async function main() {
   const config = settings();
   const base = await loadNodeProgram(config.wasmPath);
   const baseModule = base.module;
-  const programs = new Map<WebAssembly.Module, LinkPlanSource>();
+  const programs = new Map<WebAssembly.Module, SharedLinkPlan>();
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
   const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};
-  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
+  for (const engine of pairedEngineKinds) {
     const path = config.engines[engine];
     if (!path) continue;
     const program = await loadNodeProgram(path, engine);
@@ -169,7 +180,7 @@ async function run(data: GuestData) {
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
     const module = request ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
-    if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports);
+    if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports, config.engineAllocationFault);
     instance = linked?.entry ?? await WebAssembly.instantiate(module, imports);
     cliFetch?.install();
     host.installSlots();
@@ -195,7 +206,7 @@ async function run(data: GuestData) {
     const modules = { url: (key: string) => prefix + encodeURIComponent(key), put: (url: string, source: string) => void sources.set(url, source) };
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
-    await startEngineHost({ instance, moduleUrls: "data", modules, fetch: nodeFetch,
+    await startEngineHost({ instance, moduleUrls: "data", modules: config.modules === "store" ? modules : undefined, fetch: nodeFetch,
       asyncContext: config.context === "native" ? createNodeAsyncContext() : undefined,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,

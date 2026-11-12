@@ -14,7 +14,7 @@ try {
       const page = await context.newPage();
       const downloads: string[] = [];
       page.on("request", request => { if (request.url().includes("bun-tools.wasm")) downloads.push(request.url()); });
-      await page.goto(`${url}?engine=${engine}`);
+      await page.goto(`${url}?engine=${engine}&prompt=off`);
       assert.match(await ready(page), /ready/);
       await writeFile(page, "/home/user/tool-source.ts", "export const answer: number = 42;\n");
       assert.equal((await run(page, "bun run tool-source.ts")).code, 0);

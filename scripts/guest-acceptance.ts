@@ -1,3 +1,4 @@
+import { rejectWithdrawnPublicationPath } from "./producer-closure.ts";
 import { programProfile } from "../src/engine-kind.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -27,6 +28,7 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
     if (error.code !== "ENOENT") throw error;
     return [] as string[];
   });
+  for (const name of entries) rejectWithdrawnPublicationPath(name);
   const unexpectedReceipts = entries
     .filter(name => name.endsWith(".wasm.build.json") && !allowedReceipts.has(name))
     .map(name => join(dist, name));

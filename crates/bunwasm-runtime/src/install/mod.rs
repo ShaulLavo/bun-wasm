@@ -3,6 +3,7 @@ mod io;
 mod local;
 mod migration;
 mod overrides;
+mod pending;
 mod resolve;
 mod version;
 
@@ -149,6 +150,7 @@ fn execute(
             unlock(
                 &mut resolution_lock,
                 &opts,
+                &manifest,
                 member.as_ref().and_then(|_| manifest["name"].as_str()),
             );
         }
@@ -348,7 +350,7 @@ fn finalize_additions(
         let Some(package) = command_package(resolver, &name, member) else {
             continue;
         };
-        let range = if opts.exact {
+        let range = if opts.exact && !resolve::tarball::is_specifier(&range) {
             package.version.clone()
         } else if range == "latest" {
             format!("^{}", package.version)
@@ -383,6 +385,13 @@ fn package_present(package: &Package) -> bool {
     if let Some(local) = &package.local {
         return local::physical(&package.path()).ok().as_deref() == Some(local.path.as_path());
     }
+    if fs::read(installed_source_path(&package.path()))
+        .ok()
+        .as_deref()
+        != Some(installed_source(package).as_slice())
+    {
+        return false;
+    }
     let Ok(bytes) = fs::read(package.path().join("package.json")) else {
         return false;
     };
@@ -392,16 +401,50 @@ fn package_present(package: &Package) -> bool {
     value["name"] == package.name && value["version"] == package.version
 }
 
+fn installed_source_path(path: &Path) -> std::path::PathBuf {
+    path.with_file_name(format!(
+        ".{}.bun-wasm-source",
+        path.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+fn installed_source(package: &Package) -> Vec<u8> {
+    json!([
+        package.name,
+        package.version,
+        package.tarball,
+        package.integrity
+    ])
+    .to_string()
+    .into_bytes()
+}
+
+fn forget_installed_source(path: &Path) -> Result<()> {
+    match fs::remove_file(installed_source_path(path)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn install_packages(resolver: &mut Resolver) -> Result<usize> {
     let mut installed = 0;
     let keys: Vec<_> = resolver.packages.keys().cloned().collect();
-    for key in keys {
-        let package = &resolver.packages[&key];
+    let mut downloads = io::Downloads::default();
+    let mut lookahead = keys.iter();
+    for key in &keys {
+        prefetch_packages(resolver, &mut lookahead, &mut downloads);
+        let package = &resolver.packages[key];
         if package_present(package) {
             continue;
         }
-        if let Err(error) = install_package(package, resolver.refresh, &resolver.registry) {
-            if !package.optional {
+        if let Err(error) = install_package(
+            package,
+            resolver.refresh,
+            &resolver.registry,
+            &mut downloads,
+        ) {
+            if !package.optional || package.explicit_tarball {
                 return Err(format!("{}@{}: {error}", package.name, package.version));
             }
             eprintln!(
@@ -409,7 +452,7 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
                 package.name,
                 resolver.registry.redact(&error)
             );
-            resolver.packages.remove(&key);
+            resolver.packages.remove(key);
             continue;
         }
         installed += 1;
@@ -417,11 +460,46 @@ fn install_packages(resolver: &mut Resolver) -> Result<usize> {
     Ok(installed)
 }
 
-fn install_package(package: &Package, refresh: bool, registry: &io::Registry) -> Result<()> {
+fn prefetch_packages<'a>(
+    resolver: &Resolver,
+    lookahead: &mut impl Iterator<Item = &'a String>,
+    downloads: &mut io::Downloads,
+) {
+    while !downloads.is_full() {
+        let Some(key) = lookahead.next() else {
+            break;
+        };
+        let Some(package) = resolver.packages.get(key) else {
+            continue;
+        };
+        if package.local.is_some() || package_present(package) {
+            continue;
+        }
+        downloads.prefetch(
+            &package.tarball,
+            true,
+            resolver.refresh && !package.explicit_tarball,
+            &resolver.registry,
+        );
+    }
+}
+
+fn install_package(
+    package: &Package,
+    refresh: bool,
+    registry: &io::Registry,
+    downloads: &mut io::Downloads,
+) -> Result<()> {
     if let Some(local) = &package.local {
+        forget_installed_source(&package.path())?;
         return local::link(&local.path, &package.path());
     }
-    let bytes = io::fetch(&package.tarball, true, refresh, registry)?;
+    let bytes = downloads.fetch(
+        &package.tarball,
+        true,
+        refresh && !package.explicit_tarball,
+        registry,
+    )?;
     io::integrity(&bytes, &package.integrity)?;
     let path = package.path();
     let staging = path.with_file_name(format!(
@@ -432,15 +510,20 @@ fn install_package(package: &Package, refresh: bool, registry: &io::Registry) ->
         fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let result = io::extract(&bytes, &staging).and_then(|_| validate_package(&staging, package));
-    if let Err(error) = result {
+    let result = io::extract(&bytes, &staging)
+        .and_then(|_| validate_package(&staging, package))
+        .and_then(|()| {
+            forget_installed_source(&path)?;
+            if path.exists() {
+                fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            }
+            fs::rename(&staging, &path).map_err(|e| e.to_string())?;
+            io::write(&installed_source_path(&path), &installed_source(package))
+        });
+    if result.is_err() {
         let _ = fs::remove_dir_all(staging);
-        return Err(error);
     }
-    if path.exists() {
-        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-    }
-    fs::rename(staging, path).map_err(|e| e.to_string())
+    result
 }
 
 fn validate_package(staging: &Path, package: &Package) -> Result<()> {
@@ -463,6 +546,7 @@ fn prune(locked: &Value, resolver: &Resolver) -> Result<()> {
         }
         let chain = chain_from_lock(key, row)?;
         let path = resolve::path(&chain);
+        forget_installed_source(&path)?;
         if fs::symlink_metadata(&path).is_ok() {
             if fs::symlink_metadata(&path).is_ok_and(|m| m.is_symlink()) {
                 fs::remove_file(path)
@@ -539,7 +623,11 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
             .filter(|row| row[0] == format!("{}@{}", package.name, package.version))
             .and_then(|row| row[1].as_str())
             .unwrap_or(&package.tarball);
-        let tarball = migration::transport(&package.name, &package.version, tarball)?;
+        let tarball = if package.explicit_tarball {
+            package.tarball.clone()
+        } else {
+            migration::transport(&package.name, &package.version, tarball)?
+        };
         let row = if let Some(local) = &package.local {
             let path = local::relative(&local.path, &std::env::current_dir().unwrap());
             let path = if !local.workspace
@@ -847,14 +935,20 @@ fn selected(name: &str, opts: &Options) -> bool {
             .any(|input| resolve::spec(input).is_ok_and(|(n, _)| n == name))
 }
 
-fn unlock(locked: &mut Value, opts: &Options, workspace: Option<&str>) {
+fn unlock(locked: &mut Value, opts: &Options, manifest: &Value, workspace: Option<&str>) {
     if workspace.is_some() {
         return;
     }
+    let sources = resolve::tarball::locked_sources(locked, manifest);
     let Some(packages) = locked["packages"].as_object_mut() else {
         return;
     };
-    packages.retain(|key, _| !selected(key, opts));
+    packages.retain(|key, row| {
+        !selected(key, opts)
+            || row[1]
+                .as_str()
+                .is_some_and(|source| sources.contains(source))
+    });
 }
 
 fn finalize_updates(

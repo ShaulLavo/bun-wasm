@@ -47,6 +47,23 @@
       cancel: reason => reader.cancel(reason),
     });
   }
+  async function visitChunk<T>(reader: ReadableStreamDefaultReader<T>, chunk: T, visit: (chunk: T) => void): Promise<void> {
+    try { visit(chunk); }
+    catch (error) {
+      try { await reader.cancel(); } catch {}
+      throw error;
+    }
+  }
+  async function consume<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) return;
+        await visitChunk(reader, next.value, visit);
+      }
+    } finally { reader.releaseLock(); }
+  }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
     if (body.closed) return;
@@ -76,5 +93,5 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

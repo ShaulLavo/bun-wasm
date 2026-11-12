@@ -46,10 +46,13 @@ fn crypto(manifest: &Path, out: &Path) {
         "BUNWASM_BORINGSSL_BUILD",
         "WASI_SDK_PATH",
         "BUN_WASM_SYSROOT",
+        "CMAKE_C_COMPILER_LAUNCHER",
+        "CMAKE_CXX_COMPILER_LAUNCHER",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-changed=c/rsa.c");
+    println!("cargo:rerun-if-changed=src/tls.rs");
     println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake");
     let source = std::env::var_os("BUNWASM_BORINGSSL_SOURCE")
         .map(std::path::PathBuf::from)
@@ -82,6 +85,11 @@ fn crypto(manifest: &Path, out: &Path) {
                 "-DOPENSSL_NO_ASM=1",
                 "-DBUILD_TESTING=OFF",
             ]);
+        for language in ["C", "CXX"] {
+            let name = format!("CMAKE_{language}_COMPILER_LAUNCHER");
+            let launcher = std::env::var(&name).unwrap_or_default();
+            configure.arg(format!("-D{name}={launcher}"));
+        }
         if wasm {
             let flags = format!(
                 "-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK{}",
@@ -94,7 +102,7 @@ fn crypto(manifest: &Path, out: &Path) {
                 ))
                 .args([
                     format!("-DCMAKE_C_FLAGS={flags}"),
-                    format!("-DCMAKE_CXX_FLAGS={flags}"),
+                    format!("-DCMAKE_CXX_FLAGS={flags} -fno-exceptions -fno-rtti"),
                 ]);
         } else {
             configure.args([
@@ -112,7 +120,7 @@ fn crypto(manifest: &Path, out: &Path) {
             Command::new("cmake")
                 .arg("--build")
                 .arg(&build)
-                .args(["--target", "crypto", "--parallel", "2"])
+                .args(["--target", "crypto", "ssl", "--parallel", "2"])
                 .status()
                 .unwrap()
                 .success(),
@@ -147,6 +155,7 @@ fn crypto(manifest: &Path, out: &Path) {
         .include(source.join("include"))
         .compile("bunwasm_crypto");
     println!("cargo:rustc-link-search=native={}", build.display());
+    println!("cargo:rustc-link-lib=static=ssl");
     println!("cargo:rustc-link-lib=static=crypto");
     if wasm {
         let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
@@ -208,11 +217,12 @@ impl Profile {
         std::fs::write(build.join(STAMP), self.name()).expect("BoringSSL profile stamp");
     }
 
-    /// A PIE link prefers a shared library for `-l`; a group member must not depend on one.
+    /// The group core supplies its required C++ functions compiled with atomics.
+    /// Do not pull non-atomic SDK archive members into that profile.
     fn link_cxx_runtime(self) {
-        let names: [&str; 2] = match self {
-            Self::Split => ["static=c++", "static=c++abi"],
-            Self::SharedGroup => ["static:+verbatim=libc++.a", "static:+verbatim=libc++abi.a"],
+        let names: &[&str] = match self {
+            Self::Split => &["static=c++", "static=c++abi"],
+            Self::SharedGroup => &[],
         };
         for name in names {
             println!("cargo:rustc-link-lib={name}");

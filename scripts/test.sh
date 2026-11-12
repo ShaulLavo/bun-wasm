@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end fixtures: build dist/bun.wasm, run every tests/fixtures/<name>
-# through the runtime_proc-capable hosts and diff stdout (and the exit code).
+# through the runtime_proc-capable hosts and compare output and the exit code.
 #
 # A fixture directory holds:
 #   index.{js,mjs,cjs,ts,tsx}   entry point (run as `bun run /index.*`)
@@ -31,45 +31,77 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|hermes|browser] [--context native|hooks] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|browser] [--context native|hooks] [name...]
 #     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
-#     --engine hermes   run dist/bun-hermes.wasm (Hermes, opt-in; scripts/build-bun-hermes.sh)
 #     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
 #                       (web/scripts/node-host.mjs; docs/engine-browser.md)
+#     --engine spidermonkey --wasm PATH --tier interp|pbl
+#                       experimental native fixtures only; requires explicit BUN_WASM_LAUNCHER,
+#                       BUN_WASM_SHELL and BUN_WASM_ENV_UTILITY, plus the fixed sibling
+#                       spidermonkey-engine.wasm. Never builds or updates expectations.
 #     --context hooks   with --engine browser: carry AsyncLocalStorage with the printed
 #                       hooks instead of Node's, as a browser does
+#     --modules records with --engine browser: no module store, so every ES module loads
+#                       as a registration record, as in a browser worker
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
-# test-checks.ts runs the runtime checks once before starting parallel fixture groups.
-[[ "${BUN_WASM_RUNTIME_CHECKED:-0}" == 1 ]] || "$root/scripts/check-runtime.sh" || exit $?
 
 build=1
 update=0
 engine=quickjs
 context=native
+modules=store
+wasm=""
+tier=""
+experimental_options=0
 names=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build) build=0 ;;
     --update) update=1 ;;
-    --engine) engine="$2"; shift ;;
+    --engine|--context|--wasm|--tier)
+      [[ $# -ge 2 && "$2" != --* ]] || { echo "$1 needs a value"; exit 2; }
+      case "$1" in
+        --engine) engine="$2" ;;
+        --context) context="$2" ;;
+        --wasm) wasm="$2"; experimental_options=1 ;;
+        --tier) tier="$2"; experimental_options=1 ;;
+      esac
+      shift ;;
     --engine=*) engine="${1#--engine=}" ;;
-    --context) context="$2"; shift ;;
     --context=*) context="${1#--context=}" ;;
+    --modules) modules="$2"; shift ;;
+    --modules=*) modules="${1#--modules=}" ;;
+    --wasm=*) wasm="${1#--wasm=}"; experimental_options=1 ;;
+    --tier=*) tier="${1#--tier=}"; experimental_options=1 ;;
+    --*) echo "unknown option $1"; exit 2 ;;
     *) names+=("$1") ;;
   esac
   shift
 done
 
+if [[ "$engine" != spidermonkey && $experimental_options == 1 ]]; then
+  echo "--wasm and --tier need --engine spidermonkey"
+  exit 2
+fi
 case "$engine" in
   quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
-  hermes) wasm="$root/dist/bun-hermes.wasm"; build_script="$root/scripts/build-bun-hermes.sh" ;;
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
-  *) echo "unknown engine $engine (quickjs, jsc, hermes or browser)"; exit 2 ;;
+  spidermonkey)
+    [[ $update == 0 ]] || { echo "--engine spidermonkey cannot --update expectations"; exit 2; }
+    [[ -n "$wasm" ]] || { echo "--engine spidermonkey requires --wasm CORE"; exit 2; }
+    case "$tier" in
+      interp|pbl) ;;
+      *) echo "--engine spidermonkey requires --tier interp or pbl"; exit 2 ;;
+    esac
+    # Explicit experimental inputs never invoke the supported producer or any build.
+    build=0
+    ;;
+  *) echo "unknown engine $engine (quickjs, jsc, browser or explicit spidermonkey)"; exit 2 ;;
 esac
 case "$context" in
   native) ;;
@@ -77,9 +109,52 @@ case "$context" in
   *) echo "unknown context $context (native or hooks)"; exit 2 ;;
 esac
 
-scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")"
+launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
+shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
+env_wasm="${BUN_WASM_ENV_UTILITY:-$root/dist/bash-web-env.wasm}"
+child_env=()
+guest_env=()
+if [[ $engine == spidermonkey ]]; then
+  [[ -n "${BUN_WASM_LAUNCHER:-}" && -f "$BUN_WASM_LAUNCHER" && -x "$BUN_WASM_LAUNCHER" ]] || {
+    echo "experimental SpiderMonkey needs explicit executable BUN_WASM_LAUNCHER"; exit 2;
+  }
+  [[ -n "${BUN_WASM_SHELL:-}" && -n "${BUN_WASM_ENV_UTILITY:-}" ]] || {
+    echo "experimental SpiderMonkey needs explicit BUN_WASM_SHELL and BUN_WASM_ENV_UTILITY"; exit 2;
+  }
+  for input in "$wasm" "$(dirname "$wasm")/spidermonkey-engine.wasm" "$shell_wasm" "$env_wasm"; do
+    [[ -f "$input" && -r "$input" && -s "$input" ]] || { echo "missing experimental input $input"; exit 2; }
+  done
+  # The fixture child changes cwd; retain the supplied sibling layout, including symlinks.
+  wasm="$(realpath -ms -- "$wasm")"
+  launcher="$(realpath -ms -- "$launcher")"
+  shell_wasm="$(realpath -ms -- "$shell_wasm")"
+  env_wasm="$(realpath -ms -- "$env_wasm")"
+  child_env=("BUN_WASM_SPIDERMONKEY_TIER=$tier")
+  guest_env=(--env "BUN_WASM_SPIDERMONKEY_TIER=$tier")
+  printf 'experimental spidermonkey tier=%s core=%s side=%s launcher=%s\n' "$tier" "$wasm" "$(dirname "$wasm")/spidermonkey-engine.wasm" "$launcher"
+else
+  # test-checks.ts runs supported runtime checks once before parallel fixture groups.
+  [[ "${BUN_WASM_RUNTIME_CHECKED:-0}" == 1 ]] || "$root/scripts/check-runtime.sh" || exit $?
+fi
+
+scratch=""
 server_pid=""
-trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
+child_pid=""
+cleanup() {
+  if [[ -n "$child_pid" ]]; then
+    kill -KILL -- "-$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  [[ -z "$scratch" ]] || rm -rf "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")" || exit 1
 
 if [[ $build == 1 && $update == 0 ]]; then
   "$build_script" >"$scratch/build.log" 2>&1 || {
@@ -90,10 +165,9 @@ if [[ $build == 1 && $update == 0 ]]; then
 fi
 
 # Every native-engine guest imports runtime_proc, including non-network fixtures.
-launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
 start_test_server() {
   [[ -n "$server_pid" ]] && return 0
-  bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
+  TMPDIR="$scratch" bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
   server_pid=$!
   for _ in $(seq 50); do
     [[ -s "$scratch/server.port" ]] && break
@@ -109,15 +183,18 @@ if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
     { tail -30 "$scratch/shell-build.log"; echo "bash-web shell build failed"; exit 1; }
 fi
 # Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
-shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
-env_wasm="${BUN_WASM_ENV_UTILITY:-$root/dist/bash-web-env.wasm}"
 if [[ $update == 0 && $engine != browser && ! ( -f "$shell_wasm" && -f "$env_wasm" ) ]]; then
   echo "missing $shell_wasm or $env_wasm; run scripts/build-bash-web-shell.sh"
   exit 1
 fi
 
 if [[ ${#names[@]} == 0 ]]; then
-  for dir in "$root"/tests/fixtures/*/; do names+=("$(basename "$dir")"); done
+  group_fixtures=$(bun "$root/scripts/test-checks.ts" native --profile shared-group --list)
+  for dir in "$root"/tests/fixtures/*/; do
+    name=$(basename "$dir")
+    if grep -Fxq "tests/fixtures/$name" <<< "$group_fixtures"; then continue; fi
+    names+=("$name")
+  done
 fi
 
 normalize() {
@@ -152,8 +229,49 @@ pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $engine == spidermonkey ]]; then
+    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      printf 'FAIL %s (unsafe fixture name)\n' "$name"
+      fail=$((fail + 1))
+      failed+=("$name")
+      continue
+    fi
+    specialized=0
+    case "$name" in
+      http-response-lifecycle|worker-review|fs-empty-read|stdout-busy-loop|fs-writev-partial|pipe-closed-output)
+        specialized=1 ;;
+    esac
+    if [[ $specialized == 0 && (! -d "$root/tests/fixtures/$name" || ! -f "$root/tests/fixtures/$name/expected.txt") ]]; then
+      printf 'FAIL %s (missing fixture or expected.txt)\n' "$name"
+      fail=$((fail + 1))
+      failed+=("$name")
+      continue
+    fi
+  fi
+  harness_tier=()
+  harness_env=()
+  if [[ $engine == spidermonkey ]]; then
+    harness_tier=(--tier "$tier")
+    harness_env=(
+      "BUN_WASM_LAUNCHER=$launcher"
+      "BUN_WASM_SHELL=$shell_wasm"
+      "BUN_WASM_ENV_UTILITY=$env_wasm"
+      "BUN_WASM_SPIDERMONKEY_TIER=$tier"
+    )
+  fi
   if [[ $update == 0 && "$name" == http-response-lifecycle ]]; then
-    if BUN_WASM_LAUNCHER="$launcher" bun "$root/scripts/http-response-lifecycle.ts" "$engine" "$scratch/http-response-lifecycle"; then
+    if env "${harness_env[@]}" BUN_WASM_LAUNCHER="$launcher" bun "$root/scripts/http-response-lifecycle.ts" "$engine" "$scratch/http-response-lifecycle" --wasm "$wasm" "${harness_tier[@]}"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
+  if [[ $update == 0 && "$name" == io-resource-context ]]; then
+    iorc=(--surface native --engine "$engine" --guest "$wasm" --launcher "$launcher" --shell "$shell_wasm" --env-utility "$env_wasm")
+    [[ $engine == browser ]] && iorc=(--surface node-host --guest "$wasm" --context "$context")
+    if bun "$root/scripts/io-resource-context.ts" "${iorc[@]}" --out "$scratch/io-resource-context"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -162,7 +280,7 @@ for name in "${names[@]}"; do
     continue
   fi
   if [[ $update == 0 && "$name" == worker-review ]]; then
-    if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
+    if env "${harness_env[@]}" node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm" "${harness_tier[@]}"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -171,7 +289,7 @@ for name in "${names[@]}"; do
     continue
   fi
   if [[ $update == 0 && "$name" == fs-empty-read ]]; then
-    if python3 "$root/tests/test-empty-stdin.py" --engine "$engine" --wasm "$wasm"; then
+    if env "${harness_env[@]}" python3 "$root/tests/test-empty-stdin.py" --engine "$engine" --wasm "$wasm" "${harness_tier[@]}"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -180,7 +298,7 @@ for name in "${names[@]}"; do
     continue
   fi
   if [[ $update == 0 && "$name" == stdout-busy-loop ]]; then
-    if node --no-warnings "$root/tests/test-stdout-busy-loop.ts" --engine "$engine" --wasm "$wasm"; then
+    if env "${harness_env[@]}" node --no-warnings "$root/tests/test-stdout-busy-loop.ts" --engine "$engine" --wasm "$wasm" "${harness_tier[@]}"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -189,7 +307,7 @@ for name in "${names[@]}"; do
     continue
   fi
   if [[ $update == 0 && "$name" == fs-writev-partial ]]; then
-    if python3 "$root/tests/test-writev-partial.py" --engine "$engine" --wasm "$wasm"; then
+    if env "${harness_env[@]}" python3 "$root/tests/test-writev-partial.py" --engine "$engine" --wasm "$wasm" "${harness_tier[@]}"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -199,10 +317,11 @@ for name in "${names[@]}"; do
   fi
   if [[ $update == 0 && "$name" == pipe-closed-output ]]; then
     pipe_hosts=(node)
-    [[ $engine != browser ]] && pipe_hosts=(native node)
+    [[ $engine != browser && $engine != spidermonkey ]] && pipe_hosts=(native node)
+    [[ $engine == spidermonkey ]] && pipe_hosts=(native)
     pipe_ok=1
     for pipe_host in "${pipe_hosts[@]}"; do
-      python3 "$root/tests/test-closed-output.py" --engine "$engine" --wasm "$wasm" --host "$pipe_host" || pipe_ok=0
+      env "${harness_env[@]}" python3 "$root/tests/test-closed-output.py" --engine "$engine" --wasm "$wasm" --host "$pipe_host" "${harness_tier[@]}" || pipe_ok=0
     done
     if [[ $pipe_ok == 1 ]]; then
       pass=$((pass + 1))
@@ -240,7 +359,7 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && AGENT=0 CLAUDECODE='' HOME=/ "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
     code=$?
     if [[ "$code" != "$expected_exit" ]]; then
       echo "native Bun failed $name (exit $code, expected $expected_exit)"
@@ -262,15 +381,18 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && exec timeout --kill-after=5s 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" --modules "$modules" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
-      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err") &
   else
-    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
-      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
-      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && exec env "${child_env[@]}" timeout --kill-after=5s 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
+      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" "${guest_env[@]}" -- \
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err") &
   fi
+  child_pid=$!
+  wait "$child_pid"
   code=$?
+  child_pid=""
   show_files "$work" "$scratch/out"
   normalize <"$scratch/out" >"$scratch/out.n"
   normalize <"$scratch/err" >"$scratch/err.n"
@@ -278,6 +400,8 @@ for name in "${names[@]}"; do
   diff -u "$src/expected.txt" "$scratch/out.n" >"$scratch/diff" || ok=0
   if [[ -f "$src/expected_stderr.txt" ]]; then
     diff -u "$src/expected_stderr.txt" "$scratch/err.n" >>"$scratch/diff" || ok=0
+  elif [[ $engine == spidermonkey ]]; then
+    diff -u /dev/null "$scratch/err.n" >>"$scratch/diff" || ok=0
   fi
   if [[ $ok == 1 && "$code" == "$expected_exit" ]]; then
     pass=$((pass + 1))
@@ -287,8 +411,13 @@ for name in "${names[@]}"; do
   fail=$((fail + 1))
   failed+=("$name")
   printf 'FAIL %s (exit %s, expected %s)\n' "$name" "$code" "$expected_exit"
-  head -40 "$scratch/diff"
-  [[ -s "$scratch/err" ]] && { echo "--- stderr:"; head -20 "$scratch/err"; }
+  if [[ $engine == spidermonkey ]]; then
+    cat "$scratch/diff"
+    [[ ! -s "$scratch/err" ]] || { echo "--- stderr:"; cat "$scratch/err"; }
+  else
+    head -40 "$scratch/diff"
+    [[ -s "$scratch/err" ]] && { echo "--- stderr:"; tail -20 "$scratch/err"; }
+  fi
 done
 
 [[ $update == 1 ]] && exit 0

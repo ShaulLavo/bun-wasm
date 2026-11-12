@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { nativeTargetRoots, type NativeHandoffRoot } from "./ci-native-handoff-paths";
 
 const archiveNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"] as const;
 type ArchiveName = typeof archiveNames[number];
@@ -40,12 +41,20 @@ function context() {
     },
   };
 }
-function layout(state: Context) {
+type Root = Pick<NativeHandoffRoot, "path" | "presence">;
+function requiredRoots(paths: readonly string[]): Root[] {
+  return paths.map(path => ({ path, presence: "required" }));
+}
+function layout(state: Context): { name: ArchiveName; directory: string; roots: readonly Root[] }[] {
   return [
-    { name: archiveNames[0], directory: state.target, roots: ["."] },
-    { name: archiveNames[1], directory: state.cargo, roots: ["registry", "git", "bin/cargo-machete"] },
-    { name: archiveNames[2], directory: state.workspace, roots: ["vendor/bun", "vendor/boringssl"] },
+    { name: archiveNames[0], directory: state.target, roots: nativeTargetRoots },
+    { name: archiveNames[1], directory: state.cargo, roots: requiredRoots(["registry", "git", "bin/cargo-machete"]) },
+    { name: archiveNames[2], directory: state.workspace, roots: requiredRoots(["vendor/bun", "vendor/boringssl"]) },
   ];
+}
+function missing(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return true; throw error; }
 }
 function safeRelative(path: string): string {
   if (!path || isAbsolute(path) || path.split("/").includes("..") || /[\r\n\0]/.test(path)) throw new Error(`Unsafe archive path: ${path}`);
@@ -81,12 +90,20 @@ function trackDependencies(directory: string, path: string, tracked: Set<string>
     ancestors(tracked, path === "." ? file : `${path}/${file}`);
   }
 }
-function inventory(directory: string, roots: string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
+function presentRoots(directory: string, roots: readonly Root[]): string[] {
+  const present: string[] = [];
+  for (const root of roots) {
+    if (!missing(join(directory, safeRelative(root.path)))) present.push(root.path);
+    else if (root.presence === "required") throw new Error(`Missing required native handoff root: ${root.path}`);
+  }
+  return present;
+}
+function inventory(directory: string, roots: readonly string[], archive: ArchiveName, repositories: GitDirectory[], excluded = ""): string[] {
   const paths: string[] = [];
   const tracked = new Set<string>();
   function visit(path: string): void {
     safeRelative(path);
-    if (!include(path, tracked)) return;
+    if (path === excluded || !include(path, tracked)) return;
     const absolute = join(directory, path);
     const stat = lstatSync(absolute);
     const metadata = metadataRoot(path);
@@ -112,6 +129,25 @@ function shell(script: string, ...args: string[]): void {
 function output(values: Record<string, string>): void {
   appendFileSync(required("GITHUB_OUTPUT"), Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
 }
+function stageBunGit(state: Context, scratch: string): string {
+  const path = "vendor/bun/.git";
+  inventory(state.workspace, [path], "sources.tar.zst", []);
+  const directory = join(scratch, "source-git");
+  const metadata = join(directory, path);
+  const bun = join(state.workspace, "vendor/bun");
+  const base = /^BUN_COMMIT=([a-f0-9]{40})$/m.exec(readFileSync(join(state.workspace, "scripts/sync-bun.sh"), "utf8"))?.[1];
+  if (!base) throw new Error("Missing pinned Bun source commit");
+  const head = git(bun, "rev-parse", "HEAD");
+  mkdirSync(join(metadata, "objects/pack"), { recursive: true });
+  mkdirSync(join(metadata, "refs"));
+  // The consumer checks the patched HEAD and reapplies patches to the pinned base tree.
+  // Keep those two complete trees, without upstream history or unrelated refs.
+  shell('git -C "$1" rev-list --objects --no-object-names --no-walk "$3" "$4" | git -C "$1" pack-objects "$2"', bun, join(metadata, "objects/pack/pack"), head, base);
+  writeFileSync(join(metadata, "HEAD"), `${head}\n`);
+  writeFileSync(join(metadata, "shallow"), Array.from(new Set([head, base])).join("\n") + "\n");
+  execFileSync("git", ["-C", bun, "read-tree", head], { env: { ...process.env, GIT_INDEX_FILE: join(metadata, "index") } });
+  return directory;
+}
 async function pack(state: Context, bundle: string): Promise<void> {
   if (existsSync(bundle)) throw new Error("Refusing an existing handoff bundle");
   mkdirSync(bundle);
@@ -125,12 +161,18 @@ async function packArchives(state: Context, bundle: string, scratch: string): Pr
   mkdirSync(join(state.cargo, "git"), { recursive: true });
   for (const item of layout(state)) {
     const start = performance.now();
-    const paths = inventory(item.directory, item.roots, item.name, repositories);
+    const roots = presentRoots(item.directory, item.roots);
+    const sources = item.name === "sources.tar.zst";
+    const extraDirectory = sources ? stageBunGit(state, scratch) : item.directory;
+    const paths = inventory(item.directory, roots, item.name, repositories, sources ? "vendor/bun/.git" : "");
+    const extraPaths = sources ? inventory(extraDirectory, ["vendor/bun/.git"], item.name, repositories) : [];
     const list = join(scratch, "files");
+    const extraList = join(scratch, "extra-files");
     writeFileSync(list, paths.join("\0") + "\0");
-    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -o "$3"', item.directory, list, join(bundle, item.name));
+    writeFileSync(extraList, extraPaths.length ? extraPaths.join("\0") + "\0" : "");
+    shell('tar --posix --no-recursion --null -C "$1" -T "$2" -C "$4" -T "$5" -cpf - | zstd -T2 -6 --long=27 -o "$3"', item.directory, list, join(bundle, item.name), extraDirectory, extraList);
     archives[item.name] = await hash(join(bundle, item.name));
-    console.log(JSON.stringify({ archive: item.name, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
+    console.log(JSON.stringify({ archive: item.name, roots, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
   }
   const bun = { head: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD"), tree: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD^{tree}") };
   const manifest = { schema: 1, identity: state.identity, archives, repositories, bun };
@@ -151,21 +193,23 @@ function parseGit(value: unknown): GitDirectory {
   return { archive: name, path, bare: item.bare };
 }
 function absent(path: string): void {
-  try { lstatSync(path); }
-  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return; throw error; }
-  throw new Error(`Refusing to overlay native state: ${path}`);
+  if (!missing(path)) throw new Error(`Refusing to overlay native state: ${path}`);
 }
 function preflightDestinations(state: Context): void {
   for (const path of [state.target, join(state.cargo, "registry"), join(state.cargo, "git"), join(state.cargo, "bin/cargo-machete"), join(state.workspace, "vendor/bun"), join(state.workspace, "vendor/boringssl")]) absent(path);
 }
 async function inspect(state: Context, bundle: string) {
   digestText(required("NATIVE_QUALITY_MANIFEST_SHA256"));
-  if (await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
-  const manifest = object(JSON.parse(readFileSync(join(bundle, "manifest.json"), "utf8")));
+  // Hash and parse the same bytes, so the admitted digest covers exactly what is decoded.
+  const manifestBytes = readFileSync(join(bundle, "manifest.json"));
+  if (createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
+  const manifest = object(JSON.parse(manifestBytes.toString("utf8")));
   if (manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)) throw new Error("Foreign native handoff identity");
   const archives = object(manifest.archives);
   if (JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)) throw new Error("Native archive whitelist mismatch");
-  if (JSON.stringify(readdirSync(bundle).sort()) !== JSON.stringify(["manifest.json"].concat(archiveNames).sort())) throw new Error("Unexpected native bundle files");
+  const files = readdirSync(bundle).sort();
+  const expected = ["manifest.json"].concat(archiveNames).sort();
+  if (JSON.stringify(files) !== JSON.stringify(expected)) throw new Error(`Unexpected native bundle files: expected ${JSON.stringify(expected)}, found ${JSON.stringify(files)}`);
   for (const name of archiveNames) if (archives[name] !== await hash(join(bundle, name))) throw new Error(`Native archive digest mismatch: ${name}`);
   if (!Array.isArray(manifest.repositories)) throw new Error("Missing Git metadata inventory");
   const repositories = manifest.repositories.map(parseGit);
@@ -184,6 +228,7 @@ async function unpack(state: Context, bundle: string): Promise<void> {
     mkdirSync(item.directory, { recursive: true });
     shell('zstd -dc "$1" | tar --no-same-owner -xpf - -C "$2"', join(bundle, item.name), item.directory);
     for (const repository of manifest.repositories.filter(repository => repository.archive === item.name)) restoreGit(item.directory, repository);
+    rmSync(join(bundle, item.name));
   }
   const bun = join(state.workspace, "vendor/bun");
   if (git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree) throw new Error("Restored Bun Git identity mismatch");

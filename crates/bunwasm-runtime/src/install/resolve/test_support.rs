@@ -13,7 +13,7 @@ pub(super) fn lock_snapshot(manifest: &Value, resolver: &Resolver) -> Value {
     locked
 }
 
-pub(super) fn archive(meta: &Value) -> Vec<u8> {
+pub(in super::super) fn archive(meta: &Value) -> Vec<u8> {
     let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let mut archive = tar::Builder::new(compressor);
     let bytes = serde_json::to_vec(meta).unwrap();

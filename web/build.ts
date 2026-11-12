@@ -1,12 +1,15 @@
 // Builds the playground into web/dist as plain static files.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
-// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; HERMES_WASM overrides the opt-in ../dist/bun-hermes.wasm.
+// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm.
 // bash-web guests come from scripts/build-bash-web-shell.sh (BASH_WEB_GUESTS_DIR overrides ../dist).
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
+import { templateFiles } from "../sandbox/template-files";
+import { projectTemplates } from "./src/playground/project-templates";
 import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
+import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -26,6 +29,10 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Cloudflare Static Assets headers: cross-origin isolation (SharedArrayBuffer for
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
+for (const template of projectTemplates) {
+  const files = await templateFiles(resolve(here, "../sandbox", template.directory));
+  await Bun.write(join(out, template.file), JSON.stringify({ files }));
+}
 
 type Metafile = NonNullable<typeof result.metafile>;
 
@@ -56,6 +63,7 @@ function commandChunks(metafile: Metafile): string[] {
 
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
 const engineBuilds: Record<string, string> = {};
+await stageSharedPrograms(out, engineBuilds);
 
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) return false;
@@ -82,16 +90,15 @@ const jscEngineSource = join(dirname(jscSource), "jsc-engine.wasm");
 if (existsSync(jscSource) && !(await copyWasm(jscEngineSource, "jsc-engine.wasm"))) {
   throw new Error(`JSC core requires its matching side module: ${jscEngineSource}`);
 }
+if (process.env.SPIDERMONKEY_WASM) {
+  const source = resolve(here, process.env.SPIDERMONKEY_WASM);
+  if (!(await copyWasm(source, "bun-spidermonkey.wasm"))) throw new Error(`SpiderMonkey core is missing: ${source}`);
+  const side = join(dirname(source), "spidermonkey-engine.wasm");
+  if (!(await copyWasm(side, "spidermonkey-engine.wasm"))) throw new Error(`SpiderMonkey core requires its matching side module: ${side}`);
+}
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);
-}
-
-const hermesSource = resolve(here, process.env.HERMES_WASM ?? "../dist/bun-hermes.wasm");
-await copyWasm(hermesSource, "bun-hermes.wasm");
-const hermesEngineSource = join(dirname(hermesSource), "hermes-engine.wasm");
-if (existsSync(hermesSource) && !(await copyWasm(hermesEngineSource, "hermes-engine.wasm"))) {
-  throw new Error(`Hermes core requires its matching side module: ${hermesEngineSource}`);
 }
 
 const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");

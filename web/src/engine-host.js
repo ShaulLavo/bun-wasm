@@ -1,3 +1,4 @@
+import { installNativeWasmLifetime } from "./native-wasm-lifetime.ts";
 import { createScriptEvaluation } from "./script-evaluation.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
@@ -6,9 +7,12 @@ import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
+import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { reportWasmCallTrap } from "./wasm-call-trap.ts";
+import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -20,9 +24,11 @@ import { bindSharedObjectHost } from "./shared-objects/host.ts";
 // - implements the natives that need engine values (module loading, eval, promise/proxy
 //   introspection) on the host engine,
 // - evaluates the runtime's JS polyfills (src/js/*.js, served by the wasm) natively,
-// - loads ES modules natively: each file becomes a blob: (browser) or data: (Node) URL whose
-//   import specifiers point at its dependencies' URLs, so live bindings, top-level await and
-//   import.meta are the engine's own,
+// - loads ES modules: with a module store (Node's module hooks), natively, each file a named or
+//   data: URL whose import specifiers point at its dependencies' URLs; without one (a browser
+//   worker, controlled by a service worker or not), as registration records linked and
+//   evaluated by the runtime's esm_loader (module-records.ts), so import cycles need no URL
+//   before their source exists,
 // - and drives the runtime's event loop from the host's (timers on setTimeout/MessageChannel,
 //   microtasks native).
 //
@@ -47,6 +53,13 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+// Called through a variable: an indirect eval, in the global scope. Captured so a guest that
+// replaces `globalThis.eval` cannot reach CommonJS compilation or lazy polyfills.
+// oxlint-disable-next-line no-eval -- The runtime's classic-script factories run through the engine evaluator.
+const nativeEval = globalThis.eval;
+const nativeEncodeURIComponent = globalThis.encodeURIComponent;
+const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
+const nativeMapSet = uncurryThis(Map.prototype.set);
 
 // A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
 // reads and calls of GetIterator(iterable, async) and given to the loop in
@@ -219,25 +232,34 @@ class Writer {
 }
 
 class Reader {
-  constructor(bytes, view, pos) {
+  constructor(bytes, view, pos, end) {
     this.bytes = bytes;
     this.view = view;
     this.pos = pos;
+    this.end = end;
+  }
+  need(n) {
+    if (n > this.end - this.pos) throw new RangeError("corrupt native result");
   }
   u32() {
+    this.need(4);
     const n = this.view.getUint32(this.pos, true);
     this.pos += 4;
     return n;
   }
   raw() {
     const n = this.u32();
+    this.need(n);
     const s = this.bytes.subarray(this.pos, this.pos + n);
     this.pos += n;
     return s;
   }
   value() {
+    this.need(1);
     const tag = this.bytes[this.pos++];
     switch (tag) {
+      case T.UNDEFINED:
+        return undefined;
       case T.NULL:
         return null;
       case T.FALSE:
@@ -245,16 +267,19 @@ class Reader {
       case T.TRUE:
         return true;
       case T.NUM: {
+        this.need(8);
         const n = this.view.getFloat64(this.pos, true);
         this.pos += 8;
         return n;
       }
       case T.BIGINT: {
+        this.need(8);
         const n = this.view.getBigInt64(this.pos, true);
         this.pos += 8;
         return n;
       }
       case T.BIGUINT: {
+        this.need(8);
         const n = this.view.getBigUint64(this.pos, true);
         this.pos += 8;
         return n;
@@ -264,41 +289,62 @@ class Reader {
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
-      case T.ARRAY: {
-        const n = this.u32();
-        const out = new Array(n);
-        for (let i = 0; i < n; i++) out[i] = this.value();
-        return out;
-      }
-      case T.OBJECT: {
-        const n = this.u32();
-        const out = {};
-        for (let i = 0; i < n; i++) {
-          const k = wireFromUtf8.decode(this.raw().slice());
-          out[k] = this.value();
-        }
-        return out;
-      }
+      case T.ARRAY:
+        return this.array();
+      case T.OBJECT:
+        return this.object();
       default:
-        return undefined;
+        throw new RangeError("corrupt native result");
     }
+  }
+  array() {
+    const n = this.u32();
+    this.need(n);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = this.value();
+    return out;
+  }
+  object() {
+    const n = this.u32();
+    // Each field needs a four-byte key length and at least a value tag.
+    this.need(n * 5);
+    const out = {};
+    for (let i = 0; i < n; i++) {
+      const k = wireFromUtf8.decode(this.raw().slice());
+      Object.defineProperty(out, k, {
+        value: this.value(), enumerable: true, writable: true, configurable: true,
+      });
+    }
+    return out;
   }
 }
 
 // --- calling the wasm --------------------------------------------------------------------
 
-function wasmCaller(exports) {
+function wasmCaller(exports, onWasmCallTrap) {
   const memory = memoryViews(exports.memory);
   const result = () => {
-    const ptr = exports.bunwasm_result_ptr();
-    return new Reader(memory.bytes(), memory.view(), ptr).value();
+    const ptr = exports.bunwasm_result_ptr() >>> 0;
+    const len = exports.bunwasm_result_len() >>> 0;
+    const bytes = memory.bytes();
+    const end = ptr + len;
+    if (end > bytes.byteLength) throw new RangeError("corrupt native result");
+    const reader = new Reader(bytes, memory.view(), ptr, end);
+    const value = reader.value();
+    if (reader.pos !== end) throw new RangeError("corrupt native result");
+    return value;
   };
   function call(index, args) {
     const w = new Writer();
     w.value(args);
     const ptr = exports.bunwasm_alloc(w.len);
     memory.bytes().set(w.buf.subarray(0, w.len), ptr);
-    const status = exports.bunwasm_call(index, ptr, w.len);
+    let status;
+    try { status = exports.bunwasm_call(index, ptr, w.len); }
+    catch (error) {
+      reportWasmCallTrap(onWasmCallTrap, error, index);
+      throw error;
+    }
     const value = result();
     if (status !== 0) throw nativeError(value);
     return value;
@@ -366,7 +412,7 @@ class EngineHost {
   constructor(o, resolve) {
     this.o = o;
     this.resolveDone = resolve;
-    this.wasm = wasmCaller(o.instance.exports);
+    this.wasm = wasmCaller(o.instance.exports, o.onWasmCallTrap);
     this.exited = false;
     this.pendingAsync = 0;
     this.testComplete = false;
@@ -375,17 +421,20 @@ class EngineHost {
     this.immediate = false;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
-    this.building = new Set();
     // promise -> {state, value}, for console.log and Bun.peek.
     this.promiseStates = new WeakMap();
-    // Pending writes to o.modules, awaited before the next import().
+    // New writes to o.modules, moved to `writing` by the next import(). `writing` keeps each
+    // write until it settles, so every import that overlaps it waits for it.
     this.storing = [];
+    this.writing = new Set();
     this.paths = new Map();
-    this.contentModules = o.moduleUrls === "blob" ? new ContentModules({
+    this.contentModules = o.modules && o.moduleUrls === "blob" ? new ContentModules({
       named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
       paths: this.paths, storing: this.storing,
     }) : null;
     this.handoffs = new Map();
+    // Without a module store: the record loader for every ES module (createRecords).
+    this.records = null;
     this.asyncContext = undefined;
     this.wakeArmed = false;
     if (NativeMessageChannel) {
@@ -402,8 +451,12 @@ class EngineHost {
     this.entry = d.entry;
     const native = this.buildNative(d);
     this.native = native;
+    // Before any module is read: the wasm then prepares every module for its record.
+    if (!this.o.modules) native.hostUseModuleRecords();
     let internal;
     try {
+      // The guest's constructor from here on; first-party and Waffle allocators captured the native one at bundle evaluation.
+      if (this.o.sharedObjects) installSharedBufferRealm(this.o.sharedObjects.claimBuffer);
       const factory = this.evalPolyfill("bootstrap");
       internal = factory(native);
     } catch (err) {
@@ -418,13 +471,17 @@ class EngineHost {
       if (typeof file !== "string") return file;
       const generated = native.preparedSourceName(file);
       if (generated !== undefined) return generated;
-      const path = this.paths.get(file);
+      const fragment = file.indexOf("#");
+      const path = this.paths.get(fragment < 0 ? file : file.slice(0, fragment));
       if (path) return path;
       if (evalFrame) return file;
       return /^(blob:|data:|file:|https?:|node:internal\/)/.test(file) ? `bun-wasm:host` : file;
     };
     this.installGlobals();
     this.wrapPromiseJobs();
+    // After the promise wrapper (the loader's reactions carry AsyncLocalStorage), before
+    // user code (the loader captures the built-ins it uses).
+    if (!this.o.modules) this.records = this.createRecords();
     this.watchRejections();
     this.startEntry();
     this.schedule(0);
@@ -473,7 +530,8 @@ class EngineHost {
     native.DOMException = NativeDOMException;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
-    Object.assign(native, this.valueNatives(native.mapPosition));
+    const mapPosition = native.mapPosition;
+    Object.assign(native, this.valueNatives((name, line, col) => name.startsWith("bunwasm:hot:") && native.hotMapLookup ? native.hotMapLookup(name, line, col) : mapPosition(name, line, col)));
     return native;
   }
 
@@ -579,21 +637,43 @@ class EngineHost {
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
   // sourceURL names the file in stack traces.
   evalAt(code, filename) {
-    // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
-    return (0, eval)(`${code}\n//# sourceURL=${filename}`);
+    return nativeEval(`${code}\n//# sourceURL=${filename}`);
+  }
+
+  /**
+   * The record loader for every ES module of a host without a module store. Called after
+   * promise reactions are wrapped and before user code, so `then` is the host's own.
+   */
+  createRecords() {
+    const host = this;
+    const then = uncurryThis(Promise.prototype.then);
+    return createModuleRecords({
+      record: key => host.native.hostModuleRecord(key),
+      // A module URL the URL -> path table maps back to the file in stack traces.
+      evaluate: (code, key, done, fail) => {
+        then(import(host.url(code, key)), namespace => { done(namespace.default); }, fail);
+      },
+      handoff: (key, format) => host.handoff(key, format),
+      keys: wrapperKeys,
+      initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
+      resolve: (specifier, referrer) => host.native.resolveImport(specifier, referrer, "inferred"),
+      active: () => !host.exited,
+      track: operation => host.track(operation, then),
+    }, this.evalPolyfill("esm_loader"), then);
   }
 
   // --- ES modules ---
 
+  // The fragment names the file: fetching ignores it, but a V8 stack frame's URL (and
+  // CallSite#getFileName) then ends with the module's path. WebKit drops the fragment,
+  // so the table keys the URL without it (displayName strips it). A data: URL also
+  // encodes parentheses, which stack-trace eval origins use as delimiters.
   url(source, key) {
-    let url;
-    if (this.o.moduleUrls === "blob" && nativeCreateObjectURL) {
-      url = nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }));
-    } else {
-      url = `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`;
-    }
-    this.paths.set(url, key);
-    return url;
+    const base = this.o.moduleUrls === "blob" && nativeCreateObjectURL
+      ? nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }))
+      : `data:text/javascript;charset=utf-8,${escapeParentheses(nativeEncodeURIComponent(source))}`;
+    nativeMapSet(this.paths, base, key);
+    return `${base}#${nativeEncodeURIComponent(key)}`;
   }
 
   importKey(key) {
@@ -602,48 +682,43 @@ class EngineHost {
 
   /** Builds module `key` and its static dependencies, waits until the store has them, imports it. */
   async importReady(key) {
+    if (this.records) return this.records.importKey(key);
     const url = this.ensureModule(key);
-    if (this.storing.length > 0) await Promise.all(this.storing.splice(0));
+    for (const write of this.storing.splice(0)) this.watchWrite(write);
+    if (this.writing.size > 0) await Promise.all(this.writing);
     return import(url);
   }
 
-  /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
+  watchWrite(write) {
+    this.writing.add(write);
+    const settled = () => this.writing.delete(write);
+    write.then(settled, settled);
+  }
+
+  /**
+   * The URL of module `key` (a path or a builtin name) in the module store, built with its
+   * dependencies. Only a host with a store gets here; the others load records.
+   */
   ensureModule(key) {
     if (this.contentModules) return this.contentModules.ensure(key);
     const cached = this.urls.get(key);
     if (cached) return cached;
+    // A named URL is known before its source exists, so import cycles link
+    // natively, with live bindings, like in Bun.
     const store = this.o.modules;
-    if (store) {
-      // A named URL is known before its source exists, so import cycles link
-      // natively, with live bindings, like in Bun.
-      const url = store.url(key);
-      this.urls.set(key, url);
-      this.paths.set(url, key);
-      let source;
-      try {
-        source = this.moduleSource(key);
-      } catch (err) {
-        this.urls.delete(key);
-        throw err;
-      }
-      const write = store.put(url, source);
-      if (write) this.storing.push(write);
-      return url;
-    }
-    // Content URLs (blob:/data:) exist only once their source is final: no cycles.
-    if (this.building.has(key)) {
-      const err = new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`);
-      err.code = "ERR_CIRCULAR_IMPORT";
+    const url = store.url(key);
+    this.urls.set(key, url);
+    this.paths.set(url, key);
+    let source;
+    try {
+      source = this.moduleSource(key);
+    } catch (err) {
+      this.urls.delete(key);
       throw err;
     }
-    this.building.add(key);
-    try {
-      const url = this.url(this.moduleSource(key), key);
-      this.urls.set(key, url);
-      return url;
-    } finally {
-      this.building.delete(key);
-    }
+    const write = store.put(url, source);
+    if (write) this.storing.push(write);
+    return url;
   }
 
   moduleSource(key) {
@@ -651,16 +726,19 @@ class EngineHost {
     if (info.format === "esm") return this.linkEsm(key, info);
     // CommonJS, JSON, text and builtins: evaluated now (sharing require's
     // cache), re-exported by a small wrapper.
-    let value;
-    let def;
-    if (info.format === "builtin") {
-      value = this.internal.builtin(key);
-      def = value && typeof value === "object" && value.__esModule ? value.default : value;
-    } else {
-      [value, def] = this.internal.importNonEsm(key, info.format);
+    const handoff = this.handoff(key, info.format);
+    this.handoffs.set(key, handoff);
+    return wrapperSource(key, handoff.value);
+  }
+
+  /** A non-ES module's exports, run (or reused) through require's cache, and its default. */
+  handoff(key, format) {
+    if (format === "builtin") {
+      const value = this.internal.builtin(key);
+      return { value, default: value && typeof value === "object" && value.__esModule ? value.default : value };
     }
-    this.handoffs.set(key, { value, default: def });
-    return wrapperSource(key, value);
+    const [value, def] = this.internal.importNonEsm(key, format);
+    return { value, default: def };
   }
 
   linkEsm(key, info) {
@@ -683,7 +761,7 @@ class EngineHost {
   }
 
   replacement(from, imp) {
-    if (imp.kind === "dynamic") return `globalThis.__bunwasm_dynamicImport(${JSON.stringify(from)})`;
+    if (imp.kind === "dynamic") return `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(from)})`;
     if (imp.key === null) {
       const err = new Error(imp.error);
       err.code = "ERR_MODULE_NOT_FOUND";
@@ -698,13 +776,16 @@ class EngineHost {
     hidden("__bunwasm_meta", (meta, path) => {
       host.internal.initImportMeta(meta, path, path === host.internal.mainPath);
     });
-    hidden("__bunwasm_dynamicImport", (from) => (spec) =>
-      host.track(
-        (async () => host.importReady(host.native.resolve(NativeString(spec), from, false)))(),
-      ),
+    hidden("__bunwasm_dynamicImport", (from) => (spec, options) => host.records
+      ? host.records.importFrom(spec, from, options)
+      : host.track(host.internal.importRequests.request(spec, options, (text, mode, resolve, reject) => {
+        const key = host.native.resolveImport(text, from, mode);
+        host.importReady(key).then(resolve, reject);
+      })),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
     this.installContextHooks(hidden);
+    installNativeWasmLifetime(WebAssembly, promise => host.track(promise, observePromise), (promise, fulfilled, rejected) => host.promiseThen(promise, fulfilled, rejected));
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }
@@ -1001,14 +1082,20 @@ class EngineHost {
 
   // --- the event loop ---
 
-  /** Keep the process alive until `promise` settles; wake the loop then. */
-  track(promise) {
+  /** Keeps the loop alive until `promise` settles; `then`, when given, is a captured reaction. */
+  track(promise, then) {
     this.pendingAsync++;
     const done = () => {
       this.pendingAsync--;
       this.schedule(0);
     };
-    promise.then(done, done);
+    try {
+      if (then) then(promise, done, done);
+      else promise.then(done, done);
+    } catch (error) {
+      done();
+      throw error;
+    }
     return promise;
   }
 
@@ -1043,6 +1130,7 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    this.enterRoot();
     // Read before stepping I/O, so a change published meanwhile still ends the next wait.
     const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
     this.guard(() => this.internal.pumpSignals(), false);
@@ -1068,6 +1156,17 @@ class EngineHost {
       return undefined;
     }
     return this.finish();
+  }
+
+  // Every turn is a host task with an empty stack: the scheduler's MessageChannel and
+  // timers, network readiness and process-wake notifications all arrive here. No request's
+  // frame applies to it. Without a native continuation provider the frame is the host's own
+  // slot, and a resumed continuation's restore microtask can leave an earlier request's
+  // frame there (installContextHooks). The request handler, signal handler or beforeExit
+  // listener this turn runs would then see it, and its `run` would copy that request's other
+  // stores.
+  enterRoot() {
+    if (!this.o.asyncContext) this.asyncContext = undefined;
   }
 
   // Pipe and child changes publish on the process wake word: run the loop for them rather than
@@ -1133,26 +1232,73 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
-    this.internal?.workerStartup?.cancel();
-    this.o.sharedObjects?.close();
-    this.disposeNativeStreams?.();
-    this.native.closeAllDirs();
-    this.flush();
-    if (this.timer !== null) nativeClearTimeout(this.timer);
-    if (this.o.onExit) this.o.onExit(code);
-    this.resolveDone(code);
+    let cleanupError;
+    const recordCleanupError = error => {
+      if (!cleanupError) {
+        cleanupError = error;
+        return;
+      }
+      const previous = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      cleanupError = new AggregateError(previous.concat(error), "Engine cleanup failed");
+    };
+    try {
+      this.internal?.workerStartup?.cancel();
+    } catch (error) {
+      recordCleanupError(error);
+    } finally {
+      try { this.o.sharedObjects?.close(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.disposeNativeStreams?.(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.native.tlsDispose(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.native.closeAllDirs(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.flush(); }
+      catch (error) { recordCleanupError(error); }
+      if (this.timer !== null) nativeClearTimeout(this.timer);
+      try { this.o.onExit?.(code); }
+      catch (error) { recordCleanupError(error); }
+      try { this.resolveDone(code); }
+      catch (error) { recordCleanupError(error); }
+    }
+    if (cleanupError) throw cleanupError;
   }
+}
+
+/** An encoded URL component with `(` and `)` encoded too. */
+function escapeParentheses(text) {
+  let out = "";
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    out += character === "(" ? "%28" : character === ")" ? "%29" : character;
+  }
+  return out;
+}
+
+// What wrapperKeys uses, captured before user code: it also runs on the record import path.
+const nativeObjectKeys = Object.keys;
+const nativeArrayPush = Function.prototype.call.bind(Array.prototype.push);
+const nativeRegExpExec = Function.prototype.call.bind(RegExp.prototype.exec);
+const identifierKey = /^[\p{L}\p{N}_$]+$/u;
+
+/** The named exports a non-ES module's namespace gets: its own enumerable identifier keys. */
+function wrapperKeys(value) {
+  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? nativeObjectKeys(value) : [];
+  const names = [];
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index];
+    if (key !== "default" && key !== "__esModule" && nativeRegExpExec(identifierKey, key) !== null) nativeArrayPush(names, key);
+  }
+  return names;
 }
 
 /** ES module re-exporting a CommonJS/JSON/builtin module's exports (handed over by __bunwasm_wrap). */
 function wrapperSource(key, value) {
-  const keys = value !== null && (typeof value === "object" || typeof value === "function") ? Object.keys(value) : [];
   let src = `const h = globalThis.__bunwasm_wrap(${JSON.stringify(key)}); const m = h.value; export default h.default;\n`;
-  const exports = [];
-  keys.forEach((k, i) => {
-    if (k === "default" || k === "__esModule" || !/^[\p{L}\p{N}_$]+$/u.test(k)) return;
+  const exports = wrapperKeys(value).map((k, i) => {
     src += `const e${i} = m[${JSON.stringify(k)}];\n`;
-    exports.push(`e${i} as ${JSON.stringify(k)}`);
+    return `e${i} as ${JSON.stringify(k)}`;
   });
   if (exports.length) src += `export { ${exports.join(", ")} };\n`;
   return src;

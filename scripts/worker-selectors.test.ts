@@ -22,7 +22,7 @@ function workerModule(self: boolean, control: unknown = { input: 12, output: 15 
   const modules: Record<string, unknown> = {
     process, events: EventEmitter, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({ prepare: () => ({ graph: {}, commit() {}, abort() {} }) }) },
-    spawn: { spawn: () => ({ pid: 71, _workerChannel: { input: 21, output: 22 }, _abortWorker() {} }) },
+    spawn: { spawnWorker: () => ({ pid: 71, _workerChannel: { input: 21, output: 22 }, _abortWorker() {} }) },
     worker_channel: { open: (read: number, write: number) => {
       channels.push([read, write]);
       throw stop;

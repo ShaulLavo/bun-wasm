@@ -1,3 +1,4 @@
+import { nativeStreamBridgeSource } from "./fixtures/native-stream-source.ts";
 import { stripTypeScriptTypes } from "node:module";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -15,7 +16,7 @@ function inputs() {
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.directHelper = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-direct-stream.ts"), "utf8"));
-  sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
+  sources.hostBridge = nativeStreamBridgeSource(stripTypeScriptTypes);
   sources.fromControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-readable-from-controls.ts", import.meta.url), "utf8"));
   sources.completionControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-stream-completion-controls.ts", import.meta.url), "utf8"));
   sources.reactControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-direct-react-controls.ts", import.meta.url), "utf8"));
@@ -55,8 +56,7 @@ for (const name of ["chromium", "webkit"]) {
         return { count, milliseconds: runs.toSorted((a, b) => a - b)[3], runs };
       }
       const nativeConstruction = sources.benchmark ? await constructionTime(native.ReadableStream) : undefined;
-      const constructDirect = new Function(sources.directHelper.replace("export function constructNativeReadable", "function constructNativeReadable") + ";return constructNativeReadable;")();
-      const dispose = sources.hostBridge ? new Function("constructNativeReadable", sources.hostBridge.replace(/^import .*native-direct-stream.*;$/m, "").replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")(constructDirect) : () => {};
+      const dispose = sources.hostBridge ? new Function(sources.hostBridge)() : () => {};
       const bridgeConstruction = sources.benchmark ? await constructionTime(ReadableStream) : undefined;
       const cache = new Map();
       let frame;

@@ -1,6 +1,7 @@
 import { quickjsPair } from "./quickjs-plan-fixture";
+import { linkedFixtureValue } from "./linked-fixture";
 import { expect, test } from "bun:test";
-import { BunWasmAssetError, loadBunWasm, prepareProgram, prepareQuickjsProgram, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
+import { BunWasmAssetError, loadBunWasm, prepareProgram, prepareQuickjsProgram, programMetadata, type BunWasmAsset } from "../../src/assets.js";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const hash = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -145,24 +146,23 @@ test("distinct valid QuickJS sides retain distinct Waffle program associations",
   const first = await prepareQuickjsProgram(core, side);
   const second = await prepareQuickjsProgram(core, sideB);
   expect(first).not.toBe(second);
-  expect(await prepareQuickjsProgram(core, side)).toBe(first);
-  expect(programLinkPlan(first)?.libraries[0]?.source).toEqual(side);
-  expect(programLinkPlan(second)?.libraries[0]?.source).toEqual(sideB);
+  expect(await prepareQuickjsProgram(core, side)).not.toBe(first);
+  expect(programMetadata(first).linkPlan).not.toBe(programMetadata(second).linkPlan);
+  expect(linkedFixtureValue(programMetadata(first).linkPlan)).toBe(42);
+  expect(linkedFixtureValue(programMetadata(second).linkPlan)).toBe(42);
   expect(WebAssembly.Module.customSections(first, "bun-wasm-pair")).toHaveLength(1);
   expect(WebAssembly.Module.exports(first)).toEqual(WebAssembly.Module.exports(new WebAssembly.Module(core)));
   const ordinary = new WebAssembly.Module(wasm);
-  expect(programLinkPlan(ordinary)).toBeUndefined();
+  expect(programMetadata(ordinary).linkPlan).toBeUndefined();
   expect(await loadBunWasm({ module: ordinary })).toBe(ordinary);
 });
 
 test("paired preparation snapshots both inputs before asynchronous hashing", async () => {
   const { core, side } = quickjsPair();
-  const originalCore = core.slice(), originalSide = side.slice();
   const pending = prepareQuickjsProgram(core, side);
   core.fill(0); side.fill(0);
   const module = await pending;
-  expect(programLinkPlan(module)?.core.source.slice(0, originalCore.length)).toEqual(originalCore);
-  expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(originalSide);
+  expect(linkedFixtureValue(programMetadata(module).linkPlan)).toBe(42);
 });
 
 test("prepares the verified pair and rejects its naked core override", async () => {
@@ -170,10 +170,8 @@ test("prepares the verified pair and rejects its naked core override", async () 
   const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
   const paired = { kind: "quickjs", core: describe("https://example.test/bun.wasm", core), side: describe("https://example.test/quickjs.wasm", side) } satisfies BunWasmAsset;
   const module = await loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.core.url ? core : side) });
-  const plan = programLinkPlan(module);
-  expect(plan?.core.source.slice(0, core.length)).toEqual(core);
-  expect(plan?.core.source.length).toBeGreaterThan(core.length);
-  expect(plan?.libraries[0]?.source).toEqual(side);
+  const plan = programMetadata(module).linkPlan;
+  expect(linkedFixtureValue(plan)).toBe(42);
   expect(await loadBunWasm({ module })).toBe(module);
   await expect(loadBunWasm({ module: new WebAssembly.Module(core) })).rejects.toThrow("matching prepared side module");
 });
@@ -183,12 +181,10 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} preparation reject
   const other = quickjsPair(kind === "jsc" ? "quickjs" : "jsc");
   await expect(prepareProgram({ kind, core, side: other.side })).rejects.toThrow("initializer/RUN");
   await expect(prepareProgram({ kind: kind === "jsc" ? "quickjs" : "jsc", core, side })).rejects.toThrow("core declaration");
-  const expectedCore = core.slice(), expectedSide = side.slice();
   const pending = prepareProgram({ kind, core, side });
   core.fill(0); side.fill(0);
   const module = await pending;
-  expect(programLinkPlan(module)?.core.source.slice(0, expectedCore.length)).toEqual(expectedCore);
-  expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(expectedSide);
+  expect(linkedFixtureValue(programMetadata(module).linkPlan)).toBe(42);
 });
 
 test("paired preparation never compiles synchronously, which browser main threads refuse for large modules", async () => {
@@ -197,8 +193,20 @@ test("paired preparation never compiles synchronously, which browser main thread
   const refused = new Proxy(Module, { construct() { throw new RangeError("WebAssembly.Compile is disallowed on the main thread"); } });
   Reflect.set(WebAssembly, "Module", refused);
   try {
-    expect(programLinkPlan(await prepareProgram({ kind: "jsc", core, side }))?.libraries[0]?.source).toEqual(side);
+    const module = await prepareProgram({ kind: "jsc", core, side });
+    expect(programMetadata(module).linkPlan).toBeDefined();
   } finally {
     Reflect.set(WebAssembly, "Module", Module);
   }
+});
+
+test("prepared roots retain source-derived memory declarations", async () => {
+  const { programMemory } = await import("../../src/program-memory.ts");
+  const { pages } = await import("waffle");
+  const core = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 5, 4, 1, 1, 1, 7]);
+  const module = await prepareProgram({ kind: "single", core });
+  core.fill(0);
+  expect(programMemory(module)).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(7) }]);
+  expect(() => programMemory(new WebAssembly.Module(wasm))).toThrow("source memory declarations");
+  expect(programMemory(await prepareProgram({ kind: "single", core: wasm }))).toEqual([]);
 });

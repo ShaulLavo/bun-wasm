@@ -4,11 +4,13 @@ import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { ENGINE_BIN } from "../src/executable-paths.ts";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 import { sample } from "./app-matrix/engine-memory-hook.ts";
 import { ready, terminalText, writeFile } from "../web/tests/playground.mjs";
 import { stopForeground } from "../web/tests/foreground.ts";
 
-const failedBytes = 600 * 1024 * 1024;
+export const failedBytes = maxMemoryBytes() + 64 * 1024 * 1024;
+export const fixtureAllocationBytes = 8 * 1024 * 1024;
 const gate = `import fs from 'node:fs'; async function gate(name) { while (!fs.existsSync('/home/user/'+name)) await Bun.sleep(20); }`;
 
 const repository = resolve(import.meta.dir, "..");
@@ -90,7 +92,10 @@ export function installActorObserver({ engine, executable, paths }: { engine: En
     const argv: unknown[] = message.args;
     if (!paths.includes(String(argv[2]))) return result;
     const telemetry: unknown = Reflect.get(message, "memoryTelemetry");
-    const valid = argv.length === 3 && argv[0] === executable && argv[1] === "run" && Reflect.get(message, "engine") === engine
+    const env: unknown = Reflect.get(message, "env");
+    // The launcher preserves shell argv[0] and overwrites this authority from the admitted executable.
+    const executableMatches = env && typeof env === "object" && Reflect.get(env, "BUNWASM_EXEC_PATH") === executable;
+    const valid = executableMatches && argv.length === 3 && (argv[0] === "bun" || argv[0] === executable) && argv[1] === "run" && Reflect.get(message, "engine") === engine
       && telemetry && typeof telemetry === "object" && "id" in telemetry && typeof telemetry.id === "string" && telemetry.id.length > 0
       && "buffer" in telemetry && telemetry.buffer instanceof SharedArrayBuffer;
     observations.push(valid ? { authority: "host-worker-launch", id: telemetry.id, engine, path: argv[2] }
@@ -101,7 +106,7 @@ export function installActorObserver({ engine, executable, paths }: { engine: En
 }
 export function selectActor(observations: unknown, expected: Pick<Actor, "engine" | "path">): Actor {
   assert(Array.isArray(observations), "host launch observations unavailable");
-  assert(expected.engine === "quickjs" || expected.engine === "jsc", "only QJS/JSC are qualified; Hermes needs its own merged heap ABI and controls");
+  assert(expected.engine === "quickjs" || expected.engine === "jsc", "only supported paired engines QJS/JSC are qualified");
   const matches = observations.filter((value: unknown) => value && typeof value === "object" && Reflect.get(value, "path") === expected.path);
   assert.equal(matches.length, 1, `unique host fixture launch required: ${expected.path}`);
   const value: unknown = matches[0];
@@ -190,7 +195,7 @@ async function verifyEngine(browser: Browser, url: string, engine: "quickjs" | "
       console.log('memory-baseline'); await gate('busy');
       console.log('memory-busy-start'); const until = Date.now()+5000; while(Date.now()<until) {}
       console.log('memory-busy-end'); await gate('allocate');
-      globalThis.kept = new Uint8Array(1048576); console.log('memory-allocated'); await gate('fail');
+      globalThis.kept = new Uint8Array(${fixtureAllocationBytes}); console.log('memory-allocated'); await gate('fail');
       try { globalThis.failed = new Uint8Array(${failedBytes}); } catch(e) { console.log('memory-failure'); }
       await gate('stop'); console.log('memory-finished');`);
     await waitMarker(page, engine, "memory-baseline");

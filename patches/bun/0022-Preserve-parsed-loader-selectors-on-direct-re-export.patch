@@ -1,0 +1,29 @@
+From 0de39d51cfa0314998cefb5b1c8110d0d3032f3a Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 8 Nov 2026 09:45:45 +0200
+Subject: [PATCH 22/22] Preserve parsed loader selectors on direct re-exports
+
+---
+ src/js_parser/parse/parse_stmt.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/js_parser/parse/parse_stmt.rs b/src/js_parser/parse/parse_stmt.rs
+index 201bb653..0b984ec9 100644
+--- a/src/js_parser/parse/parse_stmt.rs
++++ b/src/js_parser/parse/parse_stmt.rs
+@@ -1257,6 +1257,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                     // TODO: import assertions
+                     // path.assertions
+                 );
++                p.import_records.items_mut()[import_record_index as usize].loader = path.loader;
+ 
+                 if path.is_macro {
+                     p.log().add_error(
+@@ -1329,6 +1330,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+                     let import_record_index =
+                         p.add_import_record(ImportKind::Stmt, parsed_path.loc, parsed_path.text);
++                    p.import_records.items_mut()[import_record_index as usize].loader = parsed_path.loader;
+                     let path_name = fs::PathName::init(parsed_path.text);
+                     let namespace_ref = {
+                         use std::io::Write as _;

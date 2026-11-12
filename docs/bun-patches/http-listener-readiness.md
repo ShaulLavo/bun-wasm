@@ -24,12 +24,27 @@ request remains referenced until its completion or cancellation. The Node host's
 port probe is not proof that its later named-host bind succeeded. No delay or
 retry is used, and fake timers do not control the I/O waiter.
 
+The startup and accept waiters run in the async-context frame current when
+`listen()` was called, as a Node server resource's callbacks do: `enterWith`
+before it, a scoped `run` around it, and not a frame entered after it. The
+`listening` and bind `error` events and accepted connections see that frame,
+and the caller's frame is restored after each step. The host enters every I/O
+turn in the root frame ([0008](0008-await-context-hooks.md)), so without this
+they would see none. A raw `node:net` server binds its startup and accept
+waiters to the same frame through `net_listener`'s `inContext`, and a late bind
+error drops its accept waiter with the frame it carries.
+`web/tests/listen-context.test.ts` compares the maintained listener, scheduler
+and HTTP request path, and the raw TCP listener, with Node's own servers on the
+hook path and with a native continuation provider. Node gives an accepted raw
+socket its own frame; the maintained socket reads in the listen-time frame, as
+the HTTP request path does, so that one observation is not compared.
+
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. |
+| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. Startup and acceptance, HTTP and raw TCP, run in the listen-time async-context frame. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -48,3 +63,5 @@ from exiting before the port probe's listen/close callbacks, which blocked the
 unchanged Nuxt CLI before it reached its default child-process fork. Closing
 still cancels the pending request. No timer, retry or forced permanent listener
 reference is introduced.
+
+Closing a server clears its retired startup and acceptance references after removing the waiters. This releases their captured context when the closed server remains reachable. The focused pending-bind and ready-bind close controls cover both HTTP and TCP servers.

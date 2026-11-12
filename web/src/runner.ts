@@ -1,22 +1,29 @@
+import { programMemory } from "../../src/program-memory.ts";
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
-import { programLinkPlan } from "../../src/assets.js";
+import { isSharedGroupCore, pairedEngines } from "../../src/engine-kind.ts";
+import { programMetadata } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
 import type { ProcessRuntime } from "../../src/process-runtime.js";
-import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { loadEngineProgram, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
-import { siblingWorkerUrl } from "./bun-launcher.js";
+import { siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import { createNotificationBridge, type NotificationBridge } from "waffle/browser/notification-relay";
+import { createPreview1Network } from "waffle/browser/preview1-network";
 import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
-import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
+import { claimOutcome, type OutcomeWord } from "waffle/proc/outcome";
+import { captureNativeReturn, captureProcessObserver, type ProcessObserver } from "waffle/proc/observation";
 import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
+import { runtimeRelay } from "./net/relay.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
+import { pageFacts } from "./engine-stack-budget";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
@@ -27,15 +34,27 @@ function loadTools(): Promise<WebAssembly.Module> {
     .catch(error => { toolsModule = undefined; throw error; });
 }
 
+function physicalStop(worker: Worker, returned: () => void, stopped: () => void): Promise<void> {
+  return new Promise<void>(resolve => {
+    const completion: unknown = worker.terminate();
+    const complete = () => { returned(); stopped(); };
+    if (completion === undefined) { complete(); resolve(); return; }
+    resolve(Promise.resolve(completion).then(complete));
+  });
+}
+
 export interface RunOptions {
   engine: Engine;
+  profile?: ProgramMemoryProfile;
   module: WebAssembly.Module;
-  /** Arguments after `bun`. */
+  /** Arguments after `bun`; a Preview1 root's complete argv. */
   args: string[];
+  /** Bun roots add their engine PATH; a Preview1 root receives exactly this environment. */
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
   runtime: ProcessRuntime;
   network?: BunNetworkOptions;
+  preview1?: Preview1LauncherOptions;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
@@ -70,6 +89,34 @@ function slotsMode(): RunRequest["slots"] {
 }
 
 const registeredPrograms = new WeakMap<ProcessRuntime, Set<string>>();
+const runtimeProfiles = new WeakMap<ProcessRuntime, ProgramMemoryProfile>();
+
+/** A Preview1 root is a generic program: it gets a snapshot of the caller's exact argv and
+ * environment. Only a Bun root gets its engine executable as argv[0], PATH and BUNWASM_EXEC_PATH. */
+function rootCommand(options: RunOptions): Pick<RunRequest, "args" | "env"> {
+  if (options.adapter === "preview1") return { args: options.args.slice(), env: { ...options.env } };
+  const executable = `${ENGINE_BIN[options.engine]}/bun`;
+  return {
+    args: [executable].concat(options.args),
+    env: { ...engineEnvironment(options.engine, bunEnvironment(options.env)), BUNWASM_EXEC_PATH: executable },
+  };
+}
+
+async function preparePreview1Network(
+  options: RunOptions,
+  request: Omit<RunRequest, "controlGrant">,
+): Promise<Awaited<ReturnType<typeof createPreview1Network>> | undefined> {
+  if (options.adapter !== "preview1") return;
+  const sockets = options.preview1?.sockets ?? [];
+  if (!sockets.length) return;
+  const relay = await runtimeRelay(options.runtime, options.network?.relay);
+  const owner = await createPreview1Network(options.runtime, {
+    sockets,
+    connect: options.network?.connect ?? relay?.connect,
+  });
+  request.network = owner?.connection;
+  return owner;
+}
 
 function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: Extract<ExecutableRegistration, { adapter: "bun" }>["module"]): void {
   for (const command of ["bun", "node", "nodejs"]) {
@@ -79,16 +126,27 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
   }
 }
 
-function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
-  const engines: Engine[] = ["quickjs", "jsc", "browser"];
-  for (const engine of engines.concat(selected === "hermes" ? ["hermes"] : [])) {
+function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module, profile: ProgramMemoryProfile): void {
+  const engines: readonly Engine[] = pairedEngines;
+  for (const engine of engines.concat(["browser"], selected === "spidermonkey" ? [selected] : [])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
     const module = engine === selected && adapter !== "preview1" ? selectedModule
-      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+      : () => loading ??= loadEngineProgram(engine, profile, () => {}).then(result => result.module);
     registerEngineCommands(subprocess, programs, engine, module);
   }
+}
+
+/** A group core links only into a group admitted by the page, charged by that group's owner. */
+async function adoptRootProgram(subprocess: SubprocessBroker, transport: Parameters<SubprocessBroker["adoptRuntimeRoot"]>[0], module: WebAssembly.Module, cancelled: () => boolean) {
+  const group = isSharedGroupCore(module);
+  const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
+  if (!controlGrant) return undefined;
+  const linkPlan = programMetadata(module).linkPlan;
+  if (group && !linkPlan) throw new TypeError("Memory group root requires a prepared link plan");
+  const member = group && linkPlan ? await subprocess.admitRootGroup({ module, linkPlan }) : undefined;
+  return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
 }
 
 function acceptRootSharedConnection(route: SharedObjectRoute | undefined, message: BunSharedConnection, terminal: boolean): string | undefined {
@@ -111,12 +169,17 @@ function releaseNotifications(bridge: NotificationBridge | undefined): void {
 
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
+  const profile = options.profile ?? (isSharedGroupCore(options.module) ? "shared-group" : "split");
+  if (options.adapter !== "preview1") verifyMemoryProfile(options.module, profile);
+  const registeredProfile = runtimeProfiles.get(options.runtime);
+  if (registeredProfile && registeredProfile !== profile) throw new TypeError("A Bun runtime cannot switch program memory profiles");
+  runtimeProfiles.set(options.runtime, profile);
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
   const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
   let helper: RuntimeNetworkHelper | undefined;
+  let networkOwner: Awaited<ReturnType<typeof createPreview1Network>> | undefined;
   let socketRoot: Awaited<ReturnType<typeof options.runtime.filesystem.directoryHandle>> | undefined;
   let disposeLookup: (() => void) | undefined;
-  const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
   // worker, its children and the shell all spawn through the same service; its transport and
   // client chunks load on first use rather than with the page.
@@ -125,20 +188,19 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const memoryTelemetryId = crypto.randomUUID();
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let notifications: NotificationBridge | undefined;
-  let request: RunRequest;
+  let request: Omit<RunRequest, "controlGrant">;
   try {
     request = {
       engine: options.engine,
       adapter: options.adapter,
       runtimeProcess: options.runtimeProcess,
       module: options.module,
-      linkPlan: programLinkPlan(options.module),
-      args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
-      env: { ...engineEnvironment(options.engine, options.adapter === "preview1" ? options.env : bunEnvironment(options.env)), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
+      ...programMetadata(options.module),
+      ...rootCommand(options),
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
+      stackHost: pageFacts(),
       net: ring,
-      moduleCache,
       lookupPort: lookupChannel?.port2,
       slots: slotsMode(),
     };
@@ -161,12 +223,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     throw error;
   }
   let rootOutcome: OutcomeWord | null = null;
+  let rootObserver: ProcessObserver | undefined;
+  let nativeReturned: (() => void) | undefined;
   let rootPid = pid, rootJob = job;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
-  let rootStopped = false;
   let rootConsumerRelease: (() => void) | undefined;
   let worker: Worker | undefined;
+  let workerAcquisition: Promise<Worker> | undefined;
   let subprocess: SubprocessBroker | undefined;
   let finished = false;
   let confirmed = false;
@@ -176,22 +240,38 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     return rootQuiescence ??= options.runtime.filesystem.quiesce(request.filesystem);
   };
   let workerStopped = false;
+  let workerStop: Promise<void> | undefined;
   const releaseRootConsumer = () => { rootConsumerRelease?.(); rootConsumerRelease = undefined; };
-  const stopWorker = () => {
+  const stopWorker = (): Promise<void> => {
     sharedRoute?.close();
-    if (workerStopped) return;
+    if (workerStopped) return workerStop ?? Promise.resolve();
     workerStopped = true;
+    const completion = Promise.withResolvers<void>();
+    workerStop = completion.promise;
+    void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
+    const stop = (taken: Worker) => physicalStop(taken, () => nativeReturned?.(), () => subprocess?.rootStopped());
+    try {
+      const pending = worker ? stop(worker) : workerAcquisition?.then(stop, () => {});
+      Promise.resolve(pending).then(() => { releaseRootConsumer(); completion.resolve(); }, completion.reject);
+    } catch (error) { completion.reject(error); }
     request.filesystem.port.close();
     request.lookupPort?.close();
     lookupChannel?.port1.close();
     lookupChannel?.port2.close();
     disposeLookup?.();
-    worker?.terminate();
     releaseNotifications(notifications);
     try { helper?.dispose(); }
-    finally { socketRoot?.release(); socketRoot = undefined; if (moduleCache) void caches.delete(moduleCache); }
+    finally {
+      try { networkOwner?.dispose(); }
+      finally {
+        networkOwner = undefined;
+        socketRoot?.release();
+        socketRoot = undefined;
+      }
+    }
+    return workerStop;
   };
-  const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
+  const stopRoot = () => stopWorker();
   const starting = performance.now();
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
@@ -203,16 +283,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     endMemorySnapshot(memoryTelemetryId);
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
-    stopWorker();
-    releaseRootConsumer();
+    void Promise.resolve(stopRoot()).catch(() => {});
   }
   function finish(result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) {
     // Page disposal may take ownership while this run is already awaiting its root fence.
     // Its stop hook runs after the owned fence and must settle that existing outcome too.
     if (finished) { if (ownedDisposal) confirm(true); return; }
     if (options.runtime.disposed && !ownedDisposal) return;
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return;
     if (rootOutcome) {
-      const winner = claimOutcome(rootOutcome, signal === undefined
+      const winner = observed?.kind === "selected" ? observed.result : claimOutcome(rootOutcome, signal === undefined
         ? { kind: "exited", code: result.code } : { kind: "signaled", code: signal });
       result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
         ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
@@ -244,7 +325,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     subprocess = new SubprocessBroker(workerUrl, options.runtime, {
       loadTools, network: options.network,
       rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
-      stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
+      stopRoot: () => {
+        const observed = rootObserver?.read();
+        if (observed?.kind !== "terminated") finish({ code: observed?.kind === "selected" ? waitStatus(observed.result) : 137 }, false, undefined, true);
+        return stopWorker();
+      },
       output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
     });
   } catch (error) {
@@ -265,7 +350,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     let programs = registeredPrograms.get(options.runtime);
     if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
     if (!subprocess) throw new Error("Bun process controller did not initialize");
-    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module);
+    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module, profile);
   } catch (error) {
     sharedRoute?.close();
     releaseRootConsumer();
@@ -277,18 +362,24 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     try { dispatchBunNetwork(helper, message); }
     catch (error) { finish({ code: 126, error: String(error) }); }
   };
+  const onSharedConnection = (message: BunSharedConnection) => {
+    const observed = rootObserver?.read();
+    const terminal = options.runtime.disposed || finished || Boolean(observed && observed.kind !== "pending");
+    const error = acceptRootSharedConnection(sharedRoute, message, terminal);
+    if (error) finish({ code: 126, error });
+  };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (msg.type === "shared-control-allocation") { subprocess?.rootControlAllocated(msg.buffer); return; }
     if (recordMemorySnapshot(msg)) return;
-    if (msg.type === "bun-shared-connect") {
-      const selected = rootOutcome && readOutcome(rootOutcome);
-      const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));
-      if (error) finish({ code: 126, error });
-      return;
-    }
+    if (msg.type === "bun-shared-connect") { onSharedConnection(msg); return; }
     if (options.runtime.disposed) return;
     if (finished) {
       if (msg.type === "runtime-proc") subprocess?.rejectRuntimeMessage(msg);
+      return;
+    }
+    if (msg.type === "observation-error") {
+      console.error("bun-wasm: root observation failed", msg.message, msg.cleanupErrors);
       return;
     }
     if (msg.type === "cleanup-error") {
@@ -296,7 +387,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       finish({ code: msg.code }, false, msg.signal);
       return;
     }
-    const selected = rootOutcome && readOutcome(rootOutcome);
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return;
+    const selected = observed?.kind === "selected" ? observed.result : null;
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
@@ -337,33 +430,45 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const pendingKills: (2 | 9 | 15)[] = [];
   void (async () => {
     if (finished || options.runtime.disposed) return;
-    // The runtime's pool usually has this worker started already, so the command doesn't wait
-    // for the worker script and its imports. A taking failure is a startup failure (126).
-    const [taken, { workerProcessState, createWorkerProcessTransport }] = await Promise.all([
-      subprocess.takeWorker(workerUrl), import("waffle/proc/worker-client"),
-    ]);
-    if (finished || workerStopped || options.runtime.disposed) return taken.terminate();
-    worker = taken;
-    worker.onmessage = onMessage;
-    worker.onerror = onError;
+    // Acquisition remains owned even if completion or page disposal wins before it returns.
+    const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
+    if (finished || options.runtime.disposed) return;
     const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
+    rootObserver = captureProcessObserver(transport);
+    nativeReturned = captureNativeReturn(transport);
     const state = workerProcessState(transport);
-    const { port: _port, ...filesystem } = request.filesystem;
-    transport.data = { ...(transport.data as object | undefined), filesystem };
-    if (!subprocess || !await subprocess.adoptRuntimeRoot(transport, () => finished)) return;
     rootOutcome = state.signals.outcome;
     rootPid = state.pid;
     rootJob = state.job;
+    workerAcquisition = Promise.resolve().then(subprocess.takeWorker.bind(subprocess, workerUrl));
+    const taken = await workerAcquisition;
+    if (finished || workerStopped || options.runtime.disposed) return stopWorker();
+    worker = taken;
+    worker.onmessage = onMessage;
+    worker.onerror = onError;
+    const { port: _port, ...filesystem } = request.filesystem;
+    transport.data = { ...(transport.data as object | undefined), filesystem };
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+      request.module = await loadTools();
+      Object.assign(request, programMetadata(request.module));
+    }
+    if (preparationStopped()) return;
+    if (!subprocess) return;
+    const adopted = await adoptRootProgram(subprocess, transport, request.module, () => finished);
+    if (!adopted) return;
+    const { controlGrant, groupTransfer } = adopted;
+    request.memoryGroup = adopted.memoryGroup;
     releaseRootConsumer();
     prepared = true;
     for (const signal of pendingKills) kill(signal);
     pendingKills.length = 0;
     if (preparationStopped()) return;
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
-      request.module = await loadTools();
-      request.linkPlan = programLinkPlan(request.module);
+    networkOwner = await preparePreview1Network(options, request);
+    if (networkOwner && (preparationStopped() || workerStopped)) {
+      networkOwner.dispose();
+      networkOwner = undefined;
+      return;
     }
-    if (preparationStopped()) return;
     let network;
     if (ring || lookupChannel) {
       network = await options.runtime.network();
@@ -373,8 +478,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         const root = await options.runtime.filesystem.directoryHandle("/");
         if (preparationStopped() || workerStopped) { root.release(); return; }
         socketRoot = root;
+        const relay = await runtimeRelay(options.runtime, options.network?.relay);
         helper = createBunNetworkHelper(network, ring, {
-          ...options.network, pathScope: { filesystem: request.filesystem, directory: root.handle },
+          ...options.network,
+          connect: options.network?.connect ?? relay?.connect,
+          pathScope: { filesystem: request.filesystem, directory: root.handle },
         });
         if (workerStopped) { helper.dispose(); socketRoot?.release(); socketRoot = undefined; return; }
       }
@@ -388,15 +496,21 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         notifications = createNotificationBridge(siblingWorkerUrl(workerUrl, "notification-worker.js"));
         request.notifications = notifications.connection;
       }
-      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : [], request.notifications ? [request.notifications.port] : []);
-      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
-      worker.postMessage(request, transfers);
+      const transfers = [request.filesystem.port]
+        .concat(request.lookupPort ? [request.lookupPort] : [])
+        .concat(request.notifications ? [request.notifications.port] : [])
+        .concat(request.network ? [request.network.port] : [])
+        .concat(groupTransfer);
+      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob), request.module);
+      worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();
     }
   })().catch(error => finish({ code: 126, error: String(error) }));
   function preparationStopped(): boolean {
     if (finished || options.runtime.disposed) return true;
-    const result = rootOutcome && readOutcome(rootOutcome);
+    const observed = rootObserver?.read();
+    if (observed?.kind === "terminated") return true;
+    const result = observed?.kind === "selected" ? observed.result : null;
     if (!result) return false;
     finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
     return true;
@@ -405,7 +519,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {
       outcomeTimer = null;
-      const result = readOutcome(rootOutcome!);
+      const observed = rootObserver!.read();
+      if (observed.kind === "terminated") return;
+      const result = observed.kind === "selected" ? observed.result : null;
       // A guest can catch a default-signal unwind and keep running. Its already selected fatal
       // outcome is authority to revoke, not an acknowledgement that filesystem locks are free.
       if (result?.kind === "signaled") finish({ code: waitStatus(result) }, false, result.code);
@@ -421,7 +537,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     // The broker synchronously publishes every job member before any teardown callback. Root
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
     void subprocess?.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
-    const result = readOutcome(rootOutcome!);
+    const observed = rootObserver!.read();
+    const result = observed.kind === "selected" ? observed.result : null;
     if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
   }
   return { done, kill };

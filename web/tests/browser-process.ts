@@ -7,11 +7,21 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { createServer } from "node:net";
 import { availableParallelism, loadavg } from "node:os";
-import { chromium, firefox, webkit, type Browser } from "playwright";
+import type { Browser } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import { processBundle } from "../scripts/ci-process-bundles";
 import { prepareBaselineSource } from "./process-baseline-source";
 
+if (process.argv[2] === "ios-safari") {
+  const startedAt = performance.now();
+  const port = Number(process.env.PROCESS_SMOKE_PORT ?? 4186);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("invalid PROCESS_SMOKE_PORT");
+  const { nativeMain } = await import("waffle/testing/page-runner");
+  const { processAdapter } = await import("./process-ios-adapter");
+  process.exit(await nativeMain(processAdapter, process.argv.slice(3), { startedAt, port }));
+}
+
+const { chromium, firefox, webkit } = await import("playwright");
 const args = process.argv.slice(2);
 const benchmark = args.includes("--benchmark");
 const artifact = benchmark || args.includes("--artifact");

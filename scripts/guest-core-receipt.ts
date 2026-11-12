@@ -1,14 +1,14 @@
 import { join, resolve } from "node:path";
 import { lstatSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { isPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type PairedEngine } from "../src/engine-kind.ts";
-import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type ProgramInputScope, type SourceOptions } from "./guest-source-manifest.ts";
-import { parseProgramProfile, SHARED_GROUP_OPTIMIZER, SHARED_GROUP_SIDE_LINK, sharedGroupCoreLink, sharedGroupEnvironment, verifySharedSysroot,
+import { isSupportedPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type SupportedPairedEngine } from "../src/engine-kind.ts";
+import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type SourceOptions } from "./guest-source-manifest.ts";
+import { parseProgramProfile, SHARED_GROUP_OPTIMIZER, sharedGroupCoreLink, sharedGroupEnvironment, sharedGroupSideLink, verifySharedSysroot,
   verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
 
 export interface ProgramInputSnapshot {
   readonly schema: 1;
-  readonly scope: ProgramInputScope;
+  readonly scope: "core" | SupportedPairedEngine;
   readonly source: { readonly head: string; readonly tree: string };
   readonly content: unknown;
   readonly contentSha256: string;
@@ -25,7 +25,7 @@ export function record(value: unknown): value is Record<string, unknown> {
 const digest = (value: unknown, length: number): value is string => typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value);
 
 export function parseProgramInputs(value: unknown): ProgramInputSnapshot {
-  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && !isPairedEngine(value.scope))
+  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && !isSupportedPairedEngine(value.scope))
     || !record(value.source) || !digest(value.source.head, 40) || !digest(value.source.tree, 40)
     || !digest(value.contentSha256, 64) || !record(value.content) || hash(JSON.stringify(value.content)) !== value.contentSha256) throw new Error("Invalid program input snapshot");
   return { schema: 1, scope: value.scope, source: { head: value.source.head, tree: value.source.tree }, content: value.content, contentSha256: value.contentSha256 };
@@ -105,7 +105,7 @@ function selectionKey(selection: CoreSelection | { kind: string; profile?: "shar
 
 type ProgramOutputRequest = { readonly artifact: string; readonly options: SourceOptions } & (
   | { readonly scope: "core"; readonly selection: CoreSelection }
-  | { readonly scope: PairedEngine; readonly profile?: ProgramProfile }
+  | { readonly scope: SupportedPairedEngine; readonly profile?: ProgramProfile }
 );
 
 function outputReceiptPath(request: ProgramOutputRequest): string {
@@ -121,7 +121,7 @@ function outputSelection(inputs: ProgramInputSnapshot): string {
   if (JSON.stringify(command.buildStd) !== JSON.stringify(buildStd)) throw new Error("Invalid retained program standard library profile");
   if (inputs.scope === "core" && JSON.stringify(command.optimizer) !== JSON.stringify(shared ? SHARED_GROUP_OPTIMIZER : optimizer)) throw new Error("Invalid retained core optimizer profile");
   if (inputs.scope !== "core" && (command.smokeExports !== false || command.spillPointers !== (inputs.scope === "jsc"))) throw new Error("Invalid retained engine finalization profile");
-  if (shared && ((inputs.scope !== "core" && inputs.scope !== "quickjs") || !record(inputs.content.sharedSysroot))) throw new Error("Invalid retained shared-group inputs");
+  if (shared && ((inputs.scope !== "core" && inputs.scope !== "quickjs" && inputs.scope !== "jsc") || !record(inputs.content.sharedSysroot))) throw new Error("Invalid retained shared-group inputs");
   const selection = inputs.content.selection;
   if (inputs.scope === "core") return selectionKey(coreSelection(selection));
   if (!record(selection) || Object.keys(selection).sort().join() !== (shared ? "kind,profile" : "kind") || selection.kind !== inputs.scope) throw new Error("Invalid engine input profile");
@@ -160,33 +160,33 @@ export async function prepareProgramOutputs(requests: readonly ProgramOutputRequ
   }
 }
 
-type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc" | "hermes";
-const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", "jsc", "hermes"];
+type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc";
+const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", "jsc"];
 
 async function prepareComposedOutputs(repository: string, sysroot: string, build: ComposedBuild, core: string, side: string): Promise<void> {
   const kind = programKindForBuild(build);
-  if (kind === "single") throw new Error(`Not a paired build: ${build}`);
+  if (!isSupportedPairedEngine(kind)) throw new Error(`Not a supported paired build: ${build}`);
   await prepareProgramOutputs([
     { artifact: core, scope: "core", selection: { features: guestBuilds[build].features }, options: sourceOptions(repository, sysroot, "browser") },
     { artifact: side, scope: kind, options: sourceOptions(repository, sysroot, kind) },
   ]);
 }
 
-export function engineEnvironment(kind: PairedEngine, sysroot: string, profile: ProgramProfile = "split"): Record<string, string> {
+export function engineEnvironment(kind: SupportedPairedEngine, sysroot: string, profile: ProgramProfile = "split"): Record<string, string> {
   if (profile === "shared-group") {
-    if (kind !== "quickjs") throw new Error(`shared-group ${kind} is not qualified: its native inputs are not built with atomics`);
+    if (kind !== "quickjs" && kind !== "jsc") throw new Error(`shared-group ${kind} is not qualified: its native inputs are not built with atomics`);
     return sharedGroupEnvironment(sysroot, kind);
   }
   const flags: Record<string, string> = {
     CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: "-C relocation-model=pic -C panic=abort -C link-self-contained=no",
     CFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC`,
   };
-  if (kind === "jsc" || kind === "hermes") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
+  if (kind === "jsc") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
   else flags.RQUICKJS_SYS_NO_WASI_SDK = "1";
   return flags;
 }
 
-export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputScope, selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
+export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputSnapshot["scope"], selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
   if (process.env.RUSTFLAGS !== undefined || process.env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
   if (scope === "quickjs" && (process.env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
   run(["bash", join(options.repository, "scripts/sync-bun.sh"), "--check"], options.repository);
@@ -218,16 +218,16 @@ function buildStdSource(options: SourceOptions): string {
 }
 
 /** Shared-group inputs: the exact flags, link, sysroot identity and profile, never a split field set. */
-function sharedGroupContent(options: SourceOptions, scope: ProgramInputScope, manifest: Awaited<ReturnType<typeof captureSourceManifest>>,
+function sharedGroupContent(options: SourceOptions, scope: ProgramInputSnapshot["scope"], manifest: Awaited<ReturnType<typeof captureSourceManifest>>,
   sharedSysroot: ReturnType<typeof verifySharedSysroot>, core: CoreSelection | undefined) {
-  if (scope !== "core" && scope !== "quickjs") throw new Error(`shared-group ${scope} is not qualified: its native inputs are not built with atomics`);
+  if (scope !== "core" && scope !== "quickjs" && scope !== "jsc") throw new Error(`shared-group ${scope} is not qualified: its native inputs are not built with atomics`);
   const environment = sharedGroupEnvironment(options.sysroot, scope);
   const recorded = Object.fromEntries(Object.keys(environment).map(name => [name, process.env[name] ?? ""]));
   if (JSON.stringify(recorded) !== JSON.stringify(environment)) throw new Error("shared-group build environment differs from its profile");
   const base = { target: "wasm32-wasip1", release: true, locked: true, offline: true, buildStd: ["std", "panic_abort"], environment };
   const command = scope === "core"
     ? { ...base, optimizer: SHARED_GROUP_OPTIMIZER, link: sharedGroupCoreLink(), finalize: "core_initialize_memory" }
-    : { ...base, link: SHARED_GROUP_SIDE_LINK, spillPointers: false, smokeExports: false };
+    : { ...base, link: sharedGroupSideLink(), spillPointers: scope === "jsc", smokeExports: false };
   const selection = core ?? { kind: scope, profile: "shared-group" };
   return { selection, sharedSysroot, command, groups: manifest.groups, tools: manifest.tools, omissions: manifest.omissions };
 }
@@ -264,11 +264,11 @@ if (import.meta.main) {
     const expected = parseProgramInputs(await Bun.file(argument).json());
     if (expected.scope !== "core") throw new Error("Expected common core inputs");
     verifyProgramReceipt(await Bun.file(path).bytes(), await Bun.file(`${path}.core.json`).json(), expected);
-  } else if (command === "tag" && path && isPairedEngine(argument) && output) {
+  } else if (command === "tag" && path && isSupportedPairedEngine(argument) && output) {
     const receipt = parseProgramReceipt(await Bun.file(`${path}.core.json`).json());
     const expected = await recaptureProgramInputs(root, sysroot, receipt.inputs);
     const bytes = await Bun.file(path).bytes();
     verifyProgramReceipt(bytes, receipt, expected);
     await Bun.write(output, tagProgramCore(bytes, argument));
-  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc|hermes OUTPUT");
+  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc OUTPUT");
 }

@@ -70,10 +70,13 @@ export class NativeHTTPExchange {
     if (this.ended) return;
     this.ended = true;
     this.request.signal.removeEventListener("abort", this.abort);
-    if (this.id) this.transport.retire(this.id);
-    if (this.id && this.transport.connected()) this.transport.input(this.id, { type: "end" });
-    if (error) { this.controller.error(error); this.response.reject(error); return; }
-    if (!cancelled) this.controller.close();
+    try {
+      if (this.id && this.transport.connected()) this.transport.input(this.id, { type: "end" });
+    } finally {
+      if (this.id) this.transport.retire(this.id);
+      if (error) { this.controller.error(error); this.response.reject(error); }
+      else if (!cancelled) this.controller.close();
+    }
   }
 }
 

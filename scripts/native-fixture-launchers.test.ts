@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
@@ -15,12 +15,16 @@ printf '%s\\n' "host-stack=$BUN_WASM_HOST_STACK_KIB" "cache=$BUN_WASM_CACHE_DIR"
 if [ -n "$LAUNCHER_EXPECTED" ]; then
   cat "$LAUNCHER_EXPECTED"
 else
-  printf 'completed plain 1\\ncontinued\\n'
+  for argument do
+    previous="$last"
+    last="$argument"
+  done
+  printf 'completed %s %s\\ncontinued\\n' "$previous" "$last"
 fi
 `, { mode: 0o755 });
 const wasm = join(scratch, "guest with spaces.wasm");
 
-function run(script: string, args: readonly string[], expected?: string) {
+function run(script: string, args: readonly string[], expected?: string, expectedStatus = 0) {
   const executable = script.endsWith(".py") ? ["python3"] : ["node", "--no-warnings"];
   const result = Bun.spawnSync(executable.concat([join(root, script)], args), {
     cwd: root,
@@ -39,7 +43,7 @@ function run(script: string, args: readonly string[], expected?: string) {
     timeout: 10000,
   });
   expect(result.stderr.toString()).toBe("");
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode).toBe(expectedStatus);
   return { stdout: result.stdout.toString(), args: readFileSync(argumentsFile, "utf8").trimEnd().split("\n") };
 }
 
@@ -73,6 +77,51 @@ test("stack measurement defaults to native host and preserves host/guest stack c
     "host-stack=512", "cache=", "cow=",
   ]);
   expect(JSON.parse(result.stdout)).toMatchObject({ host: "launcher", stack_kib: 512, budget_kib: 256, results: { plain: { completed_at_max: 1 } } });
+});
+
+test("stack measurement gives the require mode a private scratch preopen and an optional package leaf", () => {
+  const project = join(scratch, "leaf project");
+  mkdirSync(project);
+  const result = run("scripts/measure-stack.py", ["--wasm", wasm, "--max", "1", "--leaf-root", project, "--leaf", "node_modules/pkg/index.js", "require"]);
+  const chain = result.args[7]!.replace(/::\/stack-depth-scratch$/, "");
+  expect(chain.startsWith(join(scratch, "bun-wasm-stack-require-"))).toBe(true);
+  expect(existsSync(chain)).toBe(false);
+  expect(result.args.slice(0, 7)).toEqual(["--wasm", wasm, "--dir", `${root}/tests::/`, "--env", "PWD=/", "--dir"]);
+  expect(result.args.slice(8, 19)).toEqual([
+    "--env", "STACK_DEPTH_DIR=/stack-depth-scratch", "--dir", `${project}::/stack-depth-leaf`,
+    "--env", "STACK_DEPTH_LEAF=/stack-depth-leaf/node_modules/pkg/index.js", "--", "run", "/stack-depth.js", "require", "1",
+  ]);
+  expect(JSON.parse(result.stdout)).toMatchObject({ leaf: "node_modules/pkg/index.js", results: { require: { completed_at_max: 1 } } });
+});
+
+test("stack measurement distinguishes a failing package leaf from a passing zero-depth chain", () => {
+  const expected = join(scratch, "refused-at-zero.txt");
+  writeFileSync(expected, "caught require RangeError 0 Maximum call stack size exceeded\ncontinued\n");
+  const result = run("scripts/measure-stack.py", ["--wasm", wasm, "--max", "1", "require"], expected, 1);
+  expect(JSON.parse(result.stdout)).toMatchObject({ results: { require: { refused_at_zero: "caught:RangeError" } } });
+  expect(result.args.slice(-5, -3)).toEqual(["require", "0"]);
+});
+
+function probeRequire(depth: string, leaf?: string) {
+  const directory = mkdtempSync(join(scratch, "require-probe-"));
+  const result = Bun.spawnSync([process.execPath, join(root, "tests/stack-depth.js"), "require", depth], {
+    env: { ...process.env, STACK_DEPTH_DIR: directory, STACK_DEPTH_LEAF: leaf ?? "" },
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 10000,
+  });
+  // The probe first reports the stack settings it was given; this host passes none.
+  const [settings, ...rest] = result.stdout.toString().split("\n");
+  expect(settings).toBe('settings {"budget":null,"parserReserve":null}');
+  return { stdout: rest.join("\n"), left: readdirSync(directory) };
+}
+
+test("require probe loads its generated chain, reports a failing leaf and removes the chain both times", () => {
+  expect(probeRequire("3")).toEqual({ stdout: "completed require 3\ncontinued\n", left: [] });
+  const missing = probeRequire("2", join(scratch, "missing-leaf.cjs"));
+  expect(missing.stdout).toMatch(/^caught require \w+ 2 .*missing-leaf\.cjs/);
+  expect(missing.stdout.endsWith("\ncontinued\n")).toBe(true);
+  expect(missing.left).toEqual([]);
 });
 
 test("Worker regression runner honors the native launcher override", () => {

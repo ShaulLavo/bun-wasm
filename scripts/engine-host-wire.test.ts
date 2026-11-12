@@ -30,7 +30,7 @@ const wire = evaluate(`${capturedCodecs}\n${wireSource}\n${errorSource}\n({
   roundTrip(value, overwrite = false) {
     const writer = new Writer();
     writer.value(value);
-    const result = new Reader(writer.buf, writer.view, 0).value();
+    const result = new Reader(writer.buf, writer.view, 0, writer.len).value();
     if (overwrite) writer.buf.fill(0);
     return result;
   },

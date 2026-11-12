@@ -8,16 +8,26 @@ This covers native source checkouts, the native quality checkpoint, native Cargo
 targets, the JSC prebuild, JSC Cargo targets and the bash-web shell build. Restore
 keys, input hashes, build commands and required checks keep their existing guards.
 Validated main checkpoints can still be saved before a later unrelated failure.
-Exact hits are not saved again. Bash-web uses separate restore/save actions so
+Exact build-archive hits are not saved again. Bash-web uses separate restore/save actions so
 its post-job action cannot create a large PR-scoped archive.
 The native Cargo restore and main-only v4 quality checkpoint belong to
 `Native quality checkpoint`. Its run artifact transfers compiled state to the
-existing native job. That job does not restore over the handoff. Its original
+existing native job. That job does not restore over the handoff. The target
+archive holds only the typed roots in `scripts/ci-native-handoff-paths.ts`:
+required roots that every producer run writes, and guest outputs that exist only
+after a warm cache restore. A missing required root fails packing. Its original
 main-only v2 final save uses the original restore hit/matched-key outputs passed
 from the quality producer. All primary and compatibility key inputs stay intact.
+Warm transfers include the common core, QuickJS side and their Cargo targets,
+plus tools optimizer output. Their existing input and byte checks still apply.
+Tools reuse also checks the raw Wasm, optimizer binary, flags and output hash,
+then writes a fresh guest receipt against the current source inputs.
 The handoff queries Git only for tracked `node_modules` fixture paths, not the
 entire source inventory. Public tracked fixtures survive without buffering all
 upstream path names. Untracked installs and credential files stay excluded.
+The Bun Git transfer keeps the patched HEAD and pinned base with both complete
+trees, so the consumer can verify and replay the patch series. Other history and
+refs stay out. Archives use two Zstandard workers with a 128 MiB matching window.
 
 The sysroot and JSC prebuild caches are restored and saved only by the
 `JSC C/C++ prebuild` job. It hands both trees to the native job as a one-day run
@@ -27,6 +37,33 @@ GitHub restricts a pull request's merge-ref cache to that pull request. Copies
 stored there consume the repository's cache allowance but cannot warm other PRs.
 Main archives can be restored by every PR. Large merge-ref copies can evict main
 and turn an ordinary change into a full native/JSC rebuild.
+
+The shared profile job produces QuickJS, JSC and SpiderMonkey before its five
+consumer steps. It saves the complete native target, compiler objects and release
+downloads after production, so a later fixture failure or job timeout does not
+discard finished build work. These remain build caches: all consumers still block
+the job, and every restored profile still passes the producer's input and byte
+checks. Saving the immutable native key after only one engine would strand an
+incomplete entry, so there is one save after all three producers succeed.
+
+Compiler objects use a separate 512 MiB disk cache. Its restore captures immutable
+object paths and sizes; a main run publishes a new snapshot only when compilation
+adds or replaces objects. Access-time changes and evictions alone do not create
+archives. Each saved key includes the inventory fingerprint and run generation,
+so cycling back to an older inventory cannot freeze the latest-prefix restore.
+Compatible dependency and job prefixes remain available, including the existing
+v2 seeds during migration. Archive matches and compiler hit rates are logged
+separately.
+
+After publication, cache cleanup verifies that the new key is visible, then keeps
+it and the newest other v3 main snapshot for that OS, architecture and job. It
+deletes only older recognized v3 compiler-object IDs. Existing v2 seeds remain
+available to in-flight workflows using the old policy; GitHub's normal eviction
+removes them after they stop being used. The three
+cache-using jobs grant the workflow token Actions write access for this main-only
+step; owner credentials are unchanged. A failed cleanup warns and preserves the
+remaining entries. Build results and blocking checks are unaffected. Oversized
+snapshots retain the existing 603,979,776-byte refusal budget.
 
 ## Verify the policy
 

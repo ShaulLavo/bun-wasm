@@ -18,12 +18,13 @@ function source(name: string) {
   return readFileSync(output, "utf8");
 }
 
-function runtime() {
+function runtime(capabilities = new WeakSet<object>()) {
   const context = createContext({
     ArrayBuffer, Uint8Array, DataView, Map, Set, Date, RegExp, Error, TypeError, RangeError,
     Number, String, Boolean, ReadableStream,
   });
   const internal = {
+    isWasmCapability(value: unknown) { return value !== null && typeof value === "object" && capabilities.has(value); },
     native: {
       timeOrigin: () => 0, platformInfo: { version: "test", arch: "test" },
       utf8Encode: (text: string) => new TextEncoder().encode(text),
@@ -121,3 +122,20 @@ test("codec rejects malformed Blob nodes before restoring any port", () => {
   }
   expect(host.restored()).toBe(0);
 });
+
+for (const kind of ["table", "global"] as const) {
+  test(`local clone refuses privately branded ${kind} before Error tags or prototypes`, () => {
+    const value = kind === "table" ? new WebAssembly.Table({ element: "anyfunc", initial: 1 }) : new WebAssembly.Global({ value: "i32" }, 42);
+    const host = runtime(new WeakSet([value]));
+    const refused = () => {
+      assert.throws(() => host.clone(value), { name: "DataCloneError" });
+      assert.throws(() => host.clone({ value }), { name: "DataCloneError" });
+    };
+    Object.defineProperty(value, Symbol.toStringTag, { value: "Error", configurable: true });
+    refused();
+    Reflect.deleteProperty(value, Symbol.toStringTag);
+    Object.setPrototypeOf(value, Error.prototype);
+    refused();
+    expect(host.clone(new Error("ordinary")).message).toBe("ordinary");
+  });
+}

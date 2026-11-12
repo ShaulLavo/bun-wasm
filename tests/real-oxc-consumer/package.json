@@ -1,0 +1,1 @@
+{"name": "nuxt-oxc-probe", "private": true, "type": "module", "dependencies": {"oxc-parser": "0.94.0"}}

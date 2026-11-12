@@ -10,6 +10,8 @@ import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
 import { BrowserPrograms } from "../src/browser-programs";
 import release from "../../scripts/waffle-release-inputs.json";
+import { assertExactHostInterface, packageHostInterface } from "../../scripts/waffle-release-inputs";
+import { assertWafflePeer } from "../../tests/shell-product/waffle-stage";
 
 const urls = {
   worker: new URL(import.meta.resolve("waffle/browser/preview1-worker")),
@@ -37,7 +39,7 @@ async function consumerRoot(runtime: Runtime) {
   const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   transport.data = { filesystem: runtime.filesystem.createIdentity() };
   const output: string[] = [];
-  await service.adoptRuntimeRoot(transport, { output: (_fd, bytes) => output.push(new TextDecoder().decode(bytes)) });
+  await service.adoptRuntimeRoot(transport, { memory: [], output: (_fd, bytes) => output.push(new TextDecoder().decode(bytes)) });
   const descriptors = new DescriptorTable();
   const write = (chunks: readonly Uint8Array[]) => {
     for (const bytes of chunks) output.push(new TextDecoder().decode(bytes));
@@ -186,7 +188,9 @@ async function assertPackageRuntime(name: string, scope: string, physical: strin
   const root = await packageRoot(Bun.resolveSync(name, scope));
   const metadata: unknown = await Bun.file(join(root, "package.json")).json();
   expect(await physicalRuntime(name, scope)).toBe(physical);
-  expect(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined).toBe(expectedPeer);
+  const runtime = packageHostInterface(await Bun.file(physical).json(), physical);
+  assertExactHostInterface(packageHostInterface(metadata, name), runtime, name);
+  assertWafflePeer(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined, expectedPeer, name);
 }
 
 

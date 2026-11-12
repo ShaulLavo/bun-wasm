@@ -176,6 +176,55 @@ test("provided guest module loads without fetching", async () => {
   finally { install.dispose(); }
 });
 
+function programLoader(f: ReturnType<typeof fixture>, path: string) {
+  const entry = f.programs.get(path);
+  if (typeof entry?.module !== "function") throw new Error(`Missing lazy program ${path}`);
+  return entry.module;
+}
+
+test("paired executable aliases share one page preparation and loading promise", async () => {
+  const f = fixture();
+  const pair = quickjsPair();
+  const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
+  const asset = { kind: "quickjs", core: describe("https://alias.test/core", pair.core), side: describe("https://alias.test/side", pair.side) } as const;
+  const requests: string[] = [];
+  const installed = await installBunAdapters(f.runtime, { engine: "quickjs", asset, fetch: async url => {
+    requests.push(url);
+    return new Response(url === asset.core.url ? pair.core : pair.side);
+  } });
+  try {
+    const bun = programLoader(f, "/opt/bun/quickjs/bin/bun");
+    const node = programLoader(f, "/opt/bun/quickjs/bin/node");
+    expect(node).toBe(bun);
+    const first = bun();
+    expect(node()).toBe(first);
+    const module = await first;
+    expect(await programLoader(f, "/opt/bun/quickjs/bin/nodejs")()).toBe(module);
+    expect(requests).toEqual([asset.core.url, asset.side.url]);
+  } finally { installed.dispose(); }
+});
+
+test("aliases retry one rejected load together instead of retaining its rejection", async () => {
+  const f = fixture();
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const core = { url: "https://alias.test/single", bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") };
+  let requests = 0;
+  const installed = await installBunAdapters(f.runtime, { asset: { kind: "single", core }, fetch: async () => {
+    if (++requests === 1) throw new Error("first load failed");
+    return new Response(bytes);
+  } });
+  try {
+    const bun = programLoader(f, "/bin/bun"), node = programLoader(f, "/bin/node");
+    const failed = bun();
+    expect(node()).toBe(failed);
+    await expect(failed).rejects.toThrow("first load failed");
+    const retry = node();
+    expect(bun()).toBe(retry);
+    expect(await retry).toBeInstanceOf(WebAssembly.Module);
+    expect(requests).toBe(2);
+  } finally { installed.dispose(); }
+});
+
 test("different files and directories produce a typed conflict without overwriting caller data", async () => {
   for (const directory of [false, true]) {
     const f = fixture();
@@ -247,7 +296,7 @@ for (const conflict of [false, true]) {
   });
 }
 
-for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+for (const engine of ["quickjs", "jsc", "browser", "spidermonkey"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
   const f = fixture();
   const selected = engine === "browser" ? module : await prepareProgram({ kind: engine, ...quickjsPair(engine) });
   const installed = await installBunAdapters(f.runtime, { engine, module: selected });
@@ -261,24 +310,14 @@ for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) test(`def
   } finally { installed.dispose(); }
 });
 
-test("Hermes adapters require an explicit engine and matching assets", async () => {
+for (const engine of ["hermes", "unknown"]) test(`removed or unknown ${engine} engine is rejected before registration`, async () => {
   const f = fixture();
-  await expect(installBunAdapters(f.runtime, { engine: "hermes" })).rejects.toThrow("requires its matching guest");
+  // Runtime input deliberately bypasses TypeScript without claiming a supported Engine.
+  const options = { module, workerUrl: "worker.js", notificationWorkerUrl: "notify.js", engine: "browser" as const };
+  Reflect.set(options, "engine", engine);
+  await expect(installBunAdapters(f.runtime, options)).rejects.toThrow(`Unknown Bun engine: ${engine}`);
   expect(f.adapters.size).toBe(0);
-  const installed = await installBunAdapters(f.runtime, { engine: "hermes", module });
-  try { expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:hermes"]); }
-  finally { installed.dispose(); }
-  expect(f.adapters.size).toBe(0);
-});
-
-test("Hermes package registration rejects another engine at actual module admission", async () => {
-  const f = fixture();
-  const installed = await installBunAdapters(f.runtime, { engine: "hermes", module });
-  try {
-    const program = f.programs.get("/opt/bun/hermes/bin/bun");
-    if (typeof program?.module !== "function") throw new Error("Missing lazy program");
-    await expect(program.module()).rejects.toThrow("Selected hermes core declares single");
-  } finally { installed.dispose(); }
+  expect(f.programs.size).toBe(0);
 });
 
 test("installing the adapters alone installs no shared-object service", async () => {
@@ -286,4 +325,26 @@ test("installing the adapters alone installs no shared-object service", async ()
   const install = await installBunAdapters(f.runtime);
   try { expect(runtimeSharedObjectRoute(f.runtime as unknown as Runtime)).toBeUndefined(); }
   finally { install.dispose(); }
+});
+
+
+test("SpiderMonkey installation requires explicit matching guest bytes and registers its adapter only on opt-in", async () => {
+  const f = fixture();
+  await expect(installBunAdapters(f.runtime, { engine: "spidermonkey" })).rejects.toThrow("matching guest");
+  expect(f.adapters.size).toBe(0);
+  const selected = await prepareProgram({ kind: "spidermonkey", ...quickjsPair("spidermonkey") });
+  const installed = await installBunAdapters(f.runtime, { engine: "spidermonkey", module: selected });
+  try {
+    expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:spidermonkey"]);
+    expect(f.files.has("/bin/bun")).toBe(false);
+    const program = f.programs.get("/opt/bun/spidermonkey/bin/bun");
+    if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
+    expect(await program.module()).toBe(selected);
+  } finally { installed.dispose(); }
+  const wrong = await installBunAdapters(f.runtime, { engine: "spidermonkey", module });
+  try {
+    const program = f.programs.get("/opt/bun/spidermonkey/bin/bun");
+    if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
+    await expect(program.module()).rejects.toThrow("Selected spidermonkey core declares single");
+  } finally { wrong.dispose(); }
 });

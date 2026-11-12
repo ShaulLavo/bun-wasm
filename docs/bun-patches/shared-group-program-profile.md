@@ -16,11 +16,65 @@ exported separately.
 | Source | Class | Change |
 | --- | --- | --- |
 | `scripts/src/program-profile.ts`, `crates/bunwasm-cli/shared-group-link.txt` | Host feature | Original profile types, flags, J2 sysroot identity check, split/shared sysroot separation, and the selected C++ runtime member proof read from the core's link map. |
-| `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table`, plus `--max-memory` from `max-memory.txt` as for every core) and PIC+atomics split entry and allocator telemetry objects, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
-| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile, a profile stamp refusing reuse of another profile's build directory, and C++ runtime archives linked by exact file name so a PIE never depends on `libc++abi.so`. |
-| `scripts/build-bun-core.sh`, `scripts/build-engine-quickjs.sh` | Host feature | `--shared-group` / `QUICKJS_PROFILE=shared-group` producers: `-Zbuild-std`, `--shared-memory`, `--enable-threads`, group finalization. |
-| `scripts/src/engine-explicit-init.ts` | Host feature | Original core converter (start → `core_initialize_memory`) and a group side variant that never re-exports the group memory. |
+| `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table`, plus `--max-memory` selected by profile: `group-address-space.txt` for this profile, `max-memory.txt` for a split core) and PIC+atomics split entry and allocator telemetry objects, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
+| `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile and a profile stamp refusing reuse of another profile's build directory. Split builds retain their static C++ archives. The group core supplies the required C++ functions compiled with atomics, without admitting non-atomic SDK archive members. |
+| `scripts/build-bun-core.sh`, `scripts/build-engine-quickjs.sh` | Host feature | `--shared-group` / `QUICKJS_PROFILE=shared-group` producers: `-Zbuild-std`, `--shared-memory`, `--enable-threads`, group finalization. The side links with `--max-memory` at the group address space, which the receipt records (`sharedGroupSideLink`). |
+| `crates/bunwasm-cli/group-address-space.txt`, `crates/bunwasm-cli/group_address_space.rs` | Host feature | Original authority and Rust reader for the shared-group address space ([Memory ceiling](../memory-ceiling.md)). Inventoried only for shared-group programs. |
+| `scripts/src/engine-explicit-init.ts` | Host feature | Original core converter (start → `core_initialize_memory`) and a group side variant that never re-exports the group memory. Both require the decoded `env.memory` import to be shared at exactly the group address space. |
 | `scripts/guest-core-receipt.ts`, `scripts/guest-engine-receipt.ts` | Host feature | Profile recorded only for `shared-group`, checked before the input digest. |
 | `crates/bunwasm-host/src/linked_group.rs`, `crates/bunwasm-host/src/linked.rs`, `crates/bunwasm-host/src/linked_preview1.rs` | Host feature | Original wasmtime admission; member core instantiation into the group memory via the `shm` service's `SharedMemoryLease`, with chunks carved through its `MemberLease`; side linking into the member's memory, table and stack pointer with base-relative `GOT.mem` rebasing (Waffle `link/group.ts` `relativeExports` contract, reimplemented); a per-member preview1 view that re-exports the group memory (Wasmtime 39 wiggle reads the caller's `memory` export); root group creation on one runtime-wide budget and worker admission into the parent's group. |
 | `crates/bunwasm-host/src/guest.rs`, `crates/bunwasm-host/src/slots.rs`, `crates/bunwasm-host/src/process/wasi.rs`, `crates/bunwasm-host/src/process/mod.rs`, `crates/bunwasm-host/src/main.rs` | Host feature | One private-or-shared guest memory boundary for every host import (shared bytes through atomic cells and owned copies, held as the group lease); delegate adapters with a shared-memory variant; a member Store's owner holds the group backing past the Store and settles the member after `Store::into_data`. |
-| `src/engine-kind.ts`, `src/quickjs-program.ts` | Host feature | Pair profile agreement from the side's `env.memory` import and the group core initialization order. |
+| `src/engine-kind.ts`, `src/quickjs-program.ts` | Host feature | Pair profile agreement from the side's `env.memory` import. Waffle 0.0.106 (`d49714f8e4fb04cfcf47eb2a5b24cfbafdfe315a`, `packages/waffle/link/plan.ts` and `link/group.ts`) requires separate `initializeMemory` and `initialize` lists. Shared-core memory initialization and relocation run before the instance escapes; core constructors then precede side memory initialization, relocation, constructors and registration. Split cores retain their active data initialization at instantiation and declare no explicit memory stages. |
+
+The original executable fixture in `tests/package/engine-initialization-fixture.ts` uses passive data segments and trapping relocation/constructor checks. Its package test runs the released Waffle loader for all three split engine profiles and shared QuickJS, including repeated initialization. No upstream fixture or implementation is copied.
+
+`scripts/stage-program-profiles.ts` is an original delivery adapter. It validates each original core and side receipt's input digest, scope, shared profile and artifact bytes before publishing assets or fingerprints. The core receipt covers the untagged core; staging also verifies that the supplied core is exactly that core with its selected engine tag. Staging also requires both decoded shared memory imports to declare the current authoritative group address space; old-stage pairs are refused before publication. Original component source labels and receipt text are preserved independently of the host revision. SpiderMonkey staging consumes the original experimental shared pair receipt, checks the exact tagged core and side bytes against it, and binds the original core receipt, source label and included library receipt. It does not rebuild or re-capture native library inputs. The selected profile controls both optional SpiderMonkey manifest entries before choice or bootstrap. Its staging regressions reuse the original executable initialization fixture, including its untagged core, and copy no upstream source.
+
+The original page and worker adapters in `src/assets.ts`, `src/bun-adapter.ts`,
+`web/src/bun-executor.ts`, `web/src/bun-launcher.ts`, `web/src/runner.ts`,
+`web/src/subprocess-broker.ts` and `web/scripts/node-linked.ts` share Waffle's prepared
+compiled image across workers. The page retains one loading promise per adapter
+installation and supplies the matching image and memory limit together. Workers adopt
+the compiled image without source bytes or compilation. Adopted roots present the
+original page-issued module/image pair to group admission. Instances, memory regions,
+initialization and cleanup remain owned by each process. These are original host
+adapters; no upstream implementation is copied or changed by this transport.
+
+The original `web/scripts/node-signals.ts` adapter creates standalone outcome buffers
+through Waffle's factory. Terminal state and startup diagnostic storage then retain one
+shared identity when Node sends their backing buffer to another worker.
+
+### J11 real-build prerequisite repairs
+
+The first current shared-group build reproduced the unresolved TLS `errno` side
+relocation and core PIE layout/C++ link failures. The J11 integration reuses the
+concrete previously reviewed source from bun-wasm commits `0fc40ef0a8879567e12a83d922390135bead686f`,
+`9feec7bc9e08aea805d20795fcf676a21a688b05` and
+`b8094a4d8489dfd733334d6aff1c455c95c468ce`. These are original host adapters,
+not changes to upstream algorithms. No worker messaging code is imported.
+
+The core does not export nonexistent PIE stack/heap layout symbols or a TLS-offset
+`errno` data symbol. Its libc accessor returns its actual member-local errno.
+The side defines local TLS errno and copies failure errno for the four real std
+imports `write`, `writev`, `clock_gettime` and `getcwd`. The archive-based producer
+guard rejects additional unclassified std imports. Split builds keep their old
+exports, link flags and libc ownership.
+
+The shared core supplies the two replaceable C++ functions required by
+BoringSSL, sized delete and libc++ verbose abort, with the same free, diagnostic and abort
+behavior as LLVM `895aa2c896ad`, wasi-sdk 34.0. Its real unsigned-short sort
+specialization is classified separately in [Shared core libc++ sort specialization](shared-cxx-sort.md). The shared crypto build omits the
+non-atomic SDK C++ archives. Unknown runtime dependencies fail the link. Target
+feature admission and selected-member link-map proof remain enabled.
+
+The real group-core admission also needs the reviewed member stack-bound binding
+from bun-wasm `36b0e20cef8d6a047ed90a0638ad9acf43583a05`. Reuse its exact host
+change, including the core-only GOT metadata exception and negative side tests.
+Only `GOT.mem.__stack_low` and `GOT.mem.__stack_high` receive the actual carved
+member stack bounds. Sides do not get the exception. Existing profile, feature,
+maximum, growth and library admission remains closed.
+
+The matching core metadata parser repair is reused from reviewed bun-wasm commit
+`38e33e7802ff7801fc9607cee0855eaf198d1f56`. CoreLayout reads the already-admitted
+group metadata rather than the deliberately narrower paired-side parser.
+The paired-side parser's closed subsection admission is unchanged.

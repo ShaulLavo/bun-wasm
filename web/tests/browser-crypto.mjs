@@ -19,7 +19,7 @@ try {
     const checkCryptoCase = async () => {
     const browser = await s.launch(playwright[name]);
     const context = await browser.newContext();
-    const visit = await firstVisit(context, `${url}?engine=browser`);
+    const visit = await firstVisit(context, `${url}?engine=browser&prompt=off`);
     try {
       const page = await context.newPage();
       await page.goto(visit.url);

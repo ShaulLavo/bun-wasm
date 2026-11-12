@@ -4,8 +4,11 @@ import { completeObservations, observeProductTraffic, productObservations, waitF
 import type { ProductCheck } from "./product-types";
 import { fullstackApps } from "./product-fullstack";
 import { serverCommand } from "./browser.mjs";
-import type { Page } from "../../web/node_modules/playwright";
+import type { Page } from "playwright";
 import { HarnessCleanupError } from "./cleanup";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 interface FixtureOptions {
   updateMessage: string | null;
@@ -632,17 +635,20 @@ test("waits for a listening server's transient HTTP 503 and closes the probe bef
     waitForFunction: async () => {},
   };
   const pages = [preview, probe];
-  const result = await serverCommand({
-    page,
-    context: { newPage: async () => pages.shift() },
-    command: { name: "dev", args: ["run", "dev"], check: { kind: "http", text: "ready" } },
-    app: { id: "readiness-fixture" },
-    engine: "browser",
-    options: { timeout: 1_000, output: process.env.TMPDIR ?? "/tmp" },
-    terminalText: async () => "",
-  });
-  expect(result.status).toBe("pass");
-  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId", "probe-close", "page-navigation"]);
+  const output = await mkdtemp(join(tmpdir(), "bun-wasm-http-readiness-"));
+  try {
+    const result = await serverCommand({
+      page,
+      context: { newPage: async () => pages.shift() },
+      command: { name: "dev", args: ["run", "dev"], check: { kind: "http", text: "ready" } },
+      app: { id: "readiness-fixture" },
+      engine: "browser",
+      options: { timeout: 1_000, output },
+      terminalText: async () => "",
+    });
+    expect(result.status).toBe("pass");
+    expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId", "probe-close", "page-navigation"]);
+  } finally { await rm(output, { recursive: true, force: true }); }
 });
 
 test("a fast HTTP 2xx readiness response needs one script-disabled probe navigation", async () => {

@@ -62,3 +62,10 @@ shared-memory behavior and application execution are separate gates. The exact
 published Oxc fallback also parses valid TypeScript and reports invalid syntax
 with this generated WASI source on native host WebAssembly. This does not claim
 a rebuilt guest or Nuxt application acceptance.
+
+The shared-group fixture also initializes a child reactor through the unmodified
+createInstanceProxy from @emnapi/wasi-threads 2.2.0. Its replacement exports suppress
+child _initialize while retaining the original shared memory. The runtime's
+Instance.exports prototype accessor permits that proxy; an own frozen data
+property would violate the proxy get invariant before WASI can bind it. This is
+small-fixture API composition, not Rolldown or complete thread-pool acceptance.

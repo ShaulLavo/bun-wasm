@@ -17,6 +17,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=JSC_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PATH");
     println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
+    println!("cargo:rerun-if-env-changed=BUN_WASM_PROGRAM_PROFILE");
     println!("cargo:rerun-if-changed=cpp/helpers.cpp");
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     bun_version(&manifest);
@@ -68,10 +69,14 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         jsc.join("shim").display()
     );
-    println!(
-        "cargo:rustc-link-search=native={}",
-        libdir.join("noeh").display()
-    );
+    // A shared-group side links the atomics libc++ from jsc/build-libcxx.sh; the SDK's is refused.
+    let shared_group = env::var("BUN_WASM_PROGRAM_PROFILE").as_deref() == Ok("shared-group");
+    let libcxx = if shared_group {
+        jsc.join("libcxx/lib")
+    } else {
+        libdir.join("noeh")
+    };
+    println!("cargo:rustc-link-search=native={}", libcxx.display());
     println!("cargo:rustc-link-search=native={}", libdir.display());
     for lib in [
         "bunjsc_helpers",

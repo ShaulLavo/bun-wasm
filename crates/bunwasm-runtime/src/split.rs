@@ -42,6 +42,18 @@ pub extern "C" fn bun_core_dispatch(frame: u32) -> u32 {
     TRANSPORT.with(|transport| transport.dispatch(&dispatcher, frame) as u32)
 }
 
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn nested_transport_read(pointer: u32, bytes: u32) -> Result<Vec<u8>, NativeError> {
+    TRANSPORT
+        .with(|transport| transport.read(pointer, bytes))
+        .map_err(|_| NativeError::error("invalid owned nested frame"))
+}
+
+#[cfg(bun_wasm_shared_group)]
+pub(crate) fn nested_transport_validate(pointer: u32, bytes: u32) -> bool {
+    TRANSPORT.with(|transport| transport.validate(pointer, bytes).is_ok())
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn core_checkpoint() -> u32 {
     u32::from(crate::host::signal(0, 4) < 0)
@@ -87,7 +99,7 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
     }
     if mode == "record" {
         let record = if format == modules::Format::Esm {
-            state.module_record(name, &code)?
+            state.module_record(name, &code, false)?
         } else {
             String::new()
         };
@@ -107,25 +119,9 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
 fn resolve(state: &State, args: Args<'_>) -> NativeResult {
     let specifier = args.str(0)?;
     let referrer = args.str(1)?;
-    let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
-        format!("{}/", state.cwd())
-    } else {
-        referrer.to_owned()
-    };
-    match state
-        .resolver
-        .resolve(specifier, &from, resolve::Kind::Import)
-    {
-        Ok(resolve::Resolved::Builtin(name)) => Ok(Val::Array(vec![name.into(), true.into()])),
-        Ok(resolve::Resolved::File(name)) => Ok(Val::Array(vec![name.into(), false.into()])),
-        Err(message) => Err(modules::resolve_error(
-            &message,
-            specifier,
-            &from,
-            resolve::Kind::Import,
-            state.resolver.notes(),
-        )),
-    }
+    let name = state.resolve_module_name(specifier, referrer)?;
+    let builtin = resolve::builtin_name(name.as_str()).is_some();
+    Ok(Val::Array(vec![name.as_str().into(), builtin.into()]))
 }
 
 fn wrapper(args: Args<'_>) -> NativeResult {
@@ -243,6 +239,7 @@ pub(crate) fn run(options: Options) -> i32 {
         &options.args,
         &options.conditions,
         &options.exec_argv,
+        options.mode,
         options.transpiler,
     );
     SESSION.with(|session| {
@@ -254,6 +251,7 @@ pub(crate) fn run(options: Options) -> i32 {
     });
     SESSION_STATE.with(|current| assert!(current.replace(Some(state.clone())).is_none()));
     let code = run(1);
+    state.dispose_tls();
     SESSION.with(|session| session.take());
     SESSION_STATE.with(|current| current.take());
     state.directories.borrow_mut().close_all();

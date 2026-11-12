@@ -16,11 +16,17 @@ profile=${QUICKJS_PROFILE:-split}
 link_profile=()
 init_profile=()
 explicit_profile=()
+# Core functions the side's Rust std calls and then reads errno for (group-errno.c).
+group_errno_wraps=()
 case "$profile" in
   split) ;;
   shared-group)
     bun "$root/scripts/src/program-profile.ts" environment quickjs > /dev/null
-    link_profile=(--shared-memory)
+    group_errno_wraps=(write writev clock_gettime getcwd)
+    # The side declares the group address space, like its core (program-profile.ts sharedGroupSideLink).
+    group_address_space=$(bun "$root/scripts/src/program-profile.ts" group-address-space)
+    link_profile=(--shared-memory "--max-memory=$group_address_space")
+    for name in "${group_errno_wraps[@]}"; do link_profile+=("--wrap=$name"); done
     init_profile=(-matomics -mbulk-memory -mmutable-globals)
     explicit_profile=(--group)
     ;;
@@ -54,6 +60,16 @@ sysroot=$("$RUSTC" --print sysroot)
   -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-engine-quickjs
 "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC "${init_profile[@]}" -O2 -fno-builtin-malloc -fno-builtin-free \
   -DENGINE_CTOR_VALUE=quickjs_ctor_value -c "$root/scripts/src/engine-init.c" -o "$out/engine-init.o"
+archive="$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_quickjs.a"
+group_objects=()
+if [[ ${#group_errno_wraps[@]} -gt 0 ]]; then
+  "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC "${init_profile[@]}" -O2 \
+    -c "$root/crates/bunwasm-engine-quickjs/group-errno.c" -o "$out/group-errno.o"
+  group_objects=("$out/group-errno.o")
+  # shellcheck source=scripts/src/group-errno-wraps.sh
+  source "$root/scripts/src/group-errno-wraps.sh"
+  check_group_errno_wraps "$archive" "$out" "${group_errno_wraps[@]}"
+fi
 exports=(quickjs_ctor_value __stack_pointer __wasm_call_ctors quickjs_memory_telemetry quickjs_memory_telemetry_refresh)
 if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
   exports+=(quickjs_helpers_smoke quickjs_link_smoke quickjs_rust_alloc quickjs_rust_free quickjs_rust_realloc
@@ -65,7 +81,7 @@ args=()
 for name in "${exports[@]}"; do args+=("--export=$name"); done
 "$WASI_SDK_PATH/bin/wasm-ld" --shared "${link_profile[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined "${args[@]}" \
-  -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_quickjs.a"
+  -o "$out/engine.implicit.wasm" "$out/engine-init.o" "${group_objects[@]}" "$archive"
 node "$root/scripts/src/engine-explicit-init.ts" quickjs "$out/engine.implicit.wasm" "$out/engine.wasm" "${explicit_profile[@]}"
 wasm-tools validate "$out/engine.wasm"
 if [[ -n "$inputs" ]]; then

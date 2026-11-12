@@ -1,0 +1,13 @@
+empty evaluated
+a,a-b,b,default,nan,zero,😀,￿,Symbol(Symbol.toStringTag)
+{"value":"a","writable":true,"enumerable":true,"configurable":false}
+false true false null
+[object Module] true false
+false false false true
+false true
+true false true
+false false false
+true false true
+false true false
+TypeError true TypeError
+Symbol(Symbol.toStringTag) true true

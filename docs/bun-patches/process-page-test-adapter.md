@@ -1,0 +1,152 @@
+# Process page test adapter
+
+Class **Host feature**, **original test adapters** in
+`web/tests/process-ios-adapter.ts`, `process-page-suite.ts`,
+`process-page-adapter.ts`, `process-page-assets.ts`, and
+`process-diagnostic-adapter.ts` and its `process-diagnostic-error.ts` helper.
+No upstream Bun, Node or WebKit implementation is copied or patched.
+
+The page wraps the original command in one callable envelope. Hosted list and
+finish do not replace Worker or start the command. Hosted run awaits the actual
+shared allocation callback before invoking the envelope. The original desktop
+branch still invokes it once. The original case bodies, assertions and awaited
+scope finalizers remain unchanged from bun-wasm
+`3b46c7fb6cc4eef1fb5493d05ebf16a90473d396`.
+
+The shared policy requires a result and validates a transported non-null record,
+strict success, all 23 ordered labels and the actual page-error message array.
+The page snapshots error messages separately from host transport and cleanup
+failures. Shared error observation remains active through retirement. Results
+return only after the original finally, including cleanup-failure replacement
+and Worker restoration. Partial checks and currentTest survive failure.
+
+The runtime filesystem uses the supported `name` option without changing its
+IndexedDB fast default. The shared `ownedDatabase("bun-process")` policy accepts
+only `bun-process-${run}`. The page awaits its allocation ACK before opening any
+runtime. Sequential scopes reuse that exact name after disposal. Finish uses the
+shared exact-ledger cleanup. The controller-root setup supplies the published
+runtime's required `memory: []` declaration; it is a JavaScript controller, not a
+registered guest program.
+
+Asset preparation invokes only existing `processBundle("supervisor", out)` in
+one owned Bun subprocess and preserves its captured-bundle branch. Cancellation
+requests termination and joins the producer before settlement. Every output file
+maps lazily under `/current/`, including chunks, Worker siblings, mirrors, maps
+and index HTML. Blob MIME types are preserved. The shared host owns isolation
+headers, token-bound documents, reserved routes and scratch cleanup.
+
+The actual shared adapter retains a 120-second absolute clock from before setup,
+a 90-second result wait after navigation, and the original 10-second page waits.
+Native CLI dispatch precedes desktop-only Playwright value imports. Desktop
+artifact and benchmark branches and their bounds remain unchanged.
+
+`browser-process-hosted.ts` uses the public shared host and Playwright driver for
+local diagnostics, including seeded foreign-data survival and errors before
+retirement. It supplies the platform temporary directory as the shared host
+scratch root, so the local browser controls do not require a `/work` mount.
+The controls also run with an unusable inherited scratch root to verify that
+this explicit caller option wins without changing storage or cleanup policy. Its seeded database belongs only to each fresh control profile.
+List checks database absence before execution. Finish checks absence only after
+acknowledged completion, under the existing combined 10-second observation bound.
+The `delayed-finish` regression defers finish entry initialization by 500 ms;
+it does not change command budgets or any original case. The late-error control
+also permits the shared host's existing single interrupted-finish cleanup document,
+never another execution of the case body.
+The consumer pins published Waffle 0.0.123, source
+`8255a0cc806ef8fdc4d82557fbfe4b6d42c53dc7`, through public tarballs.
+The derived driver names its control record `processObservations`, keeping it
+distinct from the released base driver's private document observations.
+The hosted controls require confirmed teardown for their session, launcher, server,
+storage and scratch. They declare neither an application fixture nor its callbacks,
+so those two cleanup owners must report `not-created`. No active owner may use that
+status, and no `unconfirmed` teardown is accepted.
+The page-suite object uses `satisfies PageSuite<ProcessRequest>` so its callable
+page-owned run method stays narrow while the shared type also permits host-owned
+cases. No private Waffle checkout or future `HostCase.allocateDatabase` API is used.
+`checks/web-browser-process-page-hosted.json` gives the real Chromium and WebKit
+controls to the existing browser gate. Source controls use the existing automatic
+Web test owner. The original 16 callback bodies, 17 scope finalizers and command
+finalizer have frozen printer hashes in `process-page-adapter.test.ts`, so the
+preservation check also works in shallow CI checkouts.
+No native or whole-suite acceptance is implied. The earlier iOS result at Bun
+`04d9f359fc815aeb05785e6427e21f46383f2c6f` with unpublished Waffle `cf1972e3`
+remains a failure at the fourth case, `cpu-default-signal-13-status-141`.
+The filesystem-segment refusal has no recorded constructor ordinal or cause.
+This dependency adoption does not change or explain that result.
+
+## Optional same-document diagnostics
+
+A diagnostic entry can install the test-only synchronous
+`window.__bunProcessPageDiagnostic` callback before importing the original page
+entry. `createProcessPageSuite` accepts that callback as its optional third
+argument. It runs only after `runCases` resolves, including its awaited finalizer.
+List and finish never invoke it. Without the callback, the result is unchanged.
+A missing original result stays missing and does not invoke the callback.
+
+The diagnostic envelope nests the exact `processResultForTransport` value under
+`processResult`. It separately carries a `captured` JSON snapshot or an `error`.
+Capture errors, unserializable values, and diagnostics over 16 KiB become
+secondary errors rather than rejecting the case. The consumer snapshots the primary
+JSON once and checks the complete serialized envelope against the shared page
+runner's unchanged 48 KiB limit. If necessary it replaces diagnostics with a small
+secondary omission error. When even that envelope cannot fit, it returns the exact
+serialized primary without a wrapper and the diagnostic adapter delegates it
+unchanged. It never truncates the primary or increases the shared limit. Error
+formatting uses a bounded constant fallback if the thrown value cannot be printed. The callback must be synchronous and read-only.
+It must not mutate the original result, throw page events, or start background work.
+
+`processDiagnosticAdapter` preserves the original adapter settings and delegates
+its policy check to the original check with the nested result, or the original
+unwrapped result when diagnostic metadata cannot fit. It does not copy
+or relax any process assertions. Use this adapter only with the diagnostic entry.
+After the shared host writes the primary result, `writeProcessDiagnostics` writes
+its separate diagnostic through the public `writeResult`. It returns write errors
+as secondary data. The caller must retain the primary exit code, including when
+the diagnostic sink fails. Neither a captured diagnostic nor a sink failure is a
+new verdict on the original process case.
+
+## Optional connection refusal capture
+
+`process-case-runner.ts` holds the original command without entry side effects.
+`process-browser-main.ts` remains the same hosted and desktop entry. Importing
+the runner lets focused controls select existing labels without copying a
+controller, rewriting source, or running the full suite. Without that explicit
+selection, all original registrations still run in their original order. The
+frozen body and finalizer hashes remain unchanged.
+
+Only a hosted entry with `__bunProcessPageDiagnostic` creates a command-owned
+connection capture. The existing callback now receives its optional first
+connection-failure record after the original command finally resolves. An old
+zero-argument callback still reads its own diagnostics unchanged. The primary
+transport value, policy, clocks, allocation ACK and omission handling do not
+change. No capture exists and no diagnostic snapshot runs by default.
+
+`process-connection-capture.ts` wraps only the synchronous controller
+`filesystem.connect` operation. It copies the first failure before the enclosing
+scope disposes its runtime. The record includes the case label, scope ordinal,
+root or parent controller PID, the parent PID when applicable, typed public
+refusal fields and page-wide logical snapshots immediately before connection
+and on failure. The previous scope's disposal marker is `pending`, `fulfilled`
+or `rejected`. Fulfillment means that the original awaited scope disposal
+resolved, not that native backing memory was released.
+
+Snapshots retain public scalar totals and at most eight entries per array.
+Strings and object keys are limited to 128 characters, objects to 16 keys,
+traversal to 256 values and six levels, and each copied snapshot to 4 KiB UTF-8.
+Page-wide holder counts grouped by label and state, and omitted-holder counts,
+remain explicit. Shared guest and
+contradiction totals disclose array truncation. Symbols and non-plain objects
+are not retained. An unavailable snapshot or unreadable refusal is secondary
+missing evidence. The first failure still consumes the one-record slot.
+No Runtime, exception, SharedArrayBuffer or WebAssembly.Memory object is saved.
+
+The public ledger is page-wide. It cannot identify every runtime holder or pool
+incarnation. Buffer maxima, weak observations and `awaiting-collection` states
+are not physical residency or backing-release measurements. The record supplies
+no native constructor ordinal. The separately installed, unchanged constructor
+observer owns its own observations.
+
+Capture errors cannot replace the exact thrown connection value, including
+falsy throws. The existing callback serializer and diagnostic writer still own
+their bounds and secondary errors. Focused source controls test these paths;
+a controlled injected refusal is not evidence of an actual platform refusal.

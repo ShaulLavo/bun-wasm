@@ -65,16 +65,15 @@ test("Bun service worker still builds as one standalone classic script", () => {
 });
 
 for (const base of ["https://example.test/", "https://example.test/nested/app/"]) {
-  test(`Bun module cache and scoped chunks stay consumer policy at ${base}`, async () => {
+  test(`Bun module scope serves app files, never stored guest modules, at ${base}`, async () => {
     const sw = worker(base, "__bunwasm");
     sw.cached.set(`${base}__bunwasm/m/run/key`, new Response("cached module"));
-    expect(await (await sw.fetch("__bunwasm/m/run/key"))?.text()).toBe("cached module");
-    expect((await sw.fetch("__bunwasm/m/missing/key"))?.status).toBe(404);
+    expect(await (await sw.fetch("__bunwasm/m/run/key"))?.text()).toBe("app chunk");
     const chunk = await sw.fetch("__bunwasm/chunks/shared.js");
     expect(await chunk?.text()).toBe("app chunk");
     expect(chunk?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
     expect(chunk?.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-    expect(sw.requests).toEqual([`${base}chunks/shared.js`]);
+    expect(sw.requests).toEqual([`${base}m/run/key`, `${base}chunks/shared.js`]);
     expect(sw.fetch("unrelated.js")).toBeUndefined();
   });
 
@@ -84,7 +83,7 @@ for (const base of ["https://example.test/", "https://example.test/nested/app/"]
     expect(response?.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
     expect(response?.headers.get("cross-origin-opener-policy")).toBe("same-origin");
     const prefix = new URL(`${base}__preview/`).pathname;
-    expect(await response?.text()).toBe(`<!doctype html><script src="${new URL(base).pathname}preview-websocket.js" data-bun-port="8123" data-bun-prefix="${prefix}"></script><html>preview</html>`);
+    expect(await response?.text()).toBe(`<!doctype html><script src="${new URL(base).pathname}preview-websocket.js" data-bun-wasm-socket="shim" data-bun-port="8123" data-bun-prefix="${prefix}"></script><html>preview</html>`);
     const script = await sw.fetch("preview-websocket.js");
     expect(script?.headers.get("content-type")).toBe("text/javascript");
     expect(await script?.text()).toBe("socket adapter");

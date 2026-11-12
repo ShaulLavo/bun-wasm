@@ -40,6 +40,7 @@ declare const safe: boolean;
 const dynamicId: number | bigint = native.exec(connection, "select 1", null, safe)[1];
 const names: (string | null)[] | null = native.firstParamNames(connection, "-- empty");
 const declared: (string | null)[] = native.declaredTypes(statement);
+const reset: void = native.reset(statement);
 native.bind(statement, [null, true, 1, 1n, "text", new Uint8Array()]);
 native.close(native.deserialize(new DataView(new ArrayBuffer(1)), false), true);
 `);
@@ -50,6 +51,7 @@ native.close(native.deserialize(new DataView(new ArrayBuffer(1)), false), true);
 const rejected = [
   'native.rows(connection, undefined, 0, false);',
   'native.close(statement, true);',
+  'native.reset(connection);',
   'native.rows(statement, [], 4, false);',
   'native.rows(statement, [], 0);',
   'native.bind(statement, [new Date()]);',

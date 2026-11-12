@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/package-script-fixtures.test.ts",
+  "localRuntime": true
+}

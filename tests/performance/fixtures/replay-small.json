@@ -1,0 +1,20 @@
+{
+  "root": "/root",
+  "entries": ["/root/entry.js"],
+  "ignores": [],
+  "modules": {
+    "next/dist/compiled/@vercel/nft": {
+      "file": "/root/nft.cjs",
+      "source": "exports.nodeFileTrace = async function(entries, options) { await options.readFile(entries[0]); await options.readlink(entries[0]); await options.stat(entries[0]); options.ignore(entries[0]); return {fileList:new Set(['entry.js']),esmFileList:new Set(),warnings:new Set()}; };"
+    },
+    "next/dist/compiled/buffer": {"file":"/root/buffer.cjs","source":"exports.Buffer = function() {};"},
+    "next/dist/compiled/picomatch": {"file":"/root/picomatch.cjs","source":"module.exports = function() { return function() { return false; }; };"},
+    "next/dist/compiled/path-browserify": {"file":"/root/path.cjs","source":"exports.isAbsolute = function(file) { return file.startsWith('/'); };"}
+  },
+  "readFile": {"/root/entry.js":"abc"},
+  "readlink": {"/root/entry.js":null},
+  "stat": {"/root/entry.js":{"file":true,"directory":false}},
+  "fsCalls": {},
+  "stubUse": {},
+  "expected": {"files":1,"fileListHash":"463f0e92","warnings":0,"counts":{"readFile":1,"readBytes":3,"readlink":1,"stat":1,"ignore":1}}
+}

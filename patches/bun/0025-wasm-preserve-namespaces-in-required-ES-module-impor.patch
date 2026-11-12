@@ -1,0 +1,68 @@
+From 37974cf2c6fc3bc383f1f7d96bd5d7658db0cfe7 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 8 Nov 2026 22:43:51 +0200
+Subject: [PATCH 25/25] wasm: preserve namespaces in required ES module imports
+
+---
+ src/js_printer/lib.rs | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index f45ff7037..fedd84f98 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -3103,6 +3103,10 @@ pub(crate) mod __gated_printer {
+ 
+                 let wrap_with_to_esm = record.flags.contains(ImportRecordFlags::WRAP_WITH_TO_ESM);
+ 
++                if wrap_with_to_esm && self.print_bunwasm_require_namespace(record, wrap) {
++                    return;
++                }
++
+                 if module_type == bundle_opts::Format::InternalBakeDev {
+                     self.print_space_before_identifier();
+                     self.print_symbol(self.options.hmr_ref);
+@@ -3224,6 +3228,20 @@ pub(crate) mod __gated_printer {
+             }
+         }
+ 
++        fn print_bunwasm_require_namespace(&mut self, record: &ImportRecord, wrap: bool) -> bool {
++            let metadata = super::BUNWASM_REQUIRE_NAMESPACE.with_borrow(Clone::clone);
++            let Some(metadata) = metadata else { return false };
++            self.print_space_before_identifier();
++            self.print(metadata.as_slice());
++            self.print(b".requireNamespace(");
++            self.print_import_record_path(record);
++            self.print(b")");
++            if wrap {
++                self.print(b")");
++            }
++            true
++        }
++
+         /// Closes a `__toESM(` call: `, 1` (`isNodeMode`) for an ES module by
+         /// type, then `)`.
+         fn print_to_esm_suffix(&mut self) {
+@@ -7940,7 +7958,22 @@ pub fn with_bunwasm_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
+     f()
+ }
+ 
++/// bun-wasm: only the host's synchronous ES-module adapter enables this hook.
++/// It resolves external static imports as namespaces instead of Node-mode defaults.
++pub fn with_bunwasm_require_namespace<T>(metadata: &str, f: impl FnOnce() -> T) -> T {
++    struct Restore(Option<Vec<u8>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_REQUIRE_NAMESPACE.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_REQUIRE_NAMESPACE.with(|slot| slot.replace(Some(metadata.as_bytes().to_vec())));
++    let _restore = Restore(previous);
++    f()
++}
++
+ thread_local! {
++    static BUNWASM_REQUIRE_NAMESPACE: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+     static BUNWASM_IMPORT_REFERRER: core::cell::RefCell<Option<Vec<u8>>> = const { core::cell::RefCell::new(None) };
+     static BUNWASM_IMPORTS: core::cell::RefCell<Option<Vec<BunwasmImport>>> = const { core::cell::RefCell::new(None) };
+ }

@@ -1,0 +1,4 @@
+b
+a-start
+a-dyn B true true
+main true A

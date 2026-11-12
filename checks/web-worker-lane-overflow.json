@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/worker-lane-overflow.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

@@ -1,0 +1,165 @@
+import { test } from "bun:test";
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { installFixture as install } from "./install-fixture-command";
+
+import { assertClosed, fixture } from "./install-download-fixture";
+import { demandFixture } from "./install-demand-fixture";
+
+
+function project(directory: string, dependencies: Record<string, string>) {
+  mkdirSync(directory);
+  writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture", dependencies }));
+}
+
+for (const transitive of [false, true]) {
+  test(`metadata requests overlap without changing ${transitive ? "transitive" : "root"} resolution`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-"));
+    const registry = await fixture();
+    try {
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture", dependencies: transitive ? { parent: "1.0.0" } : registry.dependencies }));
+      const start = performance.now();
+      await install(directory, registry.base);
+      console.log(`${process.env.INSTALL_ENGINE ?? "quickjs"} ${transitive ? "transitive" : "root"}: ${(performance.now() - start).toFixed(1)} ms, peak ${registry.trace.peak}`);
+      assert.equal(registry.trace.missedBarrier, false, "second metadata request did not start before first response was released");
+      assert.ok(registry.trace.peak > 1, "fixture observed only serial HTTP work");
+      assert.ok(registry.trace.peak <= 8, `unbounded metadata requests: ${registry.trace.peak}`);
+      assert.equal(registry.trace.requests.length, transitive ? 21 : 20);
+      const lock = readFileSync(join(directory, "bun.lock"), "utf8");
+      rmSync(join(directory, "cache"), { recursive: true, force: true });
+      const before = registry.trace.requests.length;
+      await install(directory, registry.base, ["--frozen-lockfile"]);
+      assert.equal(registry.trace.requests.length, before, "locked install fetched metadata");
+      assert.equal(readFileSync(join(directory, "bun.lock"), "utf8"), lock);
+      assert.equal(registry.trace.active.size, 0);
+      rmSync(join(directory, "bun.lock"));
+      await install(directory, registry.base);
+      const cached = registry.trace.requests.length;
+      rmSync(join(directory, "bun.lock"));
+      await install(directory, registry.base);
+      assert.equal(registry.trace.requests.length, cached, "fresh metadata cache was bypassed");
+    } finally {
+      await registry.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 60000);
+}
+
+test("metadata errors close other outstanding requests and local edges do not fetch", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-errors-"));
+  const registry = await fixture();
+  try {
+    const directory = join(scratch, "failure");
+    project(directory, { "a-fail": "1.0.0", "b-stall": "1.0.0" });
+    assert.match(await install(directory, registry.base, [], 1), /503/);
+    await assertClosed(registry.trace);
+    const local = join(scratch, "local");
+    project(local, { child: "file:child" });
+    project(join(local, "child"), {});
+    const before = registry.trace.requests.length;
+    await install(local, registry.base);
+    assert.equal(registry.trace.requests.length, before, "local install fetched metadata");
+  } finally {
+    await registry.close();
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}, 60000);
+
+
+test("tarball downloads overlap and warm installs request nothing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-archives-"));
+  const registry = await fixture("tarball");
+  try {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "fixture", dependencies: registry.dependencies }));
+    const start = performance.now();
+    await install(directory, registry.base, [], 0, true);
+    console.log(`${process.env.INSTALL_ENGINE ?? "quickjs"} archives: ${(performance.now() - start).toFixed(1)} ms, peak ${registry.trace.peak}`);
+    assert.equal(registry.trace.missedBarrier, false, "second tarball request did not start before first archive was released");
+    assert.ok(registry.trace.peak > 1 && registry.trace.peak <= 8, `tarball concurrency ${registry.trace.peak}`);
+    for (const name of Object.keys(registry.dependencies)) {
+      assert.equal(JSON.parse(readFileSync(join(directory, "node_modules", name, "package.json"), "utf8")).name, name);
+    }
+    const before = registry.trace.requests.length;
+    await install(directory, registry.base, ["--frozen-lockfile"], 0, true);
+    assert.equal(registry.trace.requests.length, before, "no-op install requested metadata or archives");
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 60000);
+
+
+for (const stage of ["metadata", "tarball"] as const) {
+  test(`${stage} errors cancel siblings and optional failures stay optional`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-download-errors-"));
+    const registry = await fixture(stage);
+    try {
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: { "a-fail": "1.0.0", "b-stall": "1.0.0" } }));
+      assert.match(await install(directory, registry.base, [], 1, stage === "tarball"), /503/);
+      await assertClosed(registry.trace);
+      writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: { "item-02": "1.0.0" }, optionalDependencies: { "a-fail": "1.0.0" } }));
+      assert.match(await install(directory, registry.base, [], 0, stage === "tarball"), /optional dependency a-fail/);
+      await assertClosed(registry.trace);
+    } finally {
+      await registry.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 60000);
+}
+
+
+test("metadata lookahead spans already resolved parents with narrow child lists", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-parents-"));
+  const registry = await fixture("metadata", "parents");
+  try {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: registry.dependencies }));
+    await install(directory, registry.base);
+    assert.equal(registry.trace.missedBarrier, false, "next resolved parent's metadata did not start before the current child response was released");
+    assert.equal(registry.trace.requests.length, 40, "lookahead duplicated or speculated beyond known edges");
+    assert.ok(registry.trace.peak <= 8, `metadata concurrency ${registry.trace.peak}`);
+    const packages = lockRows(directory);
+    for (const name of Object.keys(registry.dependencies)) {
+      const child = name.replace("parent-", "item-");
+      const childRow = packages.get(child);
+      const parentRow = packages.get(name);
+      assert.ok(Array.isArray(childRow));
+      assert.ok(Array.isArray(parentRow));
+      assert.equal(childRow[0], `${child}@1.0.0`);
+      assert.equal(parentRow[0], `${name}@1.0.0`);
+    }
+    await assertClosed(registry.trace);
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 60000);
+
+function lockRows(directory: string): Map<string, unknown> {
+  const lock = Bun.JSONC.parse(readFileSync(join(directory, "bun.lock"), "utf8"));
+  assert.ok(lock && typeof lock === "object" && "packages" in lock);
+  assert.ok(lock.packages && typeof lock.packages === "object");
+  return new Map<string, unknown>(Object.entries(lock.packages));
+}
+
+test("unpredicted alias demand reserves the eighth handle and queued requests start their idle timer on consumption", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-metadata-demand-"));
+  const registry = await demandFixture();
+  try {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ dependencies: registry.dependencies }));
+    await install(directory, registry.base, [], 0, false, ["BUN_CONFIG_HTTP_IDLE_TIMEOUT=1"]);
+    assert.equal(registry.trace.peak, 8, "seven lookahead handles must leave room for an unpredicted demand");
+    assert.equal(registry.trace.requests.length, 11, "nested alias lookups must not duplicate requests");
+    const rows = lockRows(directory);
+    assert.deepEqual(Array.from(rows.keys()).sort(), ["a-shared", "b-parent", "b-parent/a-shared", "c-parent"].concat(Array.from({ length: 7 }, (_, index) => `item-${index}`)).sort());
+    const rootAlias = rows.get("a-shared"), nestedAlias = rows.get("b-parent/a-shared");
+    assert.ok(Array.isArray(rootAlias) && Array.isArray(nestedAlias));
+    assert.equal(rootAlias[0], "real-old@1.0.0");
+    assert.equal(nestedAlias[0], "real-new@1.0.0");
+    await assertClosed(registry.trace);
+  } finally {
+    await registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 30000);

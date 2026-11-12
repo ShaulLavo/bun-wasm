@@ -1,3 +1,4 @@
+import { fixtureModule } from "../../web/tests/process-module-fixture.ts";
 import { prepareProgram } from "../../src/assets.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
@@ -11,7 +12,7 @@ import { connectFilesystemIdentity, createFilesystemIdentity, revokeFilesystem, 
 import { WorkerProcessClient, createWorkerProcessTransport } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
 
-const module = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+const module = fixtureModule(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
 const workerUrl = new URL("../../web/tests/fixtures/telemetry-environment-worker.ts", import.meta.url).href;
 const notificationWorkerUrl = new URL("../../src/notification-worker-entry.ts", import.meta.url).href;
 
@@ -74,7 +75,7 @@ async function admittedEnvironment(env: Record<string, string>, engine: "browser
     const pid = fixture.runtime.identities.pid();
     const transport = createWorkerProcessTransport({ pid, job: fixture.runtime.identities.job(), identity: fixture.runtime.identities.buffer });
     transport.data = { filesystem: createFilesystemIdentity(fixture.identity) };
-    await service.adoptRuntimeRoot(transport, { output(_fd, data) { chunks.push(data); } });
+    await service.adoptRuntimeRoot(transport, { memory: [], output(_fd, data) { chunks.push(data); } });
     const rootData = transport.data;
     if (!rootData || typeof rootData !== "object" || !("pipeRegistry" in rootData)) throw new Error("root pipe registry required");
     const client = new WorkerProcessClient({ transport, descriptors,
@@ -143,7 +144,7 @@ test("preview1 root requests preserve their environment without Bun defaults", a
   const environments: Record<string, string>[] = [{}, { NEXT_TELEMETRY_DISABLED: "0" }, { NEXT_TELEMETRY_DISABLED: "" }];
   for (const env of environments) {
     const caller = Object.freeze({ PATH: "/tools", PWD: "/project", CUSTOM: "kept", ...env });
-    expect(await rootEnvironment(caller, "preview1")).toEqual({ ...caller, PATH: "/bin:/tools", BUNWASM_EXEC_PATH: "/bin/bun" });
+    expect(await rootEnvironment(caller, "preview1")).toEqual(caller);
     expect(caller).toEqual({ PATH: "/tools", PWD: "/project", CUSTOM: "kept", ...env });
   }
 });
@@ -164,7 +165,9 @@ for (const engine of ["browser", "quickjs", "jsc"] as const) {
   test(`${engine} public package adapter defaults telemetry across actual admitted worker transport`, async () => {
     const caller = Object.freeze({ PATH: "/caller-only", PWD: "/caller", BUNWASM_EXEC_PATH: "/caller/bun", CUSTOM: "kept" });
     const received = await admittedEnvironment(caller, engine, true);
-    expect(received).toEqual({ PATH: "/caller-only", PWD: "/project", BUNWASM_EXEC_PATH: `${ENGINE_BIN[engine]}/bun`, CUSTOM: "kept", NEXT_TELEMETRY_DISABLED: "1" });
+    const expected: Record<string, string> = { PATH: "/caller-only", PWD: "/project", BUNWASM_EXEC_PATH: `${ENGINE_BIN[engine]}/bun`, CUSTOM: "kept", NEXT_TELEMETRY_DISABLED: "1" };
+    if (engine === "jsc") expected.BUN_WASM_STACK_KIB = "800";
+    expect(received).toEqual(expected);
     expect(caller).toEqual({ PATH: "/caller-only", PWD: "/caller", BUNWASM_EXEC_PATH: "/caller/bun", CUSTOM: "kept" });
   });
 

@@ -89,6 +89,19 @@ impl Registry {
         }
     }
 
+    /// Release iteration locks without changing bindings or execution metadata.
+    fn reset(&self, id: u32) {
+        let Some(stmt) = self.stmts.get(&id) else {
+            return;
+        };
+        if stmt.ptr.is_null() {
+            return;
+        }
+        // SAFETY: only live statements retain a non-null pointer. Reset returns
+        // the previous step's status; cleanup must not throw that error again.
+        unsafe { ffi::sqlite3_reset(stmt.ptr) };
+    }
+
     /// Finalize a statement; a closed database whose last statement this was
     /// is closed for real.
     fn finalize(&mut self, id: u32, by_close: bool) {
@@ -853,6 +866,11 @@ fn install_statements(t: &mut Table, reg: &Shared) {
             return Ok(Val::Null);
         }
         Ok(row(stmt, &column_names(stmt), Shape::Object, a.bool(3)))
+    });
+    let r = reg.clone();
+    t.add("sqlite.reset", move |a| {
+        r.borrow().reset(handle(&a, 0)?);
+        Ok(Val::Undefined)
     });
     let r = reg.clone();
     t.add("sqlite.run", move |a| {

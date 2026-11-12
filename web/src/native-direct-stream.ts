@@ -177,6 +177,16 @@ function directSource(source: object, highWaterMark: number, onController: (cont
   };
 }
 
+function forwardedReadableGetter(dictionary: object, wrapped: object, key: string, direct: object) {
+  return function get() {
+    const value: unknown = Reflect.get(wrapped, key, wrapped);
+    // Dispatch at native conversion, including repeated type reads.
+    if (key === "type" && value === "direct") throw direct;
+    if (typeof value === "function" && key !== "type" && key !== "autoAllocateChunkSize") Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, writable: true, value });
+    return value;
+  };
+}
+
 export function constructNativeReadable(target: Function, args: unknown[], newTarget: Function, original: unknown, onController: (controller: object, error: (reason: unknown) => void) => void): object {
   if (original === null || typeof original !== "object" && typeof original !== "function") return Reflect.construct(target, args, newTarget);
   const direct = {};
@@ -184,13 +194,9 @@ export function constructNativeReadable(target: Function, args: unknown[], newTa
   if (wrapped === null || typeof wrapped !== "object") return Reflect.construct(target, args, newTarget);
   let highWaterMark: unknown;
   const forwarded = args.slice();
-  forwarded[0] = new Proxy({}, { get(_target, key) {
-    const value: unknown = Reflect.get(wrapped, key, wrapped);
-    // Dispatch at native dictionary conversion, after its strategy reads. Never
-    // probe type early or repeat a getter after native construction rejects it.
-    if (key === "type" && value === "direct") throw direct;
-    return value;
-  } });
+  const dictionary = {};
+  for (const key of ["autoAllocateChunkSize", "cancel", "pull", "start", "type"]) Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, get: forwardedReadableGetter(dictionary, wrapped, key, direct) });
+  forwarded[0] = dictionary;
   const strategy = args[1];
   if (strategy !== null && typeof strategy === "object") {
     forwarded[1] = new Proxy({}, { get(_target, key) {

@@ -444,6 +444,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::streams::install(&mut t);
     crate::archive::install(&mut t);
     install_crypto(&mut t);
+    crate::tls::install(&mut t, state.tls.clone());
     install_url(&mut t);
     crate::intl::install(&mut t);
     install_host(&mut t, state);
@@ -529,6 +530,15 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("mainArg", move |_| Ok(st.main_arg.borrow().clone().into()));
+    let st = state.clone();
+    t.add("runMode", move |_| {
+        Ok(if st.mode == crate::RunMode::Hot {
+            "hot"
+        } else {
+            "once"
+        }
+        .into())
+    });
     t.add("env", |_| {
         let fields = std::env::vars_os()
             .map(|(k, v)| {
@@ -596,6 +606,8 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
 
 #[cfg(test)]
 mod mkdir_tests;
+#[cfg(test)]
+mod rm_tests;
 
 fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
     let mut pending = vec![Path::new(path)];
@@ -691,7 +703,7 @@ fn install_fs(t: &mut Table) {
         let path = a.str(0)?;
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
-            Err(_) if a.bool(2) => return ok(),
+            Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
             Err(e) => return Err(io_error(e, "rm", Some(path))),
         };
         let result = match (meta.is_dir(), a.bool(1)) {
@@ -1120,12 +1132,53 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         }
     });
     let st = state.clone();
+    t.add("resolveImport", move |a| {
+        use crate::import_requests::{ImportMode, ImportRequest};
+        let mode = match a.str(2)? {
+            "inferred" => ImportMode::Inferred,
+            "text" => ImportMode::Text,
+            _ => return Err(NativeError::type_error("Invalid import mode")),
+        };
+        let name = st.resolve_import(
+            ImportRequest {
+                specifier: a.str(0)?,
+                mode,
+            },
+            a.str(1)?,
+        )?;
+        Ok(name.as_str().into())
+    });
+    let st = state.clone();
+    t.add("modulePath", move |a| Ok(st.module_path(a.str(0)?).into()));
+    let st = state.clone();
     t.add("workerSource", move |a| {
         let path = a.str(1)?;
         st.transpiler
             .transpile(a.str(0)?, path, crate::transpiler::Loader::from_path(path))
             .map(Val::from)
             .map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
+    t.add("hotPrepare", move |a| {
+        let generation = a.num(0)?;
+        if generation.fract() != 0.0 || !(1.0..=f64::from(u32::MAX)).contains(&generation) {
+            return Err(NativeError::type_error("Invalid hot generation"));
+        }
+        st.prepare_hot(generation as u32, a.str(1)?)
+    });
+    let st = state.clone();
+    t.add("hotDigest", move |a| {
+        st.hot_digest(a.str(0)?).map(Val::from)
+    });
+    t.add("hotMapPosition", move |a| {
+        Ok(crate::hot_run::map_position(
+            a.opt_str(0),
+            a.opt_str(1),
+            a.u32(2)?,
+            a.u32(3)?,
+            a.u32(4)?,
+            a.u32(5)?,
+        ))
     });
     let st = state.clone();
     t.add("moduleFormat", move |a| {
@@ -1498,6 +1551,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         Ok(host::proc_access(a.str(0)?, a.str(1)?).into())
     });
     t.add("procSpawn", |a| Ok(host::proc_spawn(a.bytes(0)?).into()));
+    t.add("procSpawnError", |a| {
+        text_or_code(host::proc_spawn_error(a.i32(0)?))
+    });
     t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
     t.add("procPipe", |_| {
         Ok(match host::proc_pipe() {

@@ -2,6 +2,8 @@
 
 Status: Approved (owner, 2026-10-15)
 
+Hermes remains parked under the November 1 owner decision; its retained `c36356f4` engine has a documented empty-handler Proxy `isSealed`/`isFrozen` limitation, accepted narrowly for PR 482 with no engine fix or restart in scope.
+
 ## Goal
 
 Run as much of Bun's own code as possible, on all three engines (QuickJS, the browser's engine,
@@ -528,3 +530,209 @@ or the new startup waiter. Evidence and the native control are in
 full upstream results are in `timers-browser.json` and `timers-browser-logs/`
 in the same directory. The real-Bun follow-up lane retains this baseline
 artifact until the timer follow-up is reproduced, then removes it.
+
+## Browser host call allocation abort on an 8 MiB hash input (iOS E3)
+
+Status: Approved (owner, 2026-11-05) for recording this finding and for the
+source-only diagnosis below. Not approved: a new guest build, a device run, a
+threshold scan or a runtime change. Those need a separate owner decision.
+
+### What was observed
+
+The product is the original admitted runtime 110 browser guest, source
+`e1dea936b0fe9de664ecc3980550cc091d1be120` (tree `bb90b2ff`). Its sealed
+delivery in `/work/artifacts/bun-wasm-runtime110-20261105/delivery` stays
+unchanged. The separately admitted private browser fallback guest (`425bef5a`)
+is a different artifact and is not involved.
+
+On an iPhone in Safari, the Waffle Nuxt E3 run `e3-r110-chunked-1` staged 24
+chunks with an 8 MiB chunk limit. The first chunk contained 8,388,608 bytes.
+The restorer (SHA-256 `60190aeb…`) then exited 1 on that first chunk, before
+Nuxt ran:
+
+```
+memory allocation of 8388608 bytes failed
+RuntimeError: Unreachable code should not be executed (evaluating 'e.bunwasm_call(v,F,R.len)')
+```
+
+The captured import-rejection stack, innermost first:
+
+```
+wasm-function[91]
+wasm-function[80]
+bunwasm_runtime::engine_host::Reader::val   (wasm-function[7679])
+bunwasm_runtime::engine_host::Reader::val   (wasm-function[7679])
+bunwasm_call                                (wasm-function[7835])
+p  (__bunwasm/worker.js:8:71598)
+digest
+readChunk (restore-tree.ts:287)
+```
+
+Restorer line 287 is `sha256(bytes)`, defined as
+`new Bun.CryptoHasher("sha256").update(bytes).digest("hex")`. The stack names
+`digest`, not `update`, as the frame that crossed into the guest. That fits the
+source: `update` only buffers in JavaScript.
+
+In the same guest process, earlier steps had succeeded: a `readFileSync` of the
+3,097,113-byte `tree.json`, a hash of 2,075,558 bytes of inventory text through
+the same hasher, and the `readSync` loop that filled this same 8 MiB chunk.
+Those are different operations in different memory states. They establish no
+size threshold, no size interval, and no cause in total memory, fragmentation,
+a wasm memory growth limit or Safari's allocator. One earlier large-file read on
+PC Chromium did not reproduce this; no threshold campaign was run. The Nuxt
+command never ran, and no `TypeError` cause is attributed. No Waffle defect is
+shown.
+
+### Source call chain at e1 (static reading only)
+
+`engine_host.rs`, `engine-host.js`, `bun.js`, `web.js` and `natives.rs` have no
+diff between `e1dea936` and main `cac10b72` for the code below, so the line
+numbers hold on both.
+
+1. `crates/bunwasm-runtime/src/js/bun.js:291` `CryptoHasher.update` copies the
+   input with `internal.toUint8(data).slice()` and keeps it in `#chunks`
+   (JavaScript heap, input-sized).
+2. `bun.js:296` `digest` calls `internal.concatBytes(this.#chunks)`
+   (`web.js:656`), which always allocates a new array of the total size, even for
+   one chunk (JavaScript heap, input-sized).
+3. `native.hash(alg, input)` goes to `web/src/engine-host.js:296` `call`. The
+   `Writer` (`engine-host.js:129`) serializes `[alg, input]`, doubling its
+   capacity from 256 bytes. For this input its JavaScript backing buffer
+   reaches 16,777,216 bytes. Capacity is not a measurement of live heap or
+   peak memory.
+4. `engine-host.js:299` `exports.bunwasm_alloc(w.len)` allocates a zeroed guest
+   buffer of `w.len` = 8,388,608 + 21 framing bytes (array header, the
+   `"sha256"` string, the byte-length header) at `engine_host.rs:222`. The
+   JavaScript side copies the encoding into it. This allocation succeeded,
+   because `bunwasm_call` was entered.
+5. `engine_host.rs:262` `bunwasm_call` takes ownership of that buffer as
+   `input` and calls `decode(&input)`. The outer `Reader::val` (`:120`) reads
+   the array tag and recurses for each item. The inner `Reader::val` reads the
+   bytes tag and runs `Val::Bytes(self.take(n).to_vec())` at `:132`, a second
+   guest allocation of exactly n = 8,388,608 bytes. `input` is dropped only
+   after `decode` returns (`:269`).
+6. Not reached: `natives.rs:1321` `hash` and `set_result` (`engine_host.rs:193`).
+
+The failure most likely maps to step 5: the reported size is exactly n (step 4
+asks for n + 21), and the stack shows two nested `Reader::val` frames under
+`bunwasm_call`, which matches decoding an array whose second item is bytes. At
+that point the guest heap holds both the 8 MiB + 21 byte input and the new
+8 MiB copy request. This is a source match, not proof of the exact
+allocating source line: the copy is inlined into `Reader::val`. The admitted
+guest's name section identifies frame 80 as `alloc::raw_vec::handle_error`
+and frame 91 as `alloc::alloc::handle_alloc_error`. Those names confirm an
+allocation-error path, not why the allocation failed.
+
+One nearby ownership fact, not tied to this failure: `RESULT`
+(`engine_host.rs:159`) is a thread-local `Vec` that `set_result` clears but
+never shrinks. However, the regular-file `readSync` path in
+`node_fs.js:451-476,502-506` splits large reads through `readRegularPieces`,
+requesting at most 1 MiB from each native `read_descriptor` call. The public
+8 MiB read therefore establishes neither an 8 MiB native read nor 8 MiB of
+retained `RESULT` capacity. Actual native read sizes and retained capacity
+were not instrumented.
+
+### Completed read-only verification
+
+The independent source review selected the Browser guest through the sealed
+`split/web/engine-builds.json` registry and verified SHA-256
+`ddadea2faae59b516f51e743009b49d41db8a57bd3add1dcec33d105e2739b7c`
+at `browser/default/bun-browser.wasm`. `wasm-tools print --skeleton` read its
+name and memory sections without guest instantiation or execution. Function
+7679 is `Reader::val`, and 7835 is `bunwasm_call`; functions 80 and 91 are
+identified above.
+
+Memory 0 declares 247 initial pages and 16,384 maximum pages. With 65,536
+bytes per page these are 16,187,392 and 1,073,741,824 bytes. Neither
+declaration reveals memory size at failure, free allocator capacity,
+successful or refused growth, or the allocation-failure cause. No guest
+build, device run or threshold experiment occurred.
+
+### Unknowns
+
+- Whether the inlined allocation is exactly the `:132` `to_vec`. Function
+  names and the request size support that mapping, but no source-line symbols
+  or allocator-site measurement prove it.
+- Why the allocation failed: live guest heap state, a refused memory growth,
+  fragmentation, total browser memory pressure, or another cause. The
+  declarations above do not distinguish these possibilities.
+- The guest's live allocation bytes and peak at failure. Nothing recorded them.
+- Whether the earlier `EIO` in `e3-r110-import-1` is the same allocation.
+  Sharing a host frame region does not establish that.
+
+### Future regression direction. No build authorized
+
+A later fix needs a known SHA-256 correctness vector for an 8 MiB input.
+If that fix removes the decode copy, add separate allocation accounting:
+construct the encoded `["sha256", bytes]` input before accounting starts,
+then count allocation requests of at least the payload size only while
+`decode` runs. The present bytes branch requests one payload-sized copy.
+The borrowed-decode direction would assert zero such additional requests,
+while checking decoded content and argument lifetime. Exclude input
+construction, native hashing and result encoding from this counter.
+
+This metric counts allocation requests and their sizes. It does not measure
+live allocator bytes, JavaScript heap, or committed WebAssembly linear
+memory. Do not substitute `memory.buffer.byteLength` or an uncalibrated
+"near one input" growth budget. Incremental native hashing or shrinking
+`RESULT` are separate candidate changes that need their own stated metric;
+no fix is selected by this record.
+
+Any runtime change needs its own reviewed source, guest build and applicable
+engine verification before a new admission. This task authorizes none of
+those executions. The sealed runtime 110 delivery stays unchanged.
+
+Waffle's lead is bounding each restorer hash, read and write to small windows on
+the original product to reach Nuxt. Multiple small `update` calls on one
+current hasher still produce one combined native call at `digest`, so they
+do not bound that call. The workaround must bound the total bytes per digest
+or use genuinely incremental hashing while preserving its verification
+semantics. That is not a runtime fix or proof of cause.
+
+Evidence: `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/lead-debugger/e3-r110-chunked-1/`
+(`RESULT.md`, `records.jsonl` line 5, journal array index 52 with worker
+sequence 16). The projection
+and source references are in `/work/reports/wave-20261105/engines/host-api-allocation-e3/`.
+
+
+## Bounded desktop startup and graph costs after registration loading
+
+Status: Completed November 6, 2026. Owner: Engines. The Approved follow-up belongs to PR 482 and the worker-module-loader track. Existing e1/d313 artifacts were measured in desktop Chromium and Playwright WebKit. No clear common trivial-startup regression was observed. Positively controlled WebKit command completion was 101.72 to 107.68 ms; its 200-module graph interval was 137.96 to 188.10 ms. Chromium worker control remained unproven. All eight new graph invocations returned checksum 19900. No capability-gating product change is justified by this bounded pass alone. Browser read costs remain unmeasured.
+
+Results, every sample and the reproducer are in `/work/reports/wave-20261105/waffle/nuxt-iphone-reopen/worker-module-loader-fix/implementation/startup-followup/`. Owned browser/server processes and the copied snapshot were removed. This was an experimental Linux headless comparison, not current-head or iOS performance acceptance.
+
+The protocol below is the historical executed measurement plan. Its old private-build/E3 fences do not apply to future development: the November 6 owner development-loop rule permits ordinary builds, tests and retries without custody or intake campaigns. Preserve original admitted artifacts and history, and keep real automated tests, independent review and green CI at merge.
+
+Status: Approved. Owner: Engines. This follow-up belongs to PR 482 and the worker-module-loader track. Managing accepted the documented Node read overhead for this correctness fix on November 6, 2026. The acceptance does not cover semantic regressions or establish browser performance.
+
+Measure Chromium and Playwright WebKit on the PC with existing built old/new artifacts. Do not build a new guest or host bundle for this measurement, reserve the Mac, reinstall E2, or consume the private e1 diagnostic build or E3 allowance. If a complete source-bound old/new artifact pair is unavailable, record that prerequisite instead of manufacturing provenance or rebuilding it here.
+
+Before execution, bind each artifact tree, source/build receipt, guest, compressed variant, metadata and browser version. Record all known source differences rather than attributing unrelated changes to the loader. Preserve the artifacts and use owned short scratch paths and local fixture ports. Install teardown before starting services or browsers and verify it on the PC after the run.
+
+Use one fixed pass for each browser, artifact and control condition. Each pass has two sequential guest processes with the same bootstrap and the same 200-module graph. Report every sample, including failure. No reruns for nicer timings and no open-ended tuning. Bound the overall measurement at 15 minutes.
+
+Record asset headers, decoded/compressed identities, response provenance, service-worker registrations, Cache Storage and HTTP cache conditions. A fresh context is context-cold, not proof of a cold OS or compiler cache. Record the second process as a pool-spare/warm case only when the actual worker evidence supports that description.
+
+Measure navigation to published page readiness, command dispatch to executing-guest startup, startup to graph completion, and disposal separately. Emit checksums and worker capability evidence from an acyclic bootstrap before dynamically loading the graph. Retain actual executing-worker control observations and request attribution. An unavailable worker API is not a null controller, and a controlled page or scoped URL is not evidence that its worker is controlled. Keep failed old uncontrolled-cycle imports as failures, not timing successes. Positively prove the controlled-worker case or report that case unproven.
+
+Compare the app-relevant startup and graph phases under like asset/cache conditions. Do not extrapolate the Node 5.2x/45x read ratios, the 27.5-to-68.7 ms graph result, or the roughly 15 ms hello-world difference to either browser.
+
+If normal startup in a genuinely service-worker-controlled worker regresses noticeably, take only the obvious bounded correction: choose one module mode per process from actual worker capability before entry. Use the old fast path only when the required capability exists. Use records when the controller is null or capability is missing/unavailable. Never infer native capability from a worker URL or scope. Do not restore a mixed native/record namespace bridge, pre-await dependency path, version-skew branch or mid-process mode switch.
+
+Any resulting product change requires normal source review and required checks on the changed head before merge or the private diagnostic build. Report remaining costs or an unresolved capability/control observation before widening this follow-up. Keep the one private e1-plus-reviewed-delta build and Nuxt's one later E3 separate.
+
+## Later: unoptimized WASI guest link
+
+Status: Approved, deferred. Keep the supported guest at dev opt-level 1.
+At `3b46c7fb6cc4eef1fb5493d05ebf16a90473d396` on the PC, nightly-2026-09-15,
+`CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo build --locked --offline -j 2 --target wasm32-wasip1 -p bunwasm-cli`
+(after sourcing `env.sh` and preparing the matched Bun sources/sysroot) fails
+with `undefined symbol: highway_memmem16` from `bun_bundler` and `bun_paths`.
+The matched Bun `src/highway/lib.rs:34` declares it and `memmem16` at line 380
+calls it. Our `crates/bunwasm-glue/src/bun_native.rs:529` defines
+`highway_memmem`, but has no `highway_memmem16` implementation. Optimization
+appears to remove the missing path at opt-level 1 and in release builds, which
+both link. Implement and test the portable 16-bit search later, then rerun the
+opt-level 0 link and the supported profiles. Original reproduction and full
+linker output: `/work/reports/wave-20261106/rust-build-speed/bench.py run bun-guest opt0`
+and `bun-guest-opt0-clean.log` beside that script. No fix is included here.

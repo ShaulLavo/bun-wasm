@@ -1,0 +1,13 @@
+(module
+  (import "env" "memory" (memory 1 3 shared))
+  (import "env" "observe" (func $observe (param i32)))
+  (export "memory" (memory 0))
+  (func (export "read") (param i32) (result i32) local.get 0 i32.atomic.load)
+  (func (export "write") (param i32 i32) local.get 0 local.get 1 i32.atomic.store)
+  (func (export "pages") (result i32) memory.size)
+  (func (export "grow") (param i32) (result i32) local.get 0 memory.grow)
+  (func (export "wait") (param i32 i32 i64) (result i32)
+    local.get 0 local.get 1 local.get 2 memory.atomic.wait32)
+  (func (export "notify") (param i32 i32) (result i32)
+    local.get 0 local.get 1 memory.atomic.notify)
+  (func (export "callback") (param i32) local.get 0 call $observe))

@@ -1,0 +1,95 @@
+{
+  "repository": "https://github.com/oven-sh/bun",
+  "commit": "9510e74152073d850a18758ca41114d8f214ffa6",
+  "files": [
+    {
+      "path": "src/js/node/tls.ts",
+      "blob": "0b7a288cd183e9f82bd50297bfefe2ac170bcfad",
+      "sha256": "21ab39bc77fc6258d4e9809aabc38791139c06a304f170cd359d1bafed3e269d",
+      "bytes": 69523,
+      "classification": "ported identity helpers only"
+    },
+    {
+      "path": "src/js/internal/url.ts",
+      "blob": "4740c16317c2202aed249b344645722d8c8edae0",
+      "sha256": "ffb02adc84c6b6db01dca1a905c43722d1d0adfa5ee1ddb817ef6933b37030ad",
+      "bytes": 896,
+      "classification": "deferred, not copied"
+    },
+    {
+      "path": "src/js/internal/tls.ts",
+      "blob": "924c7ac3577ca644965c4f51a97e2a7ddd634752",
+      "sha256": "e872d4be583c56c6f58959ad8e1fa686e098bf4010f1b1abb4026ffdc96c0ee2",
+      "bytes": 18732,
+      "classification": "deferred, not copied"
+    },
+    {
+      "path": "src/js/node/punycode.ts",
+      "blob": "bed3c00fbdeccf6c61b16138b6fe391950dc88c2",
+      "sha256": "8b57ec042ca49c4f985f8423be7abe515fe6b2eb45f00f91f2abda1fd1467056",
+      "bytes": 12780,
+      "classification": "deferred, not copied"
+    },
+    {
+      "path": "test/js/node/test/parallel/test-tls-check-server-identity.js",
+      "blob": "e21f39ccc763417d0de83f90eb7128cdf6c1c78f",
+      "sha256": "4df4b3f170b600d36e47bf3958fbb066aaa42cba3d03a4d73783b20277848a3c",
+      "bytes": 11481,
+      "classification": "ported all 59 pure cases"
+    },
+    {
+      "path": "LICENSE.md",
+      "blob": "7d8765cceccec1bc89752468ad7810c2db3321c3",
+      "sha256": "5dd765c71f5302163a58d2985f43565f41e3bb5546934492b178a23835820cea",
+      "bytes": 14502,
+      "classification": "read only, no copied implementation"
+    },
+    {
+      "path": "packages/bun-usockets/root_certs.der",
+      "blob": "b1252b28fe33dfdc6e32730db437a1f07cc6299b",
+      "sha256": "9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90",
+      "bytes": 129635,
+      "classification": "unchanged, native lane owns trust data"
+    },
+    {
+      "path": "test/js/node/tls/node-tls-connect-hostname-verification.test.ts",
+      "blob": "2f0219de2e3fca4da5b38219f90e421ade25fde0",
+      "sha256": "28a3a156bf70cece70c4f1df924bca7c5ec665d3c3ed7976f8cc6c58e31469e1",
+      "bytes": 23003,
+      "classification": "deferred client and native integration; includes unsupported HTTP2 and Bun.connect"
+    }
+  ],
+  "caseClassification": {
+    "unmodifiedExecutableCases": 0,
+    "portedPureCases": 59,
+    "portedInputChanges": [],
+    "portedAssertionChanges": [
+      {
+        "case": "upstream-19",
+        "reason": "The error reason escapes its newline as \\u000a rather than placing a control byte in diagnostics."
+      }
+    ],
+    "deferredIntegrationCases": [
+      "rejects an IP address as options.servername",
+      "rejects a CA-trusted cert whose CN does not match host",
+      "reports authorized=false on hostname mismatch with rejectUnauthorized=false",
+      "invokes checkServerIdentity with host when servername is omitted",
+      "passes the IP from options.host to checkServerIdentity",
+      "matches an IPv6 address with a zone id in options.host on its address",
+      "rejects an IPv6 address with a zone id that the certificate does not list",
+      "rejects a certificate that is only valid for localhost when options.host is an IP",
+      "reports authorized=false for a localhost-only certificate when options.host is an IP and rejectUnauthorized=false",
+      "tls.connect(options) to an IP address",
+      "tls.connect({ socket })",
+      "https.request(options)",
+      "http2.connect(authority, options)",
+      "a sloppy mode callback that guards on `this.pin` refuses a wrong pin",
+      "`this` is undefined when the constructor options own the callback",
+      "`this` is the options of connect() when they own the callback",
+      "quotes and escapes a DNS altname containing a comma",
+      "quotes and escapes a DNS altname containing double quotes",
+      "quotes and escapes a DNS altname containing a non-ASCII byte",
+      "reports authorized=false when a CA-trusted cert does not match the connected hostname"
+    ]
+  }
+}

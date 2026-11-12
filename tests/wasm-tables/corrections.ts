@@ -32,20 +32,21 @@ async function correctionCollect() {
     collect();
   }
 }
-correctionProbe('immutable Instance.exports assignment and deletion', () => {
+correctionProbe('Instance.exports uses the native prototype accessor', () => {
   const instance = new WebAssembly.Instance(fixture('numeric'));
   const exports = instance.exports;
-  const descriptor = Object.getOwnPropertyDescriptor(instance, 'exports');
-  if (sourceMemory) check(descriptor, 'source own exports descriptor');
-  if (descriptor) {
-    correctionEqual(descriptor.writable, false, 'exports writable=false');
-    correctionEqual(descriptor.configurable, false, 'exports configurable=false');
-    correctionEqual(descriptor.enumerable, true, 'exports enumerable=true');
-  }
-  correctionEqual(Reflect.set(instance, 'exports', {}), false, 'exports replacement rejects');
-  const deleted = Reflect.deleteProperty(instance, 'exports');
-  if (sourceMemory) correctionEqual(deleted, false, 'own exports deletion rejects');
-  correctionEqual(instance.exports, exports, 'exports survives attempted replacement/deletion');
+  correctionEqual(Object.getOwnPropertyDescriptor(instance, 'exports'), undefined, 'no own exports descriptor');
+  const descriptor = Object.getOwnPropertyDescriptor(WebAssembly.Instance.prototype, 'exports');
+  if (!descriptor || typeof descriptor.get !== 'function') throw new Error('Expected prototype exports accessor');
+  const getter = descriptor.get;
+  correctionEqual(descriptor.set, undefined, 'exports has no setter');
+  correctionEqual(descriptor.configurable, true, 'prototype exports configurable=true');
+  correctionEqual(descriptor.enumerable, true, 'prototype exports enumerable=true');
+  correctionEqual('value' in descriptor, false, 'exports is not a data property');
+  correctionThrows(() => Reflect.apply(getter, {}, []), 'TypeError');
+  correctionEqual(Reflect.set(instance, 'exports', {}), false, 'exports assignment rejects');
+  correctionEqual(Reflect.deleteProperty(instance, 'exports'), true, 'deleting absent own exports succeeds');
+  correctionEqual(instance.exports, exports, 'canonical exports survives assignment and own deletion');
   check(Object.isFrozen(exports), 'exports object remains frozen');
 });
 correctionProbe('anyfunc omitted set defaults to null', () => {

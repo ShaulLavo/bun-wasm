@@ -6,6 +6,8 @@
 # Usage: jsc/finalize.sh in.wasm out.wasm
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 [[ $# -eq 2 ]] || { echo "usage: finalize.sh in.wasm out.wasm" >&2; exit 2; }
+threads=()
+[[ "$JSC_PROFILE" == split ]] || threads=(--enable-threads)
 $CAGE "$WASM_OPT" --enable-simd --enable-bulk-memory --enable-nontrapping-float-to-int \
-  --enable-sign-ext --enable-mutable-globals --enable-multivalue --enable-reference-types \
+  --enable-sign-ext --enable-mutable-globals --enable-multivalue --enable-reference-types "${threads[@]}" \
   --spill-pointers -O2 -g --strip-dwarf --strip-producers "$1" -o "$2"

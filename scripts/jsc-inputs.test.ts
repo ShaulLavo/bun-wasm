@@ -29,7 +29,7 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     }
     const shell = (command: string, env: Record<string, string> = {}) => {
       const result = Bun.spawnSync(["bash", "-c", 'source "$1/jsc/common.sh"; copy_jsc_config_inputs; ' + command, "jsc-inputs-test", root], {
-        env: { ...process.env, ...env, JSC_BUILD_DIR: join(root, "build"), WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: sdk, BUN_WASM_SYSROOT: sysroot, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        env: { ...process.env, ...env, TMPDIR: root, JSC_BUILD_DIR: join(root, "build"), WASM_TOOLS: join(root, "tools"), WASI_SDK_PATH: sdk, BUN_WASM_SYSROOT: sysroot, PATH: `${bin}:${process.env.PATH ?? ""}` },
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(result.stderr.toString()).toBe("");
@@ -40,6 +40,12 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("JSC fixture scratch is owned by the fixture rather than the workstation", () => {
+  fixture((root, shell) => {
+    expect(shell('printf "%s" "$TMPDIR"')).toBe(root);
+  });
+});
 
 test("JSC stamp ignores scratch policy but fingerprints effective compiler inputs", () => {
   fixture((root, shell) => {
@@ -139,5 +145,24 @@ test("cold JSC fetch stages patch-added files for strict source stamping", () =>
     reject('echo unexpected > "$WEBKIT_DIR/Source/unexpected.h"');
     shell('rm "$WEBKIT_DIR/Source/unexpected.h"');
     reject('rm "$WEBKIT_DIR/Source/added.h"');
+  });
+});
+
+test("JSC tree check in a blobless clone fetches no blobs outside the sparse checkout", () => {
+  fixture((root, shell) => {
+    const origin = join(root, "origin");
+    mkdirSync(join(origin, "Source"), { recursive: true });
+    mkdirSync(join(origin, "LayoutTests"));
+    writeFileSync(join(origin, "Source/tracked.cpp"), "original source\n");
+    writeFileSync(join(origin, "LayoutTests/unused.html"), "never checked out\n");
+    writeFileSync(join(root, "jsc/webkit-wasi.patch"), "diff --git a/Source/tracked.cpp b/Source/tracked.cpp\n--- a/Source/tracked.cpp\n+++ b/Source/tracked.cpp\n@@ -1 +1 @@\n-original source\n+patched source\n");
+    shell(`git -C "${origin}" init -q; git -C "${origin}" add .; git -C "${origin}" -c user.name=fixture -c user.email=fixture@example.invalid commit -qm fixture; git -C "${origin}" config uploadpack.allowfilter true
+git clone -q --filter=blob:none --no-checkout "file://${origin}" "$WEBKIT_DIR"
+git -C "$WEBKIT_DIR" sparse-checkout set Source; git -C "$WEBKIT_DIR" checkout -q --detach HEAD; git -C "$WEBKIT_DIR" apply --index "$JSC_SRC/webkit-wasi.patch"
+git -C "$WEBKIT_DIR" remote set-url origin "file://${root}/missing-origin"`);
+    const pin = 'WEBKIT_COMMIT=$(git -C "$WEBKIT_DIR" rev-parse HEAD); ';
+    const absent = 'if git -C "$WEBKIT_DIR" cat-file -e HEAD:LayoutTests/unused.html 2>/dev/null; then exit 94; fi; ';
+    shell(pin + absent + "check_jsc_webkit_tree; " + absent, { GIT_NO_LAZY_FETCH: "1" });
+    shell(pin + 'echo changed >> "$WEBKIT_DIR/Source/tracked.cpp"; if check_jsc_webkit_tree >/dev/null 2>&1; then exit 91; fi', { GIT_NO_LAZY_FETCH: "1" });
   });
 });

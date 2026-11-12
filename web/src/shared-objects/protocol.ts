@@ -1,3 +1,6 @@
+import { sharedLaneBytes } from "./lane.ts";
+import { nativeSharedFixed, nativeSharedLength, nativeSharedGrowable } from "./native.ts";
+
 export interface SharedReference { readonly id: string; readonly byteLength: number; }
 export type SharedWasmValue = WebAssembly.Module | WebAssembly.Memory;
 export type SharedAttachment = SharedReference & (
@@ -10,6 +13,29 @@ export function sharedAttachmentValue(attachment: SharedAttachment) {
   if ("module" in attachment) return attachment.module;
   return attachment.memory;
 }
+/**
+ * Exact lengths with pre-attached native fixed buffers, granted to every member before guest entry,
+ * and channel lanes likewise. These are lifetime quotas for one runtime: a buffer is handed out once
+ * and never recycled, so no stale frame or live alias can reach reused storage. An allocation or
+ * lane past its quota is an ordinary native one, which attaches through the receiver's event loop.
+ * 672 buffers (2,112,512 bytes) and 32 lanes (67,109,888 bytes of untouched zero pages).
+ */
+export const sharedPoolClasses: readonly { readonly bytes: number; readonly count: number }[] =
+  Array.from({ length: 16 }, (_, index) => ({ bytes: (index + 1) * 4, count: 32 }))
+    .concat(Array.from({ length: 10 }, (_, index) => ({ bytes: 128 * 2 ** index, count: 16 })));
+export const sharedPoolLanes = 32;
+/** One saturating cursor per class, then one for the lanes. */
+export const sharedPoolLaneCursor = sharedPoolClasses.length;
+export { poolControlWords as sharedPoolControlWords } from "./lane-overflow.ts";
+import { poolControlWords as sharedPoolControlWords, overflowLimit, overflowBudget, overflowPage, poolChargedWord, poolDisposedWord, poolSlotStart, poolSlotWords } from "./lane-overflow.ts";
+import type { OverflowGrant } from "./lane-overflow.ts";
+export interface LaneBacking { readonly buffer: SharedArrayBuffer; readonly poolIndex: number | null; }
+export interface SharedPoolGrant {
+  readonly control: SharedArrayBuffer;
+  readonly stock: readonly (readonly SharedArrayBuffer[])[];
+  readonly lanes: readonly SharedArrayBuffer[];
+  readonly overflow: OverflowGrant | null;
+}
 export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "abort"; readonly transaction: string }
@@ -21,6 +47,7 @@ export type SharedResponse =
   | { readonly kind: "route-drained" }
   | { readonly kind: "route-retired"; readonly id: string }
   | { readonly kind: "closed"; readonly message: string }
+  | { readonly kind: "pool"; readonly grant: SharedPoolGrant }
   | { readonly kind: "attached"; readonly request: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "unavailable"; readonly request: string; readonly references: readonly SharedReference[]; readonly message: string };
 export interface SharedPort {
@@ -37,6 +64,7 @@ export interface SharedPublication {
   reference(buffer: SharedArrayBuffer): SharedReference;
   referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
   publish(): void;
+  commit(): void;
   abort(): void;
 }
 interface SharedRouteSnapshot { readonly id: string; readonly peer: string | null; readonly version: number; readonly sent: number; }
@@ -60,8 +88,8 @@ interface SharedRoutes {
   credit(): void;
 }
 interface SharedLanes {
-  create(): SharedArrayBuffer;
-  open(buffer: SharedArrayBuffer, side: 0 | 1): import("./lane.ts").SharedLane;
+  create(): LaneBacking;
+  open(backing: LaneBacking, side: 0 | 1): import("./lane.ts").SharedLane;
 }
 export interface SharedObjects {
   readonly mailbox?: import("./mailbox.ts").SharedMailbox;
@@ -73,9 +101,8 @@ export interface SharedObjects {
   wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
 }
 export const sharedObjectLimit = 1024;
-const byteLength = typeof SharedArrayBuffer === "function" ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")!.get! : null;
 export function sharedBufferLength(value: unknown): number {
-  try { if (!byteLength) throw sharedError("Shared backing is unavailable"); return byteLength.call(value); }
+  try { return nativeSharedLength(value); }
   catch { throw new DOMException("Invalid shared backing store", "DataCloneError"); }
 }
 function isSharedBuffer(value: unknown): value is SharedArrayBuffer {
@@ -160,11 +187,42 @@ export function sharedRequest(value: unknown): SharedRequest {
     default: throw sharedError("Invalid shared-object request");
   }
 }
+function poolError() { return sharedError("Invalid shared-object pool"); }
+function poolGrant(value: unknown): SharedPoolGrant {
+  const input = object(value);
+  if (!nativeSharedFixed(input.control, sharedPoolControlWords * 4) || !Array.isArray(input.stock) || input.stock.length !== sharedPoolClasses.length
+    || !Array.isArray(input.lanes) || input.lanes.length !== sharedPoolLanes) throw poolError();
+  const stock: unknown[] = input.stock, lanes: unknown[] = input.lanes;
+  const cursors = new Int32Array(input.control as SharedArrayBuffer);
+  sharedPoolClasses.forEach(({ bytes, count }, index) => {
+    const buffers = stock[index], cursor = Atomics.load(cursors, index);
+    if (!Array.isArray(buffers) || buffers.length !== count || !buffers.every(buffer => nativeSharedFixed(buffer, bytes)) || cursor < 0 || cursor > count) throw poolError();
+  });
+  const laneCursor = Atomics.load(cursors, sharedPoolLaneCursor);
+  if (laneCursor < 0 || laneCursor > sharedPoolLanes || !lanes.every(lane => nativeSharedFixed(lane, sharedLaneBytes))) throw poolError();
+  const charged = Atomics.load(cursors, poolChargedWord), disposed = Atomics.load(cursors, poolDisposedWord);
+  if (charged < 0 || charged > overflowBudget || disposed !== 0 && disposed !== 1) throw poolError();
+  const overflow = overflowGrant(input.overflow, cursors);
+  return { control: input.control as SharedArrayBuffer, stock: stock as SharedArrayBuffer[][], lanes: lanes as SharedArrayBuffer[], overflow };
+}
+function overflowGrant(value: unknown, control: Int32Array): OverflowGrant | null {
+  if (value === null) return null;
+  const { arena } = object(value);
+  if (!nativeSharedGrowable(arena, overflowBudget) || nativeSharedLength(arena) % overflowPage) throw poolError();
+  for (let word = poolSlotStart; word < sharedPoolControlWords; word += poolSlotWords) {
+    const state = Atomics.load(control, word), length = Atomics.load(control, word + 2);
+    const offset = Atomics.load(control, word + 3), capacity = Atomics.load(control, word + 4);
+    if (state < 0 || state > 7 || length < 0 || length > overflowLimit) throw poolError();
+    if (offset < 0 || capacity < 0 || capacity > overflowLimit || offset > overflowBudget - capacity) throw poolError();
+  }
+  return { arena };
+}
 export function sharedResponse(value: unknown): SharedResponse {
   const input = object(value);
   if (input.kind === "route-drained") return { kind: input.kind };
   if (input.kind === "route-retired" && typeof input.id === "string") return { kind: input.kind, id: input.id };
   if (input.kind === "closed" && typeof input.message === "string") return { kind: input.kind, message: input.message };
+  if (input.kind === "pool") return { kind: input.kind, grant: poolGrant(input.grant) };
   if (input.kind === "attached") return { kind: input.kind, request: transaction(input.request), attachments: attachments(input.attachments) };
   if (input.kind === "unavailable" && typeof input.message === "string") return { kind: input.kind, request: transaction(input.request), references: references(input.references), message: input.message };
   throw sharedError("Invalid shared-object response");

@@ -38,6 +38,15 @@ without discarding successful reentrant imports. The Node host keeps its existin
 named module loader. `web/tests/browser-worker-modules.ts` repeats atomic transfer rollback twenty
 times per browser and also starts children outside the module scope.
 
+`EngineHost.importReady` and `watchWrite` in `web/src/engine-host.js` share active
+module-store writes across concurrent imports. Every waiting import observes a
+write's rejection. Settled writes leave the active set, preserving later sequential
+import behavior. This fixes a caller draining the pending list before another
+caller could await publication. The original test adapter in
+`web/tests/engine-host-module-writes.test.ts` controls writes for cyclic graphs in
+blob and data URL modes. It covers overlapping imports, shared write failures,
+and settlement cleanup. No upstream source or comparison revision changed.
+
 The inspected upstream implementation is `src/js/node/worker_threads.ts` at Bun
 revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization needs
 `Worker.cpp` native bindings and the native web-worker constructor, so it cannot
@@ -51,8 +60,17 @@ Its descriptor table bridges pipe/terminal fd calls alongside Node WASI's filesy
 `node-host.ts` runs the root guest in a worker as well as its children, keeping that
 supervisor responsive while guest code makes synchronous process calls. The existing
 `node-host.mjs` is only a TypeScript-entry shim. CLI fetch uses the networking import
-dispatcher; signal handling uses `runtime_proc.signal`, sharing the process wake signal. The slot installer
-loads Waffle's exported memory helper, whose source and generated Node modules are
+dispatcher. `node-install-net.ts` keeps the existing guest slots and publishes response
+heads before body completion. Each handle waits for full consumption of one compact
+body packet, at most 64 KiB, before sending another. The cumulative 256 MiB guard
+remains; the packet ceiling does not bound the current source chunk or process memory.
+Close aborts the request and releases its acknowledgment wait. A typed worker
+bootstrap publishes startup, uncaught-callback and exit failures through the same
+synchronously read port and shared wake before loading the fetch module. The
+consumer does not depend on its blocked event-loop callbacks for those failures.
+Signal handling uses
+`runtime_proc.signal`, sharing the process wake signal. The slot installer loads
+Waffle's exported memory helper, whose source and generated Node modules are
 fingerprinted with every local host module by the upstream-suite resume gate.
 
 The original atomic-transfer native checks the complete buffer list before
@@ -68,6 +86,14 @@ it. WebKit and Node already preserve earlier buffers in this case. Copied
 WebAssembly memory buffers are tracked by the original runtime adapter and
 rejected as transfers.
 No Bun vendor patch is needed for these adapters.
+
+Legacy pipe delivery can restore a transferred port before the sender's moving
+record reaches the root broker. Ownership at one transfer version only advances:
+a late moving record cannot replace an already claimed or bound receiver. A
+newer transfer version still changes ownership. This keeps replies routable and
+prevents the original worker's exit from retiring a port now owned by its parent.
+The source regressions cover replies, creator exit and subsequent transfers;
+the unchanged worker-execution and web-worker fixtures are blocking native checks.
 
 The peer-close fixes are retained in the routed adapter. A pending peer-close
 sequence preserves an unstarted peer's queue until it drains, without polling.

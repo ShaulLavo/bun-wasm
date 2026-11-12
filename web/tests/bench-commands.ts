@@ -49,6 +49,7 @@ const { values: options } = parseArgs({
     // Typing time before the first command; the page may use it to prepare.
     think: { type: "string", default: "0" },
     network: { type: "boolean", default: false },
+    prompt: { type: "string", default: "off" },
   },
 });
 const runs = Number(options.runs);
@@ -57,6 +58,7 @@ const think = Number(options.think);
 assert.ok(runs > 0 && repeats > 0, "--runs and --repeats must be positive");
 const engines = { chromium, firefox, webkit };
 assert.ok(options.browser in engines, `--browser must be one of ${Object.keys(engines).join(", ")}`);
+assert.ok(options.prompt === "on" || options.prompt === "off", "--prompt must be on or off");
 const cases = options.network ? offline.concat(online) : offline;
 
 let server: ReturnType<typeof Bun.spawn> | undefined;
@@ -92,7 +94,10 @@ async function openPlayground(url: string, page?: Page): Promise<{ page: Page; r
   assert.ok(browser);
   page ??= await (await browser.newContext()).newPage();
   const start = performance.now();
-  await page.goto(url);
+  const visit = new URL(url);
+  if (options.prompt === "off") visit.searchParams.set("prompt", "off");
+  else visit.searchParams.delete("prompt");
+  await page.goto(visit.href);
   await page.waitForFunction(() => "playground" in globalThis && document.querySelector<HTMLElement>("#status")?.dataset.kind === "ok", null, { timeout: 180_000 });
   return { page, readyMs: performance.now() - start };
 }
@@ -156,7 +161,7 @@ try {
     { what: `after reload: ${command}`, median: median(samples.reloaded), samples: samples.reloaded },
   ].concat(Array.from(samples.warm, ([command, values]) => ({ what: `warm: ${command}`, median: median(values), samples: values })));
   for (const row of rows) console.log(`${row.what.padEnd(48)} ${row.median.toFixed(0).padStart(7)} ms   [${row.samples.map(value => value.toFixed(0)).join(" ")}]`);
-  const report = { url, browser: options.executable ?? options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, think, date: new Date().toISOString(), rows };
+  const report = { url, prompt: options.prompt, browser: options.executable ?? options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, think, date: new Date().toISOString(), rows };
   if (options.output) await Bun.write(options.output, JSON.stringify({ ...report, failures: Object.fromEntries(failures) }, null, 2) + "\n");
   for (const [command, detail] of failures) console.error(`\nFAILED ${command}: ${detail}`);
   process.exitCode = failures.size ? 1 : 0;

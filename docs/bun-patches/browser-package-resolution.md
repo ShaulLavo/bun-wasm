@@ -10,6 +10,19 @@ installer's typed EEXIST handling during reinstall. A synthetic symlinked-packag
 error-constructor identity with a double-dot cache name, alongside real-browser reinstall
 acceptance. No upstream source is copied.
 
+Existing installed-file references also enter through that canonical alias. This
+includes a fixture's relative `node_modules/waffle` import from outside the
+package, even if Bun visits it before the first bare package import. The target
+must still resolve within the selected installed package. Public export checks
+and package-escape refusals remain unchanged.
+
+Without that normalization, the persistence fixture's existing conformance-only
+selector and the runtime read different module-local symbols. Its OPFS-labeled
+page then silently uses the default IndexedDB takeover behavior. Two synthetic
+builds check both import orders, requiring one module input and exact symbol
+identity. The unchanged real OPFS waiting and recovery control verifies the
+consumer behavior. No private capability or package export is added.
+
 
 ## Classification
 

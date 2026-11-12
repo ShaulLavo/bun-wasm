@@ -30,7 +30,10 @@
 #include "ObjectConstructor.h"
 #include "JSLock.h"
 #include "JSArrayBuffer.h"
+#include "JSGenericTypedArrayViewInlines.h"
+#include "JSTypedArrays.h"
 #include "JSModuleLoader.h"
+#include "JSModuleNamespaceObject.h"
 #include "JSPromise.h"
 #include "JSSourceCode.h"
 #include "MicrotaskQueue.h"
@@ -39,11 +42,19 @@
 #include "SourceProvider.h"
 #include "VM.h"
 #include "Options.h"
+#include "Parser.h"
+#include "SimpleTypedArrayController.h"
 #include "WASIMemoryTelemetry.h"
 #include <wtf/URL.h>
+#include <cstdlib>
 #include <string>
 
 using namespace JSC;
+
+#if defined(BUN_WASM_SHARED_GROUP)
+// WTF's stack origin in a group side, set by the side entry before the VM exists (StackBounds.cpp).
+extern "C" char* bunjsc_stack_origin = nullptr;
+#endif
 
 extern "C" {
 // Implemented in Rust (engine_jsc.rs). Each returns a malloc'd UTF-8 string
@@ -57,6 +68,10 @@ void bunjsc_host_uncaught(JSContextRef, JSValueRef);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
+// Core allocator exports (crates/bunwasm-cli/memory-telemetry.c), imported by name. Plain loads and
+// one store of the current page capacity: no allocation, no lock and no errno write.
+const uint64_t* bun_memory_telemetry();
+const uint64_t* bun_memory_failure_telemetry();
 }
 
 extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJSValue encoded)
@@ -193,6 +208,43 @@ static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
     return bunjsc_host_interrupt();
 }
 
+// Copies the core's two allocator records. False when either ABI header is not version 1 at its size.
+static bool sampleCoreAllocator(BunjscCoreAllocatorSample& sample)
+{
+    const uint64_t* counters = bun_memory_telemetry();
+    const uint64_t* failure = bun_memory_failure_telemetry();
+    if (counters[0] != 1 || counters[1] != 80 || failure[0] != 1 || failure[1] != 72)
+        return false;
+    sample.live = counters[2];
+    sample.peak = counters[3];
+    sample.capacity = counters[9];
+    sample.failures = counters[6];
+    sample.allocations = counters[7];
+    sample.frees = counters[8];
+    sample.firstFailureSize = failure[2];
+    sample.firstFailureCategory = failure[3];
+    return true;
+}
+
+// BUN_WASM_JSC_PARSER_RESERVE (docs/stack-limits.md): a whole string of one to four decimal
+// digits from 512 through 2048, rounded up to a multiple of 16. Anything else returns 0, which
+// keeps the parser's 2048-byte default: an invalid value is never clamped into range.
+static unsigned parserReserveSetting(const char* text)
+{
+    if (!text)
+        return 0;
+    unsigned value = 0;
+    size_t digits = 0;
+    for (; text[digits]; ++digits) {
+        if (digits == 4 || text[digits] < '0' || text[digits] > '9')
+            return 0;
+        value = value * 10 + static_cast<unsigned>(text[digits] - '0');
+    }
+    if (!digits || value < 512 || value > 2048)
+        return 0;
+    return (value + 15) & ~15u;
+}
+
 extern "C" {
 
 // A global context whose global object has the module loader hooks above.
@@ -216,9 +268,17 @@ JSGlobalContextRef bunjsc_create_context()
         JSC::Options::useSuperSampler() = false;
         JSC::Options::useTextMarkers() = false;
         JSC::Options::useProfiler() = false;
+        // The only write of the parser's reserve: once per side instance, with this member's
+        // environment, before its only VM exists and so before any parse.
+        if (unsigned reserve = parserReserveSetting(getenv("BUN_WASM_JSC_PARSER_RESERVE")))
+            JSC::setWasmParserReserve(reserve);
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
+#if defined(BUN_WASM_SHARED_GROUP)
+    // The group futex parks a member safely, so its JS may block in Atomics.wait.
+    vm->m_typedArrayController = adoptRef(new SimpleTypedArrayController(true));
+#endif
     // The default method table (private to JSGlobalObject), read off a plain global object,
     // with the module loader hooks filled in.
     static GlobalObjectMethodTable table = [&] {
@@ -232,6 +292,11 @@ JSGlobalContextRef bunjsc_create_context()
         return t;
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
+    JSObject* namespacePrototype = constructEmptyObject(vm.get(), globalObject->nullPrototypeObjectStructure());
+    namespacePrototype->putDirect(vm.get(), Identifier::fromString(vm.get(), "__esModule"_s), jsBoolean(true),
+        PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
+    namespacePrototype->didBecomePrototype(vm.get());
+    globalObject->moduleNamespaceObjectStructure()->setPrototypeWithoutTransition(vm.get(), namespacePrototype);
     return JSGlobalContextRetain(toGlobalRef(globalObject));
 }
 
@@ -347,6 +412,29 @@ void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
     ++snapshot.snapshotSequence;
 }
 
+BunjscAllocationBoundary* bunjsc_allocation_boundary()
+{
+    return &bunjscAllocationBoundary;
+}
+
+// Arms the allocation-boundary control in this context's VM under the host's generation, creates one
+// oversize Uint8Array through the instrumented construction path, and arms the subject only if the
+// control was acknowledged.
+uint64_t bunjsc_allocation_boundary_qualify(JSContextRef ctx, uint64_t generation)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    if (!bunjsc_boundary_arm_control(&vm, globalObject, generation, sampleCoreAllocator))
+        return static_cast<uint64_t>(bunjscAllocationBoundary.state);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    Structure* structure = globalObject->typedArrayStructureWithTypedArrayType<TypeUint8>();
+    bool created = JSUint8Array::create(globalObject, structure, bunjscBoundaryControlLength);
+    created = created && !scope.exception();
+    scope.clearException();
+    return static_cast<uint64_t>(bunjsc_boundary_acknowledge_control(created));
+}
+
 void bunjsc_collect_garbage(JSContextRef ctx)
 {
     VM& vm = toJS(ctx)->vm();
@@ -417,6 +505,13 @@ JSValueRef bunjsc_proxy_target(JSContextRef ctx, JSValueRef value)
     return toRef(global, proxy->target());
 }
 
+bool bunjsc_is_module_namespace(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    return dynamicDowncast<JSModuleNamespaceObject>(toJS(global, value));
+}
+
 bool bunjsc_is_error(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* global = toJS(ctx);
@@ -470,6 +565,28 @@ JSValueRef bunjsc_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t len
     buffer->makeWasmMemory();
     return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Default), WTF::move(buffer)));
 }
+
+#if defined(BUN_WASM_SHARED_GROUP)
+// A real SharedArrayBuffer prefix view over a stable group region. The core retains the region
+// for the session, so the destructor is empty and old prefix views stay live after growth.
+JSValueRef bunjsc_shared_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+    auto contents = SharedArrayBufferContents::create({ data, length }, std::nullopt, nullptr, createSharedTask<void(void*)>([](void*) { }), SharedArrayBufferContents::Mode::Default);
+    return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Shared), ArrayBuffer::createShared(WTF::move(contents))));
+}
+
+// The storage of a real SharedArrayBuffer, or null for any other value.
+uint8_t* bunjsc_shared_array_buffer_data(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    return buffer && buffer->impl()->isShared() ? static_cast<uint8_t*>(buffer->impl()->data()) : nullptr;
+}
+#endif
 
 // ArrayBuffer::detach accepts pinned wasm memories; it empties every view of the buffer.
 bool bunjsc_detach_wasm_memory_buffer(JSContextRef ctx, JSValueRef value)

@@ -73,7 +73,10 @@ function receive(value: unknown) {
 const interval = setInterval(() => {
   runtime.pump();
   if (!source || request.role !== "receiver") return;
-  const packet = runtime.receiveMessageOnPort(source);
+  let packet: ReturnType<typeof runtime.receiveMessageOnPort>;
+  // A frame naming an unattached backing is not lost: this poll simply yields and tries again.
+  try { packet = runtime.receiveMessageOnPort(source); }
+  catch (error) { if ((error as { code?: string }).code === "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED") return; throw error; }
   if (packet) receive(packet.message);
 }, 1);
 if (request.role === "sender") {

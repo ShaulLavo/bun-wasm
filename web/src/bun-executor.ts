@@ -1,13 +1,14 @@
-import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
+import { adoptLinkPlan, instantiateLinkPlan, type LinkedGroup, type SharedLinkPlan } from "waffle/link";
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
-import { createMemoryReader, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
-import { memoryMaximumBytes } from "../../src/engine-kind.ts";
+import { createMemoryReader, publishBrowserCallTrap, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
+import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
+import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -16,21 +17,20 @@ import { exportSharedObjects, type SharedObjectService } from "./shared-objects/
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 import type { BunTerminal } from "./bun-terminal.js";
 
-export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
+import type { Engine } from "../../src/engine-kind.js";
+export type { Engine } from "../../src/engine-kind.js";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  /** Page observations unavailable on WorkerNavigator, also supplied for guest spawns. */
+  stackHost?: StackHost;
   memoryTelemetry?: MemoryTelemetryTransport;
-  linkPlan?: LinkPlanSource;
+  linkPlan?: SharedLinkPlan;
+  memoryLimitBytes?: number | null;
   adapter?: "bun" | "preview1";
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
   net: SharedArrayBuffer | null;
-  /**
-   * Browser engine: the Cache Storage cache for import cycles, served by the service worker
-   * under ./m/. Acyclic modules use blob URLs. Null disables import cycles.
-   */
-  moduleCache: string | null;
   /** Bun-owned DNS lookup requests are served by the page runtime. */
   lookupPort?: MessagePort;
   /** Browser-engine DNS lookup channel name used by adapter-launched workers. */
@@ -48,34 +48,7 @@ export interface RunRequest extends RuntimeWorkerRequest {
 
 export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapshot: MemorySnapshot } | { type: "net"; req: NetRequest } | BunSharedConnection;
 
-// The browser engine's polyfills replace globalThis.Response; Cache.put needs the real one.
-const NativeResponse = Response;
-
-/** Named module URLs for engine-host.js, stored where the service worker (sw.ts) serves them. */
-function moduleStore(cacheName: string, location: { href: string }) {
-  const run = cacheName.replace(/^bunwasm-m-/, "");
-  const base = new URL(`./m/${run}/`, location.href).href;
-  const openCache = caches.open.bind(caches, cacheName);
-  let cache: Promise<Cache> | undefined;
-  return {
-    url: (key: string) => base + encodeURIComponent(key),
-    put: async (url: string, source: string) => {
-      const headers = { "content-type": "text/javascript; charset=utf-8" };
-      const store = await (cache ??= openCache());
-      await store.put(url, new NativeResponse(source, { headers }));
-    },
-  };
-}
-
 export type SleepMode = "atomics" | "busy-wait";
-
-// The engines' default stack budgets are measured on V8, whose first wasm tier uses frames close to
-// its optimized ones. JavaScriptCore starts in an interpreter with frames up to three times larger,
-// in 512 KiB worker stacks on Apple platforms, so other engines get the budgets measured there
-// (docs/stack-limits.md). V8 is the engine whose stack traces have "    at " frames.
-const smallStackKib = (): Partial<Record<Engine, string>> | null => /\n\s+at /.test(new Error().stack ?? "")
-  ? null
-  : { quickjs: "32", jsc: "192" };
 
 export interface BunExecutorHost extends BunSharedNativeHost {
   /** The worker's global scope: its location and fetch, and where network requests are posted. */
@@ -97,24 +70,62 @@ export function hasTerminalMetadata(req: RunRequest): boolean {
 
 /** bun-terminal.ts as worker.ts loaded it: only for a spawn with terminal metadata, like Waffle's own terminal module. */
 export type TerminalModule = typeof import("./bun-terminal.js") | Error | undefined;
+/** The nested execution host as worker.ts loaded it: only for an admitted group member. */
+export type NestedModule = typeof import("./nested/host.js") | Error | undefined;
 
-export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined): WorkerExecutor<RunRequest> {
+// Chromium PBL exhausts its browser-native stack at 35 reentries, below the wire's 64-entry limit.
+const SPIDERMONKEY_REENTRY_LIMIT = 16;
+
+function withDefault(env: Record<string, string>, key: string, value: string | undefined): Record<string, string> {
+  return value === undefined || key in env ? env : { ...env, [key]: value };
+}
+
+/**
+ * The host's stack defaults (engine-stack-budget.ts). Each key is added only when the request lacks
+ * it, independently of the other: an explicit or empty value of one never changes the other's default.
+ */
+function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Record<string, string> {
+  const budgeted = withDefault(req.env, "BUN_WASM_STACK_KIB", engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
+  if (req.engine !== "jsc") return budgeted;
+  return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
+}
+
+export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined): WorkerExecutor<RunRequest> {
+  let nested: import("./nested/host.js").NestedHost | undefined;
+  let groupMemory: WebAssembly.Memory | undefined;
   let netHost: NetHost | null = null;
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
-  const stackKib = smallStackKib()?.[req.engine];
-  const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
+  const baseEnv = stackEnvironment(req, new Error().stack ?? "", globalThis.navigator?.userAgent ?? "");
+  const generation = allocationBoundaryGeneration(req);
+  const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };
   const lookupClient: LookupClient | undefined = req.lookupPort
     ? createLookupClient(req.lookupPort)
     : req.lookupChannel && typeof BroadcastChannel === "function"
       ? createLookupClient(new BroadcastChannel(req.lookupChannel))
       : undefined;
   const lookup = lookupClient;
-  const linked = linkedExecutor(req, host);
+  const linked = linkedExecutor(req, host, generation, group => {
+    groupMemory = group.memory;
+    nested?.bindCore(group.entry, group.memory);
+  });
   return {
     ...linked,
     hostCallFd: HOST_CALL_FD,
+    namespaces(context): WebAssembly.Imports {
+      if (!req.memoryGroup) return {};
+      if (!nestedModule || nestedModule instanceof Error) throw nestedModule ?? new TypeError("A group member needs the nested execution host");
+      nested = new nestedModule.NestedHost(
+        context.checkActive,
+        text => { context.post("stderr", new TextEncoder().encode(text)); },
+        req.engine === "spidermonkey" ? SPIDERMONKEY_REENTRY_LIMIT : undefined,
+      );
+      return { runtime_nested: nested.imports };
+    },
+    beforeBindings({ wasi }) {
+      if (nested && nestedModule && !(nestedModule instanceof Error)) nested.bindProvider(nestedModule.regionProvider(wasi));
+    },
     setup({ checkActive }) {
       terminal = attach(req, terminalModule, checkActive);
       if (!req.sharedObjects) return;
@@ -132,6 +143,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
     async instantiated({ instance, wasi, fs, checkActive, notifications }) {
+      // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
+      if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
       if (slots === "off") return;
       // The network poll is where the guest loop sleeps; Waffle's notification set lets it also
@@ -142,13 +155,14 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         checkActive();
         netHost.runtime.attachNotifications(set, () => wasi.filesystemWatches);
       }
-      const memory = instance.exports.memory;
+      // A group member's PIE image imports the group memory instead of exporting one.
+      const memory = instance.exports.memory ?? groupMemory;
       if (!(memory instanceof WebAssembly.Memory)) throw new Error("bun-wasm has no memory");
       netHost?.attach(memory);
       if (!netHost) return;
       // A guest that caught its default-signal unwind must not keep using the network.
       const impls = Object.fromEntries(Object.entries(netHost.slots()).map(([name, call]) => [name, (...args: number[]) => { checkActive(); return call(...args); }]));
-      if (slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls);
+      if (slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls, memory);
       else installHostSlots(instance, impls);
     },
     beforeFinish() {
@@ -168,9 +182,12 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         onNews() {},
       } : undefined) : undefined;
       const nativeFetch = host.fetch.bind(host);
+      const telemetry = req.memoryTelemetry;
+      // No module store: every ES module loads as a registration record (module-records.ts),
+      // with or without a service worker controlling this worker.
       return startEngineHost({
         instance, moduleUrls: "blob",
-        modules: req.moduleCache ? moduleStore(req.moduleCache, host.location) : undefined,
+        onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
@@ -194,32 +211,48 @@ function finishHostServices(sharedObjects: SharedObjectService | undefined, look
   }
 }
 
-function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
+// An armed JSC instance gets a fresh random generation in 1..2^53-1 that its VM must acknowledge
+// in the boundary record; a value inherited from a parent process is replaced, never reused.
+function allocationBoundaryGeneration(req: RunRequest): number | undefined {
+  if (req.engine !== "jsc" || req.env.BUN_WASM_JSC_ALLOCATION_BOUNDARY !== "1") return undefined;
+  const [high = 0, low = 0] = crypto.getRandomValues(new Uint32Array(2));
+  return (high & 0x1fffff) * 2 ** 32 + low || allocationBoundaryGeneration(req);
+}
+
+// The allocation-boundary reader is a separate chunk, fetched only for an armed JSC process.
+async function engineDiagnostics(generation: number | undefined): Promise<EngineDiagnostics | undefined> {
+  if (generation === undefined) return undefined;
+  return (await import("./jsc-allocation-boundary.js")).allocationBoundaryDiagnostics(generation);
+}
+
+function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: number | undefined, onLinked: (group: LinkedGroup) => void): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
-  const limitBytes = memoryMaximumBytes(req.linkPlan.core.source) ?? null;
+  const limitBytes = req.memoryLimitBytes ?? null;
   let group: LinkedGroup | undefined;
   let reader: ReturnType<typeof createMemoryReader> | undefined;
   let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
+  let diagnostics: EngineDiagnostics | undefined;
   let finished = false;
+  let checkStack: (() => void) | undefined;
   return {
     async instantiate(imports, context) {
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
-      const plan = await prepareLinkPlan(request.linkPlan);
-      if (req.adapter !== "preview1" && req.engine !== "browser" && programKind(plan.entryModule) !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
+      diagnostics = await engineDiagnostics(generation);
+      const plan = adoptLinkPlan(request.linkPlan);
+      const declared = programKind(plan.entryModule);
+      const requireSelected = declared === "spidermonkey" || req.adapter !== "preview1" && req.engine !== "browser";
+      if (requireSelected && declared !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
+      if (declared === "spidermonkey" && req.memoryGroup) checkStack = spiderMonkeyGroupStack(imports, req.memoryGroup.stackBytes);
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
-      const originalImports = context.wasi.imports;
-      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
-      let linked: LinkedGroup;
-      try {
-        linked = instantiateLinkPlan(plan, { wasi: context.wasi,
-          coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
-      } finally { context.wasi.imports = originalImports; }
+      const linked = instantiateLinkPlan(plan, { wasi: context.wasi,
+        coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
       group = linked;
-      reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry);
+      onLinked(linked);
+      reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry, undefined, linked.entry.exports.memory ?? linked.memory);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
       context.checkActive();
       return linked.entry;
@@ -227,8 +260,13 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
     initialize(context) {
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
-      group.initialize();
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry);
+      const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
+      checkStack?.();
+      const originalImports = context.wasi.imports;
+      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true, bindings);
+      try { group.initialize(); checkStack?.(); }
+      finally { context.wasi.imports = originalImports; }
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics, group.entry.exports.memory ?? group.memory);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
     beforeFinish() {
@@ -246,4 +284,24 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       }
     },
   };
+}
+
+/** The side derives its bounds from a top-level initializer's stack, not linker symbols. */
+function spiderMonkeyGroupStack(imports: WebAssembly.Imports, stackBytes: number): () => void {
+  const pointer = imports.env?.__stack_pointer;
+  const low = imports["GOT.mem"]?.__stack_low;
+  const high = imports["GOT.mem"]?.__stack_high;
+  const memory = imports.env?.memory;
+  if (!(pointer instanceof WebAssembly.Global) || !(low instanceof WebAssembly.Global) || !(high instanceof WebAssembly.Global) || !(memory instanceof WebAssembly.Memory))
+    throw new TypeError("SpiderMonkey group stack requires the host's carved globals and memory");
+  const bottom = Number(low.value) >>> 0;
+  const top = Number(high.value) >>> 0;
+  if (stackBytes !== BUN_MEMORY_GROUP_POLICY.stackBytes || top - bottom !== BUN_MEMORY_GROUP_POLICY.stackBytes || top % 65536 || bottom % 65536 || top > memory.buffer.byteLength)
+    throw new RangeError("SpiderMonkey group stack must be an exact page-aligned 8 MiB carve");
+  const balanced = () => {
+    if ((Number(pointer.value) >>> 0) !== top || (Number(low.value) >>> 0) !== bottom || (Number(high.value) >>> 0) !== top)
+      throw new RangeError("SpiderMonkey group stack pointer was not restored to the carved top");
+  };
+  balanced();
+  return balanced;
 }

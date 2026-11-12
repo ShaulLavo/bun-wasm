@@ -3,7 +3,28 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedPaths, needsJsc, needsRust, needsSharedSysroot } from "./ci-changes";
+import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
+
+test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
+  const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
+    "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
+    .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
+  for (const path of paths) expect(needsRust([path])).toBe(true);
+  expect(needsRust(["docs/bun-patches/spidermonkey-side-core-qualification.md", "spidermonkey/README.md"])).toBe(false);
+});
+
+test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
+});
+
+test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
+});
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -15,11 +36,70 @@ test.each([
   "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/fixtures/webassembly/module.wasm",
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
-  ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
+  ".github/workflows/ci.yml", "scripts/build.sh", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
+  "scripts/check-quickjs-parser-stack.ts", "scripts/fixtures/quickjs-parser-stack.c", "scripts/fixtures/quickjs-parser-stack.ts",
+  "scripts/fixtures/quickjs-parser-stack.expected.txt",
+  "scripts/check-quickjs-frame-stack.ts", "scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-frame-stack.ts",
+  "scripts/fixtures/quickjs-frame-stack.expected.txt", "scripts/quickjs-native-check.ts",
+  "scripts/check-quickjs-frame-wasi.ts", "scripts/fixtures/quickjs-frame-wasi.c",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
+});
+
+test("the Rust compiler cache dispatcher selects every affected producer", () => {
+  const paths = ["scripts/rustc-cache.sh"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
+});
+
+test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
+  "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
+  "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json", "tests/fixtures/parser-chain-stack/index.ts",
+  "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+])("JSC parser reserve input %s selects the JSC producer its browser check requires", path => {
+  expect(needsJsc([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
+  "tests/fixtures/shared-wasm-memory/parser-reserve-ownership.ts", "jsc/webkit-wasi.patch",
+])("parser reserve ownership input %s selects the shared-group producer", path => {
+  expect(needsSharedNative([path])).toBe(true);
+});
+
+const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
+
+test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumers and profile-aware page bundling select their launcher: $paths", ({ paths }) => {
+  expect(needsRust(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(false);
+  expect(needsSharedSysroot(paths)).toBe(false);
+});
+
+test.each(["web/index.html", "web/src/playground/app.tsx"])("presentation-only page input %s does not select native producers", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+  expect(needsSharedSysroot([path])).toBe(false);
+});
+
+test.each(browserBuildFiles)("browser bundling with native inputs retains their gates: %s", path => {
+  expect(needsRust([path, "crates/bunwasm-cli/src/main.rs"])).toBe(true);
+  expect(needsJsc([path, "jsc/wasi-jsc.cmake"])).toBe(true);
+  expect(needsSharedSysroot([path, "scripts/build-shared-wasi-libc.sh"])).toBe(true);
+});
+
+test.each(browserBuildFiles)("browser build file %s remains a native input when declared by a probe", path => {
+  expect(needsRust([path], [path])).toBe(true);
 });
 
 test.each([
@@ -39,7 +119,20 @@ test.each(["scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.js
   expect(needsJsc([path])).toBe(true);
 });
 
-test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
+test("native handoff roots alone select producer and consumer engine gates", () => {
+  const paths = ["scripts/ci-native-handoff-paths.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+});
+
+test("JSC artifact inventory changes select ordinary and shared consumers", () => {
+  const paths = ["scripts/ci-jsc-artifact.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
+});
+
+test.each(["src/index.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
 
@@ -118,11 +211,11 @@ test("unavailable commit comparison fails rather than skipping native checks", (
   expect(() => select("f".repeat(40), javascript)).toThrow();
 });
 
-function commitInput(path: string): string {
+function commitInput(path: string, content = "changed input\n"): string {
   if (!fixture) throw new Error("Fixture not initialized");
   git(["checkout", "-q", "--detach", base]);
   mkdirSync(join(fixture, path, ".."), { recursive: true });
-  writeFileSync(join(fixture, path), "changed input\n");
+  writeFileSync(join(fixture, path), content);
   git(["add", "."]);
   git(["commit", "-qm", `change ${path}`]);
   return git(["rev-parse", "HEAD"]);
@@ -136,9 +229,9 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
 
 test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
   expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
-    .toBe("rust=false\njsc=false\nshared=true\nhermes=false");
+    .toBe("rust=false\njsc=false\nshared=true\nshared_native=false");
   expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
-    .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
+    .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -180,31 +273,39 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
   if (!fixture) throw new Error("Fixture not initialized");
   const first = commitInput("package.json");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.1", scripts: { quality: "bun quality.ts" } }));
-  git(["commit", "-qam", "manifest inputs"]);
+  mkdirSync(join(fixture, "checks"), { recursive: true });
+  writeFileSync(join(fixture, "checks/native-shared-release.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/shared-release", profile: "shared-group" }));
+  git(["add", "."]);
+  git(["commit", "-qm", "manifest inputs"]);
   const manifestBase = git(["rev-parse", "HEAD"]);
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.2", scripts: { quality: "bun quality.ts" } }));
   git(["commit", "-qam", "patch bump"]);
   const bumped = git(["rev-parse", "HEAD"]);
   expect(select(manifestBase, bumped)).toBe("rust=false\njsc=false");
   expect(select(manifestBase, bumped, "push")).toBe("rust=false\njsc=false");
+  expect(selectionOutput(manifestBase, bumped)).toEndWith("shared_native=false");
+  expect(selectionOutput(manifestBase, bumped, "push")).toEndWith("shared_native=false");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
   git(["commit", "-qam", "change native driver"]);
   expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=false");
+  expect(selectionOutput(bumped, git(["rev-parse", "HEAD"]))).toEndWith("shared_native=true");
   expect(() => select(first, bumped)).toThrow();
 });
 
 for (const path of [
+  "scripts/ci-jsc-artifact.ts",
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
+  "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-engine-jsc/src/lib.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
   "tests/fixtures/strings-above-512mib/index.ts", "crates/bunwasm-cli/max-memory.txt",
   "web/scripts/node-host.ts", "web/scripts/node-worker.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
-  "web/src/native-direct-stream.ts",
+  "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
   "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
 ]) {
@@ -214,10 +315,32 @@ for (const path of [
   });
 }
 
+for (const [path, fixture] of [
+  ["checks/native-stack-getter-headroom.json", "tests/fixtures/stack-getter-headroom"],
+  ["tests/fixtures/stack-getter-headroom/index.ts", ""],
+  ["tests/fixtures/stack-getter-headroom/expected.txt", ""],
+  ["checks/native-getter-dispatch.json", "tests/fixtures/getter-dispatch"],
+  ["tests/fixtures/getter-dispatch/index.ts", ""],
+  ["checks/native-parser-literal-overflow.json", "tests/fixtures/parser-literal-overflow"],
+  ["tests/fixtures/parser-literal-overflow/index.ts", ""],
+  ["checks/native-assignment-chain-depth.json", "tests/fixtures/assignment-chain-depth"],
+  ["tests/fixtures/assignment-chain-depth/index.ts", ""],
+] as const) {
+  test.each(["pull_request", "push"])(`${path} retains the strict JSC stack embedding gate for %s`, event => {
+    const content = fixture ? JSON.stringify({ owner: "native", path: fixture }) : "changed stack fixture input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+    expect(needsJsc([path])).toBe(true);
+  });
+}
+
+test("similarly named stack fixtures do not select the JSC producer", () => {
+  expect(needsJsc(["checks/native-stack-getter-headroom-extra.json", "tests/fixtures/stack-getter-headroom-extra/index.ts"])).toBe(false);
+});
+
 test("unrelated page changes skip JSC; its selected gate builds and executes once", () => {
   expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);
   expect(workflow).toContain("if: needs.quality.outputs.jsc == 'true'");
-  expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(workflow.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
 });
@@ -269,12 +392,78 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
 }
 
 for (const event of ["pull_request", "push"]) {
-  test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
-    const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
-    expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
-    expect(selectionOutput(base, commitInput("scripts/producer-closure.ts"), event))
-      .toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+  test(`dormant Hermes recipes do not select native production through an actual ${event} diff`, () => {
+    expect(selectionOutput(base, commitInput("hermes/build.sh"), event))
+      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
     expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
+      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+  });
+}
+
+test("TLS live inputs select native prerequisites while lightweight-only utility edits do not", () => {
+  for (const path of ["scripts/tls-probe.ts", "scripts/tls-probe-cargo.ts", "scripts/tls-probe-handoff.ts", "tests/native/tls-probe.cpp", "checks/native-probe-tls.json"]) expect(needsRust([path])).toBe(true);
+  expect(needsRust(["scripts/tls-probe.test.ts"])).toBe(false);
+});
+
+function sharedBrowserSelection(path: string, event: string): string {
+  if (!fixture) throw new Error("Fixture not initialized");
+  git(["checkout", "-q", "--detach", base]);
+  mkdirSync(join(fixture, "checks"), { recursive: true });
+  writeFileSync(join(fixture, "checks/native-shared-browser.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/shared-browser", profile: "shared-group" }));
+  git(["add", "."]);
+  git(["commit", "-qm", "existing shared profile"]);
+  const start = git(["rev-parse", "HEAD"]);
+  mkdirSync(join(fixture, path, ".."), { recursive: true });
+  writeFileSync(join(fixture, path), "changed shared Browser input\n");
+  git(["add", "."]);
+  git(["commit", "-qm", `change ${path}`]);
+  return selectionOutput(start, git(["rev-parse", "HEAD"]), event);
+}
+
+for (const path of [
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts",
+  "web/src/memory-telemetry.ts", "web/src/net/trampoline.ts", "src/assets.ts",
+  "scripts/browser-build.ts", "web/package.json", "web/bun.lock",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the real shared consumer and launcher for %s`, event => {
+    const output = sharedBrowserSelection(path, event);
+    expect(output).toStartWith("rust=true\n");
+    expect(output).toEndWith("shared_native=true");
+  });
+}
+
+
+test("shared engine bridge and errno adapter inputs retain their JSC and shared gates", () => {
+  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c"]) {
+    expect(needsJsc([path])).toBe(true);
+    expect(needsRust([path])).toBe(true);
+    expect(needsSharedNative([path])).toBe(true);
+  }
+});
+
+for (const path of [
+  "crates/bunwasm-runtime/src/install/resolve/tarball.rs", "tests/install/registry.mjs",
+  "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts",
+  "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
+  "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
+  "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json",
+  "checks/quality-install-fixture-command.json",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects all installer producers for %s`, event => {
+    const content = path.startsWith("checks/") ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") : "changed installer input\n";
+    expect(needsJsc([path])).toBe(true);
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
+}
+
+for (const path of [
+  "spidermonkey/common.sh", "spidermonkey/fetch-spidermonkey.sh", "spidermonkey/build-shared-group.sh",
+  "spidermonkey/shared-group.ts", "spidermonkey/spidermonkey-shared-group.patch", "spidermonkey/irregexp-icu/allocator.cpp",
+  "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the existing blocking shared native gate for %s`, event => {
+    const output = sharedBrowserSelection(path, event);
+    expect(output).toStartWith("rust=true\n");
+    expect(output).toEndWith("shared_native=true");
   });
 }

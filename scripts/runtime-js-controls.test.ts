@@ -1,17 +1,22 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeJsCommands } from "./runtime-js-process";
+import { testSubreaper } from "./test-subreaper.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-js-controls-"));
 const commands = new RuntimeJsCommands(() => rmSync(scratch, { recursive: true, force: true }));
 const script = join(import.meta.dir, "transpile-runtime.ts");
 const fixture = join(import.meta.dir, "fixtures/runtime-js-child.ts");
+let restoreSubreaper = () => {};
+beforeAll(async () => { restoreSubreaper = await testSubreaper(false); });
 afterEach(() => commands.cancel());
 afterAll(async () => {
-  await commands.dispose();
-  rmSync(scratch, { recursive: true, force: true });
+  try {
+    await commands.dispose();
+    rmSync(scratch, { recursive: true, force: true });
+  } finally { restoreSubreaper(); }
 });
 
 function run(command: string, args: string[]) {

@@ -1,3 +1,4 @@
+import { pairedEngineKinds } from "../../src/engine-kind.ts";
 import { isToolCommand } from "../src/tool-command.ts";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
@@ -10,6 +11,7 @@ import { createWorkerProcessTransport, workerProcessState, type WorkerProcessMes
 import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
 import type { ProcessContext } from "waffle/proc/types";
 import { startStatus } from "waffle/proc/outcome";
+import { captureNativeReturn, captureProcessObserver } from "waffle/proc/observation";
 import { PipeController, PipePublicationRegistry } from "waffle/proc/pipes";
 import { nodeStdioCodec } from "./node-process.ts";
 import { drainDiagnostic } from "waffle/browser/diagnostic";
@@ -60,7 +62,7 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
 export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}): ExecutableRegistry {
   const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path));
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
-  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
+  for (const engine of pairedEngineKinds) {
     const module = engines[engine];
     if (module) for (const name of ["bun", "node", "nodejs"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
   }
@@ -76,7 +78,7 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
-    for (const engine of ["quickjs", "jsc", "hermes"] as const) {
+    for (const engine of pairedEngineKinds) {
       if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
       for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(bin, name), new Uint8Array());
@@ -161,7 +163,7 @@ export class NodeProcessBroker {
     this.pipes.attach(inputReader.handle());
     this.root.resources.push({ kind: "pipe", endpoint: inputReader.handle() });
     this.root.bindings.push({ fd: 0, reference: 0, rightsBase: (1n << 1n) | (1n << 27n), rightsInheriting: 0n });
-    this.supervisor.createRoot({ pid: state.pid, job: state.job, ...state.signals });
+    this.supervisor.createRoot({ pid: state.pid, job: state.job, observation: this.root, ...state.signals });
     this.broker = new WorkerProcessBroker({
       supervisor: () => Promise.resolve(this.supervisor), codec: this.pipes.codec(nodeStdioCodec),
       onPipe: handle => this.pipes.attach(handle as Parameters<WorkerPipeBroker["attach"]>[0]),
@@ -197,12 +199,28 @@ export class NodeProcessBroker {
     else this.inputSource?.resume();
   }
   attach(worker: Worker, transport: WorkerProcessTransport): void {
+    const observer = captureProcessObserver(transport);
+    const returned = captureNativeReturn(transport);
+    const nativeTerminate = worker.terminate.bind(worker);
     const { pid } = workerProcessState(transport);
+    let stopping: Promise<number> | undefined;
+    worker.terminate = () => {
+      if (stopping) return stopping;
+      const completion = Promise.withResolvers<number>();
+      stopping = completion.promise;
+      void stopping.catch(() => {});
+      try {
+        nativeTerminate().then(code => { returned(); this.workers.delete(pid); return code; })
+          .then(completion.resolve, completion.reject);
+      } catch (error) { completion.reject(error); }
+      return stopping;
+    };
     this.workers.set(pid, worker);
     worker.on("message", (message: WorkerProcessMessage) => {
       if (message?.type === "runtime-proc") void this.broker.handle(message, pid);
     });
     worker.on("error", error => {
+      if (observer.read().kind !== "pending") return;
       const record = this.supervisor.get(pid);
       if (record && startStatus(record.outcome) !== 0) {
         // The supervisor's startup diagnostic sink runs only after terminal selection wins.
@@ -216,13 +234,15 @@ export class NodeProcessBroker {
       this.supervisor.exit(pid, 126);
     });
     worker.on("exit", code => {
-      this.workers.delete(pid);
       this.supervisor.exit(pid, code);
       this.broker.pump(); this.pipes.pump();
+      if (!stopping) { this.workers.delete(pid); queueMicrotask(returned); }
     });
   }
   dispose(): Promise<void> {
     if (this.disposal) return this.disposal;
+    const completion = Promise.withResolvers<void>();
+    this.disposal = completion.promise;
     clearInterval(this.timer);
     this.inputSource?.off("data", this.onInput);
     this.inputSource?.off("end", this.onInputEnd);
@@ -230,9 +250,14 @@ export class NodeProcessBroker {
     this.inputSource?.pause();
     this.inputQueue.length = 0;
     this.broker.dispose(); this.supervisor.dispose(); this.pipes.dispose(); this.input.dispose();
-    const stops = Array.from(this.workers.values(), worker => worker.terminate());
+    const stops = Array.from(this.workers.values(), worker => Promise.resolve().then(() => worker.terminate()));
     this.workers.clear();
-    this.disposal = Promise.allSettled(stops).then(() => this.files.dispose());
+    void Promise.allSettled(stops).then(results => {
+      const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length) throw new AggregateError(failures, "Node process stops failed");
+      this.files.dispose();
+    }).then(completion.resolve, completion.reject);
     return this.disposal;
   }
 }

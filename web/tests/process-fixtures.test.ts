@@ -1,3 +1,9 @@
+import { pages } from "waffle";
+import { fixtureModule } from "./process-module-fixture.ts";
+import { programMemory } from "../../src/program-memory.ts";
+import { cliShimFixture } from "./cli-shim-fixture.ts";
+import { preview1SignalClockGuest } from "./engine-interruption-preview1.ts";
+import { runtimeProcFixture, runtimeProcJobWaitFixture } from "./runtime-proc-fixtures.ts";
 import { expect, test } from "bun:test";
 import { createSignalState, publishSignal, setSignalDisposition, signalDisposition, takeSignal } from "waffle/proc/signals";
 import { processFixture, processFixtureModes, type ProcessFixture } from "./process-fixtures";
@@ -98,4 +104,14 @@ test("handled signal followed by unrelated trap is distinguishable from default 
   const guest = instantiate("handled-trap", 2);
   expect(guest.start).toThrow(WebAssembly.RuntimeError);
   expect(guest.defaultSignal()).toBe(0);
+});
+
+const sourceKnownFixtures: readonly [string, () => Uint8Array<ArrayBuffer>][] = [
+  ["foreground wait", () => cliShimFixture("wait")],
+  ["Preview1 signal clock", preview1SignalClockGuest],
+  ["runtime-proc pipes", () => runtimeProcFixture("/fixtures/runtime-proc")],
+  ["runtime-proc job wait", () => runtimeProcJobWaitFixture("/fixtures/runtime-proc")],
+];
+for (const [name, source] of sourceKnownFixtures) test(`${name} retains its actual module declaration for manual root admission`, () => {
+  expect(programMemory(fixtureModule(source()))).toEqual([{ kind: "private", origin: "defined", maximumPages: pages(65_536) }]);
 });

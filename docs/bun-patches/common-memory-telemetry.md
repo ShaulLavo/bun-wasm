@@ -86,8 +86,15 @@ allocator bytes and must not be added to them.
 
 Only normal phase samples may invoke engine refresh. A detected failure or
 terminal cleanup permanently disables refresh for that process. Terminal
-snapshots use cached getters before linked-group disposal. The Next hook reads
-host diagnostics, never process.memoryUsage or other JS on a faulted guest,
+snapshots use cached getters before linked-group disposal. The executor observes
+side imports during `LinkedGroup.initialize()`, when pinned Waffle 0.0.107 creates
+the side instances, and restores the WASI import resolver in `finally`. The
+observer stays on each observed import through initialization and entry. A side
+import the linker bound to a core export keeps that export itself, so the
+engine's calls into the core, such as `malloc` and `free`, stay calls between
+WebAssembly modules. Only the two waits below are observed among them; see
+[Linked bindings stay direct](#linked-bindings-stay-direct). The
+Next hook reads host diagnostics, never process.memoryUsage or other JS on a faulted guest,
 and never requests GC. Counter and process identities remain in its result.
 
 
@@ -115,9 +122,51 @@ unrelated commands stay visible as separate raw facts. See the
 ## Linked-group lifecycle reference
 
 The executor's link lifecycle is adapted from Waffle `link/worker.ts` at the
-pinned `waffle-v0.0.95` release. It keeps Waffle's preparation, active checks,
-initialization, and group disposal. The local changes retain access to side
-instances for telemetry, establish an allocator-only reader before constructor
-execution, and publish cached terminal data before disposal. Linking and memory
-reservation remain Waffle's public implementation. The shared cells, schema,
-allocator wrappers, and root attribution are original adapters.
+pinned `waffle-v0.0.107` release. It keeps Waffle's preparation, active checks,
+initialization, and group disposal. Because Waffle creates side instances during
+group initialization, the local WASI import resolver is wrapped for that
+initialization call so each side wait import retains the refresh observer. The
+local changes retain access to side instances for telemetry, establish an
+allocator-only reader before constructor execution, and publish cached terminal
+data before disposal. Linking and memory reservation remain Waffle's public
+implementation. The shared cells, schema, allocator wrappers, and root
+attribution are original adapters.
+
+### Linked bindings stay direct
+
+Waffle resolves a side module's imports through the same WASI import resolver
+and passes it the bindings the linker made: core exports, relay functions and
+the shared memory, table and globals. The first version of the observer wrapped
+every function the resolver returned, including those bindings. Each engine call
+into the core then left WebAssembly, ran a JavaScript closure and entered
+WebAssembly again. The observer (`observeMemoryImports` in
+`web/src/memory-channel.ts`) now receives those bindings and returns a bound
+function unchanged unless it is `bun_core_idle` or `bun_core_poll`. Host
+functions, in the core and in a side, are still observed on every call, so a
+busy guest still answers a telemetry request at its next host call. The engine's
+interrupt check reaches one through `core_checkpoint`, which calls the core's
+observed `runtime_proc.signal` import.
+
+Measured on November 11, 2026 with the Next.js starter's `bun run build` on the
+JSC pair of CI run 42856642549, the same host source with and without this
+change, each browser pinned to the same performance cores of a shared PC:
+
+| Browser | Build before | Build after | Guest thread CPU, compile stage |
+| --- | ---: | ---: | --- |
+| Firefox 157 | 112.3 s | 101.3 s | 51.9 s to 36.0 s |
+| Chrome 157 | 97.0 s | 75.5 s | 37.8 s to 24.9 s |
+
+These are single non-quiet runs taken minutes apart, not a controlled benchmark.
+
+## Shared channel framing
+
+The original host transport keeps its 8192-byte shared channel and 32-byte header.
+Namespaced engine counters are grouped by their first dot only in the wire frame,
+then expanded to their original flat keys when read. This removes repeated JSC
+allocation-boundary prefixes without omitting counters, changing their values, or
+increasing the channel or guest memory limit. Snapshots without namespaced
+counters keep their existing wire representation.
+
+The JSC allocation-boundary check manifest also runs the channel regression. It
+round-trips a complete wide diagnostic record through publication and teardown,
+including null counters and the unchanged guest memory limit.

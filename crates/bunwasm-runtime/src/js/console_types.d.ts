@@ -54,7 +54,7 @@ declare namespace BunWasm {
     require(name: "console_constructor"): ConsoleIntrinsics;
     require(name: "bun_console_constructor"): (console: object) => ConsoleConstructor;
     builtin<K extends keyof ConsoleBuiltins>(name: K): ConsoleBuiltins[K];
-    readonly defaultPrepareStackTrace?: unknown;
+    readonly defaultPrepareStackTrace?: ErrorConstructor["prepareStackTrace"];
   }
   interface ConsoleInternal extends Internal {
     toUint8(value: unknown): Uint8Array;

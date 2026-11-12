@@ -49,6 +49,15 @@ or ignored. A shared atomic terminal-result primitive arbitrates guest completio
 failures and default actions, preserving the winning status and whether it came from an ordinary
 exit or a signal. The native Wasmtime adapter also retains an immutable typed outcome: default
 actions select immediately, while handled signals do not take the fatal cancellation path.
+The native child adapter selects its terminal outcome before reporting an instance-setup
+error, including failures in Wasm start sections, networking slots and paired initializers
+before `_start`. An already-selected fatal signal remains signal death without a false
+startup diagnostic. A genuine startup failure keeps its portable errno and diagnostic;
+ignored or pending handled signals do not hide it. Store and descriptor teardown still
+precedes child completion publication. Original `startup_tests.rs` tiny-Wasm and writer
+controls cancel inside slots and Wasm start sections, cancel before entry, preserve genuine
+malformed-slot and trap failures, and reject late kills during diagnostic writes without
+rebuilding a guest engine or timing a race.
 The original `runtime_proc.wait` adapter returns the immutable outcome kind and code on
 every host; no child-pipe metadata selector remains. The guest allocates its two directional
 worker control pipes through `runtime_proc.pipe` and binds their dynamically assigned child fds
@@ -93,11 +102,70 @@ the startup shared buffer and transferred `MessagePort` with `useAtomics=false`,
 async test, thread-pool test, and intentional rejection all pass through the maintained app matrix.
 
 
+### Node WASI descriptor delegation
+
+`web/scripts/node-process.ts` uses the public `installNodeWasiDescriptors` and
+`nodeWasiDescriptor` exports from `waffle/proc/node-wasi`. The pinned package is
+Waffle 0.0.105 at `a03b2a51f8a5eb40d1b93820f0f129867110b6c2`, with upstream
+source in `packages/waffle/proc/node-wasi.ts`. Bun keeps no local descriptor
+translation or polling implementation.
+
+The remaining close adapter is original Bun startup-cleanup policy. Waffle
+captures the supplied preview1 `fd_close` for native-handle release and replaces
+the guest-facing import with its descriptor-table close. Bun decorates that input
+to ignore only `ERR_WASI_NOT_STARTED`. Before `wasi.start` binds memory, Node WASI
+still owns its preopens, and Bun must release its process host after startup
+failure. Other thrown values propagate unchanged. Waffle retains ownership of
+reference counts, native releases, descriptor allocation, rights and polling.
+Bun still owns native stdio, worker control pipes and its no-watch `runtime_fs`
+answers. No Waffle or Node implementation is copied or patched.
+
+The real Node fixture `web/tests/fixtures/node-descriptors.ts` covers unstarted
+preopen cleanup, close error identity, exactly-once release, rights and ordinary
+descriptor operations with pipe and file stdio. The existing `node-runtime-fs`
+fixture also disposes a host before WASI starts.
+
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry including nodejs, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
+| [`web/scripts/node-process.ts`](#node-wasi-descriptor-delegation) | Host feature | Original Bun startup-close policy over the public pinned Waffle descriptor adapter; no copied generic translation or polling. |
 | [`web/src/playground/playground.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+Startup diagnostics now acquire their writer lazily, after the immutable typed
+terminal outcome is selected. An already-selected signal does not acquire the
+standard-error lock. Native regressions check diagnostic acquisition itself,
+not only a writer callback after acquisition.
+
+### Root observation ownership
+
+The original adapters in `web/src/{runner,subprocess-broker,worker}.ts` and
+`web/scripts/node-spawn.ts` use Waffle's
+canonical `proc/observation` transfer and native-return capture. The runner retains
+that association before asynchronous Worker acquisition. It stores the acquisition
+promise before runtime callbacks can reenter disposal and never reads a recycled
+producer to decide a late observer's result. Native return does not certify physical
+reader closure or replace filesystem, terminal, notification or memory-group cleanup.
+The Worker entry retains observation across its terminal and nested-host imports and
+leaves terminal reporting to the generic bootstrap. No Waffle implementation is
+copied or patched. The browser child launcher remains service-owned and unchanged.
+The Node adapter captures each Worker's native termination separately from logical
+process exit. Pending stops remain owned after an exit event, and rejected stops
+retain their exact reason instead of reporting successful disposal.
+
+The published runtime source reference is `ShaulLavo/waffle`,
+`packages/waffle/proc/{observation,worker-client}.ts` and
+`packages/waffle/browser/{worker,process-broker}.ts` at
+`6e0608451a3f89c1fa0e4f17dacdc6edc5cbc900`, runtime 0.0.118 with host interface 2.
+The matching public program family is 0.0.20. Web, sandbox and the shell guest builder
+select reviewed, merged Bash source `161153b839b58cdb6f9e1385698aaf4ba9453432`.
+
+The original bundle gate in `scripts/runtime-size.ts` classifies the exact observation
+module as eager lifecycle control alongside outcome and directory cells. Its real
+browser bundle must not import the supervisor, registry or Worker service. Unknown
+observation-related modules still fail closed, and observation bytes remain in the
+measured bundle contributions and size totals. No producer implementation is copied.

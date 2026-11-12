@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches } from "./test-checks";
+import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, parseCheck } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 
@@ -39,6 +39,18 @@ test("CI's native command runs the busy-loop stdout handshake fixture", () => {
   const command = checkCommand("native");
   expect(command.slice(0, 3)).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build"]);
   expect(command).toContain("stdout-busy-loop");
+});
+
+test("import-specifier collection runs through the shared QuickJS and JSC native gates", () => {
+  const path = "tests/fixtures/esm-import-specifier-collection";
+  expect(discoverChecks().find(check => check.path === path)).toEqual({
+    owner: "native", path, profile: "shared-group", localRuntime: false, batch: "default",
+  });
+  expect(selectChecks("native", undefined, "shared-group")).toContain(path);
+  expect(selectChecks("native")).not.toContain(path);
+  expect(checkCommand("native", [path], "shared-group")).toEqual([
+    "bun", join(root, "scripts/native-profile-fixtures.ts"), path,
+  ]);
 });
 
 test("discovery is sorted and adding a feature needs no shared command edit", () => {
@@ -89,6 +101,22 @@ test("missing, duplicate and linked inputs fail closed", () => {
   expect(() => discoverChecks(directory)).toThrow("Unsafe linked check");
 });
 
+test("Browser guest secondary inputs preserve the blocking owner and profile selection", () => {
+  const path = "scripts/example.test.ts";
+  const inputs = ["web/src/example.ts"];
+  const split = parseCheck({ owner: "browser-guest", path, inputs }, "browser-guest-example.json");
+  const shared = parseCheck({ owner: "browser-guest", path, inputs, profile: "shared-group" }, "browser-guest-example.json");
+  expect(split).toMatchObject({ owner: "browser-guest", path, inputs });
+  expect(selectChecks("browser-guest", [split])).toEqual([path]);
+  expect(selectChecks("browser-guest", [shared], "shared-group")).toEqual([path]);
+  expect(checkCommand("browser-guest", [path])).toEqual(["bun", "test", join(root, path)]);
+  expect(() => parseCheck({ owner: "web", path, inputs }, "web-example.json")).toThrow();
+});
+
+test.each([[], ["../outside.ts"], ["/outside.ts"], ["web/src/*.ts"], ["web/src/../outside.ts"], ["web/src/"], ["web/src/file.ts", "web/src/file.ts"], [17], "web/src/file.ts", null].map(inputs => ({ inputs })))("Browser guest rejects unsafe secondary inputs $inputs", ({ inputs }) => {
+  expect(() => parseCheck({ owner: "browser-guest", path: "scripts/example.test.ts", inputs }, "browser-guest-example.json")).toThrow();
+});
+
 test("runner uses argv, no-build fixtures and failure propagation, not a shell command string", () => {
   expect(checkCommand("runtime", ["scripts/example.test.ts"])).toEqual(["bun", "test", join(root, "scripts/example.test.ts")]);
   expect(checkCommand("native", ["tests/fixtures/node-misc"])).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build", "node-misc"]);
@@ -124,6 +152,12 @@ test("each discovery group retains one command owner and browser deadlines stay 
   const web = readFileSync(join(root, "scripts/test-web-host.sh"), "utf8");
   expect(web.match(/bun \.\.\/scripts\/test-checks.ts web\n/g)).toHaveLength(1);
   expect(web).toContain("browser_test bun ../scripts/test-checks.ts web-browser");
+  // The rust job bundles one verified site. Browser legs and the shared-profile consumer reuse it.
+  expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest\n/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
+  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(3);
+  expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
+  expect(workflow).not.toContain("web/build.ts");
   const runtime = readFileSync(join(root, "scripts/check-runtime.sh"), "utf8");
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" local-runtime');
@@ -135,4 +169,17 @@ test("Web subprocess boundaries and fail-fast order are preserved by manifest ba
   expect(checkBatches("web").map(paths => paths.filter(path => oldSelections().web.includes(path))).filter(paths => paths.length)).toEqual(proof.webBatches);
   expect(checkBatches("local-runtime")).toEqual([selectChecks("local-runtime")]);
   expect(proof.webBatches.map(paths => paths.length)).toEqual([10, 2, 3]);
+});
+
+test("native-probe inputs are typed and the source utility retains its lightweight owner", () => {
+  const checks = discoverChecks();
+  expect(selectChecks("cmake", checks)).toContain("scripts/tls-probe.test.ts");
+  expect(selectChecks("native-probe", checks)).toEqual(["scripts/ci-sccache-learning.test.ts", "scripts/tls-probe-live.test.ts"]);
+  const directory = fixture();
+  writeFileSync(join(directory, "scripts/probe.test.ts"), "");
+  const invalid = [undefined, [], ["../secret"], ["source.ts", "source.ts"], "source.ts"];
+  for (const inputs of invalid) {
+    manifest(directory, { owner: "native-probe", path: "scripts/probe.test.ts", inputs }, "native-probe-fixture.json");
+    expect(() => discoverChecks(directory)).toThrow("native-probe");
+  }
 });

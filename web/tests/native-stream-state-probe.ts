@@ -5,7 +5,7 @@ const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
 const mode = process.argv[2];
 const native = { ReadableStream, WritableStream, TransformStream };
 
-if (mode === "own" || mode === "browser") {
+if (mode === "own" || mode === "browser" || mode === "browser-no-iteration") {
   // Node 26 moved its hooks to prototype getters, so its default path would
   // otherwise hide the instance-property collision seen in Node 24 and 25.
   for (const Ctor of [ReadableStream, WritableStream]) {
@@ -27,6 +27,31 @@ if (mode === "own") {
     }));
   }
 }
+if (mode === "browser-no-iteration") {
+  for (const key of ["values", Symbol.asyncIterator]) assert.ok(Reflect.deleteProperty(ReadableStream.prototype, key));
+}
+
+async function checkInstalledIteration(): Promise<void> {
+  const stream = new ReadableStream({ start(controller) { controller.enqueue("one"); controller.close(); } });
+  const completion: Promise<void> = Reflect.get(stream, closedKey).promise;
+  const method: unknown = Reflect.get(stream, Symbol.asyncIterator);
+  assert.ok(typeof method === "function", "the bridge must install missing native stream iteration");
+  const values = Object.getOwnPropertyDescriptor(ReadableStream.prototype, "values");
+  const alias = Object.getOwnPropertyDescriptor(ReadableStream.prototype, Symbol.asyncIterator);
+  assert.equal(values?.value, alias?.value, "values and the iterator stay aliases after tracking wrappers");
+  for (const descriptor of [values, alias]) {
+    assert.deepEqual([descriptor?.configurable, descriptor?.writable], [true, true]);
+  }
+  assert.equal(values?.enumerable, true);
+  assert.equal(alias?.enumerable, false);
+  const iterator: AsyncIterator<unknown> = Reflect.apply(method, stream, []);
+  assert.ok(stream.locked, "iterator acquires a reader before next");
+  assert.deepEqual(await iterator.next(), { value: "one", done: false });
+  assert.deepEqual(await iterator.next(), { value: undefined, done: true });
+  assert.ok(!stream.locked, "finished iteration releases its tracked reader");
+  await completion;
+}
+
 const before = { ReadableStream, WritableStream, TransformStream };
 const readable = new ReadableStream({ start(controller) { controller.close(); } });
 const writable = new WritableStream();
@@ -81,6 +106,7 @@ try {
     }
   };
   await checkInstalledStreamHooks();
+  if (mode === "browser-no-iteration") await checkInstalledIteration();
 } finally {
   dispose();
   await writable.close();

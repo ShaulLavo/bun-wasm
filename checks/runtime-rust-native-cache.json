@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/rust-native-cache.test.ts",
+  "localRuntime": true
+}

@@ -12,7 +12,7 @@ test("playground server exit zero before HTTP assertion fails", async () => {
     if (text) return;
     return fn.toString().includes("serving:") ? { done: true, serving: false } : 0;
   } };
-  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
+  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "$ bun run .matrix-command.ts server.ts\n$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 
@@ -39,7 +39,7 @@ test("no-op launcher fails positive and negative tooling assertions and install"
 test("diagnostics ignore code frames and earlier stages", () => {
   expect(failure('1 | require("node:child_process"); throw error\nReferenceError: module is not defined', "dev")).toEqual({ category: "d", blocker: "dev: ReferenceError: module is not defined" });
   expect(failure("memory allocation of 16777216 bytes failed", "install").category).toBe("d");
-  const log = "user@bun:~$ bun install\nwarning: install failed warning\nuser@bun:~$ bun run index.js\nReferenceError: module is not defined\n[1] user@bun:~$";
+  const log = "$ bun install\nwarning: install failed warning\n$ bun run index.js\nReferenceError: module is not defined\n[1] $";
   expect(failure(stageOutput(log, "bun run index.js"), "start").blocker).toBe("start: ReferenceError: module is not defined");
 });
 
@@ -63,7 +63,7 @@ test("retained Next, Prisma and playground logs classify actual current diagnost
   const log = name => readFileSync(join(import.meta.dir, "review-evidence", name), "utf8");
   expect(failure(log("next-quickjs-dev.log"), "dev")).toEqual({ category: "d", blocker: "dev: ReferenceError: module is not defined" });
   expect(failure(log("prisma-quickjs-install.log"), "install").category).toBe("d");
-  const current = stageOutput(log("vite-react-quickjs-playground.log"), "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3137");
+  const current = stageOutput(log("vite-react-quickjs-playground.log").replaceAll("user@bun:~$", "$"), "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3137");
   expect(current).not.toContain("optional dependency");
   expect(failure(current, "dev")).toMatchObject({ category: "a" });
   expect(failure(current, "dev").blocker).toStartWith('error: Your current platform');
@@ -93,7 +93,7 @@ test("playground server exiting during the page assertion also fails", async () 
   const preview = { on() {}, exposeBinding: async () => ({ dispose: async () => {} }), addInitScript: async () => ({ dispose: async () => {} }), evaluate: async () => {}, goto: async () => ({ ok: () => true, fromServiceWorker: () => true }), locator: () => ({ filter: () => ({ waitFor: async () => {} }) }), close: async () => {} };
   const probe = { context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }), goto: async () => ({ ok: () => true, status: () => 200 }), close: async () => {} };
   const pages = [preview, probe];
-  const result = await serverCommand({ page, context: { newPage: async () => pages.shift() }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
+  const result = await serverCommand({ page, context: { newPage: async () => pages.shift() }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "$ bun run .matrix-command.ts server.ts\n$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 

@@ -1,5 +1,5 @@
 import { captureProgramInputs, inputProfile, parseProgramReceipt, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
-import { importedMemory, parseProgramFiles, programKind, programKindForBuild, programProfile, sharedGroupPair, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { importedMemory, isSupportedPairedEngine, parseProgramFiles, programKind, programKindForBuild, programProfile, sharedGroupPair, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
 import { parseProgramProfile, verifySharedSysroot, verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
@@ -101,6 +101,7 @@ async function receiptProgram(options: SourceOptions, bytes: Uint8Array, directo
   checkProfile(options.build, profile);
   const program = await programIdentity(options.build, bytes, directory, profile);
   if (program.kind === "single") return { program };
+  if (!isSupportedPairedEngine(program.kind)) throw new Error(`Unsupported normal guest receipt engine: ${program.kind}`);
   const sidePath = join(directory, programProfile(program.kind).side);
   const current = await captureProgramInputs(options, program.kind, undefined, profile);
   const engineOrigin = verifyProgramReceipt(await Bun.file(sidePath).bytes(), await Bun.file(`${sidePath}.engine.json`).json(), current);
@@ -147,7 +148,7 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   if (!Array.isArray(value.groups) || !value.groups.every(group => record(group) && typeof group.name === "string" && validFiles(group.files))) throw new Error("Invalid guest source manifest files");
   const required = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl"];
   if (value.build === "jsc" || value.build === "tools") required.push("jsc-prebuild");
-  if (value.build === "hermes") required.push("hermes-prebuild");
+  if (value.groups.some(group => group.name === "hermes-prebuild")) throw new Error("Withdrawn engine prebuild in guest source manifest");
   if (programKindForBuild(value.build) !== "single") required.push("rust-build-std");
   const names = value.groups.map(group => group.name);
   if (new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new Error("Missing guest source manifest group");

@@ -8,6 +8,7 @@ The transaction controller and wrapper retain code Bun explicitly attributes to 
 
 The TypeScript conversion preserves the ported executable syntax, strict directive, transaction wrappers, statement identity, and value conversion. No upstream dependency source was changed or re-imported.
 
+Iterator closure resets the live native statement in a `finally` block, including early break, explicit return, and loop-body exceptions. This original Rust reset adapter preserves bindings and execution metadata without finalizing the statement. Finalized, released, and force-closed statements are cleanup no-ops. The adapter ignores SQLite reset's previous-step status so cleanup does not replace the original error.
 
 ## Classification
 

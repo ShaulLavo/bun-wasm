@@ -2,12 +2,24 @@ import { expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { build } from "vite";
 import { quickjsPair } from "./quickjs-plan-fixture";
 
 const execute = promisify(execFile);
+
+async function linkDeclaredPeers(root: string, scratch: string): Promise<void> {
+  const metadata: unknown = JSON.parse(await readFile(join(scratch, "package/package.json"), "utf8"));
+  if (!metadata || typeof metadata !== "object" || !("peerDependencies" in metadata)) throw new Error("Packed peer contract is missing");
+  const peers = metadata.peerDependencies;
+  if (!peers || typeof peers !== "object" || Array.isArray(peers)) throw new Error("Invalid packed peer contract");
+  for (const peer of Object.keys(peers)) {
+    const target = join(scratch, "node_modules", peer);
+    await mkdir(dirname(target), { recursive: true });
+    await symlink(join(root, "node_modules", peer), target);
+  }
+}
 
 test("packed package includes a working public worker, no demo or guest binaries", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-package-payload-"));
@@ -21,6 +33,11 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(files).toContain("package/src/notification-worker-entry.ts");
     expect(files).toContain("package/src/quickjs-program.ts");
     expect(files).toContain("package/web/src/tool-command.ts");
+    // engine-host.js imports the record loader host layer.
+    expect(files).toContain("package/web/src/module-records.ts");
+    expect(files).toContain("package/web/src/nested/host.ts");
+    expect(files).toContain("package/web/src/nested/module-info.ts");
+    expect(files).toContain("package/web/src/nested/wire.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
@@ -28,7 +45,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     await execute("tar", ["-xzf", join(scratch, archive), "-C", scratch], { timeout: 10_000 });
     await mkdir(join(scratch, "node_modules"));
     await symlink(join(scratch, "package"), join(scratch, "node_modules/bun-wasm"));
-    await symlink(join(root, "node_modules/waffle"), join(scratch, "node_modules/waffle"));
+    await linkDeclaredPeers(root, scratch);
     await symlink(join(root, "node_modules/@types"), join(scratch, "node_modules/@types"));
     await writeFile(join(scratch, "consumer.ts"), `
       import { installBunAdapters, BunWasmExecutableConflictError } from "bun-wasm";
@@ -54,10 +71,13 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect(index).not.toContain("waffle.runtime.owner");
     await writeFile(join(scratch, "core.wasm"), quickjsPair().core);
     await writeFile(join(scratch, "wrong-side.wasm"), quickjsPair("jsc").side);
+    const sm = quickjsPair("spidermonkey");
+    await writeFile(join(scratch, "sm-core.wasm"), sm.core);
+    await writeFile(join(scratch, "sm-side.wasm"), sm.side);
     await copyFile(join(import.meta.dir, "fixtures/paired-asset-brand.ts"), join(scratch, "paired-asset-brand.ts"));
     for (const runtime of ["node", process.execPath]) {
-      const { stdout } = await execute(runtime, ["paired-asset-brand.ts", "core.wasm", "wrong-side.wasm"], { cwd: scratch, timeout: 10_000 });
-      expect(stdout.trim()).toBe("paired asset errors ok");
+      const { stdout } = await execute(runtime, ["paired-asset-brand.ts", "core.wasm", "wrong-side.wasm", "sm-core.wasm", "sm-side.wasm"], { cwd: scratch, timeout: 10_000 });
+      expect(stdout.trim()).toBe("paired asset errors ok\nspidermonkey package initialized 42");
     }
     const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset')); const asset = await import('bun-wasm/asset'); if (typeof asset.prepareQuickjsProgram !== 'function') throw Error('missing paired program loader')"], { cwd: scratch, timeout: 10_000 });
     expect(bunPaths).toContain("/src/index.ts");

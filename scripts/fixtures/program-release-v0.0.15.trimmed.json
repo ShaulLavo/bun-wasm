@@ -1,0 +1,159 @@
+{
+  "schema": "waffle-program-release/2",
+  "operation": "peer-rebind",
+  "tag": "programs-v0.0.15",
+  "version": "0.0.15",
+  "dirty": false,
+  "tagState": "tagged",
+  "assetBase": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15",
+  "sourceCommit": "3050f69d810fe7c851e487135517698b5dfd93e5",
+  "runtime": {
+    "name": "waffle",
+    "version": "0.0.107",
+    "waffleHostInterface": 1,
+    "input": {
+      "kind": "published-release"
+    },
+    "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.107/waffle-0.0.107.tgz",
+    "bytes": 2280858,
+    "sha256": "2da9ad3a055369e7ba2922ca127e1bb802b7d9e5f8b358852c0934f2951be5d0"
+  },
+  "rebind": {
+    "hostInterface": 1,
+    "from": {
+      "schema": "waffle-program-release/1",
+      "tag": "programs-v0.0.13",
+      "version": "0.0.13",
+      "manifestUrl": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/program-release.json",
+      "manifestSha256": "420216c117f9b7443c3eec70ee5c1095ea23bc05c6e25ae612bb95844e83fb72",
+      "sourceCommit": "3050f69d810fe7c851e487135517698b5dfd93e5",
+      "runtime": {
+        "name": "waffle",
+        "version": "0.0.105",
+        "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+        "bytes": 2186915,
+        "sha256": "914400ac1a8268f151ffed30fca7b983c9e368925e48cc124e1624fdac62f510"
+      }
+    },
+    "toolCommit": "acd64c19a6381c27edd602316e66d81df78abf25",
+    "toolDirty": false,
+    "bun": "1.4.4",
+    "historicalChecker": {
+      "commit": "3050f69d810fe7c851e487135517698b5dfd93e5",
+      "toolsTree": "3d604d58f33080736c399d189375a62c08b5a5dc",
+      "command": "bun tools/program-package.ts check"
+    },
+    "acceptance": {
+      "script": "tools/family-packed-app.ts",
+      "commit": "3050f69d810fe7c851e487135517698b5dfd93e5",
+      "sha256": "400fe776d77b1932cfd4d7222b11e16c4b2b724d8455f8e43a5e791d2cfc4092"
+    },
+    "runtimeInput": {
+      "kind": "local-artifact",
+      "provisional": false,
+      "sourceCommit": "acd64c19a6381c27edd602316e66d81df78abf25"
+    }
+  },
+  "order": [
+    "waffle-coreutils",
+    "waffle-findutils",
+    "waffle-grep",
+    "waffle-ripgrep",
+    "waffle-sed",
+    "waffle-base",
+    "@waffle/python",
+    "waffle-git"
+  ],
+  "packages": [
+    {
+      "name": "waffle-base",
+      "sourceDirectory": "packages/base",
+      "sourceTree": "a2795f209dd23bfac9161e9abeede51da25cad97",
+      "sourceVersion": "0.0.0",
+      "version": "0.0.15",
+      "filename": "waffle-base-0.0.15.tgz",
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz",
+      "bytes": 1662,
+      "sha256": "4284136b1271b35757943ae2d493afa4d14e2da58e7b933a56b1292e4037984e",
+      "waffleHostInterface": 1,
+      "closureDependencies": {
+        "waffle-coreutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-coreutils-0.0.15.tgz",
+        "waffle-findutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-findutils-0.0.15.tgz",
+        "waffle-grep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-grep-0.0.15.tgz",
+        "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-ripgrep-0.0.15.tgz",
+        "waffle-sed": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-sed-0.0.15.tgz"
+      },
+      "registryDependencies": {},
+      "strippedFields": [
+        "scripts"
+      ],
+      "typeOnlyUndeclared": [],
+      "artifacts": [],
+      "guests": {
+        "descriptor": [],
+        "staticReference": []
+      },
+      "original": {
+        "version": "0.0.13",
+        "filename": "waffle-base-0.0.13.tgz",
+        "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz",
+        "bytes": 1658,
+        "sha256": "2c014679bfdb19f16834a2766ae0129429410f2ee038a2e55ac519589e91b3a1"
+      },
+      "changedFiles": [
+        "package.json"
+      ],
+      "manifestChanges": [
+        {
+          "path": "version",
+          "from": "0.0.13",
+          "to": "0.0.15"
+        },
+        {
+          "path": "waffleHostInterface",
+          "from": "<missing>",
+          "to": "1"
+        },
+        {
+          "path": "dependencies.waffle",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+          "to": "<missing>"
+        },
+        {
+          "path": "dependencies.waffle-coreutils",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-coreutils-0.0.13.tgz",
+          "to": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-coreutils-0.0.15.tgz"
+        },
+        {
+          "path": "dependencies.waffle-findutils",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-findutils-0.0.13.tgz",
+          "to": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-findutils-0.0.15.tgz"
+        },
+        {
+          "path": "dependencies.waffle-grep",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-grep-0.0.13.tgz",
+          "to": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-grep-0.0.15.tgz"
+        },
+        {
+          "path": "dependencies.waffle-ripgrep",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-ripgrep-0.0.13.tgz",
+          "to": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-ripgrep-0.0.15.tgz"
+        },
+        {
+          "path": "dependencies.waffle-sed",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-sed-0.0.13.tgz",
+          "to": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-sed-0.0.15.tgz"
+        },
+        {
+          "path": "peerDependencies.waffle",
+          "from": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+          "to": "*"
+        }
+      ],
+      "fileAccounting": {
+        "tracked": 4,
+        "artifacts": 0
+      }
+    }
+  ]
+}

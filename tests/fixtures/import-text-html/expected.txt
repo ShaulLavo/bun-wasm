@@ -1,0 +1,7 @@
+order passes
+order passes
+text and default HTML identities coexist in both orders
+static, dynamic, aliases, re-exports and CommonJS share text namespaces
+raw UTF-8, BOM, shebang, JSON and ordinary CommonJS are preserved
+normalization, resolution and evaluation errors retain their identities
+source maps and process-local cache lifetimes pass

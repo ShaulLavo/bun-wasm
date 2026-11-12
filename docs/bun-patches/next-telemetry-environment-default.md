@@ -4,7 +4,7 @@ Classification: original host adapter policy and regression tests. No upstream i
 
 `src/executable-paths.ts` supplies `NEXT_TELEMETRY_DISABLED=1` in the normal Bun environment. The page runner applies it only to Bun roots; public package adapters and Shell children use it through the Bun launcher. Caller values, including `0` and the empty string, take precedence. The launcher still reserves `PWD` and the normalized `BUNWASM_EXEC_PATH` and leaves the admitted PATH unchanged. `engineEnvironment` retains its PATH-only contract.
 
-The default belongs to the host environment rather than a guest build or application fixture. Preview1 requests retain their caller environment. The existing Shell product fixture already supplies the same value and needs no change.
+The default belongs to the host environment rather than a guest build or application fixture. Preview1 requests retain their caller environment: a page-runner Preview1 root receives the caller's argv and environment exactly, with no engine PATH or `BUNWASM_EXEC_PATH`, and the process-service Preview1 launcher adds only `PWD` from the spawn request's cwd. The existing Shell product fixture already supplies the same value and needs no change.
 
 The flag disables telemetry submission. In Next 15.5.6, `dist/telemetry/storage.js` gates `submitRecord` with the disabled flag but does not gate `flushDetached`. The shutdown path can still start an independent flush child. This default does not change child-process or job ownership semantics and does not promise zero shutdown children.
 

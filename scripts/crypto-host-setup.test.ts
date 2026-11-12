@@ -36,7 +36,7 @@ for (const failRoot of [false, true]) {
 set -euo pipefail
 printf '%s|%s\n' "$PWD" "$*" >> "$INSTALL_TRACE"
 [[ "$PWD" != "$FAIL_ROOT" ]] || exit 23
-[[ "$*" == "install --frozen-lockfile --ignore-scripts" ]] || exit 24
+[[ "$*" == "$INSTALLER_ADAPTER --frozen-lockfile --ignore-scripts" ]] || exit 24
 mkdir -p node_modules/waffle/browser/net node_modules/waffle/dist
 for part in wasm input-hash sha256; do ln "$PREPARED_WAFFLE/network.$part" "node_modules/waffle/browser/net/network.$part"; done
 ln "$PREPARED_WAFFLE/index.js" node_modules/waffle/dist/index.js
@@ -44,14 +44,15 @@ ln "$PREPARED_WAFFLE/index.js" node_modules/waffle/dist/index.js
       expect(existsSync(join(directory, "node_modules"))).toBe(false);
       const result = spawnSync("bash", ["../scripts/test-web-host.sh", "--setup"], {
         cwd: join(directory, "web"),
-        env: { ...process.env, PATH: `${join(directory, "bin")}:${process.env.PATH ?? ""}`, INSTALL_TRACE: join(directory, "installs"), PREPARED_WAFFLE: join(directory, "package"), FAIL_ROOT: failRoot ? directory : "" },
+        env: { ...process.env, PATH: `${join(directory, "bin")}:${process.env.PATH ?? ""}`, INSTALL_TRACE: join(directory, "installs"), INSTALLER_ADAPTER: join(directory, "scripts/ci-install.ts"), PREPARED_WAFFLE: join(directory, "package"), FAIL_ROOT: failRoot ? directory : "" },
         encoding: "utf8",
         timeout: 10_000,
       });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(failRoot ? 23 : 0);
-      const installs = [`${directory}|install --frozen-lockfile --ignore-scripts`];
-      if (!failRoot) installs.push(`${directory}/web|install --frozen-lockfile --ignore-scripts`, `${directory}/sandbox|install --frozen-lockfile --ignore-scripts`);
+      const command = `${directory}/scripts/ci-install.ts --frozen-lockfile --ignore-scripts`;
+      const installs = [`${directory}|${command}`];
+      if (!failRoot) installs.push(`${directory}/web|${command}`, `${directory}/sandbox|${command}`);
       expect(readFileSync(join(directory, "installs"), "utf8").trim().split("\n")).toEqual(installs);
       expect(existsSync(join(directory, "node_modules"))).toBe(!failRoot);
       if (!failRoot) {

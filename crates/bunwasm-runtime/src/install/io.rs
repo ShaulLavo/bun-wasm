@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -8,6 +9,7 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::pending::Pending;
 use crate::{Transpiler, encoding, host};
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -284,11 +286,102 @@ pub fn fetch(url: &str, tarball: bool, refresh: bool, registry: &Registry) -> Re
         }
         fs::remove_file(&cache).map_err(|_| "Could not discard unsafe registry cache data")?;
     }
-    let bytes = request(&url_value, tarball, refresh, registry)?;
-    if cacheable(&bytes, tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
-        let _ = write(&cache, &bytes);
+    Download::start(&url_value, tarball, refresh, registry)?.finish(registry)
+}
+
+// Reserve one handle for a demand lookup that conservative lookahead did not predict.
+pub(super) const MAX_PREFETCHES: usize = 7;
+
+/// Owns only handles. Unconsumed bodies stay under the host's per-handle backpressure.
+#[derive(Default)]
+pub struct Downloads {
+    pending: BTreeMap<String, Result<Download>>,
+}
+
+impl Downloads {
+    pub fn is_full(&self) -> bool {
+        self.pending.len() >= MAX_PREFETCHES
     }
-    Ok(bytes)
+
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
+
+    pub fn retain(&mut self, urls: &[String]) {
+        self.pending.retain(|url, _| urls.contains(url));
+    }
+
+    pub fn prefetch(&mut self, url: &str, tarball: bool, refresh: bool, registry: &Registry) {
+        if self.is_full() || self.pending.contains_key(url) {
+            return;
+        }
+        let request = request_url(url).and_then(|url| {
+            let cache = cache_dir().join(format!("{:x}", Sha256::digest(url.as_str().as_bytes())));
+            let fresh = tarball
+                || fs::metadata(&cache)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                    .is_some_and(|age| age < Duration::from_secs(300));
+            if !refresh && fresh && cache.is_file() {
+                return Ok(None);
+            }
+            Download::start(&url, tarball, refresh, registry).map(Some)
+        });
+        match request {
+            Ok(None) => {}
+            Ok(Some(request)) => {
+                self.pending.insert(url.into(), Ok(request));
+            }
+            Err(error) => {
+                self.pending.insert(url.into(), Err(error));
+            }
+        }
+    }
+
+    pub fn fetch(
+        &mut self,
+        url: &str,
+        tarball: bool,
+        refresh: bool,
+        registry: &Registry,
+    ) -> Result<Vec<u8>> {
+        match self.pending.remove(url) {
+            Some(request) => request?.finish(registry),
+            None => fetch(url, tarball, refresh, registry),
+        }
+    }
+}
+
+struct Download {
+    handle: i32,
+    url: String,
+    tarball: bool,
+}
+
+impl Download {
+    fn start(url: &url::Url, tarball: bool, refresh: bool, registry: &Registry) -> Result<Self> {
+        Ok(Self {
+            handle: start_request(url, tarball, refresh, registry)?,
+            url: url.as_str().into(),
+            tarball,
+        })
+    }
+
+    fn finish(self, registry: &Registry) -> Result<Vec<u8>> {
+        let bytes = response(self.handle, &self.url, registry)?;
+        if cacheable(&bytes, self.tarball, registry) && fs::create_dir_all(cache_dir()).is_ok() {
+            let cache = cache_dir().join(format!("{:x}", Sha256::digest(self.url.as_bytes())));
+            let _ = write(&cache, &bytes);
+        }
+        Ok(bytes)
+    }
+}
+
+impl Drop for Download {
+    fn drop(&mut self) {
+        host::close(self.handle);
+    }
 }
 
 fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
@@ -301,12 +394,12 @@ fn cacheable(bytes: &[u8], tarball: bool, registry: &Registry) -> bool {
     registry.safe_metadata(&metadata)
 }
 
-fn request(
+fn start_request(
     url_value: &url::Url,
     tarball: bool,
     refresh: bool,
     registry: &Registry,
-) -> Result<Vec<u8>> {
+) -> Result<i32> {
     let url = url_value.as_str();
     let accept = if tarball {
         "application/vnd.bun.install-tarball"
@@ -331,9 +424,7 @@ fn request(
     if handle < 0 {
         return Err(network_error(handle, registry));
     }
-    let result = response(handle, url, registry);
-    host::close(handle);
-    result
+    Ok(handle)
 }
 
 fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
@@ -342,12 +433,11 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|s| *s > 0)
         .unwrap_or(300);
-    let timeout = Duration::from_secs(seconds);
-    let mut progress = Instant::now();
+    let mut pending = Pending::new(Duration::from_secs(seconds), Instant::now());
     let head = loop {
         match host::fetch_head(handle) {
             Ok(head) => break head,
-            Err(host::AGAIN) => wait(progress, timeout, url)?,
+            Err(host::AGAIN) => wait(&mut pending, url)?,
             Err(_) => return Err(network_error(handle, registry)),
         }
     };
@@ -357,15 +447,12 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
         return Err(format!("GET {url} - {status}"));
     }
     let mut out = Vec::new();
-    progress = Instant::now();
+    pending.progressed(Instant::now());
     loop {
         match host::read(handle, 64 * 1024) {
             Ok(bytes) if bytes.is_empty() => return Ok(out),
-            Ok(bytes) => {
-                out.extend_from_slice(&bytes);
-                progress = Instant::now();
-            }
-            Err(host::AGAIN) => wait(progress, timeout, url)?,
+            Ok(bytes) => append_progress(&mut out, &mut pending, &bytes),
+            Err(host::AGAIN) => wait(&mut pending, url)?,
             Err(_) => return Err(network_error(handle, registry)),
         }
         if out.len() > LIMIT {
@@ -374,12 +461,16 @@ fn response(handle: i32, url: &str, registry: &Registry) -> Result<Vec<u8>> {
     }
 }
 
-fn wait(progress: Instant, timeout: Duration, url: &str) -> Result<()> {
-    if progress.elapsed() >= timeout {
-        return Err(format!("Timeout downloading {url}"));
-    }
-    let remaining = timeout.saturating_sub(progress.elapsed());
-    host::poll(remaining.as_millis().clamp(1, 1000) as i32);
+fn append_progress(out: &mut Vec<u8>, pending: &mut Pending, bytes: &[u8]) {
+    out.extend_from_slice(bytes);
+    pending.progressed(Instant::now());
+}
+
+fn wait(pending: &mut Pending, url: &str) -> Result<()> {
+    let timeout_ms = pending
+        .next_poll_ms(Instant::now())
+        .ok_or_else(|| format!("Timeout downloading {url}"))?;
+    host::poll(timeout_ms);
     Ok(())
 }
 
@@ -447,7 +538,12 @@ pub fn integrity(bytes: &[u8], sri: &str) -> Result<()> {
     Err(format!("Integrity check failed ({algorithm})"))
 }
 
-pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+type ArchiveEntry<'a> = tar::Entry<'a, std::io::Take<flate2::read::GzDecoder<&'a [u8]>>>;
+
+fn visit_archive(
+    bytes: &[u8],
+    mut visit: impl FnMut(&mut ArchiveEntry<'_>, &Path) -> Result<()>,
+) -> Result<()> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder.take(LIMIT as u64 + 1));
     let entries = archive
@@ -460,36 +556,60 @@ pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
         if total > LIMIT as u64 {
             return Err("Extracted package exceeds 256 MiB".into());
         }
-        extract_entry(&mut entry, destination)?;
+        let tail = archive_path(&entry)?;
+        if !tail.as_os_str().is_empty() {
+            visit(&mut entry, &tail)?;
+        }
     }
     Ok(())
 }
 
-fn extract_entry<R: Read>(entry: &mut tar::Entry<'_, R>, destination: &Path) -> Result<()> {
+fn archive_path<R: Read>(entry: &tar::Entry<'_, R>) -> Result<PathBuf> {
     let path = entry.path().map_err(|e| e.to_string())?.into_owned();
     let mut parts = path.components();
     if !matches!(parts.next(), Some(Component::Normal(_))) {
         return Err("Unsafe tarball path".into());
     }
     let tail: PathBuf = parts.collect();
-    if tail.as_os_str().is_empty() {
-        return Ok(());
-    }
     if !tail.components().all(|p| matches!(p, Component::Normal(_))) {
         return Err("Unsafe tarball path".into());
     }
-    let target = destination.join(tail);
     let kind = entry.header().entry_type();
-    if kind.is_dir() {
-        return fs::create_dir_all(target).map_err(|e| e.to_string());
-    }
-    if !kind.is_file() {
+    if !kind.is_file() && !kind.is_dir() {
         return Err(format!("Unsupported tarball entry: {}", path.display()));
     }
-    fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
-    let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
-    std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
-    out.flush().map_err(|e| e.to_string())
+    Ok(tail)
+}
+
+pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
+    let mut manifest = None;
+    visit_archive(bytes, |entry, path| {
+        if path != Path::new("package.json") {
+            return Ok(());
+        }
+        if manifest.is_some() || !entry.header().entry_type().is_file() {
+            return Err("Tarball needs one regular package.json".into());
+        }
+        manifest = Some(
+            serde_json::from_reader(entry)
+                .map_err(|e| format!("Invalid tarball package.json: {e}"))?,
+        );
+        Ok(())
+    })?;
+    manifest.ok_or_else(|| "Tarball has no package.json".into())
+}
+
+pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+    visit_archive(bytes, |entry, path| {
+        let target = destination.join(path);
+        if entry.header().entry_type().is_dir() {
+            return fs::create_dir_all(target).map_err(|e| e.to_string());
+        }
+        fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
+        std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -519,5 +639,64 @@ mod tests {
             assert!(!cacheable(&bytes, false, &registry));
         }
         assert!(!cacheable(b"{", false, &registry));
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    fn archive(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
+        let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(compressor);
+        for (path, kind, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(*kind);
+            header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+            header.set_cksum();
+            archive.append(&header, *bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn tarball_manifest_uses_extraction_safety_checks() {
+        let manifest = b"{\"name\":\"tool\",\"version\":\"1.2.3\"}";
+        let valid = (
+            "package/package.json",
+            tar::EntryType::Regular,
+            manifest.as_slice(),
+        );
+        let bytes = archive(&[valid]);
+        assert_eq!(archive_manifest(&bytes).unwrap()["name"], "tool");
+        assert!(
+            archive_manifest(&archive(&[]))
+                .unwrap_err()
+                .contains("no package.json")
+        );
+        assert!(
+            archive_manifest(&archive(&[valid, valid]))
+                .unwrap_err()
+                .contains("one regular package.json")
+        );
+        let link = ("package/escape", tar::EntryType::Symlink, b"".as_slice());
+        assert!(
+            archive_manifest(&archive(&[valid, link]))
+                .unwrap_err()
+                .contains("Unsupported tarball entry")
+        );
+        let traversal = (
+            "package/../../outside",
+            tar::EntryType::Regular,
+            b"escape".as_slice(),
+        );
+        assert!(
+            archive_manifest(&archive(&[valid, traversal]))
+                .unwrap_err()
+                .contains("Unsafe tarball path")
+        );
+        assert!(archive_manifest(b"not a gzip archive").is_err());
     }
 }

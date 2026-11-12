@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::data::{Args, DataFn, NativeError, Record, Val};
 use crate::modules;
 use crate::natives::Table;
-use crate::resolve::{self, Kind, Resolved};
+use crate::resolve;
 use crate::{Entry, State};
 
 const T_UNDEFINED: u8 = 0;
@@ -296,6 +296,13 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("hostModuleSource", move |a| module_source(&st, a.str(0)?));
     let st = state.clone();
+    t.add("hostUseModuleRecords", move |_| {
+        st.transpiler.use_module_records();
+        Ok(Val::Undefined)
+    });
+    let st = state.clone();
+    t.add("hostModuleRecord", move |a| module_record(&st, a.str(0)?));
+    let st = state.clone();
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
         let (code, _) = st.load_source(path)?;
@@ -342,7 +349,10 @@ fn host_dynamic_imports(
     if spans.is_empty() {
         return code.to_owned();
     }
-    let hook = format!("globalThis.__bunwasm_dynamicImport({})", json_string(from));
+    let hook = format!(
+        "(function(){{}})[\"__bunwasmFunctionImport\"]({})",
+        json_string(from)
+    );
     let mut out = String::with_capacity(code.len() + spans.len() * hook.len());
     let mut at = 0;
     for span in spans {
@@ -383,7 +393,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     if format != modules::Format::Esm {
         return Ok(Record::new().set("format", format.name()).into());
     }
-    let meta = format!("globalThis.__bunwasm_meta(import.meta, {path:?}); ");
+    let meta = format!("(function(){{}})[\"__bunwasmModuleMeta\"](import.meta, {path:?}); ");
     let source = modules::esm_source_with(state, path, &code, &meta);
     let mut imports = Vec::new();
     use crate::transpiler::ModuleImportKind;
@@ -401,20 +411,34 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
             ModuleImportKind::Static(specifier) => specifier,
         };
         rec.push("kind", "static");
-        match state.resolver.resolve(specifier, path, Kind::Import) {
-            Ok(Resolved::Builtin(b)) => rec.push("key", b),
-            Ok(Resolved::File(f)) => rec.push("key", f),
-            Err(msg) => {
-                rec.push("key", Val::Null);
-                rec.push("error", msg);
-            }
-        }
+        rec.push("key", state.resolve_module_name(specifier, path)?.as_str());
         imports.push(rec.into());
     }
     Ok(Record::new()
         .set("format", "esm")
         .set("code", source)
         .set("imports", Val::Array(imports))
+        .into())
+}
+
+/// The registration record a file becomes (`crates/bunwasm-transpiler/src/register.rs`),
+/// for a host that runs every ES module through the record loader (`esm_loader.ts`):
+/// `{format: "esm", record}`, an ES module default-exporting the record, which the host
+/// evaluates as a module so the record's functions keep a script URL in stack traces.
+/// Other formats only report the format, as in [`module_source`]; the host builds their
+/// records from the CommonJS handoff.
+fn module_record(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
+    if resolve::builtin_name(path).is_some() {
+        return Ok(Record::new().set("format", "builtin").into());
+    }
+    let (code, format) = state.load_source(path)?;
+    if format != modules::Format::Esm {
+        return Ok(Record::new().set("format", format.name()).into());
+    }
+    let record = state.module_record(path, &code, true)?;
+    Ok(Record::new()
+        .set("format", "esm")
+        .set("record", record)
         .into())
 }
 

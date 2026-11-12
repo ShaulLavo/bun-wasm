@@ -48,6 +48,16 @@ Pending sink abort promises delay completion. Internally acquired native locks,
 such as async iterators and pipeTo, use weak polling with host timers. Session
 exit stops the timers. No private stream state or promise status is invented.
 
+Underlying callbacks that return `null` or a primitive, including the synchronous
+file byte source's `undefined`, now return that value directly to the native
+constructor. They still notify completion observers. Object and function results
+retain native Promise resolution and settlement notification, so then getters
+are read once, then calls run as promise jobs with the original receiver, and
+pending writable aborts still hold the completion barrier. Start throws remain
+synchronous; other throws retain their rejected-promise path and original reason.
+The callback-boundary tests run against real native constructors in Node,
+Chromium and WebKit, alongside the existing completion and direct-stream gate.
+
 Streams created outside the construction bridge, including saved original
 constructors and opaque native factory outputs, support completion observation.
 Their controllers are unavailable through browser APIs, so the error hook cannot
@@ -77,3 +87,33 @@ Bun-controller adapter used by the construction bridge.
 [Parent context](http-framing.md).
 
 [Ledger scope and pinned revisions](scope.md).
+
+### Lazy readable-source dictionaries
+
+The readable-source completion adapter now supplies an ordinary object with lazy
+own accessors for the native dictionary fields. Native conversion alone reads the
+original getters with the original source receiver. Callable members become own
+data properties holding their completion wrappers; scalar and noncallable members
+remain accessors, including repeated native `type` reads. Frozen and inherited
+inputs are not changed. The direct-stream dispatch dictionary uses the same
+representation at the actual native constructor boundary. The callback and
+promise policy described above is unchanged. Captures belong to the stream's
+callback graph, with no independent strong-root collection or wrapper cache.
+
+This bounded representation change follows an actual iOS 26.5 worker reduction,
+WebContent 8624.2.5.10.4, in which the actual file-source factory passed with an
+ordinary own-property dictionary while a fresh-callback Proxy dictionary crashed.
+The reduction alone does not identify a native lifetime, identity or GC cause.
+Source-level regressions prove the dictionary representation and conversion
+behavior. A subsequent iOS 26.5 comparison of the complete old and corrected
+adapters reproduced the old crash and passed the corrected file case. Single-
+and four-guest streamed previews also passed. Nuxt rendering, hydration and hot
+reload passed only with a development filesystem restore and changed oxc WASI
+memory settings; those remain separate blockers for unmodified-product use.
+These observations do not establish a native lifetime, identity or GC cause.
+
+Writable and transform dictionaries retain their existing representation.
+WebKit tests distinguish absent optional properties from present undefined
+properties on those dictionaries. Creating all optional own accessors would
+change their native validation. Constructor-boundary tests cover their conversion
+order and errors alongside the corrected readable path.

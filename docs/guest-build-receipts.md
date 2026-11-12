@@ -76,6 +76,20 @@ checks, public readback, and descriptor generation remain separate gates. A late
 source merge or descriptor commit does not change previously published guest bytes.
 The old public `e63f4b4f...` guest has not been rebuilt or republished by this change.
 
+## Site publication builds
+
+`bun site/build.ts` requires all four normal guests and their adjacent `.build.json`
+receipts before building shell or app assets. It verifies the guest bytes and paired
+engine bytes, then compares the embedded runtime modules and their local generators
+with the receipt's repository inventory. Added, removed, or changed inputs require a
+fresh guest build. Type declarations and unrelated commit changes do not.
+
+The check honors `BUN_BROWSER_WASM`, `BUN_WASM`, `JSC_WASM`, and `BUN_TOOLS_WASM` with
+the same app-relative paths as the sandbox and playground builds. The CI-only
+source-cache browser producer is not a normal site guest. Run
+`bun scripts/site-guest-preflight.ts` to check inputs without building the site.
+Direct `sandbox/build.ts` and `web/build.ts` development builds remain unrestricted.
+
 ## Selected source and executables
 
 Qualified entry points reject `BUNWASM_JS_OVERRIDE_DIR`, including an explicitly

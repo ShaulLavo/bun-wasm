@@ -1,0 +1,1 @@
+Alias-cycle diagnostics are deliberately provided by the portable adapter; native Bun recursively launches aliases.

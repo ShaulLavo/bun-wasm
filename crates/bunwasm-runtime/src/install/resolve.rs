@@ -1,5 +1,6 @@
 mod next_swc;
 mod selection;
+pub(super) mod tarball;
 mod wasm_packages;
 
 pub use selection::matches;
@@ -19,6 +20,51 @@ use super::{
     overrides::Overrides,
 };
 
+type Dependency = (String, (String, bool, bool));
+
+struct MetadataCandidate {
+    edge: Option<usize>,
+    name: String,
+}
+
+impl MetadataCandidate {
+    fn needed(&self, index: usize, resolver: &Resolver) -> bool {
+        self.edge.is_none_or(|edge| edge >= index)
+            && !resolver.responses.contains_key(&self.name)
+            && !resolver.packages.contains_key(&self.name)
+    }
+}
+
+struct MetadataLookahead {
+    remaining: VecDeque<MetadataCandidate>,
+    selected: Vec<MetadataCandidate>,
+}
+
+impl MetadataLookahead {
+    fn urls(&mut self, index: usize, resolver: &Resolver) -> Vec<String> {
+        self.selected
+            .retain(|candidate| candidate.needed(index, resolver));
+        while self.selected.len() < io::MAX_PREFETCHES {
+            let Some(candidate) = self.remaining.pop_front() else {
+                break;
+            };
+            if !candidate.needed(index, resolver)
+                || self
+                    .selected
+                    .iter()
+                    .any(|ready| ready.name == candidate.name)
+            {
+                continue;
+            }
+            self.selected.push(candidate);
+        }
+        self.selected
+            .iter()
+            .map(|candidate| resolver.metadata_url(&candidate.name))
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 pub struct Package {
     pub name: String,
@@ -30,6 +76,7 @@ pub struct Package {
     pub tarball: String,
     pub local: Option<Local>,
     pub optional: bool,
+    pub explicit_tarball: bool,
 }
 
 impl Package {
@@ -144,6 +191,8 @@ pub struct Resolver {
     #[cfg(test)]
     packuments: BTreeMap<String, Value>,
     responses: BTreeMap<String, Vec<u8>>,
+    downloads: io::Downloads,
+    explicit_sources: BTreeSet<String>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -154,6 +203,7 @@ pub struct Resolver {
 impl Resolver {
     pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
+            explicit_sources: tarball::locked_sources(&locked, &Value::Null),
             packages: BTreeMap::new(),
             skipped: BTreeMap::new(),
             registry,
@@ -162,6 +212,7 @@ impl Resolver {
             #[cfg(test)]
             packuments: BTreeMap::new(),
             responses: BTreeMap::new(),
+            downloads: io::Downloads::default(),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
@@ -171,16 +222,28 @@ impl Resolver {
     }
 
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
+        let result = self.resolve_graph(manifest, production);
+        self.downloads.clear();
+        result
+    }
+
+    fn resolve_graph(&mut self, manifest: &Value, production: bool) -> Result<()> {
         self.production = production;
         self.overrides = Overrides::new(manifest, &self.locked)?;
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
             self.add(&name, "workspace:*", vec![name.clone()], false)?;
         }
-        for (name, (range, optional, _)) in dependencies(manifest, production, true) {
-            let range = self.overrides.target(&name, &range).to_owned();
-            self.add(&name, &range, vec![name.clone()], optional)?;
+        let dependencies: Vec<_> = dependencies(manifest, production, true)
+            .into_iter()
+            .collect();
+        let mut lookahead = self.metadata_lookahead(&dependencies, None);
+        for (index, (name, (range, optional, _))) in dependencies.iter().enumerate() {
+            self.prefetch_dependencies(&mut lookahead, index);
+            let range = self.overrides.target(name, range).to_owned();
+            self.add(name, &range, vec![name.clone()], *optional)?;
         }
+        self.downloads.clear();
         let mut pending_peers = VecDeque::new();
         loop {
             while let Some(key) = self.pending.pop_front() {
@@ -293,30 +356,174 @@ impl Resolver {
     }
 
     fn children(&mut self, parent: &Package, peers: bool) -> Result<()> {
-        for (name, (range, optional, peer)) in dependencies(
+        let dependencies: Vec<_> = dependencies(
             &parent.meta,
             self.production,
             parent.local.as_ref().is_some_and(|p| p.workspace),
-        ) {
-            if peer != peers {
-                continue;
-            }
-            let range = self
-                .overrides
-                .replacement(&name, &range)
-                .map(str::to_owned)
-                .unwrap_or_else(|| declared_local_target(parent, range));
-            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
+        )
+        .into_iter()
+        .filter(|(_, (_, _, peer))| *peer == peers)
+        .collect();
+        let mut lookahead = self.metadata_lookahead(&dependencies, Some(parent));
+        for (index, (name, (range, optional, peer))) in dependencies.iter().enumerate() {
+            self.prefetch_dependencies(&mut lookahead, index);
+            let range = self.edge_range(Some(parent), name, range);
+            let Some(target) = self.target(parent, name, &range, *optional || parent.optional)?
             else {
                 continue;
             };
-            let chain = self.placement(parent, &name, &target, peer, optional || parent.optional);
+            let chain = self.placement(parent, name, &target, *peer, *optional || parent.optional);
             let Some(chain) = chain else {
                 continue;
             };
-            self.add(&name, &target, chain, optional || parent.optional)?;
+            self.add(name, &target, chain, *optional || parent.optional)?;
         }
         Ok(())
+    }
+
+    fn edge_range(&self, parent: Option<&Package>, name: &str, range: &str) -> String {
+        let Some(parent) = parent else {
+            return self.overrides.target(name, range).into();
+        };
+        self.overrides
+            .replacement(name, range)
+            .map(str::to_owned)
+            .unwrap_or_else(|| declared_local_target(parent, range.into()))
+    }
+
+    fn prefetch_dependencies(&mut self, current: &mut MetadataLookahead, index: usize) {
+        let urls = current.urls(index, self);
+        self.downloads.retain(&urls);
+        for url in urls {
+            self.downloads
+                .prefetch(&url, false, self.refresh, &self.registry);
+        }
+    }
+
+    fn metadata_lookahead(
+        &self,
+        current: &[Dependency],
+        parent: Option<&Package>,
+    ) -> MetadataLookahead {
+        let mut remaining = VecDeque::new();
+        for (index, (name, (range, optional, _))) in current.iter().enumerate() {
+            let range = self.edge_range(parent, name, range);
+            if let Some(name) = self.prefetch_name(parent, name, &range, *optional) {
+                remaining.push_back(MetadataCandidate {
+                    edge: Some(index),
+                    name,
+                });
+            }
+        }
+        if parent.is_some() {
+            self.pending_metadata(&mut remaining);
+        }
+        MetadataLookahead {
+            remaining,
+            selected: Vec::with_capacity(io::MAX_PREFETCHES),
+        }
+    }
+
+    fn pending_metadata(&self, candidates: &mut VecDeque<MetadataCandidate>) {
+        for key in self.pending.iter().take(io::MAX_PREFETCHES) {
+            self.pending_parent_metadata(&self.packages[key], candidates);
+        }
+    }
+
+    fn pending_parent_metadata(
+        &self,
+        parent: &Package,
+        candidates: &mut VecDeque<MetadataCandidate>,
+    ) {
+        let children = dependencies(
+            &parent.meta,
+            self.production,
+            parent.local.as_ref().is_some_and(|local| local.workspace),
+        );
+        for (name, (range, optional, peer)) in children {
+            if peer {
+                continue;
+            }
+            let range = self.edge_range(Some(parent), &name, &range);
+            let Some(name) = self.prefetch_name(Some(parent), &name, &range, optional) else {
+                continue;
+            };
+            candidates.push_back(MetadataCandidate { edge: None, name });
+        }
+    }
+
+    fn prefetch_name(
+        &self,
+        parent: Option<&Package>,
+        name: &str,
+        range: &str,
+        optional: bool,
+    ) -> Option<String> {
+        // Existing placements can satisfy or reject peers without fetching anything.
+        if self.packages.contains_key(name)
+            || parent.is_some_and(|parent| self.dependency_key(parent, name).is_some())
+        {
+            return None;
+        }
+        let mut lookup = if self.overrides.changed.contains(name) {
+            LockLookup::Skip
+        } else {
+            LockLookup::Use
+        };
+        let mut range = range.to_owned();
+        if let Some(parent) = parent {
+            let updating = self.member_update.as_ref().is_some_and(|update| {
+                update.member == parent.name && update.dependencies.contains(name)
+            });
+            if updating {
+                lookup = LockLookup::Skip;
+            } else if let Some(locked) = self.locked_child(parent, name, &range) {
+                range = locked;
+            }
+        }
+        self.metadata_name(name, &range, &[name.into()], optional, lookup)
+    }
+
+    fn metadata_name(
+        &self,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+        lookup: LockLookup,
+    ) -> Option<String> {
+        valid_name(name).ok()?;
+        if let Some(alias) = range.strip_prefix("npm:") {
+            let (name, range) = spec(alias).ok()?;
+            return self.metadata_name(&name, &range, chain, optional, lookup);
+        }
+        if range.starts_with("file:")
+            || range.starts_with("link:")
+            || range.starts_with("workspace:")
+            || tarball::is_specifier(range)
+            || self.responses.contains_key(name)
+        {
+            return None;
+        }
+        if self.local_package(name, range).ok()?.is_some() {
+            return None;
+        }
+        #[cfg(test)]
+        if self.packuments.contains_key(name) {
+            return None;
+        }
+        if matches!(lookup, LockLookup::Use)
+            && self
+                .resolve_from_lock(name, range, chain, optional)
+                .is_some()
+        {
+            return None;
+        }
+        Some(name.into())
+    }
+
+    fn metadata_url(&self, name: &str) -> String {
+        format!("{}/{}", self.registry.url, name.replace('/', "%2f"))
     }
 
     fn target(
@@ -326,7 +533,7 @@ impl Resolver {
         range: &str,
         optional: bool,
     ) -> Result<Option<String>> {
-        if self.local_package(name, range)?.is_some() {
+        if tarball::is_specifier(range) || self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
         if self.member_update.as_ref().is_some_and(|update| {
@@ -423,6 +630,8 @@ impl Resolver {
                     .local
                     .as_ref()
                     .is_some_and(|local| local.path == target.path)
+            } else if tarball::is_specifier(range) {
+                tarball::matches(found, name, range)
             } else if let Some((name, range)) = &alias {
                 found.name == *name && matches(&found.version, range)
             } else {
@@ -476,7 +685,7 @@ impl Resolver {
         let result = self.package(name, range, chain, optional, lookup);
         let package = match result {
             Ok(package) => package,
-            Err(error) if optional => {
+            Err(error) if optional && !tarball::is_specifier(range) => {
                 eprintln!(
                     "warn: optional dependency {name}: {}",
                     self.registry.redact(&error)
@@ -503,6 +712,9 @@ impl Resolver {
             let (target, version) = spec(alias)?;
             return self.package(&target, &version, chain, optional, lookup);
         }
+        if tarball::is_specifier(range) {
+            return self.tarball_package(name, range, chain, optional);
+        }
         if let Some(local) = self.local_package(name, range)? {
             return Ok(Package {
                 name: local.meta["name"].as_str().unwrap_or(name).into(),
@@ -514,6 +726,7 @@ impl Resolver {
                 tarball: String::new(),
                 optional,
                 local: Some(local),
+                explicit_tarball: false,
             });
         }
         if matches!(lookup, LockLookup::Use)
@@ -554,6 +767,7 @@ impl Resolver {
             local: None,
             integrity,
             optional,
+            explicit_tarball: false,
         })
     }
 
@@ -577,9 +791,8 @@ impl Resolver {
             return Ok(());
         }
         if !self.responses.contains_key(name) {
-            let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(
-                &format!("{}/{encoded}", self.registry.url),
+            let bytes = self.downloads.fetch(
+                &self.metadata_url(name),
                 false,
                 self.refresh,
                 &self.registry,
@@ -680,6 +893,9 @@ impl Resolver {
             return None;
         }
         let source = row[1].as_str()?;
+        if self.explicit_sources.contains(source) {
+            return None;
+        }
         let tarball = if source.is_empty() {
             format!(
                 "{}/{resolved_name}/-/{}-{version}.tgz",
@@ -707,6 +923,7 @@ impl Resolver {
             local: None,
             integrity: row[3].as_str()?.into(),
             optional,
+            explicit_tarball: false,
         })
     }
 }
@@ -902,4 +1119,8 @@ mod wasm_packages_tests;
 mod wasm_peer_graph_tests;
 
 #[cfg(test)]
-mod test_support;
+pub(super) mod test_support;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "local_lookahead_tests.rs"]
+mod local_lookahead_tests;

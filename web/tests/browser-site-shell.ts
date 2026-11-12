@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { checkDelayedStop, checkRootSignals, checkPipelineReader } from "./shell-stop-check";
 import { checkClearTyping, checkRunReplacesMultilineDraft } from "./shell-clear-check";
+import { checkPrompt } from "./shell-prompt-check";
 import { pinnedBashWeb } from "../../scripts/bash-web-guests";
 
 const port = Number(process.env.SITE_SHELL_PORT);
@@ -43,7 +44,13 @@ async function contains(page: Page, text: string): Promise<void> {
   await page.waitForFunction(text => Reflect.get(globalThis, "siteShellScreen")().includes(text), text, { timeout: 30000 });
 }
 async function ready(page: Page): Promise<void> {
-  await page.waitForFunction(() => !Reflect.get(globalThis, "playground").shell.running && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.waitForFunction(() => {
+    const { shell } = Reflect.get(globalThis, "playground");
+    return shell.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
+  });
+}
+async function runButtonReady(page: Page): Promise<void> {
+  await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>("#run")?.disabled);
 }
 async function exercise(page: Page, engine: string) {
   const base = `http://127.0.0.1:${port}/playground/`;
@@ -56,6 +63,8 @@ async function exercise(page: Page, engine: string) {
     return fs === runtime.filesystem && await runtime.processes() === await runtime.processes();
   });
   assert.equal(shared, true, "Editor and shell borrow one runtime filesystem and process service");
+  const prompt = await checkPrompt(page, "chromium", engine);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   await checkClearTyping(page, output ? `${output}/${engine}-clear-typed.png` : undefined);
   await checkRunReplacesMultilineDraft(page);
   await page.locator(".xterm-helper-textarea").focus();
@@ -109,6 +118,7 @@ async function exercise(page: Page, engine: string) {
   await command(page, "printf 'RECOVERED_%s\\n' yes");
   await contains(page, "RECOVERED_yes");
   await ready(page);
+  await runButtonReady(page);
   await page.locator("#run").click();
   await contains(page, "Hello, world.");
   await ready(page);
@@ -125,11 +135,28 @@ async function exercise(page: Page, engine: string) {
     await page.screenshot({ path: `${output}/${engine}-keyboard-repl.png`, fullPage: true });
   }
   const builds: unknown = await page.evaluate(() => Reflect.get(globalThis, "__bunwasmBuilds"));
-  console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, transcript }));
+  console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, prompt, transcript }));
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
-  return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
+  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  await page.waitForFunction(() => !!Reflect.get(globalThis, "playground"));
+  await ready(page);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
+  const columns = await page.evaluate(() => Reflect.get(globalThis, "playground").term.cols);
+  await page.setViewportSize({ width: 900, height: 700 });
+  await page.waitForFunction(previous => Reflect.get(globalThis, "playground").term.cols !== previous, columns);
+  await command(page, "echo RESIZE_RECOVERED");
+  await contains(page, "RESIZE_RECOVERED");
+  await ready(page);
+  await command(page, "exit");
+  await page.getByRole("button", { name: "Reload" }).waitFor();
+  await Promise.all([page.waitForNavigation(), page.getByRole("button", { name: "Reload" }).click()]);
+  await page.waitForFunction(() => !!Reflect.get(globalThis, "playground")?.shell && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
+  await command(page, "echo RESTART_RECOVERED");
+  await contains(page, "RESTART_RECOVERED");
+  return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, prompt, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {
   if (output) await page.screenshot({ path: `${output}/${engine}-failure.png`, fullPage: true });

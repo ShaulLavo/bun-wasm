@@ -34,6 +34,13 @@ protocols before EOF, including a timer while the pipe remains open. Its native
 manifest enrolls the fixture in all existing guest-engine gates; a source test
 or native Bun control is not a substitute for those gates.
 
+Each pending read captures the async-context frame current when it starts
+([resource frames](0008-await-context-hooks.md)); its data and end run in that frame, as native Bun 1.4.4
+reports (Node reports the frame `process.stdin` was first read in). A read requested while one is pending
+joins it, so a later `read(0)` does not move it. The shipped stream core reads ahead while paused, where Bun
+does not read: such a read belongs to the frame that resumes, with a new waiter. Finishing a read and destroy
+release its frame in a `finally`; a destroyed stream's retained waiter holds none.
+
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `process_stdin.ts`, process reader delegation and declarations | Host feature | Original nonblocking Node stdin adapter over Waffle descriptors. |

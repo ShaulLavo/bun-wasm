@@ -42,3 +42,12 @@ one implementation. The polyfill has already converted the strategy and reads
 `pull`, `cancel` and `close` once more when it is created. `scripts/direct-stream.test.ts`
 runs the generated polyfill and module under Bun for writes, pressure, cancel,
 producer errors and the other stream types.
+
+The readable dispatch facade is an ordinary lazy own-property dictionary, not a
+Proxy passed into the native constructor. It still tests `type` only when native
+conversion requests it, after the native strategy reads, and preserves repeated
+reads and exceptional getters. Callable members become own data properties when
+read. The strategy forwarding, direct sentinel, controller algorithm and portable
+`directSource` implementation are unchanged. This is the original dictionary
+adapter correction described in [Native browser stream completion](native-browser-stream-completion.md#lazy-readable-source-dictionaries),
+not a copied or patched WebKit implementation.

@@ -293,13 +293,16 @@
       this.onError = null;
       this.reading = false;
       this.writer = null;
+      this.ownership = internal.require("tls_transport").track(this);
     }
     get bufferedAmount() { return this.queue.reduce((size, item) => size + item.bytes.length, 0); }
     startReading() {
       if (this.reading || this.closed) return;
       this.reading = true;
+      const epoch = this.ownership.state.epoch;
+      const context = native.getAsyncContext();
       this.reader = addWaiter({
-        step: () => this.pumpRead(),
+        step: () => this.ownership.valid(epoch) ? internal.runInContext(context, this.pumpRead, this, []) : true,
         fail: (err) => this.fail(err),
         ref: this.referenced !== false,
       });
@@ -316,16 +319,22 @@
     }
     pumpRead() {
       if (this.closed) return true;
+      const epoch = this.ownership.state.epoch;
       let progressed = false;
-      for (;;) {
+      let bytes = 0;
+      for (let operations = 0; operations < 32 && bytes < 262144; operations++) {
+        if (!this.ownership.valid(epoch)) return true;
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle, this.readCapacity?.());
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
-        if (this.onData) this.onData(chunk);
-        if (this.closed) return true;
+        bytes += chunk.length;
+        if (this.onData) this.ownership.dispatch(() => this.onData?.(chunk));
+        if (this.closed || !this.ownership.valid(epoch)) return true;
       }
+      if (native.wake) native.wake(0);
+      return progressed ? "progress" : false;
     }
     write(bytes, callback) {
       if (this.closed || this.closing) {
@@ -393,6 +402,7 @@
     destroy(err) {
       if (this.closed) return;
       this.closed = true;
+      this.ownership.close();
       this._writeError = err || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" });
       this.reading = false;
       if (this.reader) waiters.delete(this.reader);
@@ -401,6 +411,9 @@
       for (const item of this.queue.splice(0)) {
         if (item.callback) internal.nextTick(() => item.callback(this._writeError));
       }
+      const final = this._shutdownCallback;
+      this._shutdownCallback = null;
+      if (final && !this.writeEnded) internal.nextTick(() => final(this._writeError));
       native.hostClose(this.handle);
       if (this.onClose) this.onClose();
     }
@@ -566,10 +579,18 @@
   }
 
   function serve(options = {}) {
+    if (internal.hotServers) return internal.hotServers.serve(options, createServer);
+    return createServer(options);
+  }
+
+  function createServer(options = {}) {
     if (typeof options.fetch !== "function" && !options.routes) {
       throw new TypeError("Bun.serve expects a `fetch` function or `routes`");
     }
+    const development = options.development;
+    let developmentHtml = null;
     let websocket = options.websocket;
+    let baseWebsocketHandlers = websocket;
     let websocketHandlers = websocket;
     if (websocket && !["message", "open", "ping", "pong"].some((name) => typeof websocket[name] === "function")) throw new TypeError("websocket requires a message, open, ping or pong handler");
     if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
@@ -582,7 +603,7 @@
     let fetchHandler = options.fetch;
     let errorHandler = options.error;
     let routes = compileRoutes(options.routes);
-    websocket = htmlServer.websocket(routes, options.development, websocket);
+    websocket = htmlServer.websocket(routes, development, websocket);
     let pending = 0;
     let stopped = false;
     const connections = new Set();
@@ -603,7 +624,7 @@
     const server = {
       port,
       hostname: displayHost,
-      development: htmlServer.developmentEnabled(options.development),
+      development: htmlServer.developmentEnabled(development),
       id: "",
       get url() {
         return new URL(`http://${displayHost}:${port}/`);
@@ -622,20 +643,25 @@
       },
       reload(next = {}) {
         if (next.fetch) fetchHandler = next.fetch;
-        if (next.error) errorHandler = next.error;
+        if (next.error || internal.hotServers && Object.prototype.hasOwnProperty.call(next, "error")) errorHandler = next.error;
         if (next.routes) {
           htmlServer.dispose(server);
           routes = compileRoutes(next.routes);
-          htmlServer.attach(server, routes, options.development);
+          htmlServer.attach(server, routes, development);
         }
-        if (next.websocket) websocketHandlers = next.websocket;
-        websocket = htmlServer.websocket(routes, options.development, websocketHandlers);
+        if (next.websocket) baseWebsocketHandlers = next.websocket;
+        if (internal.hotServers && Object.prototype.hasOwnProperty.call(next, "development")) updateDevelopment(next.development);
+        websocketHandlers = developmentHtml ? developmentHtml.websocket(baseWebsocketHandlers) : baseWebsocketHandlers;
+        websocket = htmlServer.websocket(routes, development, websocketHandlers);
         return server;
       },
       stop(closeActive = false) {
+        developmentHtml?.dispose();
+        internal.hotServers?.close(server);
         if (!stopped) {
           stopped = true;
           waiters.delete(accepting);
+          accepting = null;
           native.hostClose(listener);
           htmlServer.dispose(server);
           // Idle keep-alive connections close now; busy ones after their
@@ -645,10 +671,10 @@
         return Promise.resolve();
       },
       ref() {
-        accepting.ref = !stopped;
+        if (accepting) accepting.ref = true;
       },
       unref() {
-        accepting.ref = false;
+        if (accepting) accepting.ref = false;
       },
       upgrade(req, upgradeOptions = {}) {
         const state = requests.get(req);
@@ -678,18 +704,55 @@
       },
     };
 
-    async function handleRequest(request, conn, keepAlive) {
+    function updateDevelopment(enabled) {
+      if (enabled !== true || process.env.NODE_ENV === "production") {
+        developmentHtml?.dispose();
+        developmentHtml = null;
+        return;
+      }
+      if (developmentHtml) return;
+      developmentHtml = internal.hotServers.runControl(() => internal.require("dev_html").attach({ server, revisions: internal.hotServers.revisions(server) }));
+    }
+
+    function developmentRequest(request, conn, keepAlive) {
+      if (!developmentHtml || !request.target.startsWith("/_bun/wasm-dev/")) return null;
+      return internal.hotServers.runControl(() => {
+        const host = header(request.headers, "host") || `${displayHost}:${port}`;
+        const req = new Request(`http://${host}${request.target}`, { method: request.method, headers: request.headers });
+        requests.set(req, { conn });
+        try {
+          const response = developmentHtml.respond(req);
+          if (response) return internal.require("serve_request_lifetime").run(conn, () => writeResponse(conn, response, request.method, keepAlive && !stopped));
+          if (developmentHtml.upgrade(req, server)) return Promise.resolve(UPGRADED);
+          return internal.require("serve_request_lifetime").run(conn, () => writeResponse(conn, new Response("Not Found", { status: 404 }), request.method, keepAlive && !stopped));
+        } finally {
+          requests.delete(req);
+        }
+      });
+    }
+
+    function handleRequest(request, conn, keepAlive) {
+      const control = developmentRequest(request, conn, keepAlive);
+      if (control) return control.then(result => result === UPGRADED ? result : result && !stopped);
+      if (internal.hotServers) return internal.require("hot_request").run(internal.hotServers, server, conn,
+        (snapshot, releaseOnAbort) => runRequest(request, conn, keepAlive, snapshot, releaseOnAbort));
+      return runRequest(request, conn, keepAlive, null, null);
+    }
+
+    async function runRequest(request, conn, keepAlive, snapshot, releaseOnAbort) {
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
       const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
+        releaseOnAbort?.(signal);
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
-        return respondToRequest(request, conn, keepAlive, req, url);
+        return respondToRequest(request, conn, keepAlive, req, url, snapshot);
       });
       return result === UPGRADED ? result : result && !stopped;
     }
 
-    async function respondToRequest(request, conn, keepAlive, req, url) {
+    async function respondToRequest(request, conn, keepAlive, req, url, snapshot) {
+      const selectError = () => snapshot ? snapshot.error : errorHandler;
       if (req.signal.aborted) return false;
       let cookies;
       Object.defineProperty(req, "cookies", {
@@ -711,29 +774,36 @@
           res = await route.handler.call(server, req, server);
         } else {
           res = await internal.require("html_server").asset(routes, new URL(url).pathname, request.method, server);
-          if (!res) res = fetchHandler ? await fetchHandler.call(server, req, server) : new Response("Not Found", { status: 404 });
+          if (!res) {
+            const selectedFetch = snapshot ? snapshot.fetch : fetchHandler;
+            res = selectedFetch ? await selectedFetch.call(server, req, server) : new Response("Not Found", { status: 404 });
+          }
         }
       } catch (err) {
-        res = errorHandler ? await errorHandler.call(server, err) : errorResponse(err);
+        const selectedError = selectError();
+        res = selectedError ? await selectedError.call(server, err) : errorResponse(err);
       } finally {
         pending--;
         requests.delete(req);
       }
       if (conn.upgraded) return UPGRADED;
-      if (res === undefined && errorHandler === undefined) res = new Response("", { status: 404 });
+      if (res === undefined && selectError() === undefined) res = new Response("", { status: 404 });
       if (cookies) {
         for (const value of cookies.toSetCookieHeaders()) res.headers.append("Set-Cookie", value);
       }
       const responseKeepAlive = keepAlive && !stopped;
       try {
+        if (developmentHtml && snapshot?.development) res = await developmentHtml.decorate(req, res, snapshot.stamp);
         return await writeResponse(conn, res, request.method, responseKeepAlive);
       } catch (error) {
-        const fallback = errorHandler ? await errorHandler.call(server, error) : errorResponse(error);
+        const selectedError = selectError();
+        let fallback = selectedError ? await selectedError.call(server, error) : errorResponse(error);
+        if (developmentHtml && snapshot?.development) fallback = await developmentHtml.decorate(req, fallback, snapshot.stamp);
         return writeResponse(conn, fallback, request.method, responseKeepAlive);
       }
     }
 
-    const accepting = acceptLoop(listener, (conn) => {
+    let accepting = acceptLoop(listener, (conn) => {
       connections.add(conn);
       const destroy = conn.destroy.bind(conn);
       conn.destroy = () => {
@@ -742,7 +812,11 @@
       };
       serveHttp(conn, handleRequest);
     });
-    htmlServer.attach(server, routes, options.development);
+    // A frame entered at Bun.serve() is where its connections start reading and its requests
+    // run, as under Bun. Started outside any frame, it keeps each turn's own frame.
+    const context = native.getAsyncContext();
+    if (context !== undefined) accepting = internal.require("net_listener").inContext(context, accepting);
+    htmlServer.attach(server, routes, development);
     return server;
   }
 
@@ -774,6 +848,8 @@
     if (server.listening) {
       waiters.delete(server._accepting);
       waiters.delete(server._starting);
+      server._accepting = null;
+      server._starting = null;
       if (server._pipeName === undefined) native.hostClose(server._listener);
       else internal.require("net_path").close(server, hostError, typeof callback === "function");
       server.listening = false;
@@ -1102,11 +1178,7 @@
         }
         const connection = (this._framingHeaders || this._headers).get("connection")?.[1];
         const connectionText = Array.isArray(connection) ? connection.join(",") : String(connection || "");
-        this._conn.write(new Uint8Array(0), error => {
-          if (error) { callback(error); this._emitClose(); return; }
-          callback();
-          if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
-        });
+        this._conn.write(new Uint8Array(0), error => this._completeBody(callback, connectionText, error));
       }
     }
 
@@ -1115,6 +1187,7 @@
     class Server extends EventEmitter {
       constructor(options, handler) {
         super();
+        if (protocol === "https:") throw Object.assign(new Error("TLS servers are not supported in bun-wasm"), { code: "ERR_TLS_NOT_SUPPORTED" });
         if (typeof options === "function") handler = options;
         this._options = typeof options === "object" && options !== null ? options : {};
         if (handler) this.on("request", handler);
@@ -1124,17 +1197,19 @@
         this._connections = new Set();
       }
       listen(...args) {
-        const [opts, callback] = internal.require("net_address")._normalizeArgs(args);
-        const targetPort = opts.path === undefined ? internal.require("net_port").httpPort(opts.port) : undefined;
-        this._pipeName = opts.path;
+        const address = internal.require("net_address");
+        const [opts, callback] = address._normalizeArgs(args);
+        const tcp = address.isTcpListenOptions(opts);
+        const targetPort = tcp ? internal.require("net_port").httpPort(opts.port) : undefined;
+        this._pipeName = tcp ? undefined : opts.path;
         if (callback) this.once("listening", callback);
         try {
-          this._listener = opts.path === undefined ? listenOrThrow(opts.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(opts.path, hostError);
+          this._listener = tcp ? listenOrThrow(opts.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(opts.path, hostError);
         } catch (err) {
           internal.nextTick(() => this.emit("error", err));
           return this;
         }
-        this._port = opts.path === undefined ? native.hostLocalPort(this._listener) : undefined;
+        this._port = tcp ? native.hostLocalPort(this._listener) : undefined;
         this._host = opts.host || "::";
         this.listening = true;
         internal.require("net_listener").start(this, {
@@ -1149,7 +1224,6 @@
         socket._conn = conn;
         socket._phase = "open";
         socket._updatePeer();
-        socket.encrypted = protocol === "https:";
         conn.onClose = () => socket.destroy();
         socket.on("error", error => this.emit("clientError", error, socket));
         trackServerConnection(this, conn);

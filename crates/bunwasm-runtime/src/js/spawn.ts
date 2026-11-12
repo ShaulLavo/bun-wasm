@@ -7,6 +7,7 @@
   "use strict";
   const native = internal.native;
   const { Buffer } = internal.require("buffer");
+  const frames = internal.require("resource_frame");
   // WASI errno values from runtime_proc, negated.
   const AGAIN = -6;
   // Subscription kinds of procPoll.
@@ -49,7 +50,6 @@
     timeout?: number;
     maxBuffer?: number | string;
     onExit?: (child: unknown, exitCode: number | null, signalCode: string | number | null, error: unknown) => void;
-    _worker?: unknown;
     _ipc?: boolean;
     _ipcTarget?: BunWasm.NodeEmitter;
     [key: string]: unknown;
@@ -62,8 +62,10 @@
     stdin: StdioMode;
     stdout: StdioMode;
     stderr: StdioMode;
-    worker?: unknown;
+    worker?: WorkerSpawn;
   }
+  /** A guest thread started as a process. Only worker_threads, through spawnWorker, supplies one. */
+  type WorkerSpawn = object;
   type Input = { data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
   interface Spec { meta: SpawnMeta; options: SpawnOptions; input: Input }
   interface Started extends Spec {
@@ -71,6 +73,8 @@
     job: number;
     /** wait consumes the host record; every observer shares this one cached outcome. */
     outcome: Exit | null;
+    /** null until startup and its diagnostic publication are final. */
+    startupDetail: string | null;
     /** Parent ends, -1 when absent. Outputs are stdout then stderr. */
     stdinFd: number;
     outputFds: number[];
@@ -129,10 +133,10 @@
   }
 
   // A negative runtime_proc result becomes the Node error for its errno.
-  function processError(result: number, syscall: string, path?: string) {
+  function processError(result: number, syscall: string, path?: string, detail = "") {
     const code = errnoNames[-result] || `E${-result}`;
     const error: Error & { code: string; errno?: number; syscall: string; path?: string } = Object.assign(
-      new Error(path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`),
+      new Error((path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`) + (detail ? `: ${detail}` : "")),
       { code, errno: nodeErrnos[code], syscall });
     if (path !== undefined) error.path = path;
     return error;
@@ -181,7 +185,7 @@
     if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
   }
 
-  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean): Spec {
+  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, worker?: WorkerSpawn): Spec {
     if (!Array.isArray(cmd)) {
       options = (cmd || {}) as SpawnOptions;
       cmd = options.cmd;
@@ -208,7 +212,7 @@
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
-    if (options._worker) meta.worker = options._worker;
+    if (worker) meta.worker = worker;
     return { meta, options, input: prepareInput(input, sync) };
   }
 
@@ -257,8 +261,8 @@
   // Every descriptor the call creates is released again if the spawn fails. Child ends are
   // closed here once procSpawn has taken its own references, so the child sees EOF or EPIPE
   // as soon as the last parent copy goes.
-  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean): Started {
-    const spec = normalize(cmd, options, sync);
+  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, workerSpawn?: WorkerSpawn): Started {
+    const spec = normalize(cmd, options, sync, workerSpawn);
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
     if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
     checkCwd(spec.meta);
@@ -300,7 +304,7 @@
       });
       const { executable, argv, cwd } = spec.meta;
       let env = spec.meta.env;
-      if (spec.options._worker) {
+      if (spec.meta.worker) {
         // Control channels are two more ordinary bindings. Each child number is the parent's own
         // descriptor number for that end, so it cannot collide with another binding, and the child
         // learns both from its environment. Only listed descriptors reach a child: grandchildren
@@ -331,12 +335,15 @@
       const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited, fds: bindings };
       if (spec.meta.worker) request.worker = spec.meta.worker;
       const pid = native.procSpawn(JSON.stringify(request));
-      if (pid < 0) throw processError(pid, "spawn", argv[0]);
+      if (pid < 0) {
+        const detail = native.procSpawnError(0);
+        throw processError(pid, "spawn", argv[0], typeof detail === "string" ? detail : "");
+      }
       for (const fd of childEnds) release(fd);
       held.clear();
       // Only a job this child owns is ours to reap or kill; an inherited group belongs to its owner.
       const job = detached ? native.procJobOf(pid) : 0;
-      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, stdinFd, outputFds, discard, worker, ipc });
+      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, startupDetail: null, stdinFd, outputFds, discard, worker, ipc });
     } catch (error) {
       for (const fd of Array.from(held)) release(fd);
       throw error;
@@ -347,10 +354,22 @@
   // all retain that winner on the launch record instead of waiting on the same pid again.
   function waitChild(child: Started): Exit | null {
     if (child.outcome) return child.outcome;
+    if (!captureStartup(child)) return null;
     const result = native.procWait(child.pid);
     if (result === AGAIN) return null;
     if (typeof result === "number") throw processError(result, "wait");
     return child.outcome = { kind: result[0], code: result[1] };
+  }
+
+  function captureStartup(child: Started): boolean {
+    if (child.startupDetail !== null) return true;
+    const status = native.procStartStatus(child.pid);
+    // Never consume across pending startup: a failure may publish between these imports.
+    if (status === AGAIN) return false;
+    const detail = status > 0 ? native.procSpawnError(child.pid) : "";
+    if (detail === AGAIN) return false;
+    child.startupDetail = typeof detail === "string" ? detail : "";
+    return true;
   }
 
   // Reaps the child's job once every member has quiesced. A job already gone is reaped.
@@ -540,7 +559,19 @@
   }
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
-    const spec = start(cmd, options, false);
+    return run(cmd, options);
+  }
+
+  /** Internal only: public Bun.spawn and node:child_process options cannot reach this. */
+  function spawnWorker(cmd: unknown, options: SpawnOptions, worker: WorkerSpawn): Child {
+    return run(cmd, options, worker);
+  }
+
+  function run(cmd: unknown, options?: SpawnOptions, worker?: WorkerSpawn): Child {
+    const spec = start(cmd, options, false, worker);
+    // The startup notification and onExit run in the frame current at spawn(); the exited Promise,
+    // output streams and stdin callbacks keep their own frames.
+    const frame = frames.capture();
     let observingStart = typeof spec.options._onSpawn === "function";
     let pendingSpawn = false;
     internal.require("net");
@@ -662,13 +693,21 @@
     }
     function finish(status: Exit) {
       ipc?.finish();
+      try {
+        settle(status);
+      } finally {
+        // onExit was the last callback in the spawn frame.
+        frame.release();
+      }
+    }
+    function settle(status: Exit) {
       if (status.kind === 2) {
         // The wait has already consumed the child. Do not signal or wait it a second time.
         settled = true;
         clearExitHooks();
-        const error = processError(-status.code, "spawn", spec.meta.executable);
+        const error = processError(-status.code, "spawn", spec.meta.executable, spec.startupDetail || "");
         rejectExit(error);
-        if (typeof spec.options.onExit === "function") spec.options.onExit(child, null, null, error);
+        if (typeof spec.options.onExit === "function") frame.run(spec.options.onExit, spec.options, [child, null, null, error]);
         return;
       }
       const signalCode = status.kind === 1 ? signalName(status.code) : null;
@@ -678,14 +717,18 @@
       child.signalCode = signalCode;
       clearExitHooks();
       resolveExit(code);
-      if (typeof spec.options.onExit === "function") spec.options.onExit(child, child.exitCode, child.signalCode, null);
+      if (typeof spec.options.onExit === "function") frame.run(spec.options.onExit, spec.options, [child, child.exitCode, child.signalCode, null]);
     }
     function close() {
       if (closed) return;
       closed = true;
-      workerChildren.delete(child);
-      ipc?.close();
-      sink.destroy();
+      try {
+        workerChildren.delete(child);
+        ipc?.end();
+        sink.destroy();
+      } finally {
+        frame.release();
+      }
     }
     function observeAndWait(): Exit | null {
       if (observingStart) {
@@ -708,7 +751,7 @@
         // Kill probes cache entry synchronously, but Node events stay on the async step.
         if (pendingSpawn) {
           pendingSpawn = false;
-          (spec.options._onSpawn as () => void)();
+          frame.run(spec.options._onSpawn as () => void, spec.options, []);
         }
         if (status) {
           sink.destroy(Object.assign(new Error("stdin closed before drain"), { code: "EPIPE", errno: -32, syscall: "write" }));
@@ -728,7 +771,7 @@
       if (settled && !reaped) reaped = reapJob(spec.job);
       if (settled && states.every((state) => state.fd < 0)) {
         if (!reaped) reapLater(spec.job);
-        if (!spec.options._worker) close();
+        if (!spec.meta.worker) close();
         return true;
       }
       refreshRef();
@@ -746,6 +789,13 @@
       return watching(list);
     }
     function fail(error: unknown) {
+      try {
+        teardown(error);
+      } finally {
+        close();
+      }
+    }
+    function teardown(error: unknown) {
       // Public failure is final, but teardown must still observe the selected child outcome.
       const pending = !settled;
       if (pending) terminate(spec.pid, spec.job);
@@ -764,6 +814,13 @@
     Object.defineProperty(child, "_finishWorker", { value: close });
     if (spec.worker) Object.defineProperty(child, "_workerChannel", { value: spec.worker });
     Object.defineProperty(child, "_abortWorker", { value() {
+      try {
+        abortWorker();
+      } finally {
+        frame.release();
+      }
+    } });
+    function abortWorker() {
       if (!settled) terminate(spec.pid, spec.job);
       if (!reaped) reapLater(spec.job, spec);
       for (const state of states) {
@@ -774,10 +831,10 @@
       settled = true;
       resolveExit(1);
       close();
-    } });
+    }
     registered = true;
     internal.addIoWaiter(waiter);
-    if (spec.options._worker) trackWorkerChild(child);
+    if (spec.meta.worker) trackWorkerChild(child);
     supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));
     if (spec.options.signal) {
@@ -832,7 +889,7 @@
         checkTimeout();
         if (!status || states.some((state) => state.fd >= 0)) wait();
       }
-      const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable) : undefined;
+      const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable, spec.startupDetail || "") : undefined;
       result = outcome({ success: status.kind === 0 && status.code === 0, exitedDueToTimeout: timedOut, ...(error ? { error } : {}) });
     } catch (error) {
       if (!status) terminate(spec.pid, spec.job);
@@ -843,7 +900,7 @@
       for (const fd of [spec.stdinFd].concat(spec.outputFds)) if (fd >= 0) native.procClose(fd);
       if (!reapJob(spec.job)) reapLater(spec.job);
     }
-    if (status!.kind === 2) throw processError(-status!.code, "spawn", spec.meta.executable);
+    if (status!.kind === 2) throw processError(-status!.code, "spawn", spec.meta.executable, spec.startupDetail || "");
     return result;
   }
 
@@ -1171,5 +1228,5 @@
     return { ChildProcess, spawn: nodeSpawn, spawnSync: nodeSpawnSync, exec, execSync, execFile, execFileSync, fork };
   }
 
-  return { spawn, spawnSync, nodeChildProcess, which };
+  return { spawn, spawnWorker, spawnSync, nodeChildProcess, which };
 })

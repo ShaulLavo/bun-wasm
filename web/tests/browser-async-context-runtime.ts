@@ -24,7 +24,7 @@ async function exercise(name: string, type: BrowserType, options: BrowserContext
   const context = await browser.newContext(options);
   const page = await context.newPage();
   try {
-    await page.goto(`${appUrl}?engine=browser`);
+    await page.goto(`${appUrl}?engine=browser&prompt=off`);
     const status = await ready(page);
     assert.match(status, /ready · Browser \(native\)/);
     await writeFile(page, "/home/user/ctx01/index.ts", source.index);

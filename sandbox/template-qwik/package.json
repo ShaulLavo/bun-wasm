@@ -1,0 +1,12 @@
+{
+  "name": "qwik-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build",
+    "start": "vite preview --host 127.0.0.1 --port 5173 --strictPort"
+  },
+  "dependencies": { "@builder.io/qwik": "1.17.2" },
+  "devDependencies": { "vite": "7.1.12", "typescript": "5.9.3" }
+}

@@ -8,9 +8,23 @@ JSC_MAX_MEMORY_FILE="$REPO/crates/bunwasm-cli/max-memory.txt"
 # shellcheck source=/dev/null
 source "$REPO/env.sh"
 JSC_BUILD_DIR="${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}"
+# JSC_PROFILE=shared-group: real wasm atomics for a memory-group side (docs/shared-group-profile.md).
+JSC_PROFILE="${JSC_PROFILE:-split}"
+case "$JSC_PROFILE" in
+  split) JSC_PROFILE_FLAGS="" ;;
+  shared-group)
+    JSC_PROFILE_FLAGS="-matomics -mbulk-memory -mmutable-globals -DBUN_WASM_SHARED_GROUP=1"
+    if [[ "${BUN_WASM_SYSROOT:-}" != "${BUN_WASM_SHARED_SYSROOT:-unset}" ]]; then
+      echo "error: JSC_PROFILE=shared-group needs BUN_WASM_SYSROOT and BUN_WASM_SHARED_SYSROOT set to the same shared-pic sysroot" >&2
+      exit 1
+    fi
+    ;;
+  *) echo "error: unsupported JSC_PROFILE $JSC_PROFILE" >&2; exit 1 ;;
+esac
 WEBKIT_DIR="$JSC_BUILD_DIR/webkit"
 ICU_DIR="$JSC_BUILD_DIR/icu"
 ICU_PREFIX="$ICU_DIR/prefix"
+LIBCXX_DIR="$JSC_BUILD_DIR/libcxx"
 JSC_OBJ="$JSC_BUILD_DIR/build/jsc"
 SHIM_DIR="$JSC_BUILD_DIR/shim"
 JSC_CONFIG_DIR="$JSC_BUILD_DIR/inputs"
@@ -31,7 +45,13 @@ PATH_NO_BINARYEN="$(echo "$PATH" | tr ':' '\n' | grep -v binaryen | paste -sd:)"
 mkdir -p "$JSC_BUILD_DIR"
 
 JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
-JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_BUILD_DIR/jsc.wasm" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
+JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
+# The jsc shell is a standalone split program; a group side has no shell.
+if [[ "$JSC_PROFILE" == split ]]; then
+  JSC_ARTIFACTS+=("$JSC_BUILD_DIR/jsc.wasm")
+else
+  JSC_ARTIFACTS+=("$LIBCXX_DIR/lib/libc++.a" "$LIBCXX_DIR/lib/libc++abi.a")
+fi
 
 jsc_source_hashes() (
   cd "$JSC_SRC" || return 1
@@ -49,6 +69,7 @@ jsc_inputs_hash() {
   local -a command
   {
     printf 'format=3\n'
+    printf 'JSC_PROFILE=%s\n' "$JSC_PROFILE"
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
@@ -103,17 +124,28 @@ copy_jsc_config_inputs() {
   done
 }
 
+# Read-only: the prebuild and its WebKit repository are never written. The patched index,
+# any new objects and the worktree comparison's index refresh all live in a private
+# scratch directory; the original objects are read through alternates and nothing is
+# fetched, so a missing object fails instead of downloading.
 check_jsc_webkit_tree() (
   [[ "$(git -C "$WEBKIT_DIR" rev-parse HEAD)" == "$WEBKIT_COMMIT" ]] || return 1
   [[ -z "$(git -C "$WEBKIT_DIR" ls-files --others --exclude-standard)" ]] || return 1
-  local index expected
-  index=$(mktemp "$JSC_BUILD_DIR/.webkit-index-XXXXXX") || return 1
-  trap 'rm -f -- "$index"' EXIT
-  rm -f -- "$index" || return 1
-  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
-  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
-  expected=$(GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" write-tree) || return 1
-  git -C "$WEBKIT_DIR" diff --quiet "$expected" --
+  local scratch expected git_dir common_dir
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/bun-wasm-webkit-check-XXXXXX") || return 1
+  trap 'rm -rf -- "$scratch"' EXIT
+  git_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-dir) || return 1
+  common_dir=$(git -C "$WEBKIT_DIR" rev-parse --path-format=absolute --git-common-dir) || return 1
+  mkdir "$scratch/objects" || return 1
+  # Git uses this timestamp as its racy-clean cutoff, not just as file metadata.
+  cp --preserve=timestamps -- "$git_dir/index" "$scratch/worktree-index" || return 1
+  export GIT_OBJECT_DIRECTORY="$scratch/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$common_dir/objects" GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0
+  GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
+  GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
+  # --missing-ok gives the same tree id without checking that every blob exists: in this
+  # blobless clone that check fetched all of WebKit (~1.8 GB) into .git, which CI then shipped.
+  expected=$(GIT_INDEX_FILE="$scratch/index" git -C "$WEBKIT_DIR" write-tree --missing-ok) || return 1
+  GIT_INDEX_FILE="$scratch/worktree-index" git -C "$WEBKIT_DIR" diff --quiet "$expected" --
 )
 
 write_jsc_inputs_stamp() {
@@ -151,7 +183,8 @@ build_shim() {
   copy_jsc_config_inputs
   local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
+    # shellcheck disable=SC2086
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC $JSC_PROFILE_FLAGS -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

@@ -2,8 +2,9 @@
 // the bash-web commit they were built from and each file's size and SHA-256. Browser builds ship the
 // guests only when the receipt matches the consumer's bash-web pin and the bytes on disk.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const RECEIPT = "bash-web-guests.json";
 /** Program name the browser serves (programs/<name>) → the file in dist. */
@@ -29,6 +30,17 @@ function writeReceipt(dist: string, bashWeb: string, rustToolchain: string): Rec
   const receipt: Receipt = { bashWeb, rustToolchain, guests };
   writeFileSync(join(dist, RECEIPT), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
+}
+
+/** Stage the env asset selected by the consumer's installed base package. */
+async function stageEnv(consumer: string, dist: string): Promise<void> {
+  const entry = Bun.resolveSync("waffle-base", consumer);
+  const { basePrograms }: typeof import("waffle-base") = await import(entry);
+  const env = basePrograms.find(program => program.path === "/usr/bin/env");
+  if (!env?.wasm) throw new Error(`Installed waffle-base has no env WASM program: ${entry}`);
+  const source = fileURLToPath(env.wasm);
+  if (!statSync(source, { throwIfNoEntry: false })?.isFile()) throw new Error(`Missing waffle-base env WASM asset: ${source}`);
+  copyFileSync(source, join(dist, GUESTS["env.wasm"]));
 }
 
 /** The bash-web commit a consumer's package.json pins (`git+…bash-web.git#<commit>`). */
@@ -59,8 +71,15 @@ export function verifiedGuests(dist: string, bashWeb: string): { program: Progra
 }
 
 if (import.meta.main) {
-  const [command, dist, bashWeb, rustToolchain] = process.argv.slice(2);
-  if (command !== "write" || !dist || !bashWeb || !rustToolchain) throw new Error("usage: bash-web-guests.ts write <dist> <bash-web commit> <rust toolchain>");
-  for (const [program, guest] of Object.entries(writeReceipt(dist, bashWeb, rustToolchain).guests))
-    console.log(`dist/${guest.file} (programs/${program}): ${guest.bytes} bytes, sha256 ${guest.sha256} (bash-web ${bashWeb})`);
+  const [command, ...args] = process.argv.slice(2);
+  if (command === "stage-env") {
+    const [consumer, dist] = args;
+    if (!consumer || !dist) throw new Error("usage: bash-web-guests.ts stage-env <consumer> <dist>");
+    await stageEnv(consumer, dist);
+  } else {
+    const [dist, bashWeb, rustToolchain] = args;
+    if (command !== "write" || !dist || !bashWeb || !rustToolchain) throw new Error("usage: bash-web-guests.ts write <dist> <bash-web commit> <rust toolchain>");
+    for (const [program, guest] of Object.entries(writeReceipt(dist, bashWeb, rustToolchain).guests))
+      console.log(`dist/${guest.file} (programs/${program}): ${guest.bytes} bytes, sha256 ${guest.sha256} (bash-web ${bashWeb})`);
+  }
 }

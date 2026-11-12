@@ -1,5 +1,6 @@
 /vendor/bun
 /target
+/target-*
 /dist
 node_modules
 # bun build fixtures ship fake packages
@@ -7,3 +8,5 @@ node_modules
 !/tests/jsc/*/node_modules/
 __pycache__/
 /vendor/boringssl
+
+.ci-bun-cache/

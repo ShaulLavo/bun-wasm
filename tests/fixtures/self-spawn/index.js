@@ -1,4 +1,5 @@
 import { spawn, spawnSync, exec, execSync, execFile, execFileSync, fork } from "node:child_process";
+import assert from "node:assert/strict";
 import { promisify } from "node:util";
 import { readFileSync, mkdirSync } from "node:fs";
 
@@ -44,9 +45,22 @@ try {
 const forked = fork("./fork-child.js", ["fork-arg"], { silent: true });
 let forkText = "";
 forked.stdout.on("data", (chunk) => { forkText += chunk; });
-await new Promise((resolve, reject) => { forked.on("error", reject); forked.on("close", resolve); });
+const forkClosed = new Promise((resolve, reject) => { forked.on("error", reject); forked.on("close", resolve); });
+const reply = new Promise((resolve) => { forked.once("message", resolve); });
+await new Promise((resolve, reject) => {
+  forked.send({ greeting: "hello" }, (error) => error ? reject(error) : resolve());
+});
+assert.deepEqual(await reply, { received: { greeting: "hello" } });
+await forkClosed;
 console.log("fork", forkText.trim(), forked.exitCode);
-try { forked.send("hello"); } catch (error) { console.log("ipc", error.code); }
+console.log("ipc message", "hello");
+assert.throws(() => forked.send("hello", {}), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
+console.log("ipc", "ERR_NOT_SUPPORTED_IN_WASM");
+let accepted;
+const closedError = await new Promise((resolve) => { accepted = forked.send("hello", resolve); });
+assert.equal(accepted, false);
+assert.equal(closedError.code, "ERR_IPC_CHANNEL_CLOSED");
+console.log("ipc closed", accepted, closedError.code);
 for (const execute of [execSync, execFileSync]) {
   try { execute("not-a-bun-command"); } catch (error) {
     console.log("exec error", error.code === "ENOENT", error.error !== error && typeof JSON.stringify(error) === "string");

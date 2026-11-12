@@ -4,6 +4,7 @@ import { createSharedObjects } from "../web/src/shared-objects/service";
 import type { SharedPort, SharedRequest, SharedResponse } from "../web/src/shared-objects/protocol";
 import { sourceCodec, sourcePorts, sourceV8 } from "./fixtures/shared-objects/source-runtime";
 import { startupRuntime } from "./fixtures/shared-objects/startup-runtime";
+import type { Channel } from "./fixtures/shared-objects/runtime-types";
 
 const cleanup = new Set<() => void>();
 afterEach(() => { for (const close of Array.from(cleanup).reverse()) close(); cleanup.clear(); });
@@ -188,4 +189,75 @@ test("startup retains a readiness notification delivered during subscription", a
   expect(f.host.pendingAsync).toBe(0);
   expect(f.failures).toEqual([]);
   expect(f.frames.filter(frame => JSON.stringify(frame).includes('"kind":"online"'))).toHaveLength(1);
+});
+
+function legacyChannel(input: unknown[], output: unknown[]): Channel {
+  return {
+    send(frame) { output.push(frame); },
+    pump(receive) {
+      const frames = input.splice(0);
+      for (const frame of frames) receive(frame);
+      return frames.length > 0;
+    },
+    subscriptions: () => new Uint8Array(), drain() {}, close() {}, pending: false, ended: false,
+  };
+}
+function legacyWorker() {
+  const parent = sourcePorts(), control = new parent.MessageChannel();
+  cleanup.add(() => { control.port1.close(); control.port2.close(); });
+  const plan = parent.codec.prepare([null, [], control.port2], [control.port2]);
+  plan.commit();
+  const upward: unknown[] = [], downward: unknown[] = [];
+  const parentChannel = legacyChannel(upward, downward), childChannel = legacyChannel(downward, upward);
+  parent.__fixtureChild(parentChannel, plan.graph);
+  const child = sourcePorts({ channel: childChannel, graph: plan.graph });
+  child.initialize(); parent.pump();
+  cleanup.add(() => child.parentPort.close());
+  const reply = new child.MessageChannel();
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  child.parentPort.postMessage(reply.port1, [reply.port1]);
+  const moving = upward.find(isMovingFrame);
+  if (!moving) throw new Error("Missing actual legacy transfer commit frame");
+  parent.pump();
+  const port = parent.receiveMessageOnPort(control.port1)?.message;
+  if (!(port instanceof parent.MessagePort)) throw new Error("Missing transferred child port");
+  cleanup.add(() => port.close());
+  return { parent, child, control, reply, port, moving, childChannel };
+}
+function isMovingFrame(frame: unknown): boolean {
+  if (!frame || typeof frame !== "object" || !("body" in frame)) return false;
+  const body = frame.body;
+  return Boolean(body && typeof body === "object" && "kind" in body && body.kind === "moving");
+}
+
+test("legacy transferred child port keeps its bound owner after the late moving frame", () => {
+  const { parent, child, reply, port } = legacyWorker();
+  port.postMessage(9); child.pump();
+  expect(child.receiveMessageOnPort(reply.port2)).toEqual({ message: 9 });
+  reply.port2.postMessage("echo 9"); parent.pump();
+  expect(parent.receiveMessageOnPort(port)).toEqual({ message: "echo 9" });
+});
+
+test("legacy returned port retains queued replies when its creator exits", () => {
+  const { parent, childChannel, reply, port } = legacyWorker();
+  reply.port2.postMessage("before exit");
+  childChannel.send({ kind: "up", body: { kind: "gone", path: [0] } });
+  parent.pump();
+  expect(parent.receiveMessageOnPort(port)).toEqual({ message: "before exit" });
+  expect(parent.receiveMessageOnPort(port)).toBeUndefined();
+});
+
+test("legacy ownership accepts a new transfer version and ignores an older moving replay", () => {
+  const { parent, child, control, reply, port, moving, childChannel } = legacyWorker();
+  control.port1.postMessage(port, [port]); child.pump(); parent.pump();
+  const returned = child.receiveMessageOnPort(child.parentPort)?.message;
+  if (!(returned instanceof child.MessagePort)) throw new Error("Missing port transferred back to its creator");
+  cleanup.add(() => returned.close());
+  child.parentPort.postMessage(returned, [returned]); parent.pump();
+  const latest = parent.receiveMessageOnPort(control.port1)?.message;
+  if (!(latest instanceof parent.MessagePort)) throw new Error("Missing next-generation port");
+  cleanup.add(() => latest.close());
+  childChannel.send(moving); parent.pump();
+  reply.port2.postMessage("latest owner"); parent.pump();
+  expect(parent.receiveMessageOnPort(latest)).toEqual({ message: "latest owner" });
 });

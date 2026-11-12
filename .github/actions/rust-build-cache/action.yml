@@ -1,0 +1,45 @@
+name: Rust object cache
+description: Restore compiler objects independently of Cargo build artifacts
+outputs:
+  cache-primary-key:
+    description: Dependency namespace for content-keyed main-only object snapshots
+    value: ${{ steps.object-key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - id: object-key
+      shell: bash
+      run: |
+        echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"
+        echo "key=rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: objects
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: ${{ steps.object-key.outputs.key }}-restore
+        restore-keys: |
+          ${{ steps.object-key.outputs.key }}-
+          rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+    - name: Record restored compiler objects
+      shell: bash
+      run: bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" capture "$RUNNER_TEMP/sccache" "$RUNNER_TEMP/sccache-inventory.json"
+    - name: Install pinned sccache through the authenticated release API
+      shell: bash
+      run: |
+        set -euo pipefail
+        stage=$(mktemp -d "$RUNNER_TEMP/sccache-download.XXXXXXXX")
+        trap 'rm -rf -- "$stage"' EXIT
+        archive=sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz
+        url="https://github.com/mozilla/sccache/releases/download/v0.19.0/$archive"
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" "$url" "$stage/$archive"
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" "$url.sha256" "$stage/checksum"
+        printf '%s  %s\n' "$(cat "$stage/checksum")" "$stage/$archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/sccache-bin"
+        tar -xzf "$stage/$archive" --strip-components=1 -C "$RUNNER_TEMP/sccache-bin"
+        "$RUNNER_TEMP/sccache-bin/sccache" --version | grep -Fx 'sccache 0.19.0'
+        echo "$RUNNER_TEMP/sccache-bin" >> "$GITHUB_PATH"
+    - shell: bash
+      run: echo "sccache archive matched=${{ steps.objects.outputs.cache-matched-key }}; compiler object hit rates are reported by each build wrapper"

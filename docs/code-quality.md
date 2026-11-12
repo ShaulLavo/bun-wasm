@@ -107,8 +107,15 @@ producer's outputs, not its own current attempt. The manifest still requires the
 same run, source and toolchain. A rerun of the quality producer creates an
 attempt-specific artifact and publishes its new digest only after packaging.
 A needed failed, cancelled or skipped quality producer explicitly fails the
-existing native check. Documentation-only selection and downstream Hermes and
-Processes conditions are unchanged.
+existing native check. Documentation-only selection and downstream Processes conditions are unchanged.
+The owner withdrew Hermes publication on November 1, 2026. Its native VM, side,
+embedding, and app gates are retired rather than recorded as passing. The
+`quality-no-hermes-publication.json` check rejects its return to shipped selectors
+or publication contracts. All remaining native, JSC, Browser, and source-cache
+gates stay blocking. Generic formatting and source-integrity scans still cover
+retained source, but normal Clippy and workspace tests exclude the two dormant
+Hermes crates. Their old synthetic probes now live under `hermes/`, outside
+normal check discovery.
 
 Cold-run evidence reached Web checks at 59m50s, including 24m59s of native quality.
 The partition leaves 34m51s of that observed work in the consumer, before transfer
@@ -294,16 +301,12 @@ clone boundary. The entire describeReceived bodies remain byte-identical to
 original source `ac43127c85addabed7e0c2a4883247ae074e858c`; only parameter types
 were added. Each conversion alone separates the pair into different scanner
 formats; their integration restores the same pair in TypeScript. No implementation
-was copied or refactored for this correction. The total remains 21 baseline
-entries with count 1 each. The other 19 entries, scan configuration and
+was copied or refactored for this correction. The current baseline has 13 entries
+with count 1 and a reviewed reason for each. The scan configuration and
 zero-new-clone limit stay unchanged. Both existing copy-rejection probes remain
 blocking.
 
-The explicit maintenance command is:
-
-```sh
-bunx --no-install jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline --fail-on-empty
-```
+Do not use `jscpd --update-baseline`. Remove the source duplication first, then delete only the reviewed numeric fingerprint key and its required one-line reason in the same change. The duplicate gate compares the resulting allowance map with the immutable merge-parent baseline, so adding a new key or increasing a count fails.
 
 `quality:probes` injects temporary unused-variable, ambient-global, type, unused-file, exact-duplicate and
 structural-Rust violations and verifies each real gate fails. The baseline must pass before any injection. Every synthetic

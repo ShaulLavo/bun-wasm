@@ -1,0 +1,16 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/worker-large-message-browser.test.ts",
+  "inputs": [
+    "web/src/shared-objects/broker.ts",
+    "web/src/shared-objects/host.ts",
+    "web/src/shared-objects/lane-overflow.ts",
+    "web/src/shared-objects/lane.ts",
+    "web/src/shared-objects/mailbox.ts",
+    "web/src/shared-objects/native.ts",
+    "web/src/shared-objects/protocol.ts",
+    "web/src/shared-objects/realm.ts",
+    "web/src/shared-objects/runtime.ts",
+    "web/src/shared-objects/service.ts"
+  ]
+}

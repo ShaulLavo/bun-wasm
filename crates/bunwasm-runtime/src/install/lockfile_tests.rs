@@ -249,3 +249,311 @@ fn override_metadata_survives_empty_locks_and_production_comparison() {
     assert!(!same_lock(&locked, &text, &JsonParser, false).unwrap());
     assert!(!same_lock(&locked, &text, &JsonParser, true).unwrap());
 }
+
+const REMOTE: &str = "https://packages.invalid/releases/not-a-package-name.tgz";
+
+fn cache_archive(url: &str, meta: &Value) -> String {
+    let bytes = resolve::test_support::archive(meta);
+    fs::create_dir_all(io::cache_dir()).unwrap();
+    fs::write(
+        io::cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes()))),
+        &bytes,
+    )
+    .unwrap();
+    format!(
+        "sha512-{}",
+        crate::encoding::base64_encode(&sha2::Sha512::digest(&bytes), false)
+    )
+}
+
+#[test]
+fn https_tarball_source_roundtrip() {
+    isolated("https_tarball_source_roundtrip", || {
+        let manifest = json!({"dependencies":{"tool":REMOTE}});
+        fs::write("package.json", manifest.to_string()).unwrap();
+        let integrity = cache_archive(
+            REMOTE,
+            &json!({"name":"tool","version":"1.2.3","dependencies":{"child":"1.0.0"}}),
+        );
+        cache_archive(
+            "http://registry.invalid/child.tgz",
+            &json!({"name":"child","version":"1.0.0"}),
+        );
+        let tool = json!({"versions":{"1.2.3":{"name":"tool","version":"1.2.3","dist":{"tarball":"http://registry.invalid/tool.tgz"}}}});
+        fs::write(
+            io::cache_dir().join(format!(
+                "{:x}",
+                Sha256::digest(b"http://registry.invalid/tool")
+            )),
+            tool.to_string(),
+        )
+        .unwrap();
+        let child = json!({"versions":{"1.0.0":{"name":"child","version":"1.0.0","dist":{"tarball":"http://registry.invalid/child.tgz"}}}});
+        fs::write(
+            io::cache_dir().join(format!(
+                "{:x}",
+                Sha256::digest(b"http://registry.invalid/child")
+            )),
+            child.to_string(),
+        )
+        .unwrap();
+        install("install", &[]).unwrap();
+        let text = fs::read("bun.lock").unwrap();
+        let lock = parse_json(&text).unwrap();
+        assert_eq!(lock["packages"]["tool"][0], "tool@1.2.3");
+        assert_eq!(lock["packages"]["tool"][1], REMOTE);
+        assert_eq!(lock["packages"]["tool"][3], integrity);
+        assert_eq!(
+            lock["packages"]["tool"][2]["dependencies"]["child"],
+            "1.0.0"
+        );
+        assert!(Path::new("node_modules/child/package.json").is_file());
+        fs::remove_dir_all("node_modules").unwrap();
+        install("install", &["--frozen-lockfile"]).unwrap();
+        assert_eq!(fs::read("bun.lock").unwrap(), text);
+        assert_eq!(
+            parse_json(&fs::read("node_modules/tool/package.json").unwrap()).unwrap()["name"],
+            "tool"
+        );
+    });
+}
+
+#[test]
+fn https_overrides_aliases_and_cycles_preserve_sources() {
+    isolated(
+        "https_overrides_aliases_and_cycles_preserve_sources",
+        || {
+            cache_archive(
+                REMOTE,
+                &json!({"name":"@fixture/tool","version":"1.2.3-custom.1","dependencies":{"alias":format!("npm:@fixture/tool@{REMOTE}")}}),
+            );
+            let manifest = json!({"dependencies":{"parent":"file:./parent"},"overrides":{"@fixture/tool":REMOTE}});
+            fs::create_dir("parent").unwrap();
+            fs::write(
+                "parent/package.json",
+                json!({"name":"parent","version":"1.0.0","dependencies":{"@fixture/tool":"^1"}})
+                    .to_string(),
+            )
+            .unwrap();
+            fs::write("package.json", manifest.to_string()).unwrap();
+            install("install", &[]).unwrap();
+            let first = fs::read("bun.lock").unwrap();
+            let lock = parse_json(&first).unwrap();
+            assert_eq!(
+                lock["packages"]["@fixture/tool"][0],
+                "@fixture/tool@1.2.3-custom.1"
+            );
+            assert_eq!(lock["packages"]["@fixture/tool"][1], REMOTE);
+            assert_eq!(lock["packages"]["alias"][0], "@fixture/tool@1.2.3-custom.1");
+            assert_eq!(lock["packages"].as_object().unwrap().len(), 3);
+            install("install", &["--frozen-lockfile"]).unwrap();
+            assert_eq!(fs::read("bun.lock").unwrap(), first);
+        },
+    );
+}
+
+#[test]
+fn https_locked_integrity_fails_closed_even_for_optional_edges() {
+    isolated(
+        "https_locked_integrity_fails_closed_even_for_optional_edges",
+        || {
+            fs::write(
+                "package.json",
+                json!({"optionalDependencies":{"tool":REMOTE}}).to_string(),
+            )
+            .unwrap();
+            cache_archive(REMOTE, &json!({"name":"tool","version":"1.2.3"}));
+            install("install", &[]).unwrap();
+            let before = fs::read("bun.lock").unwrap();
+            cache_archive(
+                REMOTE,
+                &json!({"name":"tool","version":"1.2.3","tampered":true}),
+            );
+            assert!(
+                install("install", &["--frozen-lockfile"])
+                    .unwrap_err()
+                    .contains("Integrity check failed")
+            );
+            assert_eq!(fs::read("bun.lock").unwrap(), before);
+            let mut lock = parse_json(&before).unwrap();
+            lock["packages"]["tool"][3] = "".into();
+            fs::write("bun.lock", lock.to_string()).unwrap();
+            assert!(
+                install("install", &[])
+                    .unwrap_err()
+                    .contains("needs a supported integrity")
+            );
+            fs::remove_file("bun.lock").unwrap();
+            fs::remove_file(
+                io::cache_dir().join(format!("{:x}", Sha256::digest(REMOTE.as_bytes()))),
+            )
+            .unwrap();
+            assert!(
+                install("install", &[])
+                    .unwrap_err()
+                    .contains("networking support")
+            );
+            assert!(!Path::new("bun.lock").exists());
+        },
+    );
+}
+
+#[test]
+fn https_source_change_reinstalls_same_version() {
+    isolated("https_source_change_reinstalls_same_version", || {
+        let second = "https://packages.invalid/another-source";
+        let first_meta = json!({"name":"tool","version":"1.2.3","source":"first"});
+        let second_meta = json!({"name":"tool","version":"1.2.3","source":"second"});
+        cache_archive(REMOTE, &first_meta);
+        cache_archive(second, &second_meta);
+        fs::write(
+            "package.json",
+            json!({"dependencies":{"tool":REMOTE}}).to_string(),
+        )
+        .unwrap();
+        install("install", &[]).unwrap();
+        fs::write(
+            "package.json",
+            json!({"dependencies":{"tool":second}}).to_string(),
+        )
+        .unwrap();
+        assert!(
+            install("install", &["--frozen-lockfile"])
+                .unwrap_err()
+                .contains("lockfile is frozen")
+        );
+        assert_eq!(
+            parse_json(&fs::read("node_modules/tool/package.json").unwrap()).unwrap(),
+            first_meta
+        );
+        install("install", &[]).unwrap();
+        assert_eq!(
+            parse_json(&fs::read("node_modules/tool/package.json").unwrap()).unwrap(),
+            second_meta
+        );
+        let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+        assert_eq!(lock["packages"]["tool"][1], second);
+    });
+}
+
+#[test]
+fn https_manifest_validation_rejects_mismatch_and_missing_fields() {
+    isolated(
+        "https_manifest_validation_rejects_mismatch_and_missing_fields",
+        || {
+            fs::write(
+                "package.json",
+                json!({"dependencies":{"tool":REMOTE}}).to_string(),
+            )
+            .unwrap();
+            for meta in [
+                json!({"name":"other","version":"1.2.3"}),
+                json!({"version":"1.2.3"}),
+                json!({"name":"tool"}),
+                json!({"name":"tool","version":"latest"}),
+                json!({"name":"tool","version":"1.2.3","dependencies":{"child":false}}),
+                json!({"name":"tool","version":"1.2.3","dependencies":[]}),
+            ] {
+                cache_archive(REMOTE, &meta);
+                assert!(install("install", &[]).is_err(), "{meta}");
+                assert!(!Path::new("bun.lock").exists());
+                assert!(!Path::new("node_modules/tool").exists());
+            }
+        },
+    );
+}
+
+#[test]
+fn https_exact_add_keeps_source_and_renaming_requires_alias() {
+    isolated(
+        "https_exact_add_keeps_source_and_renaming_requires_alias",
+        || {
+            fs::write("package.json", "{}").unwrap();
+            cache_archive(REMOTE, &json!({"name":"@fixture/actual","version":"1.2.3"}));
+            let spec = format!("alias@npm:@fixture/actual@{REMOTE}");
+            install("add", &["--exact", &spec]).unwrap();
+            let manifest = parse_json(&fs::read("package.json").unwrap()).unwrap();
+            assert_eq!(
+                manifest["dependencies"]["alias"],
+                format!("npm:@fixture/actual@{REMOTE}")
+            );
+            let lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            assert_eq!(lock["packages"]["alias"][0], "@fixture/actual@1.2.3");
+            assert_eq!(lock["packages"]["alias"][1], REMOTE);
+        },
+    );
+}
+
+#[test]
+fn https_update_retains_hash_but_not_registry_selection_pins() {
+    isolated(
+        "https_update_retains_hash_but_not_registry_selection_pins",
+        || {
+            let manifest = json!({"dependencies":{"tool":REMOTE,"registry":"^1"}});
+            fs::write(
+                "package.json",
+                json!({"dependencies":{"tool":REMOTE}}).to_string(),
+            )
+            .unwrap();
+            cache_archive(REMOTE, &json!({"name":"tool","version":"1.2.3"}));
+            install("install", &[]).unwrap();
+            let mut lock = parse_json(&fs::read("bun.lock").unwrap()).unwrap();
+            let original = lock["packages"]["tool"].clone();
+            lock["packages"]["registry"] = json!([
+                "registry@1.0.0",
+                "https://registry.invalid/registry.tgz",
+                {},
+                ""
+            ]);
+            unlock(&mut lock, &Options::default(), &manifest, None);
+            assert_eq!(lock["packages"]["tool"], original);
+            assert!(lock["packages"]["registry"].is_null());
+            cache_archive(
+                REMOTE,
+                &json!({"name":"tool","version":"1.2.3","tampered":true}),
+            );
+            let mut resolver = Resolver::new(
+                io::Registry::new("http://registry.invalid").unwrap(),
+                lock,
+                false,
+            );
+            assert!(
+                resolver
+                    .resolve(&json!({"dependencies":{"tool":REMOTE}}), false)
+                    .unwrap_err()
+                    .contains("Integrity check failed")
+            );
+        },
+    );
+}
+
+#[test]
+fn https_registry_shaped_url_keeps_explicit_source_and_integrity() {
+    isolated(
+        "https_registry_shaped_url_keeps_explicit_source_and_integrity",
+        || {
+            let source = "https://registry.npmjs.org/tool/-/tool-1.2.3.tgz";
+            fs::write(
+                "package.json",
+                json!({"dependencies":{"tool":source}}).to_string(),
+            )
+            .unwrap();
+            let integrity = cache_archive(source, &json!({"name":"tool","version":"1.2.3"}));
+            install("install", &["--lockfile-only"]).unwrap();
+            let text = fs::read("bun.lock").unwrap();
+            let locked = parse_json(&text).unwrap();
+            assert_eq!(locked["packages"]["tool"][1], source);
+            assert_eq!(locked["packages"]["tool"][3], integrity);
+            cache_archive(
+                source,
+                &json!({"name":"tool","version":"1.2.3","tampered":true}),
+            );
+            assert!(
+                install("install", &["--lockfile-only"])
+                    .unwrap_err()
+                    .contains("Integrity check failed")
+            );
+            assert_eq!(fs::read("bun.lock").unwrap(), text);
+        },
+    );
+}

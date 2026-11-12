@@ -21,6 +21,7 @@ interface PortsRuntime {
   BroadcastChannel: new(name: string) => { postMessage(value: unknown): void; close(): void };
   parentPort: SourcePort;
   workerData: SourcePort;
+  __fixtureShutdown(): void;
   __fixtureChild(channel: Channel, graph: Graph): void;
   __fixturePacket(port: SourcePort, sequence: number, graph: Graph): void;
 }
@@ -62,6 +63,7 @@ function childOverlay(source: string) {
   const target = "return exports;";
   if (source.split(target).length !== 2) throw new Error("Fixture child hook is no longer unique");
   return source.replace(target, `return Object.assign(exports, {
+    __fixtureShutdown() { for (const port of Array.from(localPorts.values())) portOps.discard(port); },
     __fixtureChild(channel, graph) {
       children.set(0, { ref: true, send: frame => channel.send(frame), pump: () => channel.pump(incoming), watch: () => channel.subscriptions(), event() {} });
       claimTransferred(graph, [0]);
@@ -69,7 +71,7 @@ function childOverlay(source: string) {
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: Channel; graph?: Graph; beforeDetach?: () => void } = {}) {
+export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: Channel; graph?: Graph; beforeDetach?: () => void; active?: () => boolean } = {}) {
   const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
@@ -83,7 +85,7 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: 
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts"> = {};
   const internal = Object.assign({
     native: runtimeNative,
-    realTimers: { setImmediate }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
+    realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter() {},

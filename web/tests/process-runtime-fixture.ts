@@ -1,9 +1,10 @@
+import { fixtureReservations } from "../../tests/helpers/process-reservations.ts";
 const { createRuntimeNetwork }: typeof import("../../node_modules/waffle/browser/net/runtime.ts") = await import(
   new URL("./browser/net/runtime.ts", import.meta.resolve("waffle/package.json")).href
 );
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { MemFS } from "waffle/fs/memory";
-import { connectFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
+import { connectFilesystemIdentity, createFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
@@ -13,20 +14,22 @@ import { createProcessIdentity } from "waffle/browser/process-context";
 import type { GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 
-/** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
- * Production composition is covered by the runtime facade tests; these inject explicit owners
- * so legacy transport regressions can independently control filesystem and activation barriers.
+/** Process-service fixture with injected filesystem and activation barriers.
+ * Genuine reservations come lazily from a test-owned memory Runtime through its public host
+ * hook. The last borrower disposes that owner; no persistent storage or browser cache is used.
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
+  sharedMemory?: ProcessRuntime["sharedMemory"];
 } = {}): ProcessRuntime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
-    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
-    revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
+    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: () => createFilesystemIdentity(), fork: unused, connect: unused,
+    revoke() {}, reap() {}, async quiesce() {}, drain: unused, flush: unused,
     lookup: unused, readFile: unused, listFiles: unused, directoryHandle: unused,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
   };
+  let ownedReservations: ReturnType<typeof fixtureReservations> | undefined;
   const identities = new ProcessIdentityAllocator();
   const files = new MemFS();
   filesystem = Object.assign(Object.create(filesystem), {
@@ -49,6 +52,10 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let service!: ProcessService;
   return {
     hostIdentity: null, filesystem, identities,
+    sharedMemory: options.sharedMemory ?? {
+      snapshot() { throw new Error("Shared memory snapshot unavailable in process-only fixture"); },
+      check() { throw new Error("Shared memory admission unavailable in process-only fixture"); },
+    },
     async network() {
       assertNetworkLive();
       const owner = await (networkOwner ??= createRuntimeNetwork(assertNetworkLive));
@@ -68,8 +75,10 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     },
     registerProgram(name, program) {
       if (registry.has(name)) throw new Error(`Program already registered: ${name}`);
-      if (!adapters.has(program.adapter)) throw new Error(`Unknown adapter: ${program.adapter}`);
-      registry.register(name, { adapter: program.adapter, interruptible: program.source !== undefined, module: program.source !== undefined ? async () => {
+      if (program.adapter !== undefined && !adapters.has(program.adapter)) throw new Error(`Unknown adapter: ${program.adapter}`);
+      if (program.command) registry.register(name, { command: program.command });
+      else if (program.script) registry.register(name, { adapter: program.adapter, script: program.script, onLoad: program.onLoad });
+      else registry.register(name, { adapter: program.adapter, interruptible: program.source !== undefined, module: program.source !== undefined ? async () => {
         const source = typeof program.source === "function" ? await program.source() : program.source!;
         return compileInterruptible(source);
       } : program.cooperative === true ? program.module : async () => { throw new TypeError("Third-party programs require source bytes"); } });
@@ -82,8 +91,9 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     },
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
-      return activation ??= Promise.resolve().then(() => {
-        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, hostIdentity: null, activate: options.activate,
+      const owner = ownedReservations ??= fixtureReservations();
+      return activation ??= owner.ready.then(reservations => {
+        broker = new BrowserProcessBroker({ reservations, filesystem, identities, registry, table, hostIdentity: null, activate: options.activate,
           launch: context => {
             const launch = adapters.get(context.adapter);
             if (!launch) throw new Error(`Unknown adapter: ${context.adapter}`);
@@ -125,6 +135,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           if (failures.length) await broker?.quiesce();
           else await broker?.dispose();
         } catch (error) { errors.push(error); }
+        try { await ownedReservations?.dispose(); } catch (error) { errors.push(error); }
         const failuresAndErrors = errors.concat(failures);
         if (failuresAndErrors.length === 1) throw failuresAndErrors[0];
         if (failuresAndErrors.length) throw new AggregateError(failuresAndErrors, "Process fixture disposal failed");

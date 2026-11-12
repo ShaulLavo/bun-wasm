@@ -2,12 +2,22 @@ import { on, type Handle } from "@remix-run/component";
 import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
+import { projectTemplates } from "./project-templates";
+import { engineUnavailable, type Engine } from "../engine-loader";
+import { requireProfileEngine, type PlaygroundProfile } from "./program-profile";
 
 type Props = { playground: Playground };
 
-const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"]] as const;
+const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9 MB)"], ["jsc", "JSC (43 MB)"], ["spidermonkey", "SpiderMonkey (experimental)"]] as const;
 const RUN_TITLE = "Save and run (Ctrl/Cmd-Enter)";
 const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open the latest saved workspace", shell: RUN_TITLE };
+
+function engineOption(engine: Engine, label: string, profile: PlaygroundProfile) {
+  try { requireProfileEngine(engine, profile); }
+  catch (error) { return { label: `${label} (unsupported profile)`, unavailable: String(error) }; }
+  const unavailable = engineUnavailable(engine, profile);
+  return { label: unavailable ? "SpiderMonkey (not in this build)" : label, unavailable };
+}
 
 export function App(handle: Handle<Props>) {
   const { playground } = handle.props;
@@ -31,13 +41,24 @@ function Header(handle: Handle<Props>) {
       <header>
         <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span></h1>
         <span id="status" role="status" aria-live="polite" data-kind={status.kind}>{status.text}</span>
-        <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
+        <nav class="workspace-nav" aria-label="Projects">
+          {playground.template ? <a class="nav" href="./">Examples</a> : null}
+          {projectTemplates.filter(template => template.id !== playground.template?.id).map(template => (
+            <a class="nav" href={`?template=${template.id}`}>{template.label}</a>
+          ))}
+          <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
+        </nav>
         <select
           id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)"
           disabled={playground.locked}
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
-          {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === playground.engine}>{label}</option>)}
+          {ENGINE_OPTIONS.map(([value, label]) => {
+            const option = engineOption(value, label, playground.profile);
+            return <option value={value} selected={value === playground.engine}
+              disabled={option.unavailable !== null} title={option.unavailable ?? undefined}
+            >{option.label}</option>;
+          })}
         </select>
         <RunButton playground={playground} />
       </header>

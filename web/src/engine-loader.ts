@@ -1,21 +1,37 @@
-import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
+import { recordProgramMemory } from "../../src/program-memory.ts";
+import { pairedEngineKinds, programKind, programProfile, type Engine, type PairedEngine } from "../../src/engine-kind.ts";
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
-import type { Engine } from "./bun-executor";
+import { observeCompile, withoutCompileSpans } from "./compile-observer";
+import { profileAsset, requireProfileEngine, verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 
-export type { Engine } from "./bun-executor";
+export type { Engine } from "../../src/engine-kind.ts";
 
 /** What each `?engine=` loads. The browser engine runs the program in the page's own JS engine. */
 export const ENGINES: Record<Engine, { name: string; wasm: string; script: string }> = {
   quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
+  spidermonkey: { name: "SpiderMonkey (experimental)", wasm: "bun-spidermonkey.wasm", script: "scripts/build-bun-spidermonkey.sh" },
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
-  // Opt-in: no default build makes bun-hermes.wasm, and the engine menu leaves it out.
-  hermes: { name: "Hermes", wasm: "bun-hermes.wasm", script: "scripts/build-bun-hermes.sh" },
 };
+
+export function engineBuildHint(engine: Engine): string {
+  const { script, wasm } = ENGINES[engine];
+  if (engine === "spidermonkey") return `Stage a matched ${wasm} and sibling spidermonkey-engine.wasm with SPIDERMONKEY_WASM=/absolute/path/${wasm} bun web/build.ts. Produce the pair with ${script}.`;
+  return `Build it with ${script} (dist/${wasm}), then rebuild web/.`;
+}
+
+/** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
+export function engineUnavailable(engine: Engine, memoryProfile: ProgramMemoryProfile = "split"): string | null {
+  if (engine !== "spidermonkey") return null;
+  const { core, side } = programProfile(engine);
+  if (assetBuild(profileAsset(core, memoryProfile)) !== null && assetBuild(profileAsset(side, memoryProfile)) !== null) return null;
+  if (memoryProfile === "shared-group") return "SpiderMonkey shared-group is not in this build. Stage its matching pair with SHARED_SPIDERMONKEY_PROGRAM=/absolute/program-spidermonkey before building this host.";
+  return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
+}
 
 export function isEngine(name: string | null): name is Engine {
   return name !== null && Object.hasOwn(ENGINES, name);
@@ -27,6 +43,20 @@ export function mb(bytes: number): string {
 
 export class WasmMissing extends Error {}
 
+/** Select the engine and memory profile before fetching any program bytes. */
+export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryProfile, progress: (text: string) => void, override?: string) {
+  requireProfileEngine(engine, profile);
+  const unavailable = engineUnavailable(engine, profile);
+  if (unavailable) throw new Error(unavailable);
+  const url = new URL(override ?? profileAsset(ENGINES[engine].wasm, profile), location.href).href;
+  const loaded = engine === "browser" ? await loadWasm(url, progress)
+    : await loadPaired(url, engine, progress, profile);
+  const expected = engine === "browser" ? "single" : engine;
+  if (programKind(loaded.module) !== expected) throw new TypeError(`Bun engine mismatch: selected ${engine}`);
+  verifyMemoryProfile(loaded.module, profile);
+  return loaded;
+}
+
 /**
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
@@ -35,7 +65,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const requested = new URL(url, location.href);
   const name = requested.pathname;
   if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  for (const kind of ["quickjs", "jsc", "hermes"] as const) {
+  for (const kind of pairedEngineKinds) {
     const standard = new URL(ENGINES[kind].wasm, location.href);
     if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
   }
@@ -104,39 +134,56 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   // Compilation consumes the decompressed stream while the remaining bytes are still arriving.
   const compiling = performance.now();
   const response = new Response(body, { headers: { "content-type": "application/wasm" } });
+  // Streaming completion includes download and decompression waits. No direct compile span is available.
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
   const kind = programKind(module);
-  if (kind !== "single") {
-    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
-    return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
+  chunks.length = 0;
+  if (kind !== "single") return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
+  recordProgramMemory(module, bytes);
   const engine = { module, size };
-  if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
+  if (build) setTimeout(() => void cacheIfExpected(key, build, bytes), 0);
   return { ...engine, build };
 }
 
 async function compileCached(response: Response, key: string) {
   try {
     const bytes = new Uint8Array(await response.arrayBuffer());
-    return { bytes, module: await WebAssembly.compile(bytes) };
+    const module = await observeCompile("core", () => WebAssembly.compile(bytes));
+    recordProgramMemory(module, bytes);
+    return { bytes, module };
   } catch {
     await evictEngine(key);
     return null;
   }
 }
 
-async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void) {
-  const core = await loadVerifiedFile(url, programProfile(expected).core, progress);
+async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void, memoryProfile?: ProgramMemoryProfile) {
+  const core = await loadVerifiedFile(url, profileAsset(programProfile(expected).core, memoryProfile ?? "split"), progress, true, memoryProfile);
   // Preparation compiles asynchronously and rejects a core that declares another engine.
-  return loadProgramSide(url, expected, core, progress, true);
+  const loaded = await loadProgramSide(url, expected, core, progress, true, memoryProfile);
+  verifyMemoryProfile(loaded.module, memoryProfile ?? "split");
+  return loaded;
 }
 
-async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
+async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean, memoryProfile?: ProgramMemoryProfile) {
   const profile = programProfile(kind);
+  if (kind === "spidermonkey" && !verifyBuild) {
+    const build = assetBuild(profile.core);
+    if (build === null) throw new Error(`${profile.core}: build manifest fingerprint is missing`);
+    await verifyArtifact(profile.core, core.bytes, build);
+    core = { bytes: core.bytes, build };
+    verifyBuild = true;
+  }
   const sideUrl = new URL(profile.side, new URL(url, location.href));
-  const side = await loadVerifiedFile(sideUrl.href, profile.side, progress, verifyBuild);
-  const module = await prepareProgram({ kind, core: core.bytes, side: side.bytes });
+  const side = await loadVerifiedFile(sideUrl.href, profileAsset(profile.side, memoryProfile ?? "split"), progress, verifyBuild, memoryProfile);
+  const module = await withoutCompileSpans(() => prepareProgram({ kind, core: core.bytes, side: side.bytes }));
   return { module, size: core.bytes.length + side.bytes.length, build: core.build };
 }
 
@@ -146,10 +193,12 @@ async function loadVerifiedTools(url: string, progress: (text: string) => void):
   return { module: await prepareProgram({ kind: "single", core: bytes }), size: bytes.length, build };
 }
 
-async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {
+async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true, memoryProfile?: ProgramMemoryProfile): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {
   const build = verifyBuild ? assetBuild(name) : null;
   if (verifyBuild && build === null) throw new Error(`${name}: build manifest fingerprint is missing`);
-  const key = new URL(url, location.href).href;
+  const requested = new URL(url, location.href);
+  if (memoryProfile === "shared-group") requested.searchParams.set("profile", memoryProfile);
+  const key = requested.href;
   const cached = build === null ? null : await cachedEngine(key, build);
   if (cached && build !== null) {
     const bytes = new Uint8Array(await cached.arrayBuffer());
@@ -159,10 +208,12 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
     return { bytes, build };
   }
   progress(`downloading ${name}…`);
-  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  let response = await fetch(build === null ? gzUrl : `${gzUrl}?v=${build}`);
+  const compressed = new URL(requested);
+  if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
+  if (build !== null) compressed.searchParams.set("v", build);
+  let response = await fetch(compressed.href);
   const gzipped = response.ok;
-  if (!gzipped) response = await fetch(url);
+  if (!gzipped) response = await fetch(requested.href);
   if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   if (!response.body) throw new Error(`${url}: empty response body`);
@@ -188,17 +239,21 @@ async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expe
 }
 
 /** Caches the downloaded engine only if its bytes are the build the page expects. */
-async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<ArrayBuffer>[], size: number): Promise<void> {
-  const blob = new Blob(chunks);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+async function cacheIfExpected(key: string, build: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
   if (hex !== build) return;
-  const headers = { "content-type": "application/wasm", "content-length": String(size) };
-  await cacheEngine(key, build, new Response(blob, { headers }));
+  const headers = { "content-type": "application/wasm", "content-length": String(bytes.byteLength) };
+  // The snapshot is immutable after verification. A stream avoids Response(BufferSource)
+  // making another full copy while cache storage consumes these already-owned bytes.
+  const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) { controller.enqueue(bytes); controller.close(); },
+  });
+  await cacheEngine(key, build, new Response(body, { headers }));
 }
 
-// The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
-// Acyclic modules use blob URLs, including when WebKit starts an uncontrolled worker in the scope.
+// The service worker at ./__bunwasm/ (sw.ts) serves the Bun worker's script with the headers a
+// cross-origin isolated worker needs. Guest modules never depend on it (module-records.ts).
 export const MODULE_SCOPE = "./__bunwasm/";
 
 export async function registerModuleScope(): Promise<boolean> {

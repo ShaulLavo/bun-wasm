@@ -450,6 +450,23 @@ test("shared filesystem flush reports failed writes and permits later writes", a
   expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
+test("output-only sandbox commands do not let stdin EOF shut down the dev server", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  expect(page.runs[0]!.env.CI).toBe("true");
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["run", "dev"]);
+  expect(page.runs[1]!.env.CI).toBe("true");
+  expect(page.runs[1]!.env.PORT).toBe("5173");
+  expect(sandbox.serverState.state).toBe("starting");
+  sandbox.restart();
+  expect(page.runs[1]!.kills).toEqual([9]);
+});
+
 test("sandbox Restart cancels a pending install without launching its stale dev command", async () => {
   const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
@@ -531,4 +548,33 @@ test("sandbox stops on a failed install and only launches dev after a successful
   page.runs[1]!.done.resolve({ code: 0 });
   await turn();
   expect(page.runs[2]!.args).toEqual(["run", "dev"]);
+});
+
+test("playground passes the borrowed filesystem and truthful prompt options to the public session", async () => {
+  const page = await pageFixture();
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  const prompt = page.promptCreates[0];
+  const session = page.sessionCreates[0];
+  expect(prompt).toBeDefined();
+  expect(session).toBeDefined();
+  expect(prompt?.filesystem).toBe(page.runtime.filesystem);
+  expect(prompt?.versions).toEqual({});
+  expect(prompt?.file).toBe(true);
+  expect(prompt?.logger).toEqual(expect.any(Function));
+  expect(Object.is(session?.runtime, page.runtime)).toBe(true);
+  expect(session?.prompt).toBeDefined();
+  expect(session?.env?.PS1).toBe("$ ");
+  expect(session?.lineEditor).toEqual({ mode: "zsh" });
+});
+
+test("playground prompt-off arm skips the provider while keeping the session prompt empty", async () => {
+  const page = await pageFixture();
+  const playground = new page.Playground("?prompt=off");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  expect(page.promptCreates).toEqual([]);
+  expect(page.sessionCreates[0]?.prompt).toBeUndefined();
+  expect(page.sessionCreates[0]?.env?.PS1).toBe("$ ");
 });

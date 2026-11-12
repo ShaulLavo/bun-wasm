@@ -239,16 +239,22 @@ main {
     text-overflow: ellipsis;
   }
 
-  header a.nav {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
+  header .workspace-nav {
+    gap: 6px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    flex-wrap: wrap;
+  }
+
+  header .workspace-nav a.nav {
+    font-size: 12px;
   }
 
   header #status {
     display: block;
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 4;
     width: 100%;
   }
 
@@ -259,7 +265,7 @@ main {
 
   header #engine {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;
     min-width: 0;
     max-width: 100%;
     justify-self: start;
@@ -267,7 +273,7 @@ main {
 
   header #run {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 3;
     min-height: 34px;
   }
 
@@ -318,6 +324,12 @@ main {
   padding: 4px 30px 4px 10px;
 }
 
+.workspace-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 a.nav {
   flex: none;
   color: var(--dim);
@@ -341,6 +353,40 @@ a.nav:hover {
   color: var(--dim);
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+}
+
+.playground-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.preview-address {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playground-preview button {
+  flex: none;
+  min-height: 34px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.playground-preview iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: white;
+  color-scheme: normal;
 }
 
 #copy-terminal {

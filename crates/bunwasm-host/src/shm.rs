@@ -5,6 +5,8 @@
 //! provided. Nested Wasm users must call this same futex service rather than
 //! Wasmtime's separate built-in futex table.
 
+pub(crate) mod nested;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
@@ -22,6 +24,10 @@ const DEFAULT_MEMBERS: usize = 16;
 const DEFAULT_REGIONS: usize = 4096;
 const DEFAULT_PINS: usize = 4096;
 const DEFAULT_WATCHES: usize = 1024;
+/// The largest reservation whose byte length stays a signed 32-bit size.
+const MAX_RESERVATION_PAGES: u32 = 32767;
+/// Growth room to prefer when the declared maximum cannot fit. It never causes a refusal.
+const PREFERRED_FALLBACK_HEADROOM_PAGES: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -46,6 +52,11 @@ pub struct GroupPolicy {
     pub members: usize,
     pub parallelism: u32,
     pub maximum_pages: u32,
+    /// The most pages all members may hold together through `group_grow`: every granted
+    /// chunk (image, stack, side, heap) of every reserved, launched or retained member.
+    /// Regions are not counted. `None` is the configured `maximum_pages`; `MemoryGroup::new`
+    /// derives it, because a field default cannot follow another field.
+    pub member_pages: Option<u32>,
     pub regions: usize,
     pub pins: usize,
     pub watches: usize,
@@ -57,6 +68,7 @@ impl Default for GroupPolicy {
             members: DEFAULT_MEMBERS,
             parallelism: 1,
             maximum_pages: MAX_GROUP_PAGES,
+            member_pages: None,
             regions: DEFAULT_REGIONS,
             pins: DEFAULT_PINS,
             watches: DEFAULT_WATCHES,
@@ -228,15 +240,6 @@ impl GroupBackingBudget {
         backing.bypassed.store(true, Ordering::SeqCst);
     }
 
-    fn charge(&self, backing: &Backing, pages: u32) -> bool {
-        let mut state = self.lock();
-        let backings = Self::reconcile_all_locked(&mut state);
-        let outcome = self.charge_locked(&mut state, backing, pages);
-        drop(state);
-        drop(backings);
-        outcome
-    }
-
     fn charge_locked(&self, state: &mut BudgetState, backing: &Backing, pages: u32) -> bool {
         if backing.bypassed() {
             return false;
@@ -252,6 +255,32 @@ impl GroupBackingBudget {
         state.peak_bytes = state.peak_bytes.max(committed);
         backing.charged_pages.fetch_add(pages, Ordering::SeqCst);
         true
+    }
+
+    /// Runs `select` with the pages still chargeable to `backing` and charges its plan in the
+    /// same critical section, so the room it saw is the room it gets.
+    fn charge_selected(
+        &self,
+        backing: &Backing,
+        select: impl FnOnce(u32) -> Result<ReservationPlan, Errno>,
+    ) -> Result<ReservationPlan, Errno> {
+        let mut state = self.lock();
+        let backings = Self::reconcile_all_locked(&mut state);
+        let spare = self.limit_bytes.saturating_sub(state.committed_bytes) / u64::from(PAGE_BYTES);
+        let budget_pages = if backing.bypassed() {
+            0
+        } else {
+            u32::try_from(spare).unwrap_or(u32::MAX)
+        };
+        let outcome = select(budget_pages).and_then(|plan| {
+            if plan.growth != 0 && !self.charge_locked(&mut state, backing, plan.growth) {
+                return Err(Errno::NoMem);
+            }
+            Ok(plan)
+        });
+        drop(state);
+        drop(backings);
+        outcome
     }
 
     fn rollback(&self, backing: &Backing, pages: u32) {
@@ -337,9 +366,14 @@ pub struct GroupSnapshot {
     pub holds: usize,
     pub watches: usize,
     pub waiters: usize,
+    /// The backing's high-water charge. It falls only when the group's backing is dropped.
     pub committed_bytes: u64,
+    /// Pages members hold now, counted against the policy's member cap. It falls when a
+    /// member is released, unlike `committed_bytes`.
+    pub member_pages: u32,
     pub free_bytes: u64,
     pub bypassed: bool,
+    pub published: usize,
 }
 
 #[derive(Clone)]
@@ -350,7 +384,11 @@ pub struct MemoryGroup {
 struct GroupInner {
     backing: Arc<Backing>,
     policy: GroupPolicy,
+    /// The effective member cap in pages, normalized from the policy at creation.
+    member_cap: u32,
     state: Mutex<GroupState>,
+    #[cfg(test)]
+    fail_next_tail_growth: AtomicBool,
 }
 
 struct GroupState {
@@ -361,12 +399,16 @@ struct GroupState {
     waiters: HashMap<WaiterId, Arc<Waiter>>,
     queues: HashMap<u32, VecDeque<WaiterId>>,
     free: Vec<Chunk>,
+    /// Pages in every member's `chunks`, kept equal to their sum under this lock.
+    member_pages: u32,
     next_incarnation: u64,
-    next_handle: u32,
-    next_pin: u32,
+    // These identities never repeat within the group; u32::MAX + 1 means exhausted.
+    next_handle: u64,
+    next_pin: u64,
     next_watch: u32,
     next_waiter: u64,
     watch_sequence: u64,
+    directory: nested::Directory,
     ended: bool,
 }
 
@@ -396,11 +438,19 @@ struct Region {
     chunk: Chunk,
     holders: HashMap<MemberId, u32>,
     pins: usize,
+    /// Directory entries naming this region. They hold it until withdrawn or the group ends.
+    published: u32,
 }
 
 struct Pin {
     region: RegionHandle,
-    owner: MemberId,
+    owner: PinOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PinOwner {
+    Member(MemberId),
+    Group,
 }
 
 struct Watch {
@@ -454,6 +504,7 @@ impl MemoryGroup {
             (1..=MAX_GROUP_PAGES).contains(&policy.maximum_pages),
             "memory group maximum exceeds wasm32"
         );
+        let member_cap = effective_member_pages(&policy)?;
         let memory = SharedMemory::new(engine, MemoryType::shared(1, policy.maximum_pages))?;
         let backing = budget
             .register(memory)
@@ -469,19 +520,24 @@ impl MemoryGroup {
             waiters: HashMap::new(),
             queues: HashMap::new(),
             free: Vec::new(),
+            member_pages: 0,
             next_incarnation: 1,
             next_handle: 1,
             next_pin: 1,
             next_watch: 1,
             next_waiter: 1,
             watch_sequence: 1,
+            directory: nested::Directory::default(),
             ended: false,
         };
         Ok(Self {
             inner: Arc::new(GroupInner {
                 backing,
                 policy,
+                member_cap,
                 state: Mutex::new(state),
+                #[cfg(test)]
+                fail_next_tail_growth: AtomicBool::new(false),
             }),
         })
     }
@@ -557,12 +613,14 @@ impl MemoryGroup {
             watches: state.watches.len(),
             waiters: state.waiters.len(),
             committed_bytes: u64::from(self.inner.backing.charged_pages()) * u64::from(PAGE_BYTES),
+            member_pages: state.member_pages,
             free_bytes: state
                 .free
                 .iter()
                 .map(|chunk| u64::from(chunk.pages) * u64::from(PAGE_BYTES))
                 .sum(),
             bypassed: self.inner.backing.bypassed(),
+            published: state.directory.len(),
         }
     }
 
@@ -678,7 +736,7 @@ impl GroupInner {
         let pins = state
             .pins
             .iter()
-            .filter(|(_, pin)| pin.owner == id)
+            .filter(|(_, pin)| pin.owner == PinOwner::Member(id))
             .map(|(pin, _)| *pin)
             .collect::<Vec<_>>();
         for pin in pins {
@@ -694,13 +752,30 @@ impl GroupInner {
         let chunks = Self::current_member_mut(&mut state, id)
             .map(|member| std::mem::take(&mut member.chunks))
             .unwrap_or_default();
+        // The only place member pages are returned: a released member, or an aborted
+        // reservation. A retained member keeps its chunks and stays charged.
         for chunk in chunks {
+            state.member_pages = state
+                .member_pages
+                .checked_sub(chunk.pages)
+                .expect("member pages released twice");
             give_chunk(&mut state.free, chunk);
         }
         state.members[id.index] = None;
-        if state.members.iter().all(Option::is_none) {
-            state.ended = true;
+        if !state.members.iter().all(Option::is_none) {
+            return;
         }
+        state.ended = true;
+        let pins = state.pins.keys().copied().collect::<Vec<_>>();
+        for pin in pins {
+            self.drop_pin_locked(&mut state, pin);
+        }
+        // The last member's stop retires every publication; compiled code unmaps off the lock.
+        let retired = nested::retire_directory(&mut state);
+        assert!(state.pins.is_empty());
+        assert!(state.regions.is_empty());
+        drop(state);
+        drop(retired);
     }
 
     fn grow(&self, member: MemberId, pages: u32) -> Result<u32, Errno> {
@@ -709,11 +784,19 @@ impl GroupInner {
         }
         let mut state = self.lock();
         Self::receives(&state, member)?;
+        // Refused before any placement, so a grow past the cap changes nothing.
+        let charged = state
+            .member_pages
+            .checked_add(pages)
+            .filter(|total| *total <= self.member_cap)
+            .ok_or(Errno::NoMem)?;
         let chunk = self.take_chunk_locked(&mut state, pages)?;
         let page = chunk.page;
         Self::current_member_mut(&mut state, member)?
             .chunks
             .push(chunk);
+        // Charged only now that the chunk is placed and owned by the member.
+        state.member_pages = charged;
         Ok(page)
     }
 
@@ -721,18 +804,41 @@ impl GroupInner {
         if len == 0 || len > 0x7fff_ffff || !valid_alignment(align) {
             return Err(Errno::Inval);
         }
+        let pages = len.div_ceil(PAGE_BYTES);
+        self.create_region(member, pages, pages, Some(len))
+    }
+
+    /// Creates a region covering `required` pages, extended toward `desired` as the group's
+    /// contiguous room and backing budget allow.
+    fn create_reservation(
+        &self,
+        member: MemberId,
+        required: u32,
+        desired: u32,
+    ) -> Result<SharedBacking, Errno> {
+        self.create_region(member, required, desired, None)
+    }
+
+    /// `len` keeps an exact byte length; `None` covers the whole selected chunk.
+    fn create_region(
+        &self,
+        member: MemberId,
+        required: u32,
+        desired: u32,
+        len: Option<u32>,
+    ) -> Result<SharedBacking, Errno> {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         if state.regions.len() >= self.policy.regions {
             return Err(Errno::Again);
         }
-        let pages = len.div_ceil(PAGE_BYTES);
-        let chunk = self.take_chunk_locked(&mut state, pages)?;
-        let handle = fresh_region(&mut state);
+        let handle = RegionHandle(u32::try_from(state.next_handle).map_err(|_| Errno::Again)?);
+        let chunk = self.take_reservation_locked(&mut state, required, desired)?;
+        state.next_handle += 1;
         let backing = SharedBacking {
             handle,
             addr: chunk.page * PAGE_BYTES,
-            len,
+            len: len.unwrap_or(chunk.pages * PAGE_BYTES),
         };
         let mut holders = HashMap::new();
         holders.insert(member, 1);
@@ -743,6 +849,7 @@ impl GroupInner {
                 chunk,
                 holders,
                 pins: 0,
+                published: 0,
             },
         );
         Self::current_member_mut(&mut state, member)?
@@ -840,12 +947,13 @@ impl GroupInner {
         if state.pins.len() >= self.policy.pins {
             return Err(Errno::Again);
         }
-        let id = fresh_pin(&mut state);
+        let id = PinId(u32::try_from(state.next_pin).map_err(|_| Errno::Again)?);
+        state.next_pin += 1;
         state.pins.insert(
             id,
             Pin {
                 region: handle,
-                owner: member,
+                owner: PinOwner::Member(member),
             },
         );
         state.regions.get_mut(&handle).ok_or(Errno::BadF)?.pins += 1;
@@ -856,7 +964,7 @@ impl GroupInner {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let current = state.pins.get(&pin).ok_or(Errno::BadF)?;
-        if current.owner != member {
+        if current.owner != PinOwner::Member(member) {
             return Err(Errno::BadF);
         }
         let target = state
@@ -865,7 +973,18 @@ impl GroupInner {
             .flatten()
             .find(|candidate| candidate.pid == pid && candidate.phase != MemberPhase::Retained);
         let target = target.ok_or(Errno::Search)?.id;
-        state.pins.get_mut(&pin).ok_or(Errno::BadF)?.owner = target;
+        state.pins.get_mut(&pin).ok_or(Errno::BadF)?.owner = PinOwner::Member(target);
+        Ok(())
+    }
+
+    fn route_group(&self, member: MemberId, pin: PinId) -> Result<(), Errno> {
+        let mut state = self.lock();
+        Self::receives(&state, member)?;
+        let current = state.pins.get_mut(&pin).ok_or(Errno::BadF)?;
+        if current.owner != PinOwner::Member(member) {
+            return Err(Errno::BadF);
+        }
+        current.owner = PinOwner::Group;
         Ok(())
     }
 
@@ -873,7 +992,7 @@ impl GroupInner {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let current = state.pins.get(&pin).ok_or(Errno::BadF)?;
-        if current.owner != member {
+        if current.owner != PinOwner::Member(member) {
             return Err(Errno::BadF);
         }
         let handle = current.region;
@@ -886,7 +1005,8 @@ impl GroupInner {
     fn unpin(&self, member: MemberId, pin: PinId) -> Result<(), Errno> {
         let mut state = self.lock();
         Self::receives(&state, member)?;
-        if state.pins.get(&pin).ok_or(Errno::BadF)?.owner != member {
+        let owner = state.pins.get(&pin).ok_or(Errno::BadF)?.owner;
+        if owner != PinOwner::Member(member) && owner != PinOwner::Group {
             return Err(Errno::BadF);
         }
         self.drop_pin_locked(&mut state, pin);
@@ -908,7 +1028,7 @@ impl GroupInner {
         let Some(region) = state.regions.get(&handle) else {
             return;
         };
-        if !region.holders.is_empty() || region.pins != 0 {
+        if !region.holders.is_empty() || region.pins != 0 || region.published != 0 {
             return;
         }
         let region = state.regions.remove(&handle).expect("region checked above");
@@ -916,30 +1036,95 @@ impl GroupInner {
     }
 
     fn take_chunk_locked(&self, state: &mut GroupState, pages: u32) -> Result<Chunk, Errno> {
-        if let Some(chunk) = take_free_chunk(&mut state.free, pages) {
+        self.take_reservation_locked(state, pages, pages)
+    }
+
+    /// Unavailable optional room never refuses bytes that do fit: a failed attempt with optional
+    /// room is retried once at exactly the required size.
+    fn take_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        required: u32,
+        desired: u32,
+    ) -> Result<Chunk, Errno> {
+        match self.try_reservation_locked(state, required, desired) {
+            Err(Errno::NoMem) if desired > required => {
+                self.try_reservation_locked(state, required, required)
+            }
+            outcome => outcome,
+        }
+    }
+
+    fn try_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        required: u32,
+        desired: u32,
+    ) -> Result<Chunk, Errno> {
+        let plan = self
+            .backing
+            .budget
+            .charge_selected(&self.backing, |budget_pages| {
+                select_reservation(
+                    &state.free,
+                    self.backing.actual_pages(),
+                    self.policy.maximum_pages,
+                    budget_pages,
+                    required,
+                    desired,
+                )
+            })?;
+        self.commit_reservation_locked(state, plan)
+    }
+
+    fn commit_reservation_locked(
+        &self,
+        state: &mut GroupState,
+        plan: ReservationPlan,
+    ) -> Result<Chunk, Errno> {
+        if plan.growth == 0 {
+            let chunk = take_free_chunk(&mut state.free, plan.pages).ok_or(Errno::NoMem)?;
             zero_chunk(&self.backing.memory, chunk);
             return Ok(chunk);
         }
-        self.reconcile();
-        let new_pages = self
-            .backing
-            .charged_pages()
-            .checked_add(pages)
-            .ok_or(Errno::NoMem)?;
-        if new_pages > self.policy.maximum_pages {
+        let tail = Chunk {
+            page: self.grow_tail(plan.growth)?,
+            pages: plan.growth,
+        };
+        if plan.tail_hole == 0 {
+            return Ok(tail);
+        }
+        let hole = state
+            .free
+            .last()
+            .copied()
+            .filter(|hole| hole.pages == plan.tail_hole && hole.page + hole.pages == tail.page);
+        let Some(hole) = hole else {
+            // A trusted raw growth moved the tail. The new pages stay charged and reusable.
+            give_chunk(&mut state.free, tail);
+            return Err(Errno::NoMem);
+        };
+        state.free.pop();
+        zero_chunk(&self.backing.memory, hole);
+        Ok(Chunk {
+            page: hole.page,
+            pages: plan.pages,
+        })
+    }
+
+    fn grow_tail(&self, pages: u32) -> Result<u32, Errno> {
+        #[cfg(test)]
+        if self.fail_next_tail_growth.swap(false, Ordering::SeqCst) {
+            self.backing.budget.rollback(&self.backing, pages);
             return Err(Errno::NoMem);
         }
-        if !self.backing.budget.charge(&self.backing, pages) {
-            return Err(Errno::NoMem);
-        }
-        let page = match self.backing.memory.grow(u64::from(pages)) {
-            Ok(page) => page as u32,
+        match self.backing.memory.grow(u64::from(pages)) {
+            Ok(page) => Ok(page as u32),
             Err(_) => {
                 self.backing.budget.rollback(&self.backing, pages);
-                return Err(Errno::NoMem);
+                Err(Errno::NoMem)
             }
-        };
-        Ok(Chunk { page, pages })
+        }
     }
 
     fn watch(&self, member: MemberId, addr: u32, expected: i32) -> Result<WatchId, Errno> {
@@ -1362,28 +1547,19 @@ fn wait_status(status: WaitStatus) -> WaitResult {
     }
 }
 
+/// An omitted member cap is the configured group maximum. An explicit one is a positive page
+/// count no greater than that maximum; anything else refuses the group rather than clamping.
+fn effective_member_pages(policy: &GroupPolicy) -> Result<u32> {
+    let pages = policy.member_pages.unwrap_or(policy.maximum_pages);
+    anyhow::ensure!(
+        (1..=policy.maximum_pages).contains(&pages),
+        "memory group member cap must be between one page and the group maximum"
+    );
+    Ok(pages)
+}
+
 fn valid_alignment(align: u32) -> bool {
     align.is_power_of_two() && align <= PAGE_BYTES
-}
-
-fn fresh_region(state: &mut GroupState) -> RegionHandle {
-    loop {
-        let id = RegionHandle(state.next_handle);
-        state.next_handle = state.next_handle.wrapping_add(1).max(1);
-        if id.0 != 0 && !state.regions.contains_key(&id) {
-            return id;
-        }
-    }
-}
-
-fn fresh_pin(state: &mut GroupState) -> PinId {
-    loop {
-        let id = PinId(state.next_pin);
-        state.next_pin = state.next_pin.wrapping_add(1).max(1);
-        if id.0 != 0 && !state.pins.contains_key(&id) {
-            return id;
-        }
-    }
 }
 
 fn fresh_watch(state: &mut GroupState) -> WatchId {
@@ -1404,6 +1580,59 @@ fn fresh_waiter(state: &mut GroupState) -> WaiterId {
             return id;
         }
     }
+}
+
+/// A selected allocation. Its `growth` pages are already charged to the backing budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReservationPlan {
+    pages: u32,
+    growth: u32,
+    tail_hole: u32,
+}
+
+/// The declared maximum when it fits. Otherwise the required pages plus optional room, which
+/// never takes more than half of what remains so later members keep at least as much.
+fn reservation_pages(required: u32, desired: u32, available: u32) -> u32 {
+    if available >= desired {
+        return desired;
+    }
+    let optional = ((available - required) / 2).min(PREFERRED_FALLBACK_HEADROOM_PAGES);
+    required + optional
+}
+
+/// Chooses from one consistent view of holes, the tail and the budget. Holes are never summed,
+/// because a reservation must be one stable contiguous range.
+fn select_reservation(
+    free: &[Chunk],
+    actual: u32,
+    ceiling: u32,
+    budget_pages: u32,
+    required: u32,
+    desired: u32,
+) -> Result<ReservationPlan, Errno> {
+    let growable = ceiling.saturating_sub(actual).min(budget_pages);
+    let tail_hole = free
+        .last()
+        .filter(|chunk| chunk.page + chunk.pages == actual)
+        .map_or(0, |chunk| chunk.pages);
+    let largest = free.iter().map(|chunk| chunk.pages).max().unwrap_or(0);
+    let available = largest.max(tail_hole + growable);
+    if available < required {
+        return Err(Errno::NoMem);
+    }
+    let pages = reservation_pages(required, desired, available);
+    if largest >= pages {
+        return Ok(ReservationPlan {
+            pages,
+            growth: 0,
+            tail_hole: 0,
+        });
+    }
+    Ok(ReservationPlan {
+        pages,
+        growth: pages - tail_hole,
+        tail_hole,
+    })
 }
 
 fn take_free_chunk(free: &mut Vec<Chunk>, pages: u32) -> Option<Chunk> {
@@ -1561,6 +1790,13 @@ pub fn shm_route(member: &MemberLease, pin: u32, pid: u32) -> i32 {
     member
         .group
         .route(member.member, PinId(pin), pid)
+        .map_or_else(Errno::result, |()| 0)
+}
+
+pub fn shm_route_group(member: &MemberLease, pin: u32) -> i32 {
+    member
+        .group
+        .route_group(member.member, PinId(pin))
         .map_or_else(Errno::result, |()| 0)
 }
 
@@ -1734,6 +1970,14 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
     )?;
     linker.func_wrap(
         "runtime_shm",
+        "shm_route_group",
+        |caller: Caller<'_, Host>, pin: u32| {
+            host_member(caller.data())
+                .map_or_else(|error| error, |member| shm_route_group(member, pin))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_shm",
         "shm_accept",
         |caller: Caller<'_, Host>, pin: u32, out: u32| {
             host_member(caller.data())
@@ -1793,5 +2037,7 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod member_cap_tests;
 #[cfg(test)]
 mod tests;

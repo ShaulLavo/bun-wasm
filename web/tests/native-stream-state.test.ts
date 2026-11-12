@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 
-for (const mode of ["native", "own", "browser"]) {
+for (const mode of ["native", "own", "browser", "browser-no-iteration"]) {
   test(`native stream hooks preserve ${mode} host construction`, () => {
     const result = spawnSync("node", [new URL("./native-stream-state-probe.ts", import.meta.url).pathname, mode], {
       encoding: "utf8", timeout: 10000,

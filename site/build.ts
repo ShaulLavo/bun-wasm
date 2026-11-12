@@ -3,6 +3,8 @@
 // work unchanged in either place.
 import { appendFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveSiteSpiderMonkey, verifySiteGuests } from "../scripts/site-guest-preflight";
+import { templates } from "../sandbox/src/template-catalog";
 
 const root = resolve(import.meta.dir, "..");
 const out = join(import.meta.dir, "dist");
@@ -17,6 +19,10 @@ async function build(app: string): Promise<void> {
   await run(app, ["bun", "install", "--frozen-lockfile"]);
   await run(app, ["bun", "run", "build"]);
 }
+
+const spiderMonkey = resolveSiteSpiderMonkey(root);
+await verifySiteGuests(root, process.env, spiderMonkey);
+if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 
 // The deployed site always ships bash-web's shell and env guests, built at the apps' pin.
 const guests = Bun.spawn(["bash", "scripts/build-bash-web-shell.sh"], { cwd: root, stdout: "inherit", stderr: "inherit" });
@@ -34,4 +40,12 @@ appendFileSync(join(out, "_headers"), "\n/playground/\n  Cache-Control: no-store
   + `/playground/chunks/*.js\n${immutable}/playground/__bunwasm/chunks/*.js\n${immutable}`);
 // Source maps stay local; the public site doesn't need them.
 for (const map of new Bun.Glob("**/*.map").scanSync(out)) rmSync(join(out, map));
+const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
+if (revision.exitCode !== 0) throw new Error("Cannot identify the site source commit");
+const waffle = await Bun.file(join(root, "sandbox/node_modules/waffle/package.json")).json();
+await Bun.write(join(out, "deployment.json"), JSON.stringify({
+  sourceCommit: revision.stdout.toString().trim(),
+  waffleVersion: waffle.version,
+  templates: templates.map(({ id, label, file, editorFile }) => ({ id, label, file, editorFile })),
+}, null, 2));
 console.log(`site: ${out}`);

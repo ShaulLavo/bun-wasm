@@ -121,7 +121,7 @@ export function runtimeProcFixture(executable = "/bin/bun"): Uint8Array<ArrayBuf
     readExact(c(0), 4, 83), check(load(4096), 0x676e6970, 84), poll(c(0), 0, 85, true),
     check(read(c(0), 1), 0, 86), close(c(0), 87), check(write(c(10), 773, 4), 4, 88), close(c(10), 89),
     writeExact(c(11), 793, 13, 90), writeExact(c(2), 806, 13, 91), close(c(11), 92), close(c(2), 93), call(9, c(23)));
-  // argc == 1 identifies a recursively launched child; root runner supplies [bun, abi-parent].
+  // argc == 1 identifies a recursively launched child; the root caller supplies [executable, abi-parent].
   const body = [1, 9, 0x7f].concat(check(call(10, c(32), c(36)), 0, 40), load(32), c(1),
     [0x46, 0x04, 0x40], child, [0x05], parent, [0x0b, 0x0b]);
   const signature = (arity: number, result = true) => [0x60].concat(uint(arity), Array.from({ length: arity }, () => 0x7f), result ? [1, 0x7f] : [0]);

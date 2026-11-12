@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { convertCoreInitializers, convertEngineInitializers } from "./engine-explicit-init.ts";
-import { sharedGroupMaxPages } from "./program-profile.ts";
+import { assertSideMemory, convertCoreInitializers, convertEngineInitializers } from "./engine-explicit-init.ts";
+import { sharedGroupMaxPages, sharedGroupMemberPages } from "./program-profile.ts";
 
 function u32(value: number): number[] {
   const bytes: number[] = [];
@@ -23,8 +23,9 @@ function section(id: number, payload: number[]): number[] {
 
 type Limits = readonly number[];
 const UNSHARED: Limits = [0, 1];
-// flags 3 (shared, has maximum), minimum 1, maximum: the guest memory maximum in pages.
-const GROUP: Limits = [3, 1].concat(u32(sharedGroupMaxPages()));
+// flags 3 (shared, has maximum), minimum 1, maximum: the group address space in pages.
+const shared = (maximum: number): Limits => [3, 1].concat(u32(maximum));
+const GROUP: Limits = shared(sharedGroupMaxPages());
 
 function fixture(options: { memory?: boolean; limits?: Limits; table?: boolean; stack?: boolean; start?: boolean; relocationKind?: number; conflicting?: boolean } = {}): Uint8Array<ArrayBuffer> {
   const imports: number[][] = [];
@@ -81,9 +82,33 @@ test("a shared-group side keeps its imported group memory and never exports it",
   expect(WebAssembly.Module.exports(module).map(entry => entry.name)).toContain("quickjs_initialize_memory");
   expect(() => convertEngineInitializers(fixture({ limits: GROUP }), "quickjs")).toThrow(/profile/);
   expect(() => convertEngineInitializers(fixture(), "quickjs", "shared-group")).toThrow(/profile/);
-  for (const engine of ["jsc", "hermes"] as const) {
-    expect(() => convertEngineInitializers(fixture({ limits: GROUP }), engine, "shared-group")).toThrow(/not qualified/);
-  }
+  expect(WebAssembly.Module.exports(new WebAssembly.Module(convertEngineInitializers(fixture({ limits: GROUP }), "jsc", "shared-group"))).map(entry => entry.name)).toContain("jsc_initialize_memory");
+});
+
+test("a shared-group side declares the group address space, not wasm-ld's implicit maximum or another stage", () => {
+  // 65536 is what wasm-ld writes for a shared PIC image linked without --max-memory.
+  const refused = [65536, sharedGroupMemberPages(), sharedGroupMaxPages() - 1].flatMap(maximum => [
+    () => convertEngineInitializers(fixture({ limits: shared(maximum) }), "quickjs", "shared-group"),
+    () => convertEngineInitializers(fixture({ limits: shared(maximum) }), "jsc", "shared-group"),
+  ]);
+  for (const convert of refused) expect(convert).toThrow(/group address space/);
+  expect(() => assertSideMemory(fixture(), "shared-group")).toThrow(/group address space/);
+  expect(() => assertSideMemory(fixture({ limits: GROUP }), "shared-group")).not.toThrow();
+  expect(() => assertSideMemory(fixture(), "split")).not.toThrow();
+});
+
+// Why the exact check matters: import matching alone accepts a wider declared maximum, so a
+// side left at wasm-ld's 65536 pages would instantiate against the group memory and hide its
+// stage. A narrower one (a stage-1 image) cannot instantiate at all.
+test("Wasm import matching accepts the group memory for an equal or wider declared maximum only", () => {
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: sharedGroupMaxPages(), shared: true });
+  const importer = (maximum: number) => new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(
+    section(2, [1].concat(name("env"), name("memory"), [2], shared(maximum))))));
+  const instantiate = (maximum: number) => new WebAssembly.Instance(importer(maximum), { env: { memory } });
+  expect(() => instantiate(sharedGroupMaxPages())).not.toThrow();
+  expect(() => instantiate(65536)).not.toThrow();
+  expect(() => instantiate(sharedGroupMemberPages())).toThrow(WebAssembly.LinkError);
+  expect(() => instantiate(sharedGroupMaxPages() - 1)).toThrow(WebAssembly.LinkError);
 });
 
 function coreFixture(options: { limits?: Limits; dylink?: boolean; exportMemory?: boolean; start?: boolean; missing?: string } = {}): Uint8Array<ArrayBuffer> {
@@ -116,13 +141,14 @@ test("a shared-group core's start becomes core_initialize_memory and nothing els
   expect(() => convertCoreInitializers(output)).toThrow();
 });
 
-test("core conversion refuses anything but a PIE group image at the guest memory maximum", () => {
+test("core conversion refuses anything but a PIE group image at the group address space", () => {
   const fixtures = [
     coreFixture({ limits: UNSHARED }),
-    coreFixture({ limits: [3, 1].concat(u32(65536)) }),
-    // A core linked for another capacity stage.
-    coreFixture({ limits: [3, 1].concat(u32(sharedGroupMaxPages() / 2)) }),
-    coreFixture({ limits: [3, 1].concat(u32(sharedGroupMaxPages() * 2)) }),
+    coreFixture({ limits: shared(65536) }),
+    // A core linked for another capacity stage, including the 1 GiB guest memory maximum.
+    coreFixture({ limits: shared(sharedGroupMemberPages()) }),
+    coreFixture({ limits: shared(sharedGroupMaxPages() / 2) }),
+    coreFixture({ limits: shared(sharedGroupMaxPages() - 1) }),
     coreFixture({ dylink: false }),
     coreFixture({ exportMemory: true }),
     coreFixture({ start: false }),

@@ -2,8 +2,11 @@
 
 Class **Host feature**. These are original adapters, not copied or translated upstream code.
 The matching contract was written against Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
-`proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
-web page and sandbox now pin Waffle `c1cb67c300439af24335d0b2ec481bfb52f79a01` together, including their lockfiles.
+`proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The original
+root package, web page and sandbox selected Waffle
+`c1cb67c300439af24335d0b2ec481bfb52f79a01` together. Their current published 0.0.111
+pin and required caller changes are recorded in
+[process memory admission](process-memory-admission.md).
 
 The 2026-10-24 consumer refresh also updates original launcher fixtures for the required
 `RuntimeProcessContext.identity`, delegates identity reservation and bounded payload methods
@@ -31,7 +34,11 @@ names and never switch stores on failure. The original editor-gate fixture in
 `web/tests/fixtures/startup-filesystem.ts` selects Waffle's supported `whenBusy: "wait"`
 policy for an explicit fast-mode control. It does not expose a product backend selector or
 alter default takeover behavior; the real page and filesystem worker still own waiting,
-recovery and persistence.
+recovery and persistence. The editor gate uses the production consumer-package
+resolver, so shared root and web source select the sandbox's runtime when building
+the sandbox. Its fault-injection plugin runs first, and the original assertion
+still requires exactly one runtime-owned filesystem. No runtime copy or editor
+assertion is dropped to accommodate separate dependency installations.
 The old physical-store selector is removed from product pages. Conformance fixtures alone use
 Waffle's internal implementation override to retain IndexedDB and OPFS backend tests. Runtime-child startup-refusal tests also follow Waffle's current host-only diagnostics contract,
 leaving inherited stderr untouched while the parent consumes the typed START_FAILED result. No old

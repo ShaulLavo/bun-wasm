@@ -1,0 +1,33 @@
+import type { NextConfig } from "next";
+
+const config: NextConfig = {
+  experimental: { cpus: 1 },
+  webpack(config, context) {
+    config.plugins.push({
+      apply(compiler) {
+        const name = `${context.isServer ? "server" : "client"}:${context.nextRuntime ?? "browser"}`;
+        let started = 0;
+        let modules = [];
+        let times = new WeakMap();
+        compiler.hooks.invalid.tap("PlaygroundProfile", (file) => console.log("NEXT_PROFILE", JSON.stringify({ name, phase: "invalid", file, at: Date.now() })));
+        compiler.hooks.compile.tap("PlaygroundProfile", () => {
+          started = Date.now();
+          modules = [];
+          times = new WeakMap();
+          console.log("NEXT_PROFILE", JSON.stringify({ name, phase: "compile", at: started }));
+        });
+        compiler.hooks.compilation.tap("PlaygroundProfile", compilation => {
+          compilation.hooks.buildModule.tap("PlaygroundProfile", module => times.set(module, Date.now()));
+          compilation.hooks.succeedModule.tap("PlaygroundProfile", module => modules.push({ id: module.identifier(), ms: Date.now() - times.get(module) }));
+        });
+        compiler.hooks.done.tap("PlaygroundProfile", () => {
+          modules.sort((a, b) => b.ms - a.ms);
+          console.log("NEXT_PROFILE", JSON.stringify({ name, phase: "done", at: Date.now(), ms: Date.now() - started, built: modules.length, modules: modules.slice(0, 12) }));
+        });
+      },
+    });
+    return config;
+  },
+};
+
+export default config;

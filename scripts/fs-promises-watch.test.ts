@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 function productionSource(name: string) {
@@ -41,7 +42,13 @@ test("fs/promises exposes the watch imported by the Deno shim", () => {
 
 function wrapperSource(value: object): string {
   const source = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8");
-  const factory = runInNewContext(source.slice(source.indexOf("function wrapperSource(")) + "\nwrapperSource");
+  const start = source.indexOf("const identifierKey =");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const factory = runInNewContext(source.slice(start) + "\nwrapperSource", {
+    nativeObjectKeys: Object.keys,
+    nativeRegExpExec: Function.prototype.call.bind(RegExp.prototype.exec),
+    nativeArrayPush: Function.prototype.call.bind(Array.prototype.push),
+  });
   return factory("node:fs/promises", value);
 }
 
@@ -205,7 +212,7 @@ function productionBackend() {
       fsWatchRead: () => reads.shift() ?? -6,
       fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
-    require: (name: string) => name === "events" ? EventEmitter : { Buffer },
+    require: (name: string) => name === "events" ? EventEmitter : name === "resource_frame" ? resourceFrames() : { Buffer },
     addIoWaiter: (waiter: { step(): unknown }) => { waiters.add(waiter); return waiter; },
     removeIoWaiter: (waiter: { step(): unknown }) => waiters.delete(waiter),
     nextTick: queueMicrotask,

@@ -5,6 +5,9 @@ use std::sync::{Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use wasmtime::{Instance, Module, Store, StoreLimitsBuilder};
 
+#[path = "group_pin_tests.rs"]
+mod group_pins;
+
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn group() -> MemoryGroup {
@@ -640,6 +643,7 @@ fn admitted_import_cancellation_interrupts_only_its_member_before_stop_release()
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
     let watches = crate::fs_watch::Watches::new(net.notify());
     let host = Host {
+        nested: crate::nested::State::default(),
         wasi: wasi.build_p1(),
         watches,
         net,

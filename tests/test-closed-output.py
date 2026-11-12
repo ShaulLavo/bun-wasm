@@ -12,12 +12,19 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests/fixtures/pipe-closed-output"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--engine", choices=["quickjs", "jsc", "browser"], required=True)
+parser.add_argument("--engine", choices=["quickjs", "jsc", "browser", "spidermonkey"], required=True)
 parser.add_argument("--wasm", type=Path, required=True)
+parser.add_argument("--tier", choices=["interp", "pbl"])
 parser.add_argument("--host", choices=["native", "node", "node-control"])
 parser.add_argument("--large-only", action="store_true")
 parser.add_argument("--batch-only", action="store_true")
 args = parser.parse_args()
+if args.engine == "spidermonkey" and args.tier is None:
+    parser.error("SpiderMonkey requires --tier interp|pbl")
+if args.engine == "spidermonkey" and not all(os.environ.get(name) for name in ("BUN_WASM_LAUNCHER", "BUN_WASM_SHELL", "BUN_WASM_ENV_UTILITY")):
+    parser.error("SpiderMonkey requires explicit launcher, shell, and env utility inputs")
+if args.host == "node" and args.engine == "spidermonkey":
+    parser.error("SpiderMonkey closed-output verification requires the native host")
 if args.host == "node-control" and not args.batch_only:
     parser.error("--host node-control requires --batch-only")
 host = args.host or ("node" if args.engine == "browser" else "native")
@@ -41,10 +48,13 @@ def command(directory: Path, script: str) -> list[str]:
         ]
     # The same launcher scripts/test.sh selects.
     launcher = Path(os.environ.get("BUN_WASM_LAUNCHER") or Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
+    native = []
+    if args.engine == "spidermonkey":
+        native = ["--shell", os.environ["BUN_WASM_SHELL"], "--env-utility", os.environ["BUN_WASM_ENV_UTILITY"], "--env", f"BUN_WASM_SPIDERMONKEY_TIER={args.tier}"]
     return [
         str(launcher), "--wasm", str(args.wasm.resolve()),
         "--engine", f"{args.engine}={args.wasm.resolve()}",
-        "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin", "--dir", f"{directory}::/",
+        "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin"] + native + ["--dir", f"{directory}::/",
         "--env", "PWD=/", "run", f"/{script}",
     ]
 
@@ -55,6 +65,7 @@ def closed_pipe(directory: Path, fd: int, method: str, handled: bool) -> tuple[i
         command(directory, "callback.ts" if method == "callback" else "index.js") + arguments, cwd=directory,
         stdout=subprocess.PIPE if fd == 1 else subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        env=dict(os.environ, **({"BUN_WASM_SPIDERMONKEY_TIER": args.tier} if args.engine == "spidermonkey" else {})),
     )
     pipe = producer.stdout if fd == 1 else producer.stderr
     assert pipe is not None
@@ -93,6 +104,7 @@ def sustained_output(directory: Path, fd: int) -> tuple[int, int, float]:
     result = subprocess.run(
         command(directory, "large.js") + [str(fd)], cwd=directory,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20,
+        env=dict(os.environ, **({"BUN_WASM_SPIDERMONKEY_TIER": args.tier} if args.engine == "spidermonkey" else {})),
     )
     output = result.stdout if fd == 1 else result.stderr
     assert output == b"x" * (8 * 1024 * 1024), f"fd={fd} exit={result.returncode} received {len(output)} bytes, expected 8388608"
@@ -134,7 +146,7 @@ def check_batch(directory: Path, fd: int):
             command(directory, "batch.ts") + [str(fd)], cwd=directory,
             stdout=writer if fd == 1 else subprocess.PIPE,
             stderr=writer if fd == 2 else subprocess.PIPE, timeout=20,
-            env=dict(os.environ, NODE_NO_WARNINGS="1"),
+            env=dict(os.environ, NODE_NO_WARNINGS="1", **({"BUN_WASM_SPIDERMONKEY_TIER": args.tier} if args.engine == "spidermonkey" else {})),
         )
     finally:
         os.close(writer)

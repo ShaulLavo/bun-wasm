@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/oven-sh/bun",
+  "commit": "9510e74152073d850a18758ca41114d8f214ffa6",
+  "path": "packages/bun-usockets/root_certs.der",
+  "sha256": "9c211f519356eff61365ff890856135b1b8ee298775b144ce6089782ae603f90",
+  "bytes": 129635,
+  "count": 121,
+  "format": "u32-le count; u32-le offsets[count + 1]; concatenated DER certificates",
+  "importedAt": "2026-11-01",
+  "origin": "Mozilla NSS certdata.txt, filtered for SERVER_AUTH:TRUSTED_DELEGATOR",
+  "nssRelease": null,
+  "license": {
+    "identifier": "MPL-2.0",
+    "notice": "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.",
+    "upstreamNoticePath": "packages/bun-usockets/certdata.txt"
+  },
+  "sourceFiles": [
+    {
+      "path": "packages/bun-usockets/certdata.txt",
+      "sha256": "81b7f2576333a2e360e673f912d7b0b7a765d836c731003e348a46cac5d37198"
+    },
+    {
+      "path": "packages/bun-usockets/root_certs.txt",
+      "sha256": "ef62e6b6f5ae9ce04a60537ea5cb279627e4c96f87936f3570401e7eff72d830"
+    },
+    {
+      "path": "packages/bun-usockets/generate-root-certs.pl",
+      "sha256": "ef017a611132379fdc19345ae497b71d4ee9aa31408edf914b88bf5c2279d03a"
+    },
+    {
+      "path": "packages/bun-usockets/generate-root-certs.mjs",
+      "sha256": "81d22c900c20293171623f6af774727ef3fb0c24a58857ea8934fb21d72ebbd9"
+    },
+    {
+      "path": "src/runtime/socket/bundled_root_certs.rs",
+      "sha256": "a25cea7b83820579bae96c8ff0d8f8fb8063d0026c1a412ba190b759be131906"
+    }
+  ]
+}

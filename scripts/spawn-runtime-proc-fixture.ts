@@ -4,6 +4,7 @@ import * as nodePath from "node:path";
 import { runInNewContext } from "node:vm";
 import { EventEmitter } from "node:events";
 import * as nodeStream from "node:stream";
+import { resourceFrames, type ContextSlot } from "./resource-frame-source";
 
 // spawn.ts against an in-memory runtime_proc service: descriptors, pipes with reference counts,
 // typed wait and job reaping. Real hosts are covered by the browser, Node and native ABI suites.
@@ -22,6 +23,7 @@ interface FakeChild {
 }
 interface ServiceOptions {
   failSpawn?: number;
+  spawnDetail?: string;
   deferStart?: boolean;
   now?: () => number;
   onSpawn?(child: FakeChild): void;
@@ -89,6 +91,13 @@ export function service(options: ServiceOptions = {}) {
       options.onSpawn?.(child);
       if (!options.deferStart && (!child.selected || child.selected[0] === 0)) child.started = true;
       return child.pid;
+    },
+    procSpawnError(id: number) {
+      calls.push(`spawnError:${id}`);
+      if (id === 0) return options.spawnDetail ?? "";
+      const child = children.get(id);
+      if (!child || child.reaped || child.waited) return -12;
+      return child.selected?.[0] === 2 ? options.spawnDetail ?? "" : "";
     },
     ownJob: 3,
     procJobOf(id: number) { return id === 0 ? this.ownJob : children.get(id)?.job ?? -71; },
@@ -194,13 +203,13 @@ interface TestTimers {
   setImmediate: typeof setImmediate;
 }
 
-export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[] } = {}) {
+export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[]; contexts?: ContextSlot } = {}) {
   const waiters: any[] = [];
   const process = Object.assign(new EventEmitter(), { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", exitCode: 0, cwd: () => "/work" });
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise, process,
   });
-  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) } };
+  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) }, resource_frame: resourceFrames(options.contexts) };
   const internal = {
     native: fake.native,
     web: { ReadableStream, Response },
@@ -251,7 +260,7 @@ export function loadExit(fake: ReturnType<typeof service>, options: { workerErro
   Object.assign(loaded.internal, options, { cancelIoWaiters() { cleanup.push("cancelIoWaiters"); } });
   const emitExit: (code: number) => void = runInNewContext(`${source}; emitExit`, {
     process: loaded.process, internal: loaded.internal,
-    native: { closeAllDirs() { cleanup.push("closeAllDirs"); } },
+    native: { tlsDispose() {}, closeAllDirs() { cleanup.push("closeAllDirs"); } },
     printError(error: unknown) { errors.push(error); },
   });
   return { ...loaded, emitExit, errors, cleanup };

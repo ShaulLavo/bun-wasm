@@ -175,7 +175,7 @@ try {
     await page.goto(url);
     await ready(page);
     for (const engine of engines) {
-      await page.goto(`${url}?engine=${engine}`);
+      await page.goto(`${url}?engine=${engine}&prompt=off`);
       await ready(page);
       await writeFile(page, "/home/user/cycle/a.js", 'import { b } from "./b.js"; export function a() { return "a"; } console.log(b());');
       await writeFile(page, "/home/user/cycle/b.js", 'import { a } from "./a.js"; export function b() { return a() + "b"; }');

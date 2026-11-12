@@ -135,12 +135,39 @@ pub trait Transpiler {
         })
     }
 
+    /// File-module preparation, with process-owned semantic import identity.
+    /// Keep syntax errors distinct from infrastructure and printer failures.
+    fn prepare_module(
+        &self,
+        source: &str,
+        path: &str,
+        loader: Loader,
+        _intern: &mut crate::import_requests::InternImport<'_>,
+    ) -> Result<Transpiled, RecordError> {
+        self.transpile_with_map(source, path, loader)
+            .map_err(RecordError::Other)
+    }
+
+    /// From now on [`Transpiler::transpile_with_map`] prepares modules for
+    /// registration records (module-level `this` and literal expressions kept
+    /// as written): the host runs every ES module of this process through the
+    /// record loader. Called once, before the process loads any module.
+    fn use_module_records(&self) {}
+
     /// Print an ES module as a registration record for engines without native
     /// module support. The optional mappings map record positions to source.
-    fn register(&self, _source: &str, path: &str) -> Result<Transpiled, String> {
-        Err(format!(
+    fn register(&self, _source: &str, path: &str) -> Result<Transpiled, RecordError> {
+        Err(RecordError::Other(format!(
             "module registration for {path} needs Bun's parser, which this bun.wasm was built without"
-        ))
+        )))
+    }
+
+    /// [`Transpiler::register`] as an ES module that default-exports the
+    /// record, for a host that evaluates records as modules.
+    fn register_module(&self, _source: &str, path: &str) -> Result<Transpiled, RecordError> {
+        Err(RecordError::Other(format!(
+            "module registration for {path} needs Bun's parser, which this bun.wasm was built without"
+        )))
     }
 
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.
@@ -252,6 +279,17 @@ pub enum ModuleKind {
     Script,
     CommonJs,
     Esm,
+}
+
+/// Why file preparation or module registration failed. Both carry the compiler's
+/// report (`file:line:col: message` lines).
+#[derive(Clone, Debug)]
+pub enum RecordError {
+    /// The module's source is invalid: a parse error or a module early error, which a
+    /// native module load reports as a `SyntaxError`.
+    Syntax(String),
+    /// Anything else, reported as a build error.
+    Other(String),
 }
 
 /// Transpiler output with an optional source map and parser classification.

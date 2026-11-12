@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { rootFixture } from "./process-root-fixture";
 import { createNotifyObserver } from "./notify-observer";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
@@ -21,7 +22,7 @@ const notifyObserver = createNotifyObserver();
 function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module {
   const text = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
   const imports = [1].concat(text(namespace), text(name), [0, 0]);
-  return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports)));
+  return fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports)));
 }
 function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((runtime: ProcessRuntime) => Partial<RunOptions>) = {}) {
   const originalWorker = globalThis.Worker;
@@ -178,7 +179,7 @@ for (const path of ["supervisor", "dispose"] as const) test(`${path} freezes roo
   const state = registryFixture();
   let controller: PipeController | undefined;
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const registry = attachPipePublicationRegistry((state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
     controller = new PipeController({ registry, relay: "manual", capacity: 16 });
     const writer = controller.retain(1, "write"), reader = controller.retain(1, "read");
@@ -194,7 +195,7 @@ test("job kill freezes unknown reserved child endpoints before its spawn message
   const state = registryFixture();
   let controller: PipeController | undefined;
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     expect(state.messages).toHaveLength(1);
     const registry = attachPipePublicationRegistry((state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
@@ -212,7 +213,7 @@ test("ordinary root completion freezes only its own pipe row, not a reserved ind
   const state = registryFixture();
   let controller: PipeController | undefined;
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: [], env: {}, cwd: "/", job: -1, fds: [] });
     const registry = attachPipePublicationRegistry((state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry);
     controller = new PipeController({ registry, relay: "manual", capacity: 16 });
@@ -255,16 +256,17 @@ test("explicit Preview1 children run without installing Bun slots", async () => 
 test("disposal before lazy pipe activation closes the subsequently created pipe broker", async () => {
   const state = registryFixture();
   const originalDispose = WorkerPipeBroker.prototype.dispose;
-  let disposals = 0;
-  WorkerPipeBroker.prototype.dispose = function () { disposals++; originalDispose.call(this); };
+  const disposals = new Map<WorkerPipeBroker, number>();
+  WorkerPipeBroker.prototype.dispose = function () { disposals.set(this, (disposals.get(this) ?? 0) + 1); originalDispose.call(this); };
   try {
     const creating = state.runtime.processes();
-    const pending = state.broker.adoptRuntimeRoot(state.root);
+    const pending = state.broker.adoptRuntimeRoot(state.root, []);
     const disposal = state.runtime.dispose();
     await expect(pending).rejects.toThrow("disposed");
     await creating;
     await disposal;
-    expect(disposals).toBe(1);
+    // The public reservation owner has its own broker. Both real owners stop once.
+    expect(Array.from(disposals.values())).toEqual([1, 1]);
   } finally { await state.dispose(); WorkerPipeBroker.prototype.dispose = originalDispose; }
 });
 
@@ -288,7 +290,7 @@ test("pipe-only generic work uses the responsive relay without activating the pr
   const state = registryFixture({ activate: async () => { activations++; return import("waffle/proc"); } });
   let controller: PipeController | undefined;
   try {
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     controller = new PipeController({ registry: attachPipePublicationRegistry(
       (state.root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry), relay: "manual", capacity: 16 });
     const reader = controller.retain(1, "read"), writer = controller.retain(1, "write");
@@ -310,7 +312,7 @@ test("generic runtime byte registrations retain injected-check metadata at worke
   const state = registryFixture();
   try {
     state.broker.register("/bin/injected", { adapter: "preview1", bytes: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]) });
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const pid = state.client.spawn(1, { executable: "/bin/injected", argv: [], env: {}, cwd: "/", job: 1, fds: [] });
     await state.broker.runtimeMessage(state.messages[0]!, 1);
     const deadline = performance.now() + 1000;
@@ -340,7 +342,7 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
       10, body.length + 2, 1, body.length].concat(body));
     expect(WebAssembly.validate(bytes)).toBe(true);
     const entry = refusal === "SIMD" ? { adapter: "preview1", bytes } : {
-      adapter: "preview1", module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])),
+      adapter: "preview1", module: fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])),
     };
     if (refusal === "compiled") {
       expect(() => state.broker.register("/bin/refused", entry as ExecutableRegistration)).toThrow(/require source bytes/);
@@ -349,7 +351,7 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
       return;
     }
     state.broker.register("/bin/refused", entry as ExecutableRegistration);
-    await state.broker.adoptRuntimeRoot(state.root);
+    await state.broker.adoptRuntimeRoot(state.root, []);
     const fd = state.descriptors.open({ kind: "terminal", read: () => 0, write: () => 0,
       readiness: () => ({ readable: false, writable: true, hangup: false }) }, 0xffffn, 0n);
     const pid = state.client.spawn(1, { executable: "/bin/refused", argv: [], env: {}, cwd: "/", job: 1,
@@ -377,7 +379,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
     let suppressed = 0;
     try {
       state.broker.register("/bin/fixture", { module: imported("signal"), adapter: "bun", engine });
-      await state.broker.adoptRuntimeRoot(state.root);
+      await state.broker.adoptRuntimeRoot(state.root, []);
       const pid = state.client.spawn(1, { executable: "/bin/fixture", argv: ["/bin/fixture"], env: {}, cwd: "/", job: -1, fds: [] });
       await state.broker.runtimeMessage(state.messages[0]!, 1);
       const supervisor = await state.broker.ready();

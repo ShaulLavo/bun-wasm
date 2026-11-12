@@ -13,5 +13,8 @@ if ! ruby -e 'require "erb"' 2>/dev/null; then
 fi
 
 targets=("$@")
-[[ ${#targets[@]} -gt 0 ]] || targets=(JavaScriptCore WTF bmalloc jsc)
+if [[ ${#targets[@]} -eq 0 ]]; then
+  targets=(JavaScriptCore WTF bmalloc)
+  [[ "$JSC_PROFILE" != split ]] || targets+=(jsc)
+fi
 PATH="$PATH_NO_BINARYEN" $CAGE ninja -C "$JSC_OBJ" -j"$JOBS" "${targets[@]}"

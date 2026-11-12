@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { testCompose } from "./compose";
+import { testModuleRecordControls } from "./module-records";
 
 const root = resolve(import.meta.dir, "../..");
 
@@ -95,3 +96,4 @@ test("fresh Node-hosted WASM subprocesses preserve stdio, cwd, files, exits and 
 }, 105000);
 
 testCompose("bun-browser.wasm");
+testModuleRecordControls(process.env.BUN_WASM_TEST_BROWSER_WASM || resolve(root, "dist/bun-browser.wasm"));

@@ -1,0 +1,238 @@
+import type { Transport } from "./transport";
+import type { Admission } from "./scope";
+import { withScoped, withAdmission } from "./scope-fixture";
+import { expect, test } from "bun:test";
+import { frameworks } from "./catalog";
+import { execute } from "./execute";
+import { namedAngularDiagnostic, buildAngularDiagnosticSource } from "./angular-diagnostic";
+import { diagnosticFilesystem, diagnosticPath, type DiagnosticFixture } from "./angular-diagnostic-fixture";
+import { withPlayground } from "./test-fixture";
+
+const path = diagnosticPath;
+const reference = `See "${path}" for further details.`;
+
+test("uses the latest named Angular diagnostic in a cumulative terminal", () => {
+  const latest = "/tmp/ng-6O5XQu/angular-errors.log";
+  const output = `${reference}\nerror: script "dev" exited with code 127\n$ bun run dev\nSee "${latest}" for further details.`;
+  expect(namedAngularDiagnostic(output)).toBe(latest);
+});
+
+test("retains the latest reference when the same diagnostic is printed repeatedly", () => {
+  const latest = "/tmp/ng-current/angular-errors.log";
+  expect(namedAngularDiagnostic(`${reference}\nSee "${latest}" for further details.\nSee "${latest}" for further details.`)).toBe(latest);
+});
+type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean; failedRead?: "failure" | "final" | "both"; browserMemory?: "empty" | "trap" };
+
+async function runFixture(config: Fixture = {}) {
+  const framework = frameworks.find(item => item.id === (config.framework ?? "angular"));
+  if (!framework) throw new Error("Missing framework fixture");
+  const filesystem = diagnosticFilesystem(config);
+  try { return await withPlayground(framework, 0, async transport => {
+    const logs: string[] = [];
+    const events: string[] = [];
+    await withScoped(transport, page => page.evaluate(`globalThis.diagnostic = ${JSON.stringify({ ...config, output: config.output ?? reference })};
+      playground.term.buffer.active = { length: 1, getLine() { return { isWrapped: false, translateToString() { return diagnostic.output; } }; } };
+      const submit = playground.shell.submit.bind(playground.shell);
+      playground.shell.submit = async text => { if (text === 'bun run dev' && diagnostic.fail !== false) { playground.shell.lastExit = 127; return; } return submit(text); };
+      void 0`));
+    const snapshots = config.browserMemory === "trap" ? [{ engine: "browser", engineCounters: { browserCallTrapCapacityBytes: 131072 } }] : [];
+    if (config.browserMemory) await withScoped(transport, page => page.evaluate(`globalThis.__bunMemorySnapshots = async () => ${JSON.stringify(snapshots)};`));
+    const evaluate = transport.evaluate.bind(transport);
+    const pending: Promise<unknown>[] = [];
+    let transcripts = 0;
+    transport.evaluate = async <T>(expression: string, admission: Admission, options?: Parameters<Transport["evaluate"]>[2]): Promise<T> => {
+      if (expression.includes("const read = globalThis.__goalsReadAngularDiagnostic")) events.push("diagnostic");
+      if (expression.includes("function transcript")) transcripts++;
+      const failedRead = config.failedRead === "both" || (transcripts === 3 && config.failedRead === "failure") || (transcripts === 4 && config.failedRead === "final");
+      if (expression.includes("function transcript") && transcripts >= 3 && failedRead) throw new Error("terminal read failed");
+      if (config.changingTerminal && expression.includes("function transcript") && transcripts >= 3) {
+        return evaluate<T>(JSON.stringify(transcripts === 3 ? "Error: failure-time detail\r\nraw" : "cleanup-time output\r\nraw"), admission, options);
+      }
+      const delay = config.slowTerminal && transcripts === 3 && expression.includes("function transcript");
+      const work = evaluate<T>(expression, admission, options);
+      const operation = (async () => { const value = await work; if (delay) await Bun.sleep(2050); return value; })();
+      if (delay) pending.push(operation);
+      return operation;
+    };
+    if (config.owned) transport.cleanup = async () => { events.push("cleanup"); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const close = transport.close.bind(transport);
+    transport.close = async () => { events.push("close"); await close(); };
+    const started = performance.now();
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 500,
+      async createTransport() { return transport; }, async saveLog(text) { events.push("save"); logs.push(text); },
+    });
+    const durationMs = performance.now() - started;
+    await Promise.all(pending);
+    expect(filesystem.disposed()).toBe(true);
+    expect(await withAdmission(admission => evaluate("typeof globalThis.__goalsReadAngularDiagnostic", admission))).toBe("undefined");
+    return { result, logs, events: events.slice(), durationMs, reads: filesystem.operations, readInodes: filesystem.readInodes, ranges: filesystem.ranges, expected: filesystem.expected, replaced: filesystem.replaced() };
+  }, 0, filesystem.filesystem); }
+  finally { await filesystem.close(); }
+}
+
+test.each([false, true])("retains distinct failure and cleanup observations for owned cleanup = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true });
+  const log = observed.logs.at(-1) ?? "";
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("failure-time detail") });
+  expect(log).toContain("Error: failure-time detail\r\nraw");
+  expect(log).toContain("cleanup-time output\r\nraw");
+  expect(log.indexOf("failure-time detail")).toBeLessThan(log.indexOf("cleanup-time output"));
+  expect(log).toContain("Failure-time terminal observation");
+  expect(log).toContain(owned ? "Cleanup-time terminal observation (before owned transport cleanup)" : "Cleanup-time terminal observation (after server stop)");
+});
+
+test.each([false, true])("labels unavailable failure observation without attributing later output, owned = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true, failedRead: "failure" });
+  const log = observed.logs.at(-1) ?? "";
+  if (observed.result.status !== "fail") throw new Error("Expected a failed cell");
+  expect(observed.result.phase).toBe("dev");
+  expect(observed.result.error).toContain("without listening");
+  expect(observed.result.error).not.toContain("cleanup-time output");
+  expect(log).toContain("Failure-time terminal observation unavailable");
+  expect(log).toContain("Error: terminal read failed");
+  expect(log).toContain("cleanup-time output\r\nraw");
+});
+
+test.each([false, true])("retains saved failure observation when final read fails, owned = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true, failedRead: "final" });
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("failure-time detail") });
+  expect(observed.logs.at(-1)).toContain("Failure-time terminal observation");
+  expect(observed.logs.at(-1)).toContain("Error: failure-time detail\r\nraw");
+  expect(observed.result.attempts[0]?.phases.at(-1)?.status).toBe("pass");
+  expect(observed.events.at(-1)).toBe(owned ? "cleanup" : "close");
+});
+
+test("owned fallback labels both unavailable observations", async () => {
+  const observed = await runFixture({ owned: true, failedRead: "both" });
+  expect(observed.result.status).toBe("fail");
+  expect(observed.logs.at(-1)).toContain("Failure-time terminal observation unavailable");
+  expect(observed.logs.at(-1)).toContain("Final terminal observation unavailable");
+  expect(observed.logs.at(-1)).toContain("Failure capture: Error: terminal read failed");
+});
+
+test.each([false, true])("successful terminal output remains unchanged, owned = %s", async owned => {
+  const observed = await runFixture({ owned, fail: false, browserMemory: "empty" });
+  expect(observed.result.status).toBe("pass");
+  expect(observed.logs).toEqual([reference]);
+  const unavailable = await runFixture({ owned, fail: false });
+  expect(unavailable.result.status).toBe("pass");
+  expect(unavailable.logs).toEqual([reference + "\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
+});
+
+test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
+  const observed = await runFixture({ owned });
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("without listening") });
+  expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+  expect(observed.reads).toEqual(["preopen", "resolve", "stat", "resolve", "stat", "resolve", "stat", "stat", "read"]);
+  expect(observed.readInodes).toEqual([observed.expected]);
+  expect(observed.ranges).toEqual([[16_384, 0]]);
+  expect(observed.logs).toHaveLength(2);
+  for (const log of observed.logs) expect(log).toContain("at ajv/dist/compile/codegen/index.js:181:24");
+  expect(observed.events[0]).toBe("diagnostic");
+  expect(observed.events.at(-1)).toBe(owned ? "cleanup" : "close");
+});
+
+test("failure capture reads the latest named log after an earlier Angular command", async () => {
+  const observed = await runFixture({ output: `See "/tmp/ng-previous/angular-errors.log" for further details.\n${reference}` });
+  expect(observed.readInodes).toEqual([observed.expected]);
+  expect(observed.logs.at(-1)).toContain(`--- Guest Angular diagnostic: ${path} ---`);
+  expect(observed.logs.at(-1)).toContain("at ajv/dist/compile/codegen/index.js:181:24");
+});
+
+test.each([false, true])("Angular capture preserves Browser trap facts when its read stalls = %s", async stalled => {
+  const observed = await runFixture({ browserMemory: "trap", stalled });
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+  expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass" });
+  for (const log of observed.logs) {
+    expect(log).toContain('"browserCallTrapCapacityBytes":131072');
+    expect(log).toContain(stalled ? "Guest Angular diagnostic unavailable" : "at ajv/dist/compile/codegen/index.js:181:24");
+  }
+});
+
+test.each([
+  { fail: false },
+  { framework: "astro" },
+  { output: "Unrelated failure" },
+  { output: 'See "/home/user/private.log" for further details.' },
+  { output: 'See "/tmp/ng-abc/../angular-errors.log" for further details.' },
+])("only a failed Angular phase with an exact named diagnostic reads guest files: %j", async config => {
+  const observed = await runFixture(config);
+  expect(observed.reads).toEqual([]);
+  expect(observed.logs.at(-1)).not.toContain("--- Guest Angular diagnostic:");
+  expect(observed.result.status).toBe(config.fail === false ? "pass" : "fail");
+});
+
+test.each(["/tmp", "/tmp/ng-9kxMAf", path])("refuses symlink at %s without reading its target", async symlink => {
+  const observed = await runFixture({ symlink });
+  expect(observed.readInodes).toEqual([]);
+  expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+});
+
+test("a missing diagnostic preserves failure and cleanup", async () => {
+  const observed = await runFixture({ missing: true });
+  expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+  expect(observed.events.at(-1)).toBe("close");
+});
+
+test("retains only a bounded tail", async () => {
+  const contents = "discarded prefix\n" + "x".repeat(20_000) + "\n" + Array.from({ length: 120 }, (_, index) => `line ${index}`).join("\n");
+  const observed = await runFixture({ contents });
+  expect(observed.logs.at(-1)).toContain("truncated to last 16 KiB / 100 lines");
+  expect(observed.logs.at(-1)).toContain("line 119");
+  expect(observed.logs.at(-1)).not.toContain("discarded prefix");
+  expect(observed.logs.at(-1)).not.toContain("line 19\n");
+});
+
+test("a stalled read consumes the existing two-second observation allowance and still tears down", async () => {
+  const observed = await runFixture({ stalled: true, owned: true });
+  expect(observed.durationMs).toBeGreaterThanOrEqual(1900);
+  expect(observed.durationMs).toBeLessThan(3000);
+  expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
+  expect(observed.events.at(-1)).toBe("cleanup");
+});
+
+test("a late terminal response cannot start guest capture after the observation deadline", async () => {
+  const observed = await runFixture({ slowTerminal: true, owned: true });
+  expect(observed.reads).toEqual([]);
+  expect(observed.events.at(-1)).toBe("cleanup");
+}, 10_000);
+
+test("rejects misleading references and accepts the observed Angular path", () => {
+  expect(namedAngularDiagnostic(reference)).toBe(path);
+  expect(namedAngularDiagnostic(`prefix ${reference}`)).toBeUndefined();
+  expect(namedAngularDiagnostic('See "/tmp/ng-abc/secret.txt" for further details.')).toBeUndefined();
+});
+
+test.each(["/tmp", "/tmp/ng-9kxMAf", path])("replacement of %s after resolution cannot redirect the retained handle", async replaced => {
+  const observed = await runFixture({ replacement: { path: replaced, after: "resolve" } });
+  expect(observed.replaced).toBe(true);
+  expect(observed.readInodes.every(inode => inode === observed.expected)).toBe(true);
+  expect(observed.logs.at(-1)).not.toContain("PRIVATE FILE MUST NOT BE READ");
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev" });
+});
+
+test.each(["/tmp", "/tmp/ng-9kxMAf", path])("replacement of checked %s before reading cannot expose a private target", async replaced => {
+  const observed = await runFixture({ replacement: { path: replaced, after: "stat" } });
+  expect(observed.replaced).toBe(true);
+  if (replaced === path) {
+    expect(observed.readInodes).toEqual([observed.expected]);
+    expect(observed.logs.at(-1)).toContain("at ajv/dist/compile/codegen/index.js:181:24");
+  } else {
+    expect(observed.readInodes).toEqual([]);
+    expect(observed.logs.at(-1)).toContain("Guest Angular diagnostic unavailable");
+  }
+  expect(observed.logs.at(-1)).not.toContain("PRIVATE FILE MUST NOT BE READ");
+});
+
+test("portable fleet bundle embeds the same pinned reader without remote source dependencies", async () => {
+  const diagnostic = await buildAngularDiagnosticSource();
+  const built = await Bun.build({ entrypoints: [new URL("./angular-diagnostic.ts", import.meta.url).pathname], target: "bun", define: { __GOALS_ANGULAR_DIAGNOSTIC__: JSON.stringify(diagnostic) } });
+  expect(built.success).toBe(true);
+  const source = await built.outputs[0]?.text();
+  if (!source) throw new Error("Missing portable reader bundle");
+  const embedded: unknown = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  if (!embedded || typeof embedded !== "object" || !("angularDiagnostic" in embedded) || typeof embedded.angularDiagnostic !== "function") throw new Error("Missing embedded reader export");
+  await expect(embedded.angularDiagnostic({ async evaluate(expression: string) { expect(expression).toContain("const read = globalThis.__goalsReadAngularDiagnostic"); throw new Error("Embedded reader evaluated"); } }, path, Date.now() + 2000)).rejects.toThrow("Embedded reader evaluated");
+});

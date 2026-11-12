@@ -115,6 +115,8 @@
   function own(snapshot: Omit<Snapshot, "queue">, owner: Route | null, origin: Route, ready = true) {
     const previous = owners.get(snapshot.id);
     if (previous && previous.version > snapshot.version) return;
+    // Legacy delivery can claim the new owner before the sender's moving frame arrives.
+    if (previous?.version === snapshot.version && previous.owner !== null && owner === null) return;
     owners.set(snapshot.id, { owner, origin, version: snapshot.version, peer: snapshot.peer, sent: snapshot.sent, ready });
     if (!owner || !ready) return;
     const waiting = pending.get(snapshot.id) || [];
@@ -316,7 +318,7 @@
     #openLane(lane: BunWasm.PortLane) {
       const lanes = sharedLanes(), state = this.#value();
       if (!lanes || state.lane) return;
-      const io = lanes.open(lane.buffer, lane.side);
+      const io = lanes.open(lane, lane.side);
       state.lane = { ...lane, io, stop: io.watch(() => internal.realTimers.setImmediate(pump)) };
     }
     /** Stops reading the lane: for good when the port closes, or until a transferred port's next owner reads it. */
@@ -331,12 +333,12 @@
       const other = state.peer === null ? undefined : localPorts.get(state.peer);
       if (state.lane || !lanes || !other) return;
       if (!other.#state || other.#state.lane) return;
-      const buffer = lanes.create();
-      this.#openLane({ buffer, side: 0 }); other.#openLane({ buffer, side: 1 });
+      const backing = lanes.create();
+      this.#openLane({ ...backing, side: 0 }); other.#openLane({ ...backing, side: 1 });
     }
     static #drainLane(port: MessagePort, defer = false) {
       const state = port.#state;
-      if (!state?.lane) return;
+      if (!state?.lane || state.phase !== "open") return;
       let arrived = false;
       state.lane.io.drain(text => {
         const body = record(JSON.parse(text));
@@ -386,7 +388,7 @@
       const state = this.#value();
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed",
-        lane: state.lane ? { buffer: state.lane.buffer, side: state.lane.side } : null };
+        lane: state.lane ? { buffer: state.lane.buffer, side: state.lane.side, poolIndex: state.lane.poolIndex } : null };
     }
     #bind() {
       if (restoringLocally) return;
@@ -423,8 +425,14 @@
       };
     }
     static #receive(port: MessagePort) {
-      if (!port.#state?.queue.length) return undefined;
-      const message = messagePacket(port.#state.queue.shift()).data;
+      const state = port.#state;
+      if (!state) return undefined;
+      if (!state.queue.length) {
+        if (!port.#attachmentWait) return undefined;
+        // The head frame cannot decode in this synchronous turn. It stays pending, whole, and delivers once this thread's event loop runs.
+        throw Object.assign(new Error("receiveMessageOnPort: the next message needs a shared backing that is not attached in this thread; it will be delivered once this thread's event loop runs"), { code: "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED" });
+      }
+      const message = messagePacket(state.queue.shift()).data;
       port.#maybeClose();
       return { message };
     }
@@ -453,7 +461,7 @@
     }
     #acceptNext(state: PortState): boolean {
       const graph = state.pending.get(state.received);
-      if (!graph || state.phase !== "open") return false;
+      if (!graph || state.phase === "closed" || state.phase === "closing" && state.lane !== null) return false;
       try {
         this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
         if (this.#attachmentWait) return false;
@@ -568,6 +576,7 @@
       const state = this.#state;
       if (!state || state.phase !== "open") return;
       state.phase = "closing";
+      state.lane?.io.close();
       this.#attachmentWait?.(); this.#attachmentWait = null;
       for (const graph of state.pending.values()) discardPendingTransfers(graph);
       MessagePort.#closeQueuedPorts(state.queue);
@@ -804,11 +813,10 @@
       env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
-      try { child = internal.require("spawn").spawn([process.execPath].concat(exec.conditions, target.argv, argv), {
+      try { child = internal.require("spawn").spawnWorker([process.execPath].concat(exec.conditions, target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
-        _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
-      }); } catch (error) { transferPlan.abort(); publicPort.close(); childPort.close(); throw error; }
+      }, { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined }); } catch (error) { transferPlan.abort(); publicPort.close(); childPort.close(); throw error; }
       this.#child = child;
       let control: BunWasm.WorkerChannel | null = null;
       try {

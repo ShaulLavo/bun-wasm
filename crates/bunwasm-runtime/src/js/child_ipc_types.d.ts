@@ -4,8 +4,11 @@ declare namespace BunWasm {
     readonly connected: boolean;
     send(message: unknown, handle?: unknown, options?: unknown, callback?: unknown): boolean;
     disconnect(): void;
+    /** Reads what the child left, then ends the channel as `end` does. */
     finish(): void;
     close(error?: Error): void;
+    /** Closes as the channel's own terminal event, its disconnect in the channel's frame (the child's exit). */
+    end(error?: Error): void;
     ref(): ChildIpc;
     unref(): ChildIpc;
   }

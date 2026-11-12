@@ -9,16 +9,23 @@
 
 extern JSValue JS_bunwasm_NewWasmMemoryBuffer(JSContext *, uint8_t *, size_t);
 
-_Static_assert(sizeof(JSBunwasmMemoryTelemetry) == 96, "telemetry ABI size");
+_Static_assert(sizeof(JSBunwasmMemoryTelemetry) == 128, "telemetry ABI size");
 _Static_assert(offsetof(JSBunwasmMemoryTelemetry, failed_size) == 64, "failure offset");
 _Static_assert(offsetof(JSBunwasmMemoryTelemetry, counters_valid) == 88, "valid offset");
+_Static_assert(offsetof(JSBunwasmMemoryTelemetry, automatic_gc_count) == 96, "automatic GC count offset");
+_Static_assert(offsetof(JSBunwasmMemoryTelemetry, malloc_size_after_automatic_gc) == 104, "automatic GC floor offset");
+_Static_assert(offsetof(JSBunwasmMemoryTelemetry, malloc_gc_threshold) == 112, "GC threshold offset");
+_Static_assert(offsetof(JSBunwasmMemoryTelemetry, current_malloc_size) == 120, "current malloc offset");
 
+/* Every request goes unchanged to the engine's default callbacks, so these
+   callbacks may declare the default bound for the frame stack. */
+#define backing() JS_GetDefaultMallocFunctions()
 static size_t allocation_calls;
-static void *counted_malloc(void *opaque, size_t size) { allocation_calls++; return malloc(size); }
-static void *counted_calloc(void *opaque, size_t count, size_t size) { allocation_calls++; return calloc(count, size); }
-static void *counted_realloc(void *opaque, void *ptr, size_t size) { allocation_calls++; return realloc(ptr, size); }
-static void counted_free(void *opaque, void *ptr) { free(ptr); }
-static size_t counted_usable(const void *ptr) { return malloc_usable_size((void *)ptr); }
+static void *counted_malloc(void *opaque, size_t size) { allocation_calls++; return backing()->js_malloc(NULL, size); }
+static void *counted_calloc(void *opaque, size_t count, size_t size) { allocation_calls++; return backing()->js_calloc(NULL, count, size); }
+static void *counted_realloc(void *opaque, void *ptr, size_t size) { allocation_calls++; return backing()->js_realloc(NULL, ptr, size); }
+static void counted_free(void *opaque, void *ptr) { backing()->js_free(NULL, ptr); }
+static size_t counted_usable(const void *ptr) { return backing()->js_malloc_usable_size(ptr); }
 
 _Static_assert(sizeof(JSMemoryUsage) == 224, "Rust binding size");
 _Static_assert(offsetof(JSMemoryUsage, array_buffer_count) == 208, "Rust count offset");
@@ -89,6 +96,30 @@ static void allocation_release(JSRuntime *rt, JSContext *ctx)
     assert(sample(rt, "shared-released").array_buffer_count == baseline.array_buffer_count);
 }
 
+static void automatic_gc_state(JSRuntime *rt, JSContext *ctx)
+{
+    JS_bunwasm_RefreshMemoryTelemetry(rt);
+    const JSBunwasmMemoryTelemetry *before = JS_bunwasm_MemoryTelemetry(rt);
+    uint64_t gc_before = before->automatic_gc_count;
+    for (int i = 0; i < 10000 && before->automatic_gc_count == gc_before; i++) {
+        const char *source =
+            "(() => { const a = {}; a.self = a; a.payload = 'x'.repeat(4096); return a; })()";
+        JSValue value = JS_Eval(ctx, source, strlen(source), "automatic-gc", JS_EVAL_TYPE_GLOBAL);
+        assert(!JS_IsException(value));
+        JS_FreeValue(ctx, value);
+        before = JS_bunwasm_MemoryTelemetry(rt);
+    }
+    const JSBunwasmMemoryTelemetry *after = JS_bunwasm_MemoryTelemetry(rt);
+    assert(after->automatic_gc_count > gc_before);
+    assert(after->malloc_size_after_automatic_gc != UINT64_MAX);
+    assert(after->malloc_gc_threshold == JS_GetGCThreshold(rt));
+    assert(after->current_malloc_size >= after->malloc_size_after_automatic_gc);
+    printf("{\"automaticGcCount\":%" PRIu64 ",\"mallocSizeAfterAutomaticGc\":%" PRIu64
+           ",\"mallocGcThreshold\":%" PRIu64 ",\"currentMallocSize\":%" PRIu64 "}\n",
+           after->automatic_gc_count, after->malloc_size_after_automatic_gc,
+           after->malloc_gc_threshold, after->current_malloc_size);
+}
+
 static void bounded_failures(JSRuntime *rt, JSContext *ctx)
 {
     const size_t request = 1048576;
@@ -143,7 +174,7 @@ static void bounded_failures(JSRuntime *rt, JSContext *ctx)
 static void cached_readout(JSRuntime *rt)
 {
     const JSBunwasmMemoryTelemetry *cached = JS_bunwasm_MemoryTelemetry(rt);
-    assert(cached->abi_version == 1 && cached->byte_size == 96);
+    assert(cached->abi_version == 1 && cached->byte_size == 128);
     assert(cached->refresh_sequence == 0 && cached->counters_valid == 0);
     assert(cached->malloc_size == UINT64_MAX);
     cached = JS_bunwasm_RefreshMemoryTelemetry(rt);
@@ -162,7 +193,7 @@ static void cached_readout(JSRuntime *rt)
     assert(cached->malloc_size >= baseline + 1048576);
     js_free_rt(rt, block);
     JS_bunwasm_RefreshMemoryTelemetry(rt);
-    printf("{\"cachedReads\":1000,\"allocatorCalls\":0,\"abiBytes\":96}\n");
+    printf("{\"cachedReads\":1000,\"allocatorCalls\":0,\"abiBytes\":128,\"automaticGcCount\":%" PRIu64 ",\"mallocGcThreshold\":%" PRIu64 ",\"currentMallocSize\":%" PRIu64 "}\n", cached->automatic_gc_count, cached->malloc_gc_threshold, cached->current_malloc_size);
 }
 
 int main(void)
@@ -172,10 +203,12 @@ int main(void)
     };
     JSRuntime *rt = JS_NewRuntime2(&functions, NULL);
     assert(rt);
+    JS_SetMallocBound(rt, JS_DefaultMallocBound);
     JSContext *ctx = JS_NewContext(rt);
     assert(ctx);
     cached_readout(rt);
     allocation_release(rt, ctx);
+    automatic_gc_state(rt, ctx);
     bounded_failures(rt, ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

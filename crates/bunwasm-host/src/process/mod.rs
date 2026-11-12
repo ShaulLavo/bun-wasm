@@ -46,6 +46,16 @@ pub const NOTCAPABLE: i32 = -76;
 const PROCESS_CAPACITY: usize = 1024;
 const MAX_ACCESS_REQUESTS: usize = 64;
 
+fn bounded_spawn_detail(mut detail: String) -> String {
+    let mut end = detail.len().min(4096);
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail.truncate(end);
+    detail.shrink_to_fit();
+    detail
+}
+
 pub(crate) fn validate_signal(signal: i32, probe: bool) -> Result<(), i32> {
     if (signal == 0 && probe) || ((1..=64).contains(&signal) && signal != 32 && signal != 33) {
         if (19..=22).contains(&signal) {
@@ -169,7 +179,9 @@ impl Runtime {
         let (_, paths) = executables::ENGINE_PATHS
             .iter()
             .find(|(engine, _)| *engine == name)
-            .ok_or_else(|| anyhow::anyhow!("unknown engine {name:?}; expected quickjs or jsc"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown engine {name:?}; expected quickjs, jsc or spidermonkey")
+            })?;
         self.executables.register(paths, module)?;
         Ok(())
     }
@@ -288,6 +300,7 @@ pub struct Processes {
     notify: Arc<Notify>,
     cancel: Arc<Cancellation>,
     access: HashMap<i32, Arc<Mutex<AccessState>>>,
+    spawn_detail: String,
     /// The memory group this process is a member of; its workers join it.
     memory_group: Option<crate::shm::MemoryGroup>,
 }
@@ -346,6 +359,7 @@ impl Processes {
             notify,
             cancel,
             access: HashMap::new(),
+            spawn_detail: String::new(),
             memory_group: None,
         }
     }
@@ -529,10 +543,45 @@ impl Processes {
     }
 
     pub fn spawn(&mut self, meta: &[u8]) -> i32 {
+        self.spawn_detail.clear();
         match self.start(meta) {
             Ok(pid) => pid,
-            Err(error) => error,
+            Err(error) => {
+                if self.spawn_detail.is_empty() {
+                    self.spawn_detail = format!("Process spawn failed (WASI errno {})", -error);
+                }
+                error
+            }
         }
+    }
+
+    pub fn spawn_error(&self, pid: i32) -> Result<String, i32> {
+        if pid < 0 {
+            return Err(INVAL);
+        }
+        let state = self.runtime.state.lock().unwrap();
+        if state.stopping
+            || self.cancel.is_finished()
+            || state
+                .processes
+                .get(&self.pid)
+                .is_none_or(|caller| caller.result.is_some())
+        {
+            return Err(SRCH);
+        }
+        if pid == 0 {
+            return Ok(self.spawn_detail.clone());
+        }
+        let child = state
+            .processes
+            .get(&pid)
+            .filter(|child| child.parent == self.pid);
+        Ok(child.ok_or(CHILD)?.cancel.spawn_error())
+    }
+
+    pub fn spawn_fault(&mut self) -> i32 {
+        self.spawn_detail = "Invalid spawn descriptor memory".into();
+        FAULT
     }
 
     fn start(&mut self, meta: &[u8]) -> Result<i32, i32> {
@@ -660,7 +709,13 @@ impl Processes {
                 let outcome = match startup {
                     Err(errno) => {
                         drop(fds);
-                        cancellation.select(FinalOutcome::StartFailed(-errno))
+                        cancellation.select_start_failure(
+                            -errno,
+                            format!(
+                                "Cannot start {} in {} (WASI errno {})",
+                                request.executable, request.cwd, -errno
+                            ),
+                        )
                     }
                     Ok(executables::Resolved {
                         module,
@@ -691,13 +746,7 @@ impl Processes {
                             Err(std::io::Error::other("child guest panicked").into())
                         })
                         .unwrap_or_else(|error| {
-                            eprintln!("bun-wasm child: {error:#}");
-                            let errno = error
-                                .chain()
-                                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
-                                .map(startup_io_errno)
-                                .unwrap_or(45); // ENOEXEC: invalid module/entry point.
-                            cancellation.select(FinalOutcome::StartFailed(errno))
+                            startup_failure(&error, &cancellation, || std::io::stderr().lock())
                         })
                     }
                 };
@@ -708,7 +757,8 @@ impl Processes {
             });
         let thread = match thread {
             Ok(thread) => thread,
-            Err(_) => {
+            Err(error) => {
+                self.spawn_detail = bounded_spawn_detail(error.to_string());
                 return Err(AGAIN);
             }
         };
@@ -979,6 +1029,25 @@ impl Processes {
             self.notify.wait_past(seen, left);
         }
     }
+}
+
+/// Classify a child error after its Store and descriptors have physically stopped.
+pub(crate) fn startup_failure<W: std::io::Write>(
+    error: &anyhow::Error,
+    cancellation: &Cancellation,
+    diagnostics: impl FnOnce() -> W,
+) -> FinalOutcome {
+    let errno = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .map(startup_io_errno)
+        .unwrap_or(45); // ENOEXEC: invalid module/entry point.
+    let outcome = cancellation.select_start_failure(errno, format!("{error:#}"));
+    if matches!(outcome, FinalOutcome::StartFailed(_)) {
+        let mut diagnostics = diagnostics();
+        let _ = writeln!(diagnostics, "bun-wasm child: {error:#}");
+    }
+    outcome
 }
 
 /// Map host I/O failures into the seven portable startup errors in runtime_proc.

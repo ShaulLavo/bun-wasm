@@ -8,6 +8,7 @@ type StructuredCloneInternal = BunWasm.Internal & {
   clonePorts?: (value: unknown, options: { transfer: unknown[] }) => unknown;
   isMessagePort?: (value: unknown) => boolean;
   isWasmMemoryBuffer?: (value: unknown) => boolean;
+  isWasmCapability?: (value: unknown) => boolean;
   native: BunWasm.Native & { transferArrayBuffers(buffers: unknown[]): void };
 };
 (function (internal: StructuredCloneInternal) {
@@ -181,6 +182,7 @@ type StructuredCloneInternal = BunWasm.Internal & {
     }
 
     cloneObject(value: object): unknown {
+      if (internal.isWasmCapability?.(value)) throw dataCloneError();
       const special = this.cloneSpecial(value);
       if (special !== undefined) return this.remember(value, special);
       if (brand(mapSize, value)) return this.cloneMap(value as Map<unknown, unknown>);

@@ -170,9 +170,14 @@ impl Transport {
         Ok(())
     }
 
-    #[cfg(any(test, not(feature = "engine-split")))]
+    #[cfg(any(test, not(feature = "engine-split"), bun_wasm_shared_group))]
     pub fn read(&self, pointer: u32, bytes: u32) -> Result<Vec<u8>, Status> {
         self.allocation(pointer, bytes)?.copy()
+    }
+
+    #[cfg(any(test, bun_wasm_shared_group))]
+    pub fn validate(&self, pointer: u32, bytes: u32) -> Result<(), Status> {
+        self.allocation(pointer, bytes).map(|_| ())
     }
 
     pub fn dispatch(&self, dispatcher: &Dispatcher, frame_ptr: u32) -> Status {
@@ -293,5 +298,22 @@ fn call_error(status: Status) -> crate::data::NativeError {
     match status {
         Status::ResourceLimit => crate::data::NativeError::error("core data allocation failed"),
         _ => crate::data::NativeError::error("invalid core transport allocation"),
+    }
+}
+
+#[cfg(test)]
+mod nested_frame_controls {
+    use super::*;
+
+    #[test]
+    fn validation_requires_an_exact_live_owned_frame_without_retaining_it() {
+        let transport = Transport::default();
+        let pointer = transport.alloc(520, Frame::ALIGN);
+        assert_ne!(pointer, 0);
+        assert!(transport.validate(pointer, 520).is_ok());
+        assert!(transport.validate(pointer, 519).is_err());
+        assert!(transport.validate(pointer + 1, 520).is_err());
+        transport.free(pointer, 520, Frame::ALIGN).unwrap();
+        assert!(transport.validate(pointer, 520).is_err());
     }
 }

@@ -6,6 +6,29 @@ import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher } from "../src/bun-launcher";
 import type { RunRequest } from "../src/bun-executor";
 
+test("no relay keeps loopback and rejects external TCP with ENOTSUP", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const network = await runtime.network();
+  const ring = createRing();
+  const helper = createBunNetworkHelper(network, ring);
+  const host = new NetHost(ring, request => dispatchBunNetwork(helper, { type: "net", req: request }), undefined, { shared: true });
+  try {
+    const listener = host.listen("localhost", 0);
+    const port = host.localPort(listener);
+    const client = host.connect("localhost", port);
+    expect(client).toBeGreaterThan(0);
+    await Bun.sleep(0);
+    expect(host.accept(listener)).toBeGreaterThan(0);
+    const external = host.connect("outside.example", 443);
+    expect(external).toBeLessThan(0);
+    expect(JSON.parse(String(host.error(0)))).toMatchObject({ code: "ENOTSUP" });
+  } finally {
+    host.dispose();
+    helper.dispose();
+    await runtime.dispose();
+  }
+});
+
 test("Bun child launches receive a per-process networking ring", async () => {
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
@@ -173,5 +196,65 @@ test("Runtime-borrowed helpers retain the default installer tarball cache policy
   } finally {
     helper.dispose(); await runtime.dispose(); globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches); else Reflect.deleteProperty(globalThis, "caches");
+  }
+});
+
+import { runtimeRelay } from "../src/net/relay";
+
+type TestRelay = NonNullable<Awaited<ReturnType<typeof runtimeRelay>>>;
+
+function relayOptions(counter: { calls: number }) {
+  return {
+    endpoint: "http://127.0.0.1:1/",
+    carriers: ["websocket"] as const,
+    getToken(): string {
+      counter.calls++;
+      throw new Error("source-only token marker, stop before I/O");
+    },
+  };
+}
+
+async function refusedRelayConnect(relay: TestRelay): Promise<unknown> {
+  try {
+    await relay.connect({ host: "source-only.example", port: 4321 }, new AbortController().signal);
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected the revoked relay to reject connection");
+}
+
+test("relay initialization cannot create a live connector after runtime disposal", async () => {
+  const runtime = processRuntimeFixture({});
+  const counter = { calls: 0 };
+  const observed = runtimeRelay(runtime, relayOptions(counter)).then(
+    relay => ({ kind: "returned", relay }) as const,
+    error => ({ kind: "rejected", error }) as const,
+  );
+  try {
+    await runtime.dispose();
+    const outcome = await observed;
+    if (outcome.kind === "returned" && outcome.relay) await refusedRelayConnect(outcome.relay);
+    expect(counter.calls).toBe(0);
+    expect(outcome.kind).toBe("rejected");
+  } finally {
+    const outcome = await observed;
+    if (outcome.kind === "returned") await outcome.relay?.close();
+    await runtime.dispose();
+  }
+});
+
+test("closed runtime relay rejects stale connect before token acquisition", async () => {
+  const runtime = processRuntimeFixture({});
+  const counter = { calls: 0 };
+  const relay = await runtimeRelay(runtime, relayOptions(counter));
+  if (!relay) throw new Error("Expected the configured runtime relay");
+  try {
+    await relay.close();
+    await relay.close();
+    expect(await refusedRelayConnect(relay)).toBeInstanceOf(Error);
+    expect(counter.calls).toBe(0);
+  } finally {
+    await relay.close();
+    await runtime.dispose();
   }
 });

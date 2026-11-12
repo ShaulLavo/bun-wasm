@@ -14,8 +14,14 @@
   }
   return function makeReader(): BunWasm.ProcessReader {
     const { Readable } = internal.builtin("node:stream");
+    const frames = internal.require("resource_frame");
     const subscription = new Uint8Array(16); // READABLE = 0, fd = 0, userdata = 0.
     let waiter: BunWasm.IoWaiter | undefined;
+    // The pending read's frame: data and end from a read run in the frame that started it, as
+    // under Bun. A read requested while one is pending joins it. The stream reads ahead while
+    // paused, where Bun does not read at all: such a read belongs to the frame that resumes.
+    let frame: BunWasm.ResourceFrame | undefined;
+    let readAhead = false;
     let referenced = true;
     let paused = false;
     function updateReference() {
@@ -25,16 +31,25 @@
       if (stream.destroyed) return true;
       const chunk = native.procRead(0, 65536);
       if (chunk === -6) return false; // WASI EAGAIN, wait for descriptor readiness.
+      // This read is over; a push may start the next one, with its own waiter and frame.
+      const finished = frame;
       waiter = undefined;
-      if (typeof chunk === "number" && chunk < 0) throw readError(chunk);
-      if (typeof chunk === "number") stream.push(null);
-      else stream.push(internal.require("buffer").Buffer.from(chunk));
+      frame = undefined;
+      try {
+        if (typeof chunk === "number" && chunk < 0) throw readError(chunk);
+        if (typeof chunk === "number") stream.push(null);
+        else stream.push(internal.require("buffer").Buffer.from(chunk));
+      } finally {
+        finished?.release();
+      }
       return true;
     }
     function read() {
       if (waiter || stream.destroyed) return;
       internal.require("net");
-      waiter = internal.addIoWaiter({ step, ref: referenced && !paused, subscriptions: () => subscription, fail });
+      readAhead = paused;
+      frame = frames.capture();
+      waiter = internal.addIoWaiter(frame.bind({ step, ref: referenced && !paused, subscriptions: () => subscription, fail }));
     }
     function fail(error: unknown) {
       waiter = undefined;
@@ -42,9 +57,15 @@
     }
     function destroy(error: unknown, callback: (error?: unknown) => void) {
       if (waiter) waiter.ref = false;
-      // Closing only our descriptor releases the pipe reader; Waffle owns the endpoint.
-      const result = native.procClose(0);
-      callback(error ?? (result < 0 ? readError(result) : undefined));
+      const pending = frame;
+      frame = undefined;
+      try {
+        // Closing only our descriptor releases the pipe reader; Waffle owns the endpoint.
+        const result = native.procClose(0);
+        callback(error ?? (result < 0 ? readError(result) : undefined));
+      } finally {
+        pending?.release();
+      }
     }
     const stream = Object.assign(new Readable({ read, destroy, highWaterMark: 65536 }), {
       fd: 0,
@@ -61,7 +82,17 @@
       unref() { referenced = false; updateReference(); return stream; },
     });
     stream.on("pause", () => { paused = true; updateReference(); });
-    stream.on("resume", () => { paused = false; updateReference(); });
+    stream.on("resume", () => {
+      paused = false;
+      if (waiter && readAhead) restartRead(waiter);
+      updateReference();
+    });
+    function restartRead(pending: BunWasm.IoWaiter) {
+      internal.removeIoWaiter(pending);
+      frame?.release();
+      waiter = undefined;
+      read();
+    }
     return stream;
   };
 })

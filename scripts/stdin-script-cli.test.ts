@@ -14,6 +14,7 @@ test("run accepts only the lone dash as stdin and preserves script arguments and
     expect(end).toBeGreaterThan(start);
     const definitions = `
       mod bunwasm_runtime { pub const BUN_VERSION: &str = "test"; pub const BUN_REVISION: &str = "test"; }
+      #[derive(Clone, Copy, PartialEq, Eq)] enum RunMode { Once, Hot }
       enum Entry { File(String), Eval(String), Test(Vec<String>) }
       mod tool_args { pub fn before_command(_: &[String]) -> Option<()> { None } }
       const HELP: &str = "help";
@@ -22,18 +23,18 @@ test("run accepts only the lone dash as stdin and preserves script arguments and
       fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| value.to_string()).collect() }
       fn main() {
         for argv in [args(&["run", "-"]), args(&["run", "--", "-"])] {
-          assert!(matches!(parse(argv, "bun"), Command::Run(Entry::File(file), tail, _, _) if file == "-" && tail.is_empty()));
+          assert!(matches!(parse(argv, "bun"), Command::Run(Entry::File(file), tail, _, _, RunMode::Once) if file == "-" && tail.is_empty()));
         }
         assert!(matches!(parse(args(&["--conditions=custom", "run", "--smol", "-", "--help", "--unknown", "tail"]), "bun"),
-          Command::Run(Entry::File(file), tail, conditions, exec_argv) if file == "-" && tail == args(&["--help", "--unknown", "tail"]) && conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));
+          Command::Run(Entry::File(file), tail, conditions, exec_argv, RunMode::Once) if file == "-" && tail == args(&["--help", "--unknown", "tail"]) && conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));
         for flag in ["--unknown", "-x", "-stdin"] {
           assert!(matches!(parse(args(&["run", flag]), "bun"), Command::Exit(1)));
         }
         assert!(matches!(parse(args(&["run", "--help"]), "bun"), Command::Exit(0)));
         assert!(matches!(parse(args(&["run"]), "bun"), Command::Exit(1)));
         assert!(matches!(parse(args(&["run", "--eval"]), "bun"), Command::Exit(1)));
-        assert!(matches!(parse(args(&["run", "file.ts", "-"]), "bun"), Command::Run(Entry::File(file), tail, _, _) if file == "file.ts" && tail == args(&["-"])));
-        assert!(matches!(parse(args(&["run", "./-", "tail"]), "bun"), Command::Run(Entry::File(file), tail, _, _) if file == "./-" && tail == args(&["tail"])));
+        assert!(matches!(parse(args(&["run", "file.ts", "-"]), "bun"), Command::Run(Entry::File(file), tail, _, _, RunMode::Once) if file == "file.ts" && tail == args(&["-"])));
+        assert!(matches!(parse(args(&["run", "./-", "tail"]), "bun"), Command::Run(Entry::File(file), tail, _, _, RunMode::Once) if file == "./-" && tail == args(&["tail"])));
       }
     `;
     const input = join(scratch, "parser.rs");
@@ -55,7 +56,7 @@ test("stdin main bypasses package aliases and files while ordinary runtime comma
   const scripts = { resolve: () => ({ kind: "runtime" }), run: () => "package-command" };
   const internal = { require: () => scripts, runMain: (_path: string): unknown => undefined };
   const loaded: string[] = [];
-  const native = {
+  const native = { runMode: () => "once",
     mainArg: () => "-",
     exists() { throw new Error("stdin is not a file"); },
     moduleFormat: () => "esm",

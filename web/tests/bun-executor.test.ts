@@ -1,18 +1,22 @@
+import { workerControlFixture } from "./worker-control-fixture.ts";
 import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
-import { WasiExit } from "waffle/core";
+import { WasiExit, type Wasi } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
-import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
+import { bootstrap, type RuntimeWorkerHost, type WorkerSetupContext } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
+import { qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
 import { installLookupServer } from "../src/net/lookup";
+import { createMemoryChannel, memoryChannelReady, requestMemoryChannel } from "../src/memory-channel";
+import { beginMemorySnapshot, endMemorySnapshot } from "../src/memory-telemetry.ts";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
@@ -56,7 +60,7 @@ const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
 afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
-async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
+async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net" | "memoryTelemetry">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
@@ -64,13 +68,13 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true,
     location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch(input) { fetched.push(String(input)); return new Response("ok"); },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: options.engine ?? "browser", adapter: options.adapter, module: guest(options.ready ?? 1),
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
-    trace: false, net: options.net ?? null, moduleCache: null, slots: options.slots,
+    trace: false, net: options.net ?? null, slots: options.slots, memoryTelemetry: options.memoryTelemetry,
   };
   try {
     await bootstrapBun(request, host);
@@ -84,6 +88,7 @@ async function bootstrapBun(request: RunRequest, host: BunExecutorHost & Runtime
   const launched = bridge ? { ...request, notifications: bridge.connection } : request;
   const executor = createBunExecutor(launched, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(launched, { ...executor, setup(context) {
       context.fs.preopen = () => 1;
       context.fs.retain = () => {};
@@ -100,60 +105,78 @@ async function runCapturingSignals(capture: (signals: ReturnType<typeof workerPr
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
-    runtimeProcess, trace: false, net, moduleCache: null };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net };
   try { await bootstrapBun(request, host); }
   finally { connection.client.port.close(); connection.server.port.close(); }
   return { messages };
 }
 const exits = (messages: WorkerMessage[]) => messages.filter(message => message.type === "exit" || message.type === "error");
 
-test("a networked Bun process without a notification scope fails its launch", async () => {
+test("a networked Bun process without a notification scope fails its launch", controlled(async () => {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
-    runtimeProcess, trace: false, net: createRing(), moduleCache: null, slots: "imports" };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net: createRing(), slots: "imports" };
   startEngineHost.mockClear();
   try { await bootstrapBun(request, host, false); }
   finally { connection.client.port.close(); connection.server.port.close(); }
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(JSON.stringify(exits(messages))).toContain("notificationWorkerUrl");
-});
+}));
 
-test("importing the executor module installs no worker message handler", () => {
+test("importing the executor module installs no worker message handler", controlled(() => {
   expect((globalThis as { onmessage?: unknown }).onmessage ?? null).toBeNull();
-});
+}));
 
-test("a ready browser guest exits with the status its engine host reports", async () => {
+test("a ready browser guest exits with the status its engine host reports", controlled(async () => {
   startEngineHost.mockClear();
   startEngineHost.mockImplementationOnce(async options => { (options.onExit as (code: number) => void)(5); return 0; });
   const { messages } = await run();
   expect(startEngineHost).toHaveBeenCalledTimes(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],
-  ["the opt-in Hermes engine", { engine: "hermes" as const }],
   ["a preview1 run", { adapter: "preview1" as const }],
   ["a guest that is not ready", { ready: 0 }],
-] as const) test(`${label} never starts the browser engine host`, async () => {
+] as const) test(`${label} never starts the browser engine host`, controlled(async () => {
   startEngineHost.mockClear();
   const { messages } = await run(options);
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
-test("the engine host gets the page's networking surface only when slots are on", async () => {
+test("the Browser executor connects its trap observer to the existing snapshot transport", controlled(async () => {
+  const id = crypto.randomUUID();
+  const memoryTelemetry = beginMemorySnapshot("browser", id);
+  if (!memoryTelemetry) throw Error("Missing diagnostic transport");
+  startEngineHost.mockImplementationOnce(async options => {
+    const observer = options.onWasmCallTrap;
+    if (typeof observer !== "function") throw Error("Missing native-call observer");
+    observer(new WebAssembly.RuntimeError("executor wiring control"), 7);
+    return 0;
+  });
+  try {
+    const { messages } = await run({ memoryTelemetry });
+    expect(messages.find(message => message.type === "bun-memory")).toMatchObject({ type: "bun-memory", snapshot: {
+      id, engine: "browser", wasmCapacityBytes: 65536, memoryLimitBytes: null,
+      engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536, browserCoreDeclaredMaximumBytes: null, browserCoreFactoryMaximumBytes: null },
+    } });
+  } finally { endMemorySnapshot(id); }
+}));
+
+test("the engine host gets the page's networking surface only when slots are on", controlled(async () => {
   startEngineHost.mockClear();
   await run({ slots: "off" });
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
@@ -161,9 +184,9 @@ test("the engine host gets the page's networking surface only when slots are on"
   await run();
   // No networking ring was supplied, so there is no host to advertise.
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
-});
+}));
 
-test("the browser engine host receives the runtime-owned DNS provider", async () => {
+test("the browser engine host receives the runtime-owned DNS provider", controlled(async () => {
   startEngineHost.mockClear();
   const channel = new MessageChannel();
   let serverCalls = 0;
@@ -181,12 +204,12 @@ test("the browser engine host receives the runtime-owned DNS provider", async ()
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true,
     location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { return new Response("ok"); },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
-    runtimeProcess, trace: false, net: createRing(), moduleCache: null, slots: "imports", lookupPort: channel.port2,
+    runtimeProcess, trace: false, net: createRing(), slots: "imports", lookupPort: channel.port2,
   };
   startEngineHost.mockImplementationOnce(async options => {
     const network = options.net as { natives: { hostLookup(hostname: string, family: 0 | 4 | 6, hints: number): Promise<unknown[]> } };
@@ -204,9 +227,9 @@ test("the browser engine host receives the runtime-owned DNS provider", async ()
   }
   expect(serverCalls).toBe(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
-});
+}));
 
-for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, async () => {
+for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, controlled(async () => {
   startEngineHost.mockClear();
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   const fetched: string[] = [];
@@ -228,7 +251,7 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch(input) {
       // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       receiver = this;
@@ -236,8 +259,8 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
       return new Response("ok");
     },
   };
-  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
-    runtimeProcess, trace: false, net: null, moduleCache: null };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net: null };
   try { await bootstrapBun(request, host); }
   finally { connection.client.port.close(); connection.server.port.close(); }
   // Assert outside the engine callback: bootstrap deliberately catches guest failures.
@@ -254,9 +277,9 @@ for (const kind of ["exited", "signaled"] as const) test(`engine host fetch pres
   expect(fetched).toEqual(["https://example.test/live"]);
   expect(readOutcome(signals.outcome)).toEqual({ kind, code, status });
   expect(exits(messages)).toEqual([{ type: "exit", code: status, signal: kind === "signaled" ? code : undefined, sleep: "atomics" }]);
-});
+}));
 
-test("every network slot refuses to run once the process has a fatal outcome", async () => {
+test("every network slot refuses to run once the process has a fatal outcome", controlled(async () => {
   const { SLOT_NAMES } = actualTrampoline;
   const { createRing } = await import("../src/net/ring");
   installed.length = 0;
@@ -277,26 +300,27 @@ test("every network slot refuses to run once the process has a fatal outcome", a
   const result = await runCapturingSignals(options => { signals = options; }, createRing());
   expect(installed).toHaveLength(1);
   expect(exits(result.messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
-});
+}));
 
-for (const kind of ["exited", "signaled"] as const) test(`every process import checks authoritative ${kind} admission before guest memory or service access`, async () => {
+for (const kind of ["exited", "signaled"] as const) test(`every process import checks authoritative ${kind} admission before guest memory or service access`, controlled(async () => {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const signals = workerProcessState(runtimeProcess).signals;
   const messages: WorkerMessage[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message: WorkerMessage) { messages.push(message); },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
     async fetch() { throw new Error("a dead process must not fetch"); },
   };
-  const request: RunRequest = { engine: "browser", module: guest(0, PROCESS_IMPORTS.map(name => ({ namespace: "runtime_proc", name }))), args: ["/bin/bun"], env: {},
-    filesystem: connection.client, runtimeProcess, trace: false, net: null, moduleCache: null };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, PROCESS_IMPORTS.map(name => ({ namespace: "runtime_proc", name }))), args: ["/bin/bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
   const executor = createBunExecutor(request, host);
   const refused = new Map<string, unknown>();
   let imports: Record<string, (...args: number[]) => unknown> = {};
   let memoryReads = 0;
   let serviceMessages = 0;
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor,
       setup(context) {
         context.fs.preopen = () => 1;
@@ -346,13 +370,13 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
   expect(serviceMessages).toBe(0);
   expect(exits(messages)).toEqual([{ type: "exit", code: kind === "signaled" ? 143 : 23,
     signal: kind === "signaled" ? 15 : undefined, sleep: "atomics" }]);
-});
+}));
 
-test("without a networking ring no slots are installed", async () => {
+test("without a networking ring no slots are installed", controlled(async () => {
   installed.length = 0;
   await run();
   expect(installed).toEqual([]);
-});
+}));
 
 // These tests invoke the actual linked imports. Descriptor readiness and the existing
 // exported controlWait boundary are test-only observation/injection points; neither the
@@ -361,19 +385,19 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   const importName = route === "runtime_proc" ? "poll" : "poll_oneoff";
   for (const stage of ["before", "after"] as const) {
     for (const terminal of (stage === "before" ? ["exited", "revoked"] : ["exited", "signaled", "revoked"]) as ("exited" | "signaled" | "revoked")[]) {
-      test(`${route} checks ${terminal} liveness ${stage} its native wait`, async () => {
+      test(`${route} checks ${terminal} liveness ${stage} its native wait`, controlled(async () => {
         const connection = createFilesystemConnection();
         const transport = createWorkerProcessTransport();
         const state = workerProcessState(transport);
         const messages: WorkerMessage[] = [];
         const host: BunExecutorHost & RuntimeWorkerHost = {
           crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-          postMessage(message: WorkerMessage) { messages.push(message); },
+          postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
           async fetch() { throw new Error("unexpected fetch"); },
         };
-        const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+        const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
           args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
-          trace: false, net: null, moduleCache: null };
+          trace: false, net: null };
         const executor = createBunExecutor(request, host);
         let call!: (...args: number[]) => unknown;
         let waits = 0, scans = 0;
@@ -383,11 +407,9 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           else claimOutcome(state.signals.outcome, { kind: terminal, code: terminal === "signaled" ? 15 : 23 });
         };
         try {
+          control.attach(request.runtimeProcess);
           await bootstrap(request, { ...executor,
-            setup(context) {
-              context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
-              executor.setup?.(context);
-            },
+            setup: context => setupLocalFilesystem(context, executor),
             imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
             run({ instance, wasi }) {
               const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
@@ -414,11 +436,11 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           expect(exits(messages)).toContainEqual({ type: "exit", code: terminal === "signaled" ? 143 : terminal === "exited" ? 23 : 1,
             signal: terminal === "signaled" ? 15 : undefined, sleep: "atomics" });
         } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
-      });
+      }));
     }
   }
 
-  test(`${route} passes the original pre-scan readiness snapshot to native wait`, async () => {
+  test(`${route} passes the original pre-scan readiness snapshot to native wait`, controlled(async () => {
     const connection = createFilesystemConnection();
     const transport = createWorkerProcessTransport();
     const state = workerProcessState(transport);
@@ -426,9 +448,9 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
       postMessage() {}, async fetch() { throw new Error("unexpected fetch"); },
     };
-    const request: RunRequest = { engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
+    const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(0, [{ namespace: route, name: importName }]),
       args: ["/bin/bun"], env: {}, filesystem: connection.client, runtimeProcess: transport,
-      trace: false, net: null, moduleCache: null };
+      trace: false, net: null };
     const executor = createBunExecutor(request, host);
     let call!: (...args: number[]) => unknown;
     let waits = 0, scans = 0;
@@ -436,11 +458,9 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
     let nativeResult: ReturnType<typeof actualControl.controlWait> | undefined;
     let original = -1;
     try {
+      control.attach(request.runtimeProcess);
       await bootstrap(request, { ...executor,
-        setup(context) {
-          context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
-          executor.setup?.(context);
-        },
+        setup: context => setupLocalFilesystem(context, executor),
         imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
         run({ instance, wasi }) {
           const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
@@ -476,23 +496,101 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       expect(nativeResult).toBe("not-equal");
       expect(result).toBe(route === "runtime_proc" ? 1 : 0);
     } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
-  });
+  }));
 }
 
-for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, async () => {
+for (const maximumPages of [4, 8]) test(`cloned linked program forwards its ${maximumPages}-page limit into terminal telemetry`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
+  const module = await prepareProgram({ kind: "quickjs", ...quickjsPair("quickjs", maximumPages) });
+  const metadata = programMetadata(module);
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module: structuredClone(module),
+    linkPlan: structuredClone(metadata.linkPlan), memoryLimitBytes: metadata.memoryLimitBytes,
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
+  const executor = createBunExecutor(request, host);
+  try {
+    await bootstrap(request, { ...executor, setup: context => setupLocalFilesystem(context, executor), run: () => 0 }, host);
+    const result = messages.find(message => message.type === "bun-memory");
+    if (result?.type !== "bun-memory") throw new Error("missing terminal memory telemetry");
+    expect(result.snapshot.terminal).toBe(true);
+    expect(result.snapshot.memoryLimitBytes).toBe(maximumPages * 65536);
+  } finally { executor.beforeFinish?.(); connection.client.port.close(); connection.server.port.close(); }
+}));
+
+// The side's two event-loop waits answer telemetry requests. Every other core export it imports,
+// here core_checkpoint, must stay the core's own function: a call between WebAssembly modules.
+const linkedSideImports = [["bun_core_idle", true], ["bun_core_poll", true], ["core_checkpoint", false]] as const;
+for (const [boundary, wait] of linkedSideImports) test(wait ? `linked ${boundary} keeps the refresh observer after initialization` : `linked ${boundary} stays a direct call into the core`, controlled(async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
+  const pair = quickjsPair("quickjs");
+  const module = await prepareProgram({ kind: "quickjs", ...pair });
+  const channel = createMemoryChannel();
+  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel,
+    coreMemoryLimits: { declaredMaximumBytes: null, factoryMaximumBytes: null } };
+  const connection = createFilesystemConnection();
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
+    filesystem: connection.client, trace: false, net: null, slots: "off", memoryTelemetry };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
+  let observed: WebAssembly.ImportValue | undefined;
+  let provider: WebAssembly.ImportValue | undefined;
+  let sideInstance: WebAssembly.Instance | undefined;
+  let originalImports: Wasi["imports"] | undefined;
+  let observation: { restored: boolean; before: boolean; after: boolean } | undefined;
+  const NativeInstance = WebAssembly.Instance;
+  WebAssembly.Instance = new Proxy(NativeInstance, { construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {
+    const instance = new Target(...args);
+    provider ??= instance.exports[boundary];
+    const value = args[1]?.env?.[boundary];
+    if (value) { observed = value; sideInstance = instance; }
+    return instance;
+  } });
+  const executor = createBunExecutor(request, host);
+  try {
+    control.attach(request.runtimeProcess);
+    await bootstrap(request, { ...executor,
+      setup: context => setupLocalFilesystem(context, executor),
+      instantiated(context) { originalImports = context.wasi.imports; },
+      run(context) {
+        if (typeof observed !== "function") throw new Error(`side instance did not receive its ${boundary} import`);
+        const generation = requestMemoryChannel(channel, true);
+        const before = memoryChannelReady(channel, generation, true);
+        observed();
+        observation = { restored: context.wasi.imports === originalImports, before,
+          after: memoryChannelReady(channel, generation, true) };
+        return 0;
+      },
+    }, host);
+    expect(sideInstance).toBeInstanceOf(NativeInstance);
+    expect(typeof provider).toBe("function");
+    expect(observed === provider).toBe(!wait);
+    expect(observation).toEqual({ restored: true, before: false, after: wait });
+  } finally {
+    WebAssembly.Instance = NativeInstance;
+    executor.beforeFinish?.();
+    connection.client.port.close(); connection.server.port.close();
+  }
+}));
+
+for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, controlled(async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
-    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
+  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programMetadata(module).linkPlan,
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
-  const { prepareLinkPlan } = await import("waffle/link");
+  const { adoptLinkPlan } = await import("waffle/link");
   if (!request.linkPlan) throw new Error("fixture link plan missing");
-  const local = await prepareLinkPlan(request.linkPlan);
+  const local = adoptLinkPlan(request.linkPlan);
   const executor = createBunExecutor(request, host);
   let instance: WebAssembly.Instance | undefined;
   const NativeInstance = WebAssembly.Instance;
@@ -502,6 +600,7 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
       instantiatedModules.push(args[0]);
       return new Target(...args);
     } });
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor,
       setup(context) { context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {}; },
       async instantiated(context) { instance = context.instance; await executor.instantiated?.(context); },
@@ -520,11 +619,13 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializ
     expect(messages.some(message => message.type === "exit" && message.code === 0)).toBe(true);
     expect(messages.some(message => message.type === "error")).toBe(false);
   } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
-});
-async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
+}));
+async function runSharedSetup(mode: "normal" | "send-failure" | "grant-failure" | "grant-and-close-failure" | "revoked-after-export" | "engine-failure") {
   const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
   const messages: WorkerMessage[] = [];
   let exported = false, bound: SharedObjectService | undefined;
+  let restorePort = () => {};
+  const grantPackets: string[] = [];
   const host: BunExecutorHost & RuntimeWorkerHost = {
     crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     fetch: globalThis.fetch.bind(globalThis),
@@ -533,13 +634,22 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       exported = true;
       if (mode === "send-failure") throw new Error("native publication failed");
       expect(transfer).toEqual([message.port]);
+      if (mode === "grant-failure" || mode === "grant-and-close-failure") {
+        const post = message.port.postMessage.bind(message.port);
+        const sending = spyOn(message.port, "postMessage").mockImplementation(packet => {
+          grantPackets.push(packet.kind);
+          if (packet.kind === "pool" || mode === "grant-and-close-failure") throw new Error("grant transport failed");
+          post(packet);
+        });
+        restorePort = () => sending.mockRestore();
+      }
       route.attach(message.port);
     },
   };
-  const request: RunRequest = {
+  const request: RunRequest = { controlGrant: control.grant,
     engine: "browser", adapter: "bun", module: guest(1), args: ["bun"], env: {},
     filesystem: connection.client, runtimeProcess: createWorkerProcessTransport({ pid: 1, job: 1 }),
-    trace: false, net: null, moduleCache: null, slots: "off", sharedObjects: { owner: route.id },
+    trace: false, net: null, slots: "off", sharedObjects: { owner: route.id },
   };
   const executor = createBunExecutor(request, host);
   startEngineHost.mockImplementationOnce(async options => {
@@ -549,6 +659,7 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
     return 0;
   });
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, setup(context) {
       context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
       executor.setup?.({ ...context, checkActive() {
@@ -557,25 +668,37 @@ async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-e
       } });
     } }, host);
     await new Promise(resolve => setTimeout(resolve, 5));
-    return { messages, exported, bound, retained: broker.inspect(), afterCleanup: broker.inspect };
+    return { messages, exported, bound, grantPackets, retained: broker.inspect(), afterCleanup: broker.inspect };
   } finally {
     executor.beforeFinish?.(); route.close(); broker.dispose();
     connection.client.port.close(); connection.server.port.close();
-    startEngineHost.mockReset();
+    restorePort(); startEngineHost.mockReset();
   }
 }
 
-test("real bootstrap exports a Bun-owned native setup port and closes engine service on finish", async () => {
+test("real bootstrap exports a Bun-owned native setup port and closes engine service on finish", controlled(async () => {
   const result = await runSharedSetup("normal");
   expect(result.exported).toBe(true);
   expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(result.bound?.inspect()).toEqual({ buffers: 0, pending: 0, staged: 0, closed: true });
   expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
   expect(exits(result.messages)[0]?.type).toBe("exit");
-});
+}));
+
+for (const mode of ["grant-failure", "grant-and-close-failure"] as const) {
+  test(`real bootstrap ${mode} fails before guest entry and tears down the pending service`, controlled(async () => {
+    const result = await runSharedSetup(mode);
+    expect(result.exported).toBe(true);
+    expect(result.grantPackets).toEqual(["pool", "closed"]);
+    expect(result.bound).toBeUndefined();
+    expect(exits(result.messages)[0]?.type).toBe("error");
+    expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  }));
+}
 
 for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as const) {
-  test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, async () => {
+  test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, controlled(async () => {
     const result = await runSharedSetup(mode);
     expect(result.exported).toBe(true);
     expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
@@ -584,20 +707,20 @@ for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as
     expect(result.retained.waiting).toBe(0);
     if (mode !== "send-failure") expect(result.retained.clients).toBe(0);
     if (result.bound) expect(result.bound.inspect().closed).toBe(true);
-  });
+  }));
 }
 
 const keepFixtureReference = () => {};
 
 async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup", kind: "quickjs" | "jsc") {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection(), lookup = new MessageChannel();
   const broker = createSharedObjectBroker(), route = kind === "quickjs" ? broker.register() : undefined;
-  const request: RunRequest = { engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
-    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null,
+  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programMetadata(module).linkPlan,
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null,
     slots: "off", sharedObjects: route ? { owner: route.id } : undefined, lookupPort: lookup.port2 };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) {
@@ -612,6 +735,7 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
   const expected = new Error(`${failure} cleanup failed`);
   let restoreClose = () => {};
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, beforeFinish() {},
       setup(context) {
         context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
@@ -643,12 +767,12 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
 
 for (const kind of ["quickjs", "jsc"] as const) {
   const failures = kind === "jsc" ? ["none", "linked", "lookup"] as const : ["none", "linked", "shared", "lookup"] as const;
-  for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, () => assertComposedCleanup(failure, kind));
+  for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, controlled(() => assertComposedCleanup(failure, kind)));
 }
 
-for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, async () => {
+for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const pair = quickjsPair(engine);
   const module = await prepareProgram({ kind: engine, ...pair });
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -659,12 +783,13 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
   linkedDisposals = 0; linkedSideReads = 0;
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
-    filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
+  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
+    filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, fetch: globalThis.fetch };
   const executor = createBunExecutor(request, host);
   try {
+    control.attach(request.runtimeProcess);
     await bootstrap(request, { ...executor, setup(context) {
       context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
       executor.setup?.(context);
@@ -683,4 +808,158 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
     linkedAllocatorCore = undefined; linkedInitializationFailure = undefined;
     connection.client.port.close(); connection.server.port.close();
   }
-});
+}));
+
+test("each armed JSC instance gets a fresh allocation-boundary generation; others keep their environment", controlled(() => {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const inherited = { BUN_WASM_JSC_ALLOCATION_BOUNDARY: "1", BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" };
+  const request = (engine: RunRequest["engine"], env: Record<string, string>): RunRequest => ({ controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env,
+    filesystem: connection.client, runtimeProcess, trace: false, net: null });
+  try {
+    const env = (req: RunRequest) => createBunExecutor(req).env?.(req);
+    const generations = Array.from({ length: 64 }, () => env(request("jsc", inherited))?.BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION);
+    for (const generation of generations) {
+      expect(generation).toMatch(/^[1-9][0-9]*$/);
+      expect(Number.isSafeInteger(Number(generation))).toBe(true);
+    }
+    expect(generations).not.toContain("7");
+    expect(new Set(generations).size).toBe(generations.length);
+    expect(env(request("quickjs", inherited))).toEqual(inherited);
+    expect(env(request("jsc", { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" }))).toEqual({ BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7", BUN_WASM_STACK_KIB: "800" });
+    const explicit = { ...inherited, BUN_WASM_STACK_KIB: "6144" };
+    expect(env(request("jsc", explicit))?.BUN_WASM_STACK_KIB).toBe("6144");
+    const unarmed = { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7", BUN_WASM_STACK_KIB: "6144" };
+    expect(env(request("jsc", unarmed))).toEqual(unarmed);
+  } finally { connection.client.port.close(); connection.server.port.close(); }
+}));
+
+const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
+const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
+const stackHosts = [
+  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208" },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800" },
+  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+];
+
+/** Runs with exactly these qualified parser reserves, whatever the shipped table holds. */
+function withQualifiedReserves<Result>(entries: QualifiedParserReserves, run: () => Result): Result {
+  const shipped = { ...qualifiedParserReserves };
+  const replace = (next: QualifiedParserReserves) => {
+    for (const host of Object.keys(qualifiedParserReserves)) Reflect.deleteProperty(qualifiedParserReserves, host);
+    Object.assign(qualifiedParserReserves, next);
+  };
+  replace(entries);
+  try { return run(); }
+  finally { replace(shipped); }
+}
+
+function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack">, engine: RunRequest["engine"], env: Record<string, string> = {}, page?: StackHost) {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const capture = spyOn(globalThis, "Error").mockReturnValue(Object.assign(new Error(), { stack: host.stack }));
+  const navigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const request: RunRequest = { controlGrant: control.grant, engine, module: guest(1), args: ["bun"], env, stackHost: page,
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  try {
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: host.agent } });
+    return createBunExecutor(request).env?.(request);
+  } finally {
+    capture.mockRestore();
+    if (navigator) Object.defineProperty(globalThis, "navigator", navigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+    connection.client.port.close(); connection.server.port.close();
+  }
+}
+
+for (const host of stackHosts) {
+  test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => withQualifiedReserves({}, () => {
+    expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
+    expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
+    expect(stackEnvironment(host, "browser")).toEqual({});
+    expect(stackEnvironment(host, "spidermonkey")).toEqual({});
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
+    expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+  })));
+}
+
+const budgetKey = "BUN_WASM_STACK_KIB", reserveKey = "BUN_WASM_JSC_PARSER_RESERVE";
+const linuxFirefox = stackHosts[0]!;
+const macSafari = { agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15", stack: geckoStack };
+const qualified: QualifiedParserReserves = { "firefox-linux": { bytes: "1024" }, "safari-macos": { bytes: "1056", minimumSafariMajor: 26 } };
+
+// The six rows of the executor contract in docs/stack-limits.md, on a host with a qualified value.
+const executorRows: { row: string; env: Record<string, string>; expected: Record<string, string> }[] = [
+  { row: "neither key", env: {}, expected: { [budgetKey]: "208", [reserveKey]: "1024" } },
+  { row: "budget only", env: { [budgetKey]: "260" }, expected: { [budgetKey]: "260", [reserveKey]: "1024" } },
+  { row: "reserve only", env: { [reserveKey]: "512" }, expected: { [budgetKey]: "208", [reserveKey]: "512" } },
+  { row: "both keys", env: { [budgetKey]: "260", [reserveKey]: "512" }, expected: { [budgetKey]: "260", [reserveKey]: "512" } },
+  { row: "an empty budget", env: { [budgetKey]: "" }, expected: { [budgetKey]: "", [reserveKey]: "1024" } },
+  { row: "an empty reserve", env: { [reserveKey]: "" }, expected: { [budgetKey]: "208", [reserveKey]: "" } },
+  { row: "an invalid reserve", env: { [reserveKey]: "1024kb" }, expected: { [budgetKey]: "208", [reserveKey]: "1024kb" } },
+];
+for (const { row, env, expected } of executorRows) {
+  test(`a JSC request with ${row} keeps each stack key independent`, controlled(() => withQualifiedReserves(qualified, () => {
+    expect(stackEnvironment(linuxFirefox, "jsc", env)).toEqual(expected);
+  })));
+}
+
+test("no engine but JSC ever receives the parser reserve", controlled(() => withQualifiedReserves(qualified, () => {
+  expect(stackEnvironment(linuxFirefox, "quickjs")).toEqual({});
+  expect(stackEnvironment(linuxFirefox, "browser")).toEqual({});
+  expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
+  expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
+  expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
+})));
+
+test("the same page observations preserve Safari QuickJS policy and JSC parser selection", controlled(() => withQualifiedReserves(qualified, () => {
+  const page = { platform: "MacIntel", vendor: "Apple Computer, Inc.", maxTouchPoints: 0 };
+  expect(stackEnvironment(macSafari, "quickjs", {}, page)).toEqual({ [budgetKey]: "36" });
+  expect(stackEnvironment(macSafari, "quickjs", { [budgetKey]: "64" }, page)).toEqual({ [budgetKey]: "64" });
+  expect(stackEnvironment(macSafari, "jsc", {}, page)).toEqual({ [budgetKey]: "192", [reserveKey]: "1056" });
+  expect(stackEnvironment(macSafari, "browser", {}, page)).toEqual({});
+  expect(stackEnvironment(macSafari, "quickjs", {}, { ...page, maxTouchPoints: 5 })).toEqual({ [budgetKey]: "32" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { ...page, maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
+})));
+
+test("a host without a qualified value adds only its budget", controlled(() => withQualifiedReserves(qualified, () => {
+  for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
+  expect(stackEnvironment(macSafari, "jsc")).toEqual({ [budgetKey]: "192" });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 5 })).toEqual({ [budgetKey]: "192" });
+})));
+
+test("the page's zero-touch fact in the run request selects the macOS Safari value", controlled(() => withQualifiedReserves(qualified, () => {
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192", [reserveKey]: "1056" });
+  expect(stackEnvironment(macSafari, "jsc", { [budgetKey]: "240" }, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "240", [reserveKey]: "1056" });
+})));
+
+test("the shipped table gives Linux Firefox exactly its qualified value, and every other host none", controlled(() => {
+  const shipped = qualifiedParserReserves["firefox-linux"]?.bytes;
+  expect(stackEnvironment(linuxFirefox, "jsc")).toEqual(shipped === undefined ? { [budgetKey]: "208" } : { [budgetKey]: "208", [reserveKey]: shipped });
+  for (const host of stackHosts.slice(1)) expect(stackEnvironment(host, "jsc")).toEqual({ [budgetKey]: host.jsc });
+  expect(stackEnvironment(macSafari, "jsc", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "192" });
+}));
+
+let control: Awaited<ReturnType<typeof workerControlFixture>>;
+
+
+function controlled(run: () => unknown) {
+  return async () => {
+    const owned = await workerControlFixture();
+    control = owned;
+    try { await run(); }
+    finally { await owned.dispose(); }
+  };
+}
+
+function setupLocalFilesystem(context: WorkerSetupContext<RunRequest>, executor: ReturnType<typeof createBunExecutor>): void {
+  context.fs.preopen = () => 1;
+  context.fs.retain = () => {};
+  context.fs.release = () => {};
+  executor.setup?.(context);
+}

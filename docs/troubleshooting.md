@@ -19,13 +19,9 @@ Cross-Origin-Embedder-Policy: require-corp
 
 `fetch` runs as the page's own `fetch`, so the browser applies CORS. The target server must send `Access-Control-Allow-Origin`. To read custom response headers it must also send `Access-Control-Expose-Headers`. Chromium reports "Failed to fetch". Safari reports "Load failed".
 
-## `ERR_CIRCULAR_IMPORT`
-
-The `browser` engine links modules through a module store. A service worker is that store in the browser. Without one, an import cycle has no URL to link against and throws. Load the page over HTTPS or from `localhost`, where a service worker can register and take control, then reload.
-
 ## The browser blocks module loading
 
-The `browser` engine creates a `blob:` URL for each acyclic module. If the page sets a Content-Security-Policy, its `script-src` must allow `blob:`, next to the Wasm and eval permissions the policy already grants.
+The `browser` engine creates a `blob:` URL for each module. If the page sets a Content-Security-Policy, its `script-src` must allow `blob:`, next to the Wasm and eval permissions the policy already grants.
 
 ## `wasmtime run dist/bun.wasm` fails to instantiate
 

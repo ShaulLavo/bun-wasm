@@ -6,7 +6,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=/dev/null
 source "$root/env.sh"
-commit=b66075af0640d650b822fd37f8e7c4e3f8c36bfa
+commit=53e61e7a7310cd2335ca57b5a19f5f4d5644ff26
 source_dir="${BASH_WEB_SOURCE:-$CARGO_TARGET_DIR/bash-web-source}"
 if [[ "$(git -C "$source_dir" rev-parse HEAD 2>/dev/null)" != "$commit" ]]; then
   if [[ -n "${BASH_WEB_SOURCE:-}" ]]; then
@@ -33,5 +33,5 @@ target="$CARGO_TARGET_DIR/bash-web-shell"
   -j "${JOBS:-2}" -p shell-engine --bin shell-runtime)
 mkdir -p "$root/dist"
 cp "$target/wasm32-wasip1/release/shell-runtime.wasm" "$root/dist/bash-web-shell.wasm"
-cp "$root/node_modules/waffle-coreutils/dist/env.wasm" "$root/dist/bash-web-env.wasm"
+bun "$root/scripts/bash-web-guests.ts" stage-env "$root" "$root/dist"
 bun "$root/scripts/bash-web-guests.ts" write "$root/dist" "$commit" "$toolchain"

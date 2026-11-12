@@ -408,7 +408,7 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
             |mut caller: Caller<'_, Host>, ptr: i32, len: i32| {
                 let (memory, size) = guest(&mut caller)?;
                 let Some(at) = proc_range(size, ptr, len) else {
-                    return Ok(crate::process::FAULT);
+                    return Ok(caller.data_mut().processes.spawn_fault());
                 };
                 view(&mut caller, &memory, &[at], |parts, host| {
                     host.processes.spawn(parts[0])
@@ -541,8 +541,10 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
 
 /// bash-web's shell guest imports two small namespaces besides runtime_proc. On this host it is
 /// never the terminal owner: it reads inherited stdio, reports 80x24 geometry and owns no phase.
-/// The native filesystem has no Waffle inode metadata, so the permission query answers ENOTSUP
-/// (docs/host-abi.md "Inode permission query" allows it) and the shell treats access as unknown.
+/// The prompt hooks use bash-web's no-provider contract: unavailable text operations return -1,
+/// while the output position is the neutral value 0. The native filesystem has no Waffle inode
+/// metadata, so the permission query answers ENOTSUP (docs/host-abi.md "Inode permission query"
+/// allows it) and the shell treats access as unknown.
 pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
     linker.func_wrap("shell_terminal", "inherited_fd", |index: i32| -> i32 {
         if (0..3).contains(&index) { index } else { -1 }
@@ -550,6 +552,20 @@ pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
     linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
     linker.func_wrap("shell_terminal", "rows", || -> i32 { 24 })?;
     linker.func_wrap("shell_terminal", "phase", |_: i32, _: i32| {})?;
+    linker.func_wrap("shell_terminal", "prompt_names", |_: i32, _: i32| -> i32 {
+        -1
+    })?;
+    linker.func_wrap(
+        "shell_terminal",
+        "prompt",
+        |_: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { -1 },
+    )?;
+    linker.func_wrap(
+        "shell_terminal",
+        "prompt_update",
+        |_: i32, _: i32, _: i32| -> i32 { -1 },
+    )?;
+    linker.func_wrap("shell_terminal", "output_position", || -> i32 { 0 })?;
     linker.func_wrap(
         "runtime_fs",
         "path_permissions_get",
@@ -569,6 +585,26 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
         |caller: Caller<'_, Host>, index: u32| -> Result<i32> {
             caller.data().cancel.check()?;
             Ok(caller.data().processes.inherited_fd(index))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
+        "spawn_error",
+        |mut caller: Caller<'_, Host>, pid: i32, ptr: i32, capacity: i32| -> Result<i32> {
+            let (memory, size) = guest(&mut caller)?;
+            let Some(range) = proc_range(size, ptr, capacity) else {
+                return Ok(crate::process::FAULT);
+            };
+            let detail = match caller.data().processes.spawn_error(pid) {
+                Ok(detail) => detail,
+                Err(errno) => return Ok(errno),
+            };
+            if detail.len() <= range.len() {
+                memory
+                    .write(&mut caller, range.start, detail.as_bytes())
+                    .context("validated spawn_error output")?;
+            }
+            Ok(detail.len() as i32)
         },
     )?;
     linker.func_wrap(

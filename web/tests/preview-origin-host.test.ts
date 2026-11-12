@@ -1,5 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { request } from "node:http";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { request, Server } from "node:http";
 import { fixture } from "./fixtures/preview-origin-native";
 import { LoopbackPreviewOrigins } from "../preview-origin-host";
 
@@ -54,6 +54,25 @@ test("native HTTP keeps root paths, methods, body, headers and status on fixed o
   expect(await (await fetch(first.origin, { method: "HEAD" })).text()).toBe("");
 });
 
+const framePolicies: { name: string; headers: Record<string, string>; embedder: string | null; resource: string | null }[] = [
+  { name: "neither policy", headers: {}, embedder: "require-corp", resource: "cross-origin" },
+  { name: "COEP only", headers: { "Cross-Origin-Embedder-Policy": "credentialless" }, embedder: "credentialless", resource: null },
+  { name: "CORP only", headers: { "Cross-Origin-Resource-Policy": "cross-origin" }, embedder: null, resource: "cross-origin" },
+  { name: "both policies", headers: { "Cross-Origin-Embedder-Policy": "unsafe-none", "Cross-Origin-Resource-Policy": "same-origin" }, embedder: "unsafe-none", resource: "same-origin" },
+];
+test.each(framePolicies)("frame defaults preserve explicit app policies: $name", async ({ headers, embedder, resource }) => {
+  const endpoint = fixture("policies");
+  endpoint.fetch = () => new Response("preview body", { status: 201, headers });
+  const binding = await host().bind({}, 3137, endpoint);
+  for (const destination of ["iframe", "frame"]) {
+    const response = await fetch(binding.origin, { headers: { "sec-fetch-dest": destination } });
+    expect(response.headers.get("cross-origin-embedder-policy")).toBe(embedder);
+    expect(response.headers.get("cross-origin-resource-policy")).toBe(resource);
+    expect(response.status).toBe(201);
+    expect(await response.text()).toBe("preview body");
+  }
+});
+
 test("foreign owner origins, wrong Host/port and cross-site requests never dispatch", async () => {
   const registry = host();
   const first = await registry.bind({}, 3137, fixture("first"));
@@ -99,6 +118,7 @@ test("late close cannot remove replacement route; teardown and lifetime allocati
   await old.close();
   expect(closes).toBe(1);
   expect(replacement.origin).not.toBe(old.origin);
+  expect(new URL(replacement.origin).hostname).not.toBe(new URL(old.origin).hostname);
   expect(registry.originForPort(owner, 3137)).toBe(replacement.origin);
   expect(await (await fetch(replacement.origin)).text()).toBe("new:/:");
   await expect(registry.bind({}, 3138, fixture("overflow"))).rejects.toThrow("allocation limit");
@@ -220,4 +240,31 @@ test("native authority rejects origin-bearing blob and credential URLs before di
   expect([400, 421]).toContain(await rawStatus(binding.origin, { host: authority }, `blob:${binding.origin}/fixture`));
   expect([400, 421]).toContain(await rawStatus(binding.origin, { host: authority }, `${binding.origin.replace("http://", "http://fixture-user:fixture-password@")}/fixture`));
   expect(dispatched).toBe(0);
+});
+
+
+test("root registration needs only canonical loopback binds while retaining distinct cookie hosts", async () => {
+  const registry = host();
+  const listen = Server.prototype.listen;
+  const guard = spyOn(Server.prototype, "listen").mockImplementation(function (this: Server, ...args: unknown[]) {
+    if (args[1] === "127.0.0.1") return Reflect.apply(listen, this, args);
+    const error = Object.assign(new Error("Only canonical loopback is available"), { code: "EADDRNOTAVAIL", syscall: "listen" });
+    queueMicrotask(() => this.emit("error", error));
+    return this;
+  });
+  try {
+    const firstOwner = {}, secondOwner = {};
+    const first = await registry.bind(firstOwner, 3137, fixture("first"));
+    const sibling = await registry.bind(firstOwner, 3138, fixture("sibling"));
+    const foreign = await registry.bind(secondOwner, 3137, fixture("foreign"));
+    const hostnames = [first, sibling, foreign].map(binding => new URL(binding.origin).hostname);
+    expect(new Set(hostnames).size).toBe(3);
+    for (const hostname of hostnames) expect(hostname).toMatch(/^bw-[a-f0-9-]+\.localhost$/);
+    expect(await (await fetch(first.origin)).text()).toBe("first:/:");
+    expect(await (await fetch(sibling.origin)).text()).toBe("sibling:/:");
+    expect(await (await fetch(foreign.origin)).text()).toBe("foreign:/:");
+  } finally {
+    await registry.close();
+    guard.mockRestore();
+  }
 });

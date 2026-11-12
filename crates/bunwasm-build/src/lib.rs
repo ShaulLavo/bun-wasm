@@ -30,125 +30,16 @@ use bun_options_types::schema::api;
 use bun_paths::resolve_path;
 use bun_sys::Fd;
 
+mod args;
+pub mod cli;
+
+pub use args::{BuildArgs, BuildEntrypoint, Format, Packages, SourceMap, Target, parse_build_args};
+
 mod stubs;
 
 extern crate bunwasm_glue;
 #[cfg(target_os = "wasi")]
 extern crate bunwasm_posix;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Target {
-    Browser,
-    Bun,
-    Node,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Format {
-    #[default]
-    Esm,
-    Cjs,
-    Iife,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SourceMap {
-    #[default]
-    None,
-    Linked,
-    Inline,
-    External,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Packages {
-    Bundle,
-    External,
-}
-
-/// `bun build` options. Field names follow the CLI flags.
-#[derive(Clone, Debug)]
-pub struct BuildArgs {
-    pub entry_points: Vec<String>,
-    /// Directory relative paths are resolved against. Defaults to the process cwd.
-    pub cwd: Option<String>,
-    pub outdir: Option<String>,
-    pub outfile: Option<String>,
-    pub root: Option<String>,
-    /// `None` is Bun's default (browser).
-    pub target: Option<Target>,
-    pub format: Format,
-    pub minify_syntax: bool,
-    pub minify_whitespace: bool,
-    pub minify_identifiers: bool,
-    pub keep_names: bool,
-    pub sourcemap: SourceMap,
-    pub splitting: bool,
-    pub external: Vec<String>,
-    pub packages: Option<Packages>,
-    pub define: Vec<(String, String)>,
-    pub drop: Vec<String>,
-    pub conditions: Vec<String>,
-    pub public_path: Option<String>,
-    pub banner: Option<String>,
-    pub footer: Option<String>,
-    pub entry_naming: Option<String>,
-    pub chunk_naming: Option<String>,
-    pub asset_naming: Option<String>,
-    pub production: bool,
-    /// `--no-bundle`: transpile each entry point on its own.
-    pub no_bundle: bool,
-    pub metafile: Option<String>,
-    /// `--react-fast-refresh`: `$RefreshReg$`/`$RefreshSig$` calls in JSX files.
-    pub react_fast_refresh: bool,
-    /// Write the output files to disk. Without it, contents are only returned.
-    pub write: bool,
-}
-
-impl Default for BuildArgs {
-    fn default() -> Self {
-        BuildArgs {
-            entry_points: Vec::new(),
-            cwd: None,
-            outdir: None,
-            outfile: None,
-            root: None,
-            target: None,
-            format: Format::Esm,
-            minify_syntax: false,
-            minify_whitespace: false,
-            minify_identifiers: false,
-            keep_names: false,
-            sourcemap: SourceMap::None,
-            splitting: false,
-            external: Vec::new(),
-            packages: None,
-            define: Vec::new(),
-            drop: Vec::new(),
-            conditions: Vec::new(),
-            public_path: None,
-            banner: None,
-            footer: None,
-            entry_naming: None,
-            chunk_naming: None,
-            asset_naming: None,
-            production: false,
-            no_bundle: false,
-            metafile: None,
-            react_fast_refresh: false,
-            write: true,
-        }
-    }
-}
-
-impl BuildArgs {
-    /// `--minify`: all three minify passes.
-    pub fn set_minify(&mut self, on: bool) {
-        self.minify_syntax = on;
-        self.minify_whitespace = on;
-        self.minify_identifiers = on;
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputKind {

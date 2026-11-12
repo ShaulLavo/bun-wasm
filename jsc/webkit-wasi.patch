@@ -24,6 +24,104 @@ index 50920859..a9ebd94f 100644
  
  # The build system will execute asm.rb every time LLIntOffsetsExtractor's mtime is newer than
  # LLIntAssembly.h's mtime. The problem we have here is: asm.rb has some built-in optimization
+diff --git a/Source/JavaScriptCore/runtime/AtomicsObject.cpp b/Source/JavaScriptCore/runtime/AtomicsObject.cpp
+--- a/Source/JavaScriptCore/runtime/AtomicsObject.cpp
++++ b/Source/JavaScriptCore/runtime/AtomicsObject.cpp
+@@ -32,6 +32,14 @@
+ #include "ReleaseHeapAccessScope.h"
+ #include "TypedArrayController.h"
+ #include "WaiterListManager.h"
++
++#if defined(BUN_WASM_SHARED_GROUP)
++extern "C" {
++int32_t bun_futex_wait32(uint32_t address, int32_t expected, int64_t timeoutNs);
++int32_t bun_futex_wait64(uint32_t address, int64_t expected, int64_t timeoutNs);
++int32_t bun_futex_wake(uint32_t address, uint32_t count);
++}
++#endif
+
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+@@ -435,4 +443,38 @@
+
+
++#if defined(BUN_WASM_SHARED_GROUP)
++// A memory-group member parks in the group futex the core exports, so a notify from any
++// member or from nested Wasm wakes it. WaiterListManager is the single-agent queue.
++template<typename ValueType>
++static JSValue groupAtomicsWait(JSGlobalObject* globalObject, ThrowScope& scope, ValueType* ptr, ValueType expected, double timeoutInMilliseconds)
++{
++    // Milliseconds to nanoseconds; beyond i64 nanoseconds waits forever.
++    int64_t timeoutNs = -1;
++    if (!std::isnan(timeoutInMilliseconds) && timeoutInMilliseconds < static_cast<double>(INT64_MAX) / 1e6)
++        timeoutNs = static_cast<int64_t>(std::max(timeoutInMilliseconds, 0.0) * 1e6);
++    auto address = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(ptr));
++    int32_t status;
++    if constexpr (sizeof(ValueType) == 8)
++        status = bun_futex_wait64(address, expected, timeoutNs);
++    else
++        status = bun_futex_wait32(address, expected, timeoutNs);
++    VM& vm = globalObject->vm();
++    switch (status) {
++    case 0:
++        return vm.smallStrings.okString();
++    case 1:
++        return vm.smallStrings.notEqualString();
++    case 2:
++        return vm.smallStrings.timedOutString();
++    case -27:
++        // EINTR: the host cancelled this member, which is terminating.
++        __builtin_trap();
++    default:
++        throwTypeError(globalObject, scope, "Atomics.wait failed in the memory group"_s);
++        return { };
++    }
++}
++#endif
++
+ template<typename ValueType, typename JSArrayType>
+ JSValue atomicsWaitImpl(JSGlobalObject* globalObject, JSArrayType* typedArray, uint64_t accessIndex, ValueType expectedValue, JSValue timeoutValue, AtomicsWaitType type)
+@@ -451,2 +493,14 @@
++#if defined(BUN_WASM_SHARED_GROUP)
++    if (type == AtomicsWaitType::Async) {
++        throwTypeError(globalObject, scope, "Atomics.waitAsync is not available in a memory group"_s);
++        return { };
++    }
++    UNUSED_VARIABLE(timeout);
++    if (!vm.m_typedArrayController->isAtomicsWaitAllowedOnCurrentThread()) {
++        throwTypeError(globalObject, scope, "Atomics.wait cannot be called from the current thread."_s);
++        return { };
++    }
++    RELEASE_AND_RETURN(scope, groupAtomicsWait(globalObject, scope, ptr, expectedValue, timeoutInMilliseconds));
++#else
+     if (type == AtomicsWaitType::Async)
+         return WaiterListManager::singleton().waitAsync(globalObject, vm, ptr, expectedValue, timeout);
+@@ -471,3 +525,4 @@
+     RELEASE_ASSERT_NOT_REACHED();
+     return { };
++#endif
+ }
+@@ -610,4 +665,15 @@
+     if (!typedArrayView->isShared())
+         return JSValue::encode(jsNumber(0));
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    if (!count)
++        return JSValue::encode(jsNumber(0));
++    uintptr_t address = typedArrayView->type() == Int32ArrayType
++        ? reinterpret_cast<uintptr_t>(uncheckedDowncast<JSInt32Array>(typedArrayView)->typedVector() + accessIndex)
++        : reinterpret_cast<uintptr_t>(uncheckedDowncast<JSBigInt64Array>(typedArrayView)->typedVector() + accessIndex);
++    int32_t woken = bun_futex_wake(static_cast<uint32_t>(address), count);
++    if (woken < 0)
++        return throwVMTypeError(globalObject, scope, "Atomics.notify failed in the memory group"_s);
++    return JSValue::encode(jsNumber(woken));
++#else
+     switch (typedArrayView->type()) {
+@@ -624,3 +690,4 @@
+         break;
+     }
++#endif
+     return { };
 diff --git i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h w/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
 index 7626bb93..6061652b 100644
 --- i/Source/JavaScriptCore/dfg/DFGAbstractHeap.h
@@ -152,7 +250,7 @@ index 4125087c..acbeafcd 100644
  
      // An import slot addressed like a variable of this environment, past the symbol table's own.
 diff --git i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
-index bda17b3b..5b39e656 100644
+index bda17b3b..b4b1afe9 100644
 --- i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
 +++ w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
 @@ -26,6 +26,7 @@
@@ -163,6 +261,20 @@ index bda17b3b..5b39e656 100644
  #include "ProgramExecutable.h"
  
  #include "BuiltinNames.h"
+@@ -609,6 +610,13 @@ Identifier JSModuleLoader::resolve(JSGlobalObject* globalObject, const Identifie
+     JSValue nameValue = name.isSymbol() || name.isNull() ? jsUndefined() : jsString(vm, name.string());
+     RETURN_IF_EXCEPTION(scope, { });
+ 
++#if OS(WASI)
++    // The collector finds stack values in linear memory, and wasm-opt --spill-pointers copies only
++    // pointer-sized locals there. A JSValue is a 64-bit local, so allocating the referrer string
++    // could collect the name string without this root.
++    Strong<Unknown> nameRoot(vm, nameValue);
++#endif
++
+     JSValue referrerValue = referrer.isSymbol() || referrer.isNull() ? jsUndefined() : jsString(vm, referrer.string());
+     RETURN_IF_EXCEPTION(scope, { });
+ 
 diff --git i/Source/JavaScriptCore/runtime/Options.cpp w/Source/JavaScriptCore/runtime/Options.cpp
 index a5b84dde..ec0277b9 100644
 --- i/Source/JavaScriptCore/runtime/Options.cpp
@@ -291,19 +403,25 @@ diff --git i/Source/WTF/wtf/StackBounds.cpp w/Source/WTF/wtf/StackBounds.cpp
 index 8cea1e87..2c53b5b9 100644
 --- i/Source/WTF/wtf/StackBounds.cpp
 +++ w/Source/WTF/wtf/StackBounds.cpp
-@@ -102,6 +102,39 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+@@ -102,6 +102,51 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
      return StackBounds { origin, bound };
  }
- 
+
 +#elif OS(WASI)
 +
 +#include <cstdlib>
 +
++#if defined(BUN_WASM_SHARED_GROUP)
++// A group side has no linker stack symbols. The side entry records the address of a local in
++// its outermost frame; the host carves the member's real stack above it.
++extern "C" char* bunjsc_stack_origin;
++#else
 +// wasm-ld places the C (shadow) stack in linear memory between these symbols; it grows down.
 +extern "C" {
 +extern char __stack_low;
 +extern char __stack_high;
 +}
++#endif
 +
 +StackBounds StackBounds::newThreadStackBounds(PlatformThreadHandle)
 +{
@@ -322,10 +440,16 @@ index 8cea1e87..2c53b5b9 100644
 +        if (unsigned long long value = strtoull(kib, nullptr, 10))
 +            budget = std::min<unsigned long long>(value, 7 * 1024) * 1024;
 +    }
++#if defined(BUN_WASM_SHARED_GROUP)
++    auto* origin = bunjsc_stack_origin;
++    RELEASE_ASSERT(origin);
++    return StackBounds { static_cast<void*>(origin), static_cast<void*>(origin - budget - 128 * 1024) };
++#else
 +    auto low = reinterpret_cast<uintptr_t>(&__stack_low);
 +    auto high = reinterpret_cast<uintptr_t>(&__stack_high);
 +    auto bound = high - std::min<size_t>(budget + 128 * 1024, high - low);
 +    return StackBounds { static_cast<void*>(&__stack_high), reinterpret_cast<void*>(bound) };
++#endif
 +}
 +
  #elif OS(UNIX) || OS(HAIKU)
@@ -611,9 +735,11 @@ diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaSc
 new file mode 100644
 --- /dev/null
 +++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,376 @@
 +#pragma once
 +
++#include <cerrno>
++#include <cstddef>
 +#include <cstdint>
 +#include <limits>
 +
@@ -683,6 +809,225 @@ new file mode 100644
 +    bunjscTelemetry.activeAllocationCategory = 0;
 +}
 +
++// Allocation-boundary diagnostic around the two oversize typed-array Gigacage calls in
++// JSArrayBufferView::ConstructionContext. Inert until the embedder arms it for one VM. It allocates
++// nothing, takes no lock, never writes errno, never collects and changes no allocation policy.
++// Every field is a little-endian u64; the record is cached and readable after a failure or trap.
++
++// Above JSArrayBufferView::fastSizeLimit (1000 elements), so the control takes the oversize branch.
++constexpr uint64_t bunjscBoundaryControlLength = 1001;
++// A host-chosen per-instance generation the VM acknowledges in its record. At most 2^53 - 1 so a
++// JavaScript host reads it exactly; zero and larger values mean no generation was supplied.
++constexpr uint64_t bunjscBoundaryGenerationLimit = (uint64_t(1) << 53) - 1;
++
++enum class BunjscBoundaryState : uint64_t { Disarmed, ControlArmed, SubjectArmed, Rejected };
++enum class BunjscBoundaryRejection : uint64_t {
++    None,
++    ControlNotObserved,
++    ControlAttempts,
++    CoverageMiss,
++    ControlFailed,
++    ControlRequest,
++    ControlIdentity,
++    CoreUnavailable,
++    CoreFailureCount,
++    CoreAllocationCount,
++    GenerationAbsent,
++    ControlGeneration,
++};
++
++// Raw values from the core's bun_memory_telemetry (live, peak, capacity, failures, allocations,
++// frees) and bun_memory_failure_telemetry (first failed size and category), including the
++// core's own UINT64_MAX and zero-category "none" values.
++struct BunjscCoreAllocatorSample {
++    uint64_t live { bunjscUnknownMemory };
++    uint64_t peak { bunjscUnknownMemory };
++    uint64_t capacity { bunjscUnknownMemory };
++    uint64_t failures { bunjscUnknownMemory };
++    uint64_t allocations { bunjscUnknownMemory };
++    uint64_t frees { bunjscUnknownMemory };
++    uint64_t firstFailureSize { bunjscUnknownMemory };
++    uint64_t firstFailureCategory { bunjscUnknownMemory };
++};
++// Bound by the side's helpers.cpp to the two core exports. False means the core record is unreadable.
++using BunjscCoreAllocatorSampler = bool (*)(BunjscCoreAllocatorSample&);
++
++// JSC heap pacing values before the call. Plain getters; mutator thread only.
++struct BunjscBoundaryHeapBudget {
++    uint64_t capacity { bunjscUnknownMemory };
++    uint64_t extraMemory { bunjscUnknownMemory };
++    uint64_t arrayBufferBytes { bunjscUnknownMemory };
++    uint64_t totalBytesAllocated { bunjscUnknownMemory };
++    uint64_t bytesAllocatedThisCycle { bunjscUnknownMemory };
++    uint64_t allocationBudgetThisCycle { bunjscUnknownMemory };
++    uint64_t maxHeapSize { bunjscUnknownMemory };
++    uint64_t sizeAfterLastCollection { bunjscUnknownMemory };
++    uint64_t ramSize { bunjscUnknownMemory };
++};
++
++struct BunjscAllocationBoundarySlot {
++    uint64_t recorded { 0 };
++    uint64_t availability { 0 }; // Bit i set: word i of this slot holds an observed value.
++    uint64_t attempt { 0 }; // Ordinal among armed attempts in the expected VM.
++    uint64_t requestSequence { bunjscUnknownMemory }; // bunjscTelemetry.allocationSequence
++    uint64_t requestBytes { bunjscUnknownMemory };
++    uint64_t elementCount { bunjscUnknownMemory };
++    uint64_t elementSize { bunjscUnknownMemory };
++    uint64_t zeroFill { bunjscUnknownMemory };
++    uint64_t vmAddress { bunjscUnknownMemory };
++    uint64_t globalObjectAddress { bunjscUnknownMemory };
++    uint64_t errnoBefore { bunjscUnknownMemory }; // Raw; read before any observer work.
++    uint64_t errnoAfterCall { bunjscUnknownMemory }; // Raw; read first after the call returns.
++    uint64_t resultNull { bunjscUnknownMemory };
++    BunjscBoundaryHeapBudget heapBefore;
++    BunjscCoreAllocatorSample coreBefore;
++    BunjscCoreAllocatorSample coreAfter;
++    uint64_t generation { bunjscUnknownMemory }; // The record's generation when this slot was written.
++};
++static_assert(sizeof(BunjscAllocationBoundarySlot) == 39 * sizeof(uint64_t));
++
++constexpr uint64_t bunjscBoundaryWords(size_t offset, size_t bytes)
++{
++    uint64_t mask = 0;
++    for (size_t word = offset / sizeof(uint64_t); word < (offset + bytes) / sizeof(uint64_t); ++word)
++        mask |= uint64_t(1) << word;
++    return mask;
++}
++constexpr uint64_t bunjscBoundaryBeforeWords = bunjscBoundaryWords(0, offsetof(BunjscAllocationBoundarySlot, errnoAfterCall));
++constexpr uint64_t bunjscBoundaryAfterCallWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, errnoAfterCall), 2 * sizeof(uint64_t));
++constexpr uint64_t bunjscBoundaryHeapWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, heapBefore), sizeof(BunjscBoundaryHeapBudget));
++constexpr uint64_t bunjscBoundarySizeAfterLastCollectionWord = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, heapBefore) + offsetof(BunjscBoundaryHeapBudget, sizeAfterLastCollection), sizeof(uint64_t));
++constexpr uint64_t bunjscBoundaryCoreBeforeWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreBefore), sizeof(BunjscCoreAllocatorSample));
++constexpr uint64_t bunjscBoundaryCoreAfterWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreAfter), sizeof(BunjscCoreAllocatorSample));
++constexpr uint64_t bunjscBoundaryGenerationWord = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, generation), sizeof(uint64_t));
++
++struct BunjscAllocationBoundary {
++    uint64_t abiVersion { 1 };
++    uint64_t byteLength { sizeof(BunjscAllocationBoundary) };
++    BunjscBoundaryState state { BunjscBoundaryState::Disarmed };
++    BunjscBoundaryRejection rejection { BunjscBoundaryRejection::None };
++    uint64_t coreSamplerBound { 0 };
++    uint64_t expectedVmAddress { bunjscUnknownMemory };
++    uint64_t expectedGlobalObjectAddress { bunjscUnknownMemory };
++    uint64_t controlLength { bunjscBoundaryControlLength };
++    uint64_t armedAttempts { 0 };
++    uint64_t subjectFailures { 0 };
++    uint64_t coverageMisses { 0 }; // Oversize calls in another VM while armed; never recorded.
++    uint64_t generation { bunjscUnknownMemory }; // Set once when the control is armed.
++    BunjscAllocationBoundarySlot last; // The latest armed attempt, written before its call.
++    BunjscAllocationBoundarySlot control;
++    BunjscAllocationBoundarySlot subject; // The first null result after the subject was armed.
++};
++static_assert(sizeof(BunjscAllocationBoundary) == 1032);
++
++inline constinit BunjscAllocationBoundary bunjscAllocationBoundary;
++inline constinit BunjscCoreAllocatorSampler bunjscCoreAllocatorSampler { nullptr };
++
++inline bool bunjsc_boundary_armed()
++{
++    auto state = bunjscAllocationBoundary.state;
++    return state == BunjscBoundaryState::ControlArmed || state == BunjscBoundaryState::SubjectArmed;
++}
++
++inline uint64_t bunjsc_boundary_sample_core(BunjscCoreAllocatorSample& sample, uint64_t words)
++{
++    if (!bunjscCoreAllocatorSampler || !bunjscCoreAllocatorSampler(sample))
++        return 0;
++    return words;
++}
++
++template<typename HeapType>
++inline uint64_t bunjsc_boundary_read_heap(HeapType& heap, BunjscBoundaryHeapBudget& budget)
++{
++    budget.capacity = heap.capacity();
++    budget.extraMemory = heap.extraMemorySize();
++    budget.arrayBufferBytes = heap.arrayBufferSize();
++    budget.totalBytesAllocated = heap.totalBytesAllocated();
++    budget.bytesAllocatedThisCycle = heap.bytesAllocatedThisCycle();
++    budget.allocationBudgetThisCycle = heap.allocationBudgetThisCycle();
++    budget.maxHeapSize = heap.maxHeapSize();
++    budget.ramSize = heap.ramSize();
++    if (!heap.lastCollectionScope())
++        return bunjscBoundaryHeapWords & ~bunjscBoundarySizeAfterLastCollectionWord;
++    budget.sizeAfterLastCollection = heap.sizeAfterLastCollection();
++    return bunjscBoundaryHeapWords;
++}
++
++// The control acknowledges only one exact, successful ZeroFill request in the armed VM and
++// context whose core wrapper counted one allocation and no new failure.
++inline BunjscBoundaryRejection bunjsc_boundary_control_rejection(const BunjscAllocationBoundary& record, bool created)
++{
++    const auto& control = record.control;
++    if (!control.recorded)
++        return BunjscBoundaryRejection::ControlNotObserved;
++    if (record.coverageMisses)
++        return BunjscBoundaryRejection::CoverageMiss;
++    if (record.armedAttempts != 1)
++        return BunjscBoundaryRejection::ControlAttempts;
++    if (!created || control.resultNull)
++        return BunjscBoundaryRejection::ControlFailed;
++    if (control.elementCount != record.controlLength || control.elementSize != 1 || control.requestBytes != record.controlLength || control.zeroFill != 1)
++        return BunjscBoundaryRejection::ControlRequest;
++    if (control.vmAddress != record.expectedVmAddress || control.globalObjectAddress != record.expectedGlobalObjectAddress)
++        return BunjscBoundaryRejection::ControlIdentity;
++    if (control.generation != record.generation)
++        return BunjscBoundaryRejection::ControlGeneration;
++    constexpr uint64_t core = bunjscBoundaryCoreBeforeWords | bunjscBoundaryCoreAfterWords;
++    if ((control.availability & core) != core)
++        return BunjscBoundaryRejection::CoreUnavailable;
++    if (control.coreAfter.failures != control.coreBefore.failures)
++        return BunjscBoundaryRejection::CoreFailureCount;
++    if (control.coreAfter.allocations != control.coreBefore.allocations + 1)
++        return BunjscBoundaryRejection::CoreAllocationCount;
++    return BunjscBoundaryRejection::None;
++}
++
++// Arms the control for one VM, context and generation. Only a disarmed record arms; a missing
++// generation rejects the record for good.
++inline bool bunjsc_boundary_arm_control(const void* vm, const void* globalObject, uint64_t generation, BunjscCoreAllocatorSampler sampler)
++{
++    auto& record = bunjscAllocationBoundary;
++    if (record.state != BunjscBoundaryState::Disarmed)
++        return false;
++    if (!generation || generation > bunjscBoundaryGenerationLimit) {
++        record.state = BunjscBoundaryState::Rejected;
++        record.rejection = BunjscBoundaryRejection::GenerationAbsent;
++        return false;
++    }
++    record.generation = generation;
++    bunjscCoreAllocatorSampler = sampler;
++    record.coreSamplerBound = sampler != nullptr;
++    record.expectedVmAddress = reinterpret_cast<uintptr_t>(vm);
++    record.expectedGlobalObjectAddress = reinterpret_cast<uintptr_t>(globalObject);
++    record.state = BunjscBoundaryState::ControlArmed;
++    return true;
++}
++
++// The only transition to SubjectArmed. A rejected control leaves the subject disarmed for good.
++inline BunjscBoundaryState bunjsc_boundary_acknowledge_control(bool created)
++{
++    auto& record = bunjscAllocationBoundary;
++    if (record.state != BunjscBoundaryState::ControlArmed)
++        return record.state;
++    record.rejection = bunjsc_boundary_control_rejection(record, created);
++    record.state = record.rejection == BunjscBoundaryRejection::None ? BunjscBoundaryState::SubjectArmed : BunjscBoundaryState::Rejected;
++    return record.state;
++}
++
++inline void bunjsc_boundary_latch(BunjscAllocationBoundary& record, const BunjscAllocationBoundarySlot& slot)
++{
++    if (record.state == BunjscBoundaryState::ControlArmed) {
++        if (!record.control.recorded)
++            record.control = slot;
++        return;
++    }
++    if (!slot.resultNull)
++        return;
++    ++record.subjectFailures;
++    if (!record.subject.recorded)
++        record.subject = slot;
++}
++
 +namespace JSC {
 +
 +// Nullable failure can be recorded before an OOM exception that may not unwind.
@@ -712,35 +1057,112 @@ new file mode 100644
 +    bool m_failed;
 +};
 +
++// Observes one oversize typed-array allocation call. A disarmed record costs one state load.
++class WASIAllocationBoundaryProbe {
++public:
++    template<typename HeapType, typename StructureType>
++    WASIAllocationBoundaryProbe(const void* vm, StructureType* structure, HeapType& heap, uint64_t elementCount, uint64_t elementSize, uint64_t bytes, bool zeroFill)
++    {
++        if (!bunjsc_boundary_armed())
++            return;
++        uint64_t errnoBefore = static_cast<uint32_t>(errno);
++        auto& record = bunjscAllocationBoundary;
++        if (reinterpret_cast<uintptr_t>(vm) != record.expectedVmAddress) {
++            ++record.coverageMisses;
++            return;
++        }
++        m_active = true;
++        auto& slot = record.last;
++        slot = { };
++        slot.recorded = 1;
++        slot.attempt = ++record.armedAttempts;
++        slot.requestSequence = bunjscTelemetry.allocationSequence;
++        slot.requestBytes = bytes;
++        slot.elementCount = elementCount;
++        slot.elementSize = elementSize;
++        slot.zeroFill = zeroFill;
++        slot.vmAddress = reinterpret_cast<uintptr_t>(vm);
++        slot.globalObjectAddress = reinterpret_cast<uintptr_t>(structure->globalObject());
++        slot.errnoBefore = errnoBefore;
++        slot.generation = record.generation;
++        uint64_t heapWords = bunjsc_boundary_read_heap(heap, slot.heapBefore);
++        uint64_t coreWords = bunjsc_boundary_sample_core(slot.coreBefore, bunjscBoundaryCoreBeforeWords);
++        slot.availability = bunjscBoundaryBeforeWords | bunjscBoundaryGenerationWord | heapWords | coreWords;
++    }
++
++    WASIAllocationBoundaryProbe(const WASIAllocationBoundaryProbe&) = delete;
++    WASIAllocationBoundaryProbe& operator=(const WASIAllocationBoundaryProbe&) = delete;
++
++    void finish(const void* result)
++    {
++        if (!m_active)
++            return;
++        uint64_t errnoAfterCall = static_cast<uint32_t>(errno);
++        auto& record = bunjscAllocationBoundary;
++        auto& slot = record.last;
++        slot.errnoAfterCall = errnoAfterCall;
++        slot.resultNull = !result;
++        uint64_t coreWords = bunjsc_boundary_sample_core(slot.coreAfter, bunjscBoundaryCoreAfterWords);
++        slot.availability |= bunjscBoundaryAfterCallWords | coreWords;
++        bunjsc_boundary_latch(record, slot);
++    }
++
++private:
++    bool m_active { false };
++};
++
 +} // namespace JSC
 diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
 --- a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
 +++ b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
-@@ -36,2 +36,6 @@
+@@ -35,4 +35,8 @@
+ #include <wtf/FastMalloc.h>
 
 +#if OS(WASI)
 +#include "WASIMemoryTelemetry.h"
 +#endif
 +
  WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-@@ -66,2 +70,5 @@
+
+@@ -65,4 +69,7 @@
+ {
      ASSERT(!isResizableOrGrowableSharedTypedArrayIncludingDataView(structure->classInfoForCells()));
 +#if OS(WASI)
 +    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(length) * elementSize, WASIMemoryAllocationScope::TypedArray);
 +#endif
 
-@@ -78,2 +85,5 @@
+     if (length <= fastSizeLimit) {
+@@ -77,4 +84,7 @@
+         m_vector = VectorType(temp);
          m_mode = FastTypedArray;
 +#if OS(WASI)
 +        allocation.succeed();
 +#endif
 
-@@ -106,2 +116,5 @@
+         if (mode == ZeroFill) {
+@@ -93,8 +103,14 @@
+
+     void* memory = nullptr;
++#if OS(WASI)
++    WASIAllocationBoundaryProbe boundary(&vm, structure, vm.heap, length, elementSize, size.value(), mode == ZeroFill);
++#endif
+     if (mode == ZeroFill)
+         memory = Gigacage::tryZeroedMalloc(Gigacage::Primitive, size.value());
+     else
+         memory = Gigacage::tryMalloc(Gigacage::Primitive, size.value());
++#if OS(WASI)
++    boundary.finish(memory);
++#endif
+     m_vector = VectorType(memory);
+     if (!m_vector)
+@@ -105,4 +121,7 @@
+     m_structure = structure;
      m_mode = OversizeTypedArray;
 +#if OS(WASI)
 +    allocation.succeed();
 +#endif
  }
+
 diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 --- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 +++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
@@ -766,10 +1188,14 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
 --- a/Source/JavaScriptCore/heap/Heap.h
 +++ b/Source/JavaScriptCore/heap/Heap.h
-@@ -400,2 +400,5 @@
+@@ -400,2 +400,9 @@
      size_t sizeAfterLastCollection() const { return m_sizeAfterLastCollect; }
 +#if OS(WASI)
 +    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
++    // Allocation-boundary pacing inputs (runtime/WASIMemoryTelemetry.h). Plain field reads; mutator thread only.
++    size_t maxHeapSize() const { return m_maxHeapSize; }
++    size_t bytesAllocatedThisCycle() const { return m_nonOversizedBytesAllocatedThisCycle + m_oversizedBytesAllocatedThisCycle; }
++    size_t ramSize() const { return m_ramSize; }
 +#endif
      // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
@@ -794,3 +1220,890 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/So
 +        request.fail();
 +#endif
          throwOutOfMemoryError(globalObject, scope);
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -45,6 +45,13 @@
+ #include "WASIMemoryTelemetry.h"
+ #endif
+
++#if defined(BUN_WASM_SHARED_GROUP)
++#include "Heap.h"
++#include "VM.h"
++extern "C" uint32_t bun_shared_buffer_alloc(uint32_t bytes);
++extern "C" void bun_shared_buffer_release(uint32_t address);
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+ namespace JSC {
+@@ -673,6 +680,27 @@ RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, uns
+     return createShared(SharedArrayBufferContents::create({ memory, sizeInBytes.value() }, maxByteLength, WTF::move(handle), nullptr, SharedArrayBufferContents::Mode::Default));
+ }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++RefPtr<ArrayBuffer> ArrayBuffer::tryCreateGroupShared(VM& vm, size_t byteLength)
++{
++    if (byteLength > MAX_ARRAY_BUFFER_SIZE)
++        return nullptr;
++    uint32_t address = bun_shared_buffer_alloc(byteLength);
++    if (!address) {
++        // Finalization lags allocation. Collect and finish sweeping so released regions return.
++        vm.heap.collectNow(Sync, CollectionScope::Full);
++        address = bun_shared_buffer_alloc(byteLength);
++    }
++    if (!address)
++        return nullptr;
++    auto* data = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(address));
++    auto release = createSharedTask<void(void*)>([](void* storage) {
++        bun_shared_buffer_release(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(storage)));
++    });
++    return createShared(SharedArrayBufferContents::create({ data, byteLength }, std::nullopt, nullptr, WTF::move(release), SharedArrayBufferContents::Mode::Default));
++}
++#endif
++
+ ArrayBuffer::~ArrayBuffer() { }
+
+ std::expected<int64_t, GrowFailReason> SharedArrayBufferContents::grow(VM& vm, size_t newByteLength, bool requirePageMultiple)
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.h
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+@@ -259,6 +259,10 @@ public:
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(ArrayBuffer&);
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(std::span<const uint8_t> = { });
+     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreateShared(VM&, size_t numElements, unsigned elementByteSize, size_t maxByteLength);
++#if defined(BUN_WASM_SHARED_GROUP)
++    // A fixed-length shared buffer over its own group memory region. Null when none is available.
++    JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreateGroupShared(VM&, size_t byteLength);
++#endif
+
+     // Only for use by Uint8ClampedArray::tryCreateUninitialized and FragmentedSharedBuffer::tryCreateArrayBuffer.
+     JS_EXPORT_PRIVATE static Ref<ArrayBuffer> createUninitialized(size_t numElements, unsigned elementByteSize);
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferConstructor.cpp
+@@ -119,6 +119,16 @@ EncodedJSValue JSGenericArrayBufferConstructor<sharingMode>::constructImpl(JSGlo
+         }
+     }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    if constexpr (sharingMode == ArrayBufferSharingMode::Shared) {
++        if (!buffer) {
++            buffer = ArrayBuffer::tryCreateGroupShared(vm, byteLength);
++            if (!buffer)
++                return JSValue::encode(throwOutOfMemoryError(globalObject, scope));
++        }
++    }
++#endif
++
+     if (!buffer) {
+         buffer = ArrayBuffer::tryCreate(byteLength, 1, maxBytes);
+         if (!buffer) [[unlikely]]
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+@@ -152,6 +152,14 @@ static ALWAYS_INLINE std::pair<SpeciesConstructResult, JSArrayBuffer*> speciesCo
+         return errorResult;
+     }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++    // Distinct wrappers can view one region, so compare the shared block, not the object.
++    if (mode == ArrayBufferSharingMode::Shared && result->impl()->data() == thisObject->impl()->data()) {
++        throwVMTypeError(globalObject, scope, "Species construction returns the same shared storage to a receiver"_s);
++        return errorResult;
++    }
++#endif
++
+     // 21. If new.[[ArrayBufferByteLength]] < newLen, throw a TypeError exception.
+     if (result->impl()->byteLength() < length) {
+         throwVMTypeError(globalObject, scope, "Species construction returns ArrayBuffer which byteLength is less than requested"_s);
+@@ -233,6 +241,17 @@ static EncodedJSValue arrayBufferSlice(JSGlobalObject* globalObject, JSValue arr
+             }
+         }
+
++#if defined(BUN_WASM_SHARED_GROUP)
++        // The default path allocates without the constructor, so it needs a region too.
++        if (mode == ArrayBufferSharingMode::Shared) {
++            newBuffer = ArrayBuffer::tryCreateGroupShared(vm, newLength);
++            if (!newBuffer)
++                return JSValue::encode(throwOutOfMemoryError(globalObject, scope));
++            if (newLength)
++                memcpy(newBuffer->data(), static_cast<const char*>(thisObject->impl()->data()) + firstIndex, newLength);
++        }
++#endif
++
+         if (!newBuffer) {
+             newBuffer = thisObject->impl()->sliceWithClampedIndex(firstIndex, finalIndex);
+             if (!newBuffer)
+diff --git a/Source/JavaScriptCore/runtime/JSArray.cpp b/Source/JavaScriptCore/runtime/JSArray.cpp
+--- a/Source/JavaScriptCore/runtime/JSArray.cpp
++++ b/Source/JavaScriptCore/runtime/JSArray.cpp
+@@ -23,2 +23,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "JSArray.h"
+@@ -2454,2 +2455,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     VM& vm = globalObject->vm();
+@@ -2542,2 +2544,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     VM& vm = globalObject->vm();
+diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCore/runtime/ProxyObject.cpp
+--- a/Source/JavaScriptCore/runtime/ProxyObject.cpp
++++ b/Source/JavaScriptCore/runtime/ProxyObject.cpp
+@@ -26,2 +26,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "ProxyObject.h"
+@@ -156,2 +157,3 @@
+ {
++    WASM_RESERVE_STACK(512);
+     NO_TAIL_CALLS();
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -23,2 +23,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "Parser.h"
+@@ -54,5 +55,5 @@
+ #define consumeOrFailWithFlags(tokenType, flags, ...) do { if (!consume(tokenType, flags)) [[unlikely]] { handleErrorToken(); internalFailWithMessage(true, __VA_ARGS__); } } while (0)
+ #define matchOrFail(tokenType, ...) do { if (!match(tokenType)) [[unlikely]] { handleErrorToken(); internalFailWithMessage(true, __VA_ARGS__); } } while (0)
+-#define failIfStackOverflow() do { if (!canRecurse()) [[unlikely]] failWithStackOverflow(); } while (0)
++#define failIfStackOverflow() do { if (m_hasStackOverflow || !canRecurse()) [[unlikely]] failWithStackOverflow(); } while (0)
+ #define semanticFail(...) do { internalFailWithMessage(false, __VA_ARGS__); } while (0)
+ #define semanticFailIfTrue(cond, ...) do { if ((cond)) [[unlikely]] internalFailWithMessage(false, __VA_ARGS__); } while (0)
+@@ -89,2 +90,16 @@
+ std::atomic<unsigned> globalParseCount { 0 };
++
++#if OS(WASI)
++// bun-wasm: bytes that parseStatement, parseAssignmentExpression, parseAssignmentChainLevel and
++// parseAssignmentChainRest leave out of their 2048-byte shadow-stack reservation. Zero-filled side
++// data therefore means the full reservation, before and without any initializer. Written at most
++// once, before the first parse (helpers.cpp).
++static uint32_t wasmParserReserveDiscount;
++
++void setWasmParserReserve(unsigned bytes)
++{
++    RELEASE_ASSERT(bytes >= 512 && bytes <= 2048 && !(bytes % 16));
++    wasmParserReserveDiscount = 2048 - bytes;
++}
++#endif
+
+@@ -2103,2 +2118,3 @@
+ {
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
+     DepthManager statementDepth(&m_statementDepth);
+@@ -4281,5 +4297,22 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseArrowFunc
+
++// bun-wasm: `a = b = c` used to parse each right side by calling parseAssignmentExpression again:
++// one host frame and one stack reservation per target. parseAssignmentLevelStart and
++// parseAssignmentLevelOperator are upstream's function cut at its operator loop, and three real
++// functions inline them. parseAssignmentExpression keeps upstream's straight-line shape and calls
++// parseAssignmentChainLevel where upstream called itself. A chain level that consumes another
++// operator publishes its record on m_suspendedAssignmentLevels and returns, and
++// parseAssignmentChainRest then runs the remaining levels one at a time, so a chain of any length
++// holds three parser frames (docs/bun-patches/jsc-assignment-chains.md).
+ template <typename LexerType>
+-template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmentExpression(TreeBuilder& context)
++template <typename Expression> ALWAYS_INLINE Expression Parser<LexerType>::finishAssignmentLevel(Expression result, AssignmentLevelState& state)
+ {
++    state = result ? AssignmentLevelState::Completed : AssignmentLevelState::Failed;
++    return result;
++}
++
++// A fresh level, up to its first operand. Every failing macro returns 0 with the state Failed.
++template <typename LexerType>
++template <typename TreeBuilder> ALWAYS_INLINE TreeExpression Parser<LexerType>::parseAssignmentLevelStart(TreeBuilder& context, JSTextPosition& start, JSTokenLocation& location, int& initialAssignmentCount, int& initialNonLHSCount, AssignmentLevelState& state)
++{
++    state = AssignmentLevelState::Failed;
+     ASSERT(!hasError());
+@@ -4289,8 +4322,8 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+     if (match(YIELD) && !canUseIdentifierYield())
+-        return parseYieldExpression(context);
++        return finishAssignmentLevel(parseYieldExpression(context), state);
+
+-    JSTextPosition start = tokenStartPosition();
+-    JSTokenLocation location(tokenLocation());
+-    int initialAssignmentCount = m_parserState.assignmentCount;
+-    int initialNonLHSCount = m_parserState.nonLHSCount;
++    start = tokenStartPosition();
++    location = tokenLocation();
++    initialAssignmentCount = m_parserState.assignmentCount;
++    initialNonLHSCount = m_parserState.nonLHSCount;
+     bool maybeAssignmentPattern = match(OPENBRACE) || match(OPENBRACKET);
+@@ -4335,3 +4368,3 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+             if (shouldReturnResult)
+-                return result;
++                return finishAssignmentLevel(result, state);
+         }
+@@ -4343,3 +4376,3 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+     if (maybeAssignmentPattern && (!lhs || (match(EQUAL) && context.isObjectOrArrayLiteral(lhs))))
+-        return parseDestructuringAssignment(context, *savePoint, location, !lhs);
++        return finishAssignmentLevel(parseDestructuringAssignment(context, *savePoint, location, !lhs), state);
+
+@@ -4348,9 +4381,27 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+         semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
+-        return lhs;
++        return finishAssignmentLevel(lhs, state);
+     }
+
+-    int assignmentStack = 0;
++    state = AssignmentLevelState::Operand;
++    return lhs;
++}
++
++// Upstream's operator loop for a level whose operand is `lhs`, over upstream's six locals: the
++// entry's own, or the fields of a chain level's record. `edge` is a constant at both call sites.
++// Call: the right side is a chain level, as upstream's call to itself, and what followed that call
++// runs after it. Suspend: the level publishes its record and returns. A resumed level, `lhs` its
++// right side or 0, runs what followed upstream's call at the top of the loop, so the loop keeps one
++// entry.
++template <typename LexerType>
++template <typename TreeBuilder> ALWAYS_INLINE TreeExpression Parser<LexerType>::parseAssignmentLevelOperator(TreeBuilder& context, JSTextPosition& start, const JSTokenLocation& location, int initialAssignmentCount, int initialNonLHSCount, int& assignmentStack, bool& hadAssignment, TreeExpression lhs, bool resumed, AssignmentEdge edge)
++{
+     Operator op;
+-    bool hadAssignment = false;
+     while (true) {
++        if (resumed)
++            failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
++        if (resumed && initialNonLHSCount != m_parserState.nonLHSCount) {
++            semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
++            break;
++        }
++        resumed = false;
+         switch (m_token.m_type) {
+@@ -4390,3 +4441,14 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+         }
+-        lhs = parseAssignmentExpression(context);
++        if (edge == AssignmentEdge::Suspend) {
++            // The driver ignores the returned expression.
++            suspendAssignmentLevel({ start, location, initialAssignmentCount, initialNonLHSCount, assignmentStack, hadAssignment });
++            return lhs;
++        }
++#if ASSERT_ENABLED
++        size_t suspendedLevelCount = m_suspendedAssignmentLevels.size();
++#endif
++        lhs = parseAssignmentChainLevel(context, AssignmentLevelState::Fresh, 0);
++        if (m_assignmentLevelSuspended) [[unlikely]]
++            lhs = parseAssignmentChainRest(context);
++        ASSERT(!m_assignmentLevelSuspended && m_suspendedAssignmentLevels.size() == suspendedLevelCount);
+         failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
+@@ -4407,2 +4469,89 @@ end:
+
++// The entry, with upstream's frame and reservation. Level 0 of every chain lives here, in
++// upstream's separate locals: a record would keep all six in memory, because `location` escapes.
++template <typename LexerType>
++template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmentExpression(TreeBuilder& context)
++{
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
++    ASSERT(!m_assignmentLevelSuspended);
++    JSTextPosition start;
++    JSTokenLocation location;
++    int initialAssignmentCount = 0;
++    int initialNonLHSCount = 0;
++    AssignmentLevelState state;
++    TreeExpression lhs = parseAssignmentLevelStart(context, start, location, initialAssignmentCount, initialNonLHSCount, state);
++    if (state != AssignmentLevelState::Operand)
++        return lhs;
++    int assignmentStack = 0;
++    bool hadAssignment = false;
++    return parseAssignmentLevelOperator(context, start, location, initialAssignmentCount, initialNonLHSCount, assignmentStack, hadAssignment, lhs, false, AssignmentEdge::Call);
++}
++
++// One right side, in the place of upstream's call to itself and with the same reservation. A fresh
++// level runs the entry's stack check first. A resumed level is a new activation too: with a right
++// side and no error it checks under its own reservation before it reduces, advances the lexer or
++// meets another operator. A failed right side only removes the level's record and propagates the
++// failure, as upstream's level did.
++template <typename LexerType>
++template <typename TreeBuilder> NEVER_INLINE TreeExpression Parser<LexerType>::parseAssignmentChainLevel(TreeBuilder& context, AssignmentLevelState state, TreeExpression lhs)
++{
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
++    ASSERT(!m_assignmentLevelSuspended);
++    AssignmentLevel level;
++    if (state == AssignmentLevelState::Resumed) {
++        resumeAssignmentLevel(level);
++        if (lhs && !hasError())
++            failIfStackOverflow();
++    } else {
++        lhs = parseAssignmentLevelStart(context, level.start, level.location, level.initialAssignmentCount, level.initialNonLHSCount, state);
++        if (state != AssignmentLevelState::Operand)
++            return lhs;
++    }
++    return parseAssignmentLevelOperator(context, level.start, level.location, level.initialAssignmentCount, level.initialNonLHSCount, level.assignmentStack, level.hadAssignment, lhs, state == AssignmentLevelState::Resumed, AssignmentEdge::Suspend);
++}
++
++// Entered by the entry only, directly after a chain level published its record. Runs the rest of
++// the chain one level at a time: a fresh level for each right side, then each published level
++// resumed with its right side or 0, innermost first. The records above its base are its own, and
++// it returns with them all removed and the flag clear. A failure never starts a fresh level.
++template <typename LexerType>
++template <typename TreeBuilder> NEVER_INLINE TreeExpression Parser<LexerType>::parseAssignmentChainRest(TreeBuilder& context)
++{
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
++    ASSERT(m_assignmentLevelSuspended && !m_suspendedAssignmentLevels.isEmpty());
++    size_t base = m_suspendedAssignmentLevels.size() - 1;
++    if (m_hasStackOverflow || !canRecurse()) [[unlikely]] {
++        // The published level ends as if its right side had failed: nothing is left to run.
++        m_assignmentLevelSuspended = false;
++        m_suspendedAssignmentLevels.shrink(base);
++        failWithStackOverflow();
++    }
++    TreeExpression lhs = 0;
++    while (true) {
++        AssignmentLevelState entry = AssignmentLevelState::Resumed;
++        if (m_assignmentLevelSuspended) {
++            m_assignmentLevelSuspended = false;
++            entry = AssignmentLevelState::Fresh;
++        } else if (m_suspendedAssignmentLevels.size() == base)
++            return lhs;
++        ASSERT(m_suspendedAssignmentLevels.size() > base);
++        lhs = parseAssignmentChainLevel(context, entry, lhs);
++    }
++}
++
++// Out of line: only a chain reaches them, and inlined vector growth would enlarge the chain level's
++// host frame. The flag is set only after the record is copied, and the level returns at once.
++template <typename LexerType>
++NEVER_INLINE void Parser<LexerType>::suspendAssignmentLevel(const AssignmentLevel& level)
++{
++    m_suspendedAssignmentLevels.append(level);
++    m_assignmentLevelSuspended = true;
++}
++
++template <typename LexerType>
++NEVER_INLINE void Parser<LexerType>::resumeAssignmentLevel(AssignmentLevel& level)
++{
++    level = m_suspendedAssignmentLevels.takeLast();
++}
++
+ template <typename LexerType>
+@@ -4446,2 +4595,4 @@
+ {
++    WASM_RESERVE_STACK(2048);
++    failIfStackOverflow();
+     ASSERT(match(AWAIT));
+diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
+--- a/Source/JavaScriptCore/parser/Parser.h
++++ b/Source/JavaScriptCore/parser/Parser.h
+@@ -152,2 +152,9 @@
+ JS_EXPORT_PRIVATE extern std::atomic<unsigned> globalParseCount;
++
++#if OS(WASI)
++// bun-wasm: sets the shadow-stack bytes parseStatement, parseAssignmentExpression and its two chain
++// functions reserve. Takes 512 through 2048 in multiples of 16. Call at most once, before the
++// first parse.
++JS_EXPORT_PRIVATE void setWasmParserReserve(unsigned bytes);
++#endif
+
+@@ -1573,2 +1580,27 @@ private:
+
++    // bun-wasm: what one level of an assignment chain keeps while its right side is parsed. These
++    // are the locals of upstream's parseAssignmentExpression that were live across its call to
++    // itself. Values only: a record is copied into and out of m_suspendedAssignmentLevels.
++    struct AssignmentLevel {
++        JSTextPosition start;
++        JSTokenLocation location;
++        int initialAssignmentCount { 0 };
++        int initialNonLHSCount { 0 };
++        int assignmentStack { 0 };
++        bool hadAssignment { false };
++    };
++
++    // bun-wasm: where one level of an assignment chain stands.
++    enum class AssignmentLevelState : uint8_t {
++        Fresh, // No token of the level is consumed.
++        Operand, // Its first operand is parsed. The next token decides whether it is a target.
++        Resumed, // Its right side came back, as an expression or as 0.
++        Completed, // The level produced its expression.
++        Failed, // The level returned 0, as every failing macro does.
++    };
++
++    // bun-wasm: how a level obtains the right side of an operator it consumed. The entry calls the
++    // chain level. The chain level suspends: it publishes its record and returns to its driver.
++    enum class AssignmentEdge : uint8_t { Call, Suspend };
++
+     // Used to determine type of error to report.
+@@ -1802,2 +1834,9 @@ private:
+     template <class TreeBuilder> TreeExpression parseAssignmentExpression(TreeBuilder&);
++    template <class TreeBuilder> NEVER_INLINE TreeExpression parseAssignmentChainLevel(TreeBuilder&, AssignmentLevelState, TreeExpression);
++    template <class TreeBuilder> NEVER_INLINE TreeExpression parseAssignmentChainRest(TreeBuilder&);
++    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelStart(TreeBuilder&, JSTextPosition& start, JSTokenLocation&, int& initialAssignmentCount, int& initialNonLHSCount, AssignmentLevelState&);
++    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelOperator(TreeBuilder&, JSTextPosition& start, const JSTokenLocation&, int initialAssignmentCount, int initialNonLHSCount, int& assignmentStack, bool& hadAssignment, TreeExpression, bool resumed, AssignmentEdge);
++    template <typename Expression> ALWAYS_INLINE Expression finishAssignmentLevel(Expression, AssignmentLevelState&);
++    NEVER_INLINE void suspendAssignmentLevel(const AssignmentLevel&);
++    NEVER_INLINE void resumeAssignmentLevel(AssignmentLevel&);
+     template <typename TreeBuilder> NEVER_INLINE TreeExpression parseArrowFunctionCandidate(TreeBuilder&, SavePoint&, const JSTokenLocation&, bool isArrowFunctionToken, bool wasOpenParen, size_t usedVariablesSize, bool& shouldReturnResult);
+@@ -2133,2 +2172,8 @@ private:
+     bool m_hasStackOverflow;
++    // bun-wasm: set only by a chain level that has just published its record and is returning to
++    // its caller, which hands it to a chain driver at once. Clear at every other function boundary.
++    bool m_assignmentLevelSuspended { false };
++    // bun-wasm: the suspended levels of every chain driver of this parse, innermost last. A driver
++    // removes exactly the records above its base before it returns.
++    Vector<AssignmentLevel, 8> m_suspendedAssignmentLevels;
+     ScopeStack m_scopeStack;
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -497,2 +497,10 @@ RegisterID* ArrayNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+             auto* array = JSCellButterfly::tryCreate(generator.vm(), cellButterflyStructure, length);
++#if OS(WASI)
++            // A Wasm host can refuse to grow memory while the guest stays usable. The shared buffer
++            // is an optimization, so build this array from its elements like any other literal.
++            if (!array) [[unlikely]] {
++                recommendedIndexingType = static_cast<IndexingType>(recommendedIndexingType & ~CopyOnWrite);
++                return generator.emitNewArray(dst, elements, length, recommendedIndexingType);
++            }
++#endif
+             RELEASE_ASSERT(array);
+@@ -2920,2 +2928,3 @@ RegisterID* DeleteValueNode::emitBytecode(BytecodeGenerator& generator, Register
+ {
++    WASM_RESERVE_STACK(1024);
+     generator.emitNodeInIgnoreResultPosition(m_expr);
+@@ -2930,2 +2939,3 @@ RegisterID* VoidNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -2965,2 +2975,3 @@ RegisterID* TypeOfValueNode::emitBytecode(BytecodeGenerator& generator, Register
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -3168,2 +3179,3 @@ RegisterID* UnaryOpNode::emitBytecode(BytecodeGenerator& generator, RegisterID*
+ {
++    WASM_RESERVE_STACK(1024);
+     if (dst == generator.ignoredResult()) {
+@@ -3190,2 +3202,3 @@ RegisterID* UnaryPlusNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+ {
++    WASM_RESERVE_STACK(1024);
+     ASSERT(opcodeID() == op_to_number);
+@@ -3200,2 +3213,3 @@ void LogicalNotNode::emitBytecodeInConditionContext(BytecodeGenerator& generator
+ {
++    WASM_RESERVE_STACK(1024);
+     if (needsDebugHook()) [[unlikely]]
+@@ -3795,2 +3809,7 @@ void ConditionalNode::emitBytecodeInConditionContext(BytecodeGenerator& generato
+
++// bun-wasm: the parser no longer bounds the depth of `a = b = c`, so the nine emitters that recurse
++// into an assignment's right side reserve shadow stack for their host frames, and emitNode's
++// existing check refuses a chain that is too deep (docs/bun-patches/jsc-assignment-chains.md).
++#define WASM_RESERVE_ASSIGNMENT_EMITTER() WASM_RESERVE_STACK(1024)
++
+ // FIXME: should this be moved to be a method on BytecodeGenerator?
+@@ -3869,2 +3888,3 @@ RegisterID* ReadModifyResolveNode::emitBytecode(BytecodeGenerator& generator, Re
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     JSTextPosition newDivot = divotStart() + m_ident.length();
+@@ -3931,2 +3951,3 @@ RegisterID* ShortCircuitReadModifyResolveNode::emitBytecode(BytecodeGenerator& g
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     JSTextPosition newDivot = divotStart() + m_ident.length();
+@@ -4036,2 +4057,3 @@ RegisterID* AssignResolveNode::emitBytecode(BytecodeGenerator& generator, Regist
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     Variable var = generator.variable(m_ident);
+@@ -4112,2 +4134,3 @@ RegisterID* AssignDotNode::emitBytecode(BytecodeGenerator& generator, RegisterID
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_rightHasAssignments, m_right->isPure(generator));
+@@ -4126,2 +4149,3 @@ RegisterID* ReadModifyDotNode::emitBytecode(BytecodeGenerator& generator, Regist
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_rightHasAssignments, m_right->isPure(generator));
+@@ -4144,2 +4168,3 @@ RegisterID* ShortCircuitReadModifyDotNode::emitBytecode(BytecodeGenerator& gener
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_rightHasAssignments, m_right->isPure(generator));
+@@ -4176,2 +4201,3 @@ RegisterID* AssignBracketNode::emitBytecode(BytecodeGenerator& generator, Regist
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     ForInContext* context = nullptr;
+@@ -4219,2 +4245,3 @@ RegisterID* ReadModifyBracketNode::emitBytecode(BytecodeGenerator& generator, Re
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_subscriptHasAssignments || m_rightHasAssignments, m_subscript->isPure(generator) && m_right->isPure(generator));
+@@ -4252,2 +4279,3 @@ RegisterID* ShortCircuitReadModifyBracketNode::emitBytecode(BytecodeGenerator& g
+ {
++    WASM_RESERVE_ASSIGNMENT_EMITTER();
+     RefPtr<RegisterID> base = generator.emitNodeForLeftHandSide(m_base, m_subscriptHasAssignments || m_rightHasAssignments, m_subscript->isPure(generator) && m_right->isPure(generator));
+diff --git a/Source/JavaScriptCore/runtime/RegExpInlines.h b/Source/JavaScriptCore/runtime/RegExpInlines.h
+--- a/Source/JavaScriptCore/runtime/RegExpInlines.h
++++ b/Source/JavaScriptCore/runtime/RegExpInlines.h
+@@ -243,1 +243,11 @@
++#if OS(WASI)
++    if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
++        if (nullOrGlobalObject) {
++            auto throwScope = DECLARE_THROW_SCOPE(vm);
++            throwScope.throwException(nullOrGlobalObject, Yarr::errorToThrow(nullOrGlobalObject, Yarr::ErrorCode::TooManyDisjunctions));
++        }
++        return -1;
++    }
++#endif
++
+     ASSERT(result >= -1);
+@@ -392,2 +402,11 @@
+     }
++#if OS(WASI)
++    if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
++        if (nullOrGlobalObject) {
++            auto throwScope = DECLARE_THROW_SCOPE(vm);
++            throwScope.throwException(nullOrGlobalObject, Yarr::errorToThrow(nullOrGlobalObject, Yarr::ErrorCode::TooManyDisjunctions));
++        }
++        return MatchResult::failed();
++    }
++#endif
+ #if REGEXP_FUNC_TEST_DATA_GEN
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -1822,2 +1822,3 @@
+     {
++        WASM_RESERVE_STACK(2048);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2338,1 +2339,6 @@
++#if OS(WASI)
++        if (result == JSRegExpResult::ErrorNoMemory)
++            return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);
++#endif
++
+         return output[0];
+@@ -2782,2 +2788,3 @@
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+diff --git a/Source/JavaScriptCore/yarr/YarrPattern.cpp b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+--- a/Source/JavaScriptCore/yarr/YarrPattern.cpp
++++ b/Source/JavaScriptCore/yarr/YarrPattern.cpp
+@@ -1964,2 +1964,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2034,2 +2035,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2185,2 +2187,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2337,2 +2340,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -2665,2 +2669,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]] {
+@@ -2942,2 +2947,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+@@ -3207,2 +3213,3 @@ public:
+     {
++        WASM_RESERVE_STACK(1024);
+         if (!isSafeToRecurse()) [[unlikely]]
+diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
+--- a/Source/JavaScriptCore/runtime/JSONObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSONObject.cpp
+@@ -27,2 +27,3 @@
+ #include "config.h"
++#include <wtf/StackBounds.h>
+ #include "JSONObject.h"
+@@ -1347,2 +1348,11 @@
+ {
++    WASM_RESERVE_STACK(1024);
++#if OS(WASI)
++    // Static buffers estimate native stack use. Wasm needs the shadow-stack guard too.
++    if (!m_vm.isSafeToRecurseSoft()) [[unlikely]] {
++        recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
++        return;
++    }
++#endif
++
+     if constexpr (bufferMode == BufferMode::DynamicBuffer) {
+diff --git a/Source/WTF/wtf/StackBounds.h b/Source/WTF/wtf/StackBounds.h
+--- a/Source/WTF/wtf/StackBounds.h
++++ b/Source/WTF/wtf/StackBounds.h
+@@ -29,2 +29,10 @@
+ #include <algorithm>
++
++// The Wasm host stack is outside linear memory. Account for native recursion
++// with few address-taken locals so the existing shadow-stack guard can see it.
++#if OS(WASI)
++#define WASM_RESERVE_STACK(bytes) asm volatile("" : : "r"(__builtin_alloca(bytes)) : "memory")
++#else
++#define WASM_RESERVE_STACK(bytes) do { } while (false)
++#endif
+ #include <wtf/StackPointer.h>
+diff --git a/Source/JavaScriptCore/bytecode/BytecodeList.rb b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+index 623d253f..fab0e744 100644
+--- a/Source/JavaScriptCore/bytecode/BytecodeList.rb
++++ b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+@@ -1599,5 +1599,11 @@ op :llint_cloop_did_return_from_js_34
+ op :llint_cloop_did_return_from_js_35
+ op :llint_cloop_did_return_from_js_36
+ op :llint_cloop_did_return_from_js_37
++op :llint_cloop_did_return_from_js_38
++op :llint_cloop_did_return_from_js_39
++op :llint_cloop_did_return_from_js_40
++op :llint_cloop_did_return_from_js_41
++op :llint_cloop_did_return_from_js_42
++op :llint_cloop_did_return_from_js_43
+ 
+ end_section :CLoopReturnHelpers
+diff --git a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+index 3bf82d66..f46d4dd5 100644
+--- a/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
++++ b/Source/JavaScriptCore/llint/LLIntOfflineAsmConfig.h
+@@ -88,6 +88,12 @@
+ #define OFFLINE_ASM_ADDRESS64 0
+ #endif
+ 
++#if OS(WASI)
++#define OFFLINE_ASM_WASI 1
++#else
++#define OFFLINE_ASM_WASI 0
++#endif
++
+ #if ASSERT_ENABLED
+ #define OFFLINE_ASM_ASSERT_ENABLED 1
+ #else
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index ad10ba11..1eec7afc 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -893,6 +893,32 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_direct)
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++static UGPRPair callGetterInLoop(CallFrame*, const JSInstruction*, JSFunction* getter, JSValue thisValue);
++
++// JSValue::get(), except that a getter written in JavaScript is not called: it is returned in
++// |getter| with an empty value, for callGetterInLoop. A missing property is undefined and an
++// exception leaves the slot unused, as in JSValue::get(). Host, bound and custom getters and
++// Proxy reads are called here as before.
++template<bool debugLLIntGetById>
++static ALWAYS_INLINE JSValue getOrFindJavaScriptGetter(JSGlobalObject* globalObject, JSValue baseValue, PropertyName propertyName, PropertySlot& slot, JSFunction*& getter)
++{
++    auto scope = DECLARE_THROW_SCOPE(getVM(globalObject));
++    bool hasSlot = baseValue.getPropertySlot<debugLLIntGetById>(globalObject, propertyName, slot);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!hasSlot)
++        return jsUndefined();
++    if (slot.isAccessor()) {
++        auto* function = dynamicDowncast<JSFunction>(slot.getterSetter()->getter());
++        if (function && !function->isHostFunction()) {
++            getter = function;
++            return { };
++        }
++    }
++    RELEASE_AND_RETURN(scope, slot.getValue(globalObject, propertyName));
++}
++#endif
++
+ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_with_this)
+ {
+     LLINT_BEGIN();
+@@ -901,7 +927,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id_with_this)
+     JSValue baseValue = getOperand(callFrame, bytecode.m_base);
+     JSValue thisVal = getOperand(callFrame, bytecode.m_thisValue);
+     PropertySlot slot(thisVal, PropertySlot::PropertySlot::InternalMethodType::Get);
++#if ENABLE(C_LOOP) && OS(WASI)
++    JSFunction* getter = nullptr;
++    JSValue result = getOrFindJavaScriptGetter<false>(globalObject, baseValue, ident, slot, getter);
++    LLINT_CHECK_EXCEPTION();
++    if (getter)
++        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, slot.thisValue()));
++#else
+     JSValue result = baseValue.get(globalObject, ident, slot);
++#endif
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
+@@ -962,13 +996,29 @@ static void setupGetByIdPrototypeCache(JSGlobalObject* globalObject, VM& vm, Cod
+     vm.writeBarrier(codeBlock);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++// Only op_get_by_id asks for |javaScriptGetter|. Every other caller compiles the code it had.
++template<bool findJavaScriptGetter = false>
++static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata, JSFunction** javaScriptGetter = nullptr)
++#else
+ static JSValue performLLIntGetByID(BytecodeIndex bytecodeIndex, CodeBlock* codeBlock, JSGlobalObject* globalObject, JSValue baseValue, const Identifier& ident, GetByIdModeMetadata& metadata)
++#endif
+ {
+     VM& vm = globalObject->vm();
+     auto throwScope = DECLARE_THROW_SCOPE(vm);
+     PropertySlot slot(baseValue, PropertySlot::PropertySlot::InternalMethodType::Get);
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++    // A getter left for the caller is an accessor slot: the caching below stores values only,
++    // so it records neither the getter nor its result.
++    JSValue result;
++    if constexpr (findJavaScriptGetter)
++        result = getOrFindJavaScriptGetter<true>(globalObject, baseValue, ident, slot, *javaScriptGetter);
++    else
++        result = baseValue.get<true>(globalObject, ident, slot);
++#else
+     JSValue result = baseValue.get<true>(globalObject, ident, slot);
++#endif
+     RETURN_IF_EXCEPTION(throwScope, { });
+ 
+     if (Options::useLLIntICs()
+@@ -1036,7 +1086,15 @@ LLINT_SLOW_PATH_DECL(slow_path_get_by_id)
+     const Identifier& ident = codeBlock->identifier(bytecode.m_property);
+     JSValue baseValue = getOperand(callFrame, bytecode.m_base);
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++    JSFunction* getter = nullptr;
++    JSValue result = performLLIntGetByID<true>(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata, &getter);
++    LLINT_CHECK_EXCEPTION();
++    if (getter)
++        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, baseValue));
++#else
+     JSValue result = performLLIntGetByID(codeBlock->bytecodeIndex(pc), codeBlock, globalObject, baseValue, ident, metadata.m_modeMetadata);
++#endif
+     LLINT_RETURN_PROFILED(result);
+ }
+ 
+@@ -2261,6 +2319,66 @@ static inline UGPRPair setUpCall(CallFrame* calleeFrame, CodeSpecializationKind
+     LLINT_CALL_RETURN(globalObject, callerSP, codePtr.taggedPtr(), JSEntryPtrTag);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++// Hands a JavaScript getter that op_get_by_id or op_get_by_id_with_this found back to the C loop.
++// The loop calls it as it calls any JavaScript function, so a getter starts no new CLoop::execute
++// on the host stack.
++//
++// Those two slow paths end in one of three ways, read by callGetByIdSlowPath in
++// LowLevelInterpreter64.asm:
++//   completed:     (pc, nullptr), as LLINT_END_IMPL
++//   threw:         (returnToThrow(vm), exceptionSignal()), as LLINT_THROW_IMPL
++//   call a getter: (entry point, stack pointer for the getter's frame), neither word null or
++//                  the signal
++// setUpCall() reports its own errors the way call slow paths do, as (callToThrow(vm), nullptr),
++// which would read as "completed" here. It becomes "threw" before this returns.
++static UGPRPair callGetterInLoop(CallFrame* callFrame, const JSInstruction* pc, JSFunction* getter, JSValue thisValue)
++{
++    CodeBlock* codeBlock = callFrame->codeBlock();
++    JSGlobalObject* globalObject = codeBlock->globalObject();
++    VM& vm = codeBlock->vm();
++    auto throwScope = DECLARE_THROW_SCOPE(vm);
++
++    // The bytecode reserved no room for this frame, so it goes below everything the caller's
++    // frame can use (CallFrame::topOfFrame(), never above the loop's stack pointer), aligned as
++    // a varargs frame is. Nothing is written until the stack is known to have the room.
++    unsigned callerRegisters = static_cast<unsigned>(callFrame->registers() - callFrame->topOfFrame());
++    CallFrame* calleeFrame = calleeFrameForVarargs(callFrame, callerRegisters, 1);
++    if (!vm.ensureJSStackCapacityFor(calleeFrame->registers())) [[unlikely]] {
++        throwStackOverflowError(globalObject, throwScope);
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    }
++
++    calleeFrame->setCallerFrame(callFrame);
++    calleeFrame->clearReturnPC();
++    calleeFrame->setCodeBlock(nullptr);
++    calleeFrame->setArgumentCountIncludingThis(1);
++    calleeFrame->setCallee(getter);
++    calleeFrame->setThisValue(thisValue);
++    callFrame->setCurrentVPC(pc);
++
++    // setUpCall() can compile the getter. A collection scans the frame stack from its published
++    // pointer, clears what lies below it (CLoopStack::sanitizeStack) and cannot see wasm locals.
++    // ScriptExecutable::prepareForExecutionImpl() defers collection while it compiles, and this
++    // does not rely on that: the finished frame is published while setUpCall() runs, which keeps
++    // the getter and its receiver alive and the frame intact. The caller's pointer is put back
++    // before any way out.
++    CLoopStack& stack = vm.cloopStack();
++    void* callerStackPointer = stack.currentStackPointer();
++    stack.setCurrentStackPointer(calleeFrame);
++    UGPRPair call = setUpCall(calleeFrame, CodeSpecializationKind::CodeForCall, getter);
++    stack.setCurrentStackPointer(callerStackPointer);
++
++    if (throwScope.exception()) [[unlikely]]
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    const void* target;
++    const void* calleeStackPointer;
++    decodeResult(call, target, calleeStackPointer);
++    RELEASE_ASSERT(target && calleeStackPointer == calleeFrame + CallerFrameAndPC::sizeInRegisters);
++    return call;
++}
++#endif
++
+ LLINT_SLOW_PATH_DECL(slow_path_ensure_call_link_info)
+ {
+     LLINT_BEGIN_NO_SET_PC();
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index e2b928eb..4367c726 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -2348,7 +2348,13 @@ llintSlowPathOp(put_setter_by_id)
+ llintSlowPathOp(put_setter_by_val)
+ llintSlowPathOp(set_function_name)
+ llintSlowPathOp(throw)
+-llintSlowPathOp(get_by_id_with_this)
++if C_LOOP and WASI
++    llintOp(op_get_by_id_with_this, OpGetByIdWithThis, macro (size, get, dispatch)
++        callGetByIdSlowPath(_llint_slow_path_get_by_id_with_this, size, OpGetByIdWithThis, dispatch)
++    end)
++else
++    llintSlowPathOp(get_by_id_with_this)
++end
+ 
+ llintOp(op_switch_string, unused, macro (unused, unused, unused)
+     callSlowPath(_llint_slow_path_switch_string)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 7187af71..f78f579a 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -460,6 +460,32 @@ macro callCallSlowPath(slowPath, action)
+     action(r0, r1)
+ end
+ 
++if C_LOOP and WASI
++    # A get_by_id slow path that can hand a JavaScript getter back to this loop
++    # (callGetterInLoop in LLIntSlowPaths.cpp). It ends in one of three ways, and the
++    # exception signal is tested before either register is used as a pointer:
++    #   r1 is LLInt::exceptionSignal (all ones): an exception is pending.
++    #   r1 is zero: done. r0 is the bytecode pointer, as after callSlowPath.
++    #   otherwise: r0 is the getter's entry point and r1 the stack pointer for its frame.
++    #   The getter is called as any JavaScript function is, and its result is stored and
++    #   profiled the way a call's result is.
++    macro callGetByIdSlowPath(slowPath, size, opcodeStruct, dispatch)
++        callCallSlowPath(
++            slowPath,
++            macro (target, calleeStackPointer)
++                bpeq calleeStackPointer, -1, _llint_throw_from_slow_path_trampoline
++                btpnz calleeStackPointer, .callGetter
++                restoreStateAfterCCallWithoutExceptionCheck()
++                dispatch()
++            .callGetter:
++                move calleeStackPointer, sp
++                cloopCallJSFunction target
++                restoreStackPointerAfterCall()
++                dispatchAfterRegularCall(size, opcodeStruct, m_valueProfile, m_dst, dispatch)
++            end)
++    end
++end
++
+ macro callTrapHandler(throwHandler)
+     storePC()
+     prepareStateForCCall()
+@@ -1701,8 +1727,12 @@ llintOpWithMetadata(op_get_by_id, OpGetById, macro (size, get, dispatch, metadat
+     performGetByIDHelper(OpGetById, m_modeMetadata, m_valueProfile, .opGetByIdSlow, size, return)
+ 
+ .opGetByIdSlow:
+-    callSlowPath(_llint_slow_path_get_by_id)
+-    dispatch()
++    if C_LOOP and WASI
++        callGetByIdSlowPath(_llint_slow_path_get_by_id, size, OpGetById, dispatch)
++    else
++        callSlowPath(_llint_slow_path_get_by_id)
++        dispatch()
++    end
+ 
+ .osrReturnPoint:
+     getterSetterOSRExitReturnPoint(op_get_by_id, size)

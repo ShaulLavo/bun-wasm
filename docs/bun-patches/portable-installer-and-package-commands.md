@@ -193,3 +193,76 @@ placement are unchanged. Generic production Resolver tests cover this ordering,
 peer-only graphs, root priority, cycles and determinism. A native Bun 1.4.4
 lockfile-only control supplies the generic placement reference. No upstream
 implementation is copied, and no package name, pin or loader exception is added.
+
+The original installer overlaps metadata transport for known sibling edges and
+archive transport for the resolved install list. It retains deterministic version,
+placement, peer, extraction and publication order. Seven lookahead handles leave
+one slot for a demand request that lookahead conservatively skips. Local edges,
+usable locks, existing placements and fresh cache files do not start speculative
+requests. Cached bytes still pass the existing safety validation before use.
+Each request owns its handle and closes it on consumption or cancellation. Only
+the current response is accumulated in guest memory; other bodies use existing
+host backpressure. No parsed packument cache or archive preload is added.
+`install-metadata.test.ts` uses real delayed registry I/O, including responses
+larger than the host body window, to check overlap, bounds, cancellation and
+request-free locked, local and no-op installs. No upstream code is copied.
+
+Metadata lookahead also fills unused handles from required edges of already
+selected queued parents. It examines at most seven queued parents and retains
+only the next seven distinct request URLs. It never resolves a speculative
+package or fetches deferred peer edges. Current siblings keep priority, and
+version selection, placement and peer traversal still run in their original
+order. Handles survive parent boundaries when their URLs remain in the window;
+obsolete handles close before replacement requests start. The existing delayed
+registry also checks overlap between narrow child lists of successive parents.
+This is an original adapter change with no additional upstream source.
+A nested-alias fixture forces an unpredicted demand while seven requests for the
+next selected parent's children remain open. Those children wait about two
+seconds before consumption under a one-second idle timeout. The check preserves
+the nested alias placement, reaches exactly eight handles, and confirms that
+queue residence does not consume the response reader's idle budget.
+
+Lookahead eligibility advances once through each current dependency list instead
+of rescanning every remaining suffix. Candidate names from the same bounded
+queued-parent window are also prepared once per current parent. Only the next
+seven transport handles are retained. Local file, link and workspace specifiers
+never open manifests during transport eligibility checks; demand-time resolution
+still validates them. Linux resolver regressions observe actual manifest opens
+with an armed inotify control, covering root lists and selected local parents.
+This avoids quadratic filesystem work without changing package selection or the
+reserved demand slot. No upstream code is copied.
+
+
+## HTTP and HTTPS tarball specifiers
+
+Class **Host feature**, original adapter changes in `install/resolve/tarball.rs`,
+`resolve.rs`, `io.rs` and `mod.rs`. No upstream source is copied or patched.
+The Bun comparison revision remains `9510e74152073d850a18758ca41114d8f214ffa6`.
+
+URL dependencies and root string overrides bypass registry range selection and
+metadata lookahead. The adapter reads the actual archive manifest through the
+same path, entry-type and size checks as extraction. It checks the requested
+package name, exact version and dependency maps. Renaming requires an explicit
+npm alias. Ordinary placement, dependency resolution and platform selection
+remain in the existing resolver.
+
+The existing four-element lock row keeps identity, explicit URL, dependency
+metadata and SRI. First resolution records an observed SHA-512 digest; locked
+resolution verifies the existing expected digest before inspecting package data.
+Refresh and update retain a same-source digest. URL changes invalidate an
+existing installed package even when its name and version match. A separate
+installer-owned sibling sidecar records the actual installed name, version,
+source URL and integrity. Its path follows the placement name, including aliases.
+Only successful archive extraction writes it. Lockfile-only resolution cannot
+change installed provenance. Reuse requires both matching provenance and package
+identity, so returning to a registry source or changing a URL through a
+lockfile-only operation cannot retain different installed files. Replacement,
+pruning and local linking clear the old record before changing the files.
+Explicit URL failures are fatal rather than optional warnings. The source Rust regressions
+cover HTTPS parsing, identity, aliases, overrides, cycles, archive safety,
+cache/lock replay and tamper. `scripts/install-tarballs.test.ts` adds a controlled
+loopback HTTP provider. Its blocking runtime check selects QuickJS, JSC and
+Browser explicitly, consuming the already-built engine artifacts. CI stages the
+existing source-cache Browser fixture before that check; this is not the normal
+W1/default-profile Browser delivery. An explicit INSTALL_ENGINE limits local
+source controls without narrowing the normal CI default.

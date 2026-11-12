@@ -1,5 +1,5 @@
 import { quickjsPair } from "./quickjs-plan-fixture";
-import { programKindForBuild, programProfile, type PairedEngine } from "../../src/engine-kind";
+import { isSupportedPairedEngine, programKindForBuild, programProfile, type SupportedPairedEngine } from "../../src/engine-kind";
 import { captureProgramInputs } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -9,7 +9,7 @@ import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../sc
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
-export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "src/program-profile.ts"];
+export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "ci-release-download.ts", "rustc-cache.sh", "src/program-profile.ts"];
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint8Array): GuestBuildReceipt {
@@ -24,6 +24,7 @@ export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint
   const kind = programKindForBuild(build);
   const core = artifactIdentity(bytes);
   if (kind === "single") return { ...inputs, program: { kind, core } };
+  if (!isSupportedPairedEngine(kind)) throw new Error(`Unsupported normal receipt fixture engine: ${kind}`);
   const identity = artifactIdentity(side ?? quickjsPair(kind).side);
   const content = { fixture: "Synthetic input identity, no production build" };
   const engineInputs = { schema: 1, scope: kind, source: sourceManifest.source, content, contentSha256: hash(JSON.stringify(content)) } as const;
@@ -32,7 +33,7 @@ export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint
 
 export function fixtureGit(root: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", root].concat(args), { stdin: "ignore" });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  if (result.exitCode !== 0) throw new Error(`Fixture git failed with status ${result.exitCode}: ${args.join(" ")}\n${result.stderr.toString()}`, { cause: result });
   return result.stdout.toString().trim();
 }
 
@@ -89,7 +90,7 @@ checksum = "${"2".repeat(64)}"
     fixtureGit(root, "commit", "-m", "pinned repository source");
     for (const path of ["sysroot/bun-wasm-sysroot.json", "sysroot/include/stdio.h", "sysroot/lib/wasm32-wasip1/libc.a", "sdk/VERSION", "sdk/lib/clang/builtins.a", "rustlib/libstd.rlib", "rust-src/Cargo.toml", "rust-src/Cargo.lock", "rust-src/std/src/lib.rs", "waffle/package.json", "waffle/scripts/build-wasi-libc.sh", "waffle/patches/wasi-libc/preopen-scan.patch", "private/secret.txt"]) await put(root, path);
     await put(root, "sysroot/bun-wasm-sysroot.json", JSON.stringify({ builderSha256: hash("fixture\n"), patchSha256: hash("fixture\n"), libcSha256: hash("fixture\n"), sdkVersion: "fixture\n" }));
-    for (const path of ["CMakeLists.txt", "cmake/input.cmake", "include/openssl/evp.h", "crypto/input.c", "gen/sources.cmake", "third_party/input.h", "util/input.c", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]) await put(root, `vendor/boringssl/${path}`);
+    for (const path of ["CMakeLists.txt", "cmake/input.cmake", "include/openssl/evp.h", "crypto/input.c", "ssl/handshake.cc", "gen/sources.cmake", "third_party/input.h", "util/input.c", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]) await put(root, `vendor/boringssl/${path}`);
     await put(root, "fake-tool", "#!/bin/sh\nprintf 'fixture tool 1\\n'\n");
     await chmod(join(root, "fake-tool"), 0o700);
     for (const path of ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a", "webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) await put(root, `jsc-build/${path}`);
@@ -102,7 +103,7 @@ checksum = "${"2".repeat(64)}"
     await writeFile(artifact, wasm);
     await writeFile(join(root, "dist/quickjs.wasm"), wasm);
     const tools = Object.fromEntries(["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => [name, join(root, "fake-tool")]));
-    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build"), hermesBuild: join(root, "hermes-build") }, artifact);
+    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -124,7 +125,10 @@ export async function withCliReceiptFixture<T>(action: (fixture: CliFixture) => 
     await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\nnative-tools/\n");
     await mkdir(join(root, "src"));
     await copyFile(new URL("../../src/engine-kind.ts", import.meta.url), join(root, "src/engine-kind.ts"));
-    fixtureGit(root, "add", "scripts", "src", ".gitignore");
+    // A shared-group side's recorded link reads both memory authorities.
+    await mkdir(join(root, "crates/bunwasm-cli"), { recursive: true });
+    for (const name of ["max-memory.txt", "group-address-space.txt"]) await copyFile(new URL(`../../crates/bunwasm-cli/${name}`, import.meta.url), join(root, "crates/bunwasm-cli", name));
+    fixtureGit(root, "add", "scripts", "src", "crates", ".gitignore");
     fixtureGit(root, "commit", "-m", "synthetic CLI probes, no compilation");
     const bin = join(options.sdk, "bin");
     const rustc = join(root, "private/toolchain/bin/rustc");
@@ -165,7 +169,7 @@ export function receiptCli(fixture: CliFixture, ...args: string[]) {
   return Bun.spawnSync([process.execPath, fixture.cli].concat(args), { cwd: fixture.root, env: fixture.env });
 }
 
-export async function stageProgramFixture(options: SourceOptions, artifact: string, kind: PairedEngine) {
+export async function stageProgramFixture(options: SourceOptions, artifact: string, kind: SupportedPairedEngine) {
   const { core, side } = quickjsPair(kind);
   await writeFile(artifact, core);
   const sidePath = join(dirname(artifact), programProfile(kind).side);

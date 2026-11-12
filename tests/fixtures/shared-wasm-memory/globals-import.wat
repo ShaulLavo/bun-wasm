@@ -1,0 +1,10 @@
+(module
+  (import "env" "memory" (memory 1 2 shared))
+  (import "env" "i" (global $i i32))
+  (import "env" "l" (global $l i64))
+  (import "env" "f" (global $f f64))
+  (import "env" "s" (global $s f32))
+  (func (export "i") (result i32) global.get $i)
+  (func (export "l") (result i64) global.get $l)
+  (func (export "f") (result f64) global.get $f)
+  (func (export "s") (result f32) global.get $s))

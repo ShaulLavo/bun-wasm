@@ -19,6 +19,28 @@ The native build runs on Linux x86_64. The CI job "Rust workspace tests (QuickJS
 
 ## Build the guests and the launcher
 
+Dev builds and tests keep function names and file/line backtraces with
+`line-tables-only` debug info. For local-variable inspection, set
+`CARGO_PROFILE_DEV_DEBUG=2 CARGO_PROFILE_TEST_DEBUG=2` before the command.
+Release profiles are unchanged.
+
+Run a build through `bash scripts/with-build-cache.sh <command...>` to use
+sccache when it is installed. The wrapper also works inside the heavy runner:
+
+```sh
+bun /work/heavy-runner/current/run.js --class build bun-host -- bash scripts/with-build-cache.sh cargo build -j 2 -p bunwasm-host
+```
+
+Set `CARGO_TARGET_DIR` to a checkout-owned path before running the wrapper.
+Rust dependencies and CMake C/C++ objects share the disk object cache
+(`/work/cache/sccache` on the maintainer's mounted data drive, or sccache's native
+default elsewhere). Each invocation owns
+and stops a private sccache server; local crates keep Cargo's incremental builds.
+Rust `staticlib` packaging runs directly through rustc because the pinned cache
+does not hash all transitive native inputs. Other Rust crate types still use the
+cache. See [the cache contract and regression](bun-patches/rust-compiler-cache.md).
+Set `SCCACHE_DIR` to choose another cache or `BUILD_CACHE=0` to bypass it.
+
 Run each command from the repository root.
 
 ```sh
@@ -55,6 +77,22 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 
 `scripts/test.sh --update` regenerates a fixture's `expected.txt` with native Bun. Review the diff before you commit it. To add a fixture, create `tests/fixtures/<name>/` with an `index.ts` and an `expected.txt`. The header of `scripts/test.sh` documents the optional files.
 
+## Update the Waffle release closure
+
+Update the runtime, relay, and base-family pins in the root, Web, and sandbox
+manifests together. Set the root `waffleHostInterface` to the released interface.
+Run `.github/scripts/update-waffle-records.sh` to refresh archive hashes, sizes,
+tagged source revisions, native source files, and program provenance.
+The updater refuses mixed interfaces or native files that differ from the runtime
+archive. It validates the original program commit and base source identity formats.
+Validation or staging failures keep `scripts/waffle-release-inputs.json` unchanged.
+The completed record replaces the old file through an atomic sibling rename.
+
+Regenerate the lockfiles with Bun, then verify frozen installs in all three scopes.
+Run the normal quality, package, and Web gates. Use the shared-group CI checks for
+both existing engine producers and their Chromium consumers. Keep these gates
+blocking while a matching program family or reviewed Bash source is unpublished.
+
 ## Change Bun's source
 
 `vendor/bun` is git-ignored and `scripts/sync-bun.sh` re-creates it. Make changes there as commits on the `wasm` branch, never as loose edits, because the sync script refuses a checkout with local changes.
@@ -85,3 +123,31 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 | How it all fits | [Architecture](concepts/architecture.md) |
 
 The repository takes no GitHub issues. [Agent instructions](../AGENTS.md) hold the conventions agents follow.
+
+## Diagnose a browser PostgreSQL TLS control
+
+For ordinary development, run one control against the existing private Pi
+PostgreSQL fixture and loopback relay. This builds the current TLS page and
+worker, uses your existing browser guest, and seeds unmodified `pg` 8.16.3 from
+an installed dependency directory. It does not consume or rewrite release
+handoffs, deliveries, or historical results.
+
+```sh
+source env.sh
+bun web/tests/tls-development.ts \
+  --wasm /work/path/to/bun-browser.wasm \
+  --pg-modules /work/path/to/pg-project/node_modules \
+  --output /work/tmp/bun-wasm-tls-result
+```
+
+The default case is `no-extra-ca`. `--case` also accepts `verified`, `hostname`,
+`rejection`, and `plaintext`. Use the fleet runner's `browser` class on the PC.
+The Pi owner-busy check and shared lane lock still apply. The fixture image
+must already be prepared. The driver creates only its uniquely named container,
+volume and scratch, and closes them on completion or interruption.
+
+Read `result.json` for the guest's original error, bounded diagnostic records,
+observer delivery and cleanup. Only the exact expected certificate or protocol
+rejection passes a negative control. A connection closing without that error
+is a failure, not evidence of certificate verification. These development runs
+do not establish application TLS acceptance.

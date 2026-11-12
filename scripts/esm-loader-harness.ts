@@ -23,11 +23,21 @@ function readRecords(name: string): Records {
   return JSON.parse(readFileSync(join(fixturesDir, name, "records.json"), "utf8"));
 }
 
+export function withImportRequests(loader: string): string {
+  const source = readFileSync(join(import.meta.dir, "../crates/bunwasm-runtime/src/js/import_requests.ts"), "utf8");
+  const prefix = "globalThis.factory = ";
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`${prefix}${source}`);
+  const factory = code.slice(code.indexOf(prefix) + prefix.length).trim().replace(/;$/, "");
+  return `(() => { (${factory})({ native: { engine: "host" }, defineGlobal(name, value) {
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  }}); return (${loader}); })()`;
+}
+
 export function loaderSource(): string {
   const prefix = "globalThis.factory = ";
   const source = readFileSync(loaderPath, "utf8").replace("(function (", `${prefix}(function (`);
   const out = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
-  return out.slice(out.indexOf(prefix) + prefix.length).trim().replace(/;$/, "");
+  return withImportRequests(out.slice(out.indexOf(prefix) + prefix.length).trim().replace(/;$/, ""));
 }
 
 // Shells with a global \`print\` (the Hermes CLI) print through it, and

@@ -147,7 +147,7 @@ try {
     return route.abort();
   });
   const page = await context.newPage();
-  await page.goto(`${match[1]}?engine=browser`);
+  await page.goto(`${match[1]}?engine=browser&prompt=off`);
   assert.match(await ready(page), /ready · Browser/);
   for (const path of sourceFiles(fixture)) await writeFile(page, `/home/user/${path}`, readFileSync(join(fixture, path), "utf8"));
   await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);

@@ -30,7 +30,7 @@ LOCK = threading.Lock()
 # its runtime imports so resume cannot reuse results after an adapter or slot change.
 BROWSER_HOST_SOURCES = (
     "web/scripts/node-host.ts", "web/scripts/async-context.ts", "web/scripts/node-worker.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
-    "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs",
+    "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.ts",
     "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
     "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/crypto-inputs.js",
     "web/src/crypto-host.js", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",

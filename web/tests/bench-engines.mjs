@@ -53,7 +53,7 @@ async function measure(type, engine, appUrl) {
   const browser = await s.launch(type);
   const page = await (await browser.newContext({ viewport: { width: 1200, height: 900 } })).newPage();
   const t0 = Date.now();
-  await page.goto(`${appUrl}?engine=${engine}`);
+  await page.goto(`${appUrl}?engine=${engine}&prompt=off`);
   const status = await ready(page);
   out.ready = Date.now() - t0;
   out.status = status;

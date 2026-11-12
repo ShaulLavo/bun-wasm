@@ -2,6 +2,7 @@
   "name": "bun-wasm",
   "version": "0.0.61",
   "private": true,
+  "waffleHostInterface": 2,
   "type": "module",
   "exports": {
     ".": {
@@ -43,6 +44,7 @@
     "src/assets.ts",
     "src/quickjs-program.ts",
     "src/engine-kind.ts",
+    "src/program-memory.ts",
     "src/bun-adapter.ts",
     "src/shared-objects.ts",
     "src/guest-asset.generated.ts",
@@ -50,6 +52,7 @@
     "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
@@ -59,15 +62,22 @@
     "web/src/promise-reactions.ts",
     "web/src/buffer-transfer.ts",
     "web/src/shared-objects",
+    "web/src/nested",
     "web/src/native-stream-state.ts",
+    "web/src/native-wasm-lifetime.ts",
+    "web/src/native-readable-iterator.ts",
     "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
+    "web/src/module-records.ts",
     "web/src/net",
     "src/executable-paths.ts",
     "web/src/bun-launcher.ts",
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
+    "web/src/engine-stack-budget.ts",
     "web/src/memory-telemetry.ts",
+    "web/src/launch-failure.ts",
+    "web/src/jsc-allocation-boundary.ts",
     "web/src/memory-channel.ts"
   ],
   "scripts": {
@@ -82,7 +92,7 @@
     "quality:lint": "oxlint --deny-warnings",
     "quality:types": "tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
     "quality:unused": "knip --no-progress",
-    "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
+    "quality:duplicates": "bun scripts/quality-duplicates.ts",
     "quality:probes": "bun scripts/test-checks.ts quality",
     "quality:rust": "bun scripts/quality-rust.ts",
     "quality:wasi": "bun scripts/quality-wasi.ts",
@@ -91,17 +101,21 @@
     "bench:engines": "bun scripts/bench-engines.ts"
   },
   "peerDependencies": {
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz"
+    "waffle": "*",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.20/waffle-base-0.0.20.tgz",
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.123/waffle-relay-0.0.123.tgz"
   },
   "devDependencies": {
+    "@builder.io/qwik": "1.17.2",
     "@types/bun": "^1.4.3",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.123/waffle-0.0.123.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
+    "miniflare": "5.20261012.0-beta",
     "oxlint": "1.88.0",
     "wrangler": "4.151.0",
     "playwright": "1.64.1"

@@ -1,0 +1,28 @@
+import { strict as assert } from 'node:assert';
+import { WASI } from 'node:wasi';
+import { createInstanceProxy } from './instance-proxy.js';
+
+const memory = new WebAssembly.Memory({ initial: 1, maximum: 3, shared: true });
+const module = new WebAssembly.Module(await Bun.file(`${import.meta.dir}/instance-reactor.wasm`).arrayBuffer());
+const instance = new WebAssembly.Instance(module, { env: { memory } });
+assert.equal(Object.hasOwn(instance, 'exports'), false);
+const descriptor = Object.getOwnPropertyDescriptor(WebAssembly.Instance.prototype, 'exports');
+assert.equal(typeof descriptor?.get, 'function');
+assert.equal(descriptor?.set, undefined);
+assert.equal(descriptor?.enumerable, true);
+assert.equal(descriptor?.configurable, true);
+assert.equal(Object.isFrozen(instance.exports), true);
+assert.equal(instance.exports, instance.exports);
+assert.throws(() => descriptor!.get!.call({}), TypeError);
+const proxy = createInstanceProxy(instance, memory);
+assert.equal(proxy.exports.memory, memory);
+assert.notEqual(proxy.exports, instance.exports);
+assert.equal(createInstanceProxy(proxy, memory), proxy);
+const words = new Int32Array(memory.buffer);
+new WASI({ version: 'preview1', args: [], env: {}, preopens: {} }).initialize(proxy);
+assert.equal(words[0], 0, 'the exact dependency suppresses child reactor initialization');
+const initialize = instance.exports._initialize;
+if (typeof initialize !== 'function') throw new Error('Missing reactor positive control');
+initialize();
+assert.equal(words[0], 42);
+console.log('shared-wasm-memory Instance exports: pass');

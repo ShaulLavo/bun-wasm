@@ -4,15 +4,38 @@
     ".": {
       "entry": [
         "scripts/app-matrix/run.mjs",
+        "scripts/build-body-consumer-probe.ts",
         "scripts/app-matrix/engine-memory-hook.ts",
         "scripts/engine-producer.ts",
+        "scripts/c1-controller.ts",
+        "scripts/goals-matrix/run.ts",
+        "scripts/goals-matrix/fleet.ts",
+        "scripts/goals-matrix/view.ts",
+        "scripts/goals-matrix/prepare.ts",
+        "scripts/performance/lifecycle.ts",
+        "scripts/performance/prepare-lifecycle.ts",
+        "scripts/performance/prepare-sharing.ts",
+        "scripts/performance/fixtures/sharing-startup.ts",
+        "scripts/performance/lifecycle-selection.ts",
+        "scripts/performance/lifecycle-profile.ts",
+        "scripts/performance/fixtures/lifecycle-process.ts",
+        "scripts/goals-matrix/calibrate-deadlines.ts",
+        "scripts/goals-matrix/policy-metadata.ts",
+        "scripts/goals-matrix/iphone-mac.ts",
+        "scripts/c1/contract-fixture.ts",
+        "scripts/c1/tls-page.ts",
+        "scripts/c1/native-header.ts",
+        "scripts/c1/step.ts",
+        "scripts/c1/steps.ts",
         "scripts/replay-engine-lineage.ts",
         "scripts/verify-engine-memory-browser.ts",
         "scripts/app-matrix/vinext-probe.ts",
         "scripts/fixtures/vinext-probe-control.ts",
+        "scripts/fixtures/next-trace-server.ts",
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/next-acceptance.ts",
         "scripts/app-matrix/next-acceptance-reference.ts",
+        "scripts/app-matrix/fixtures/browser-error-phase-observer/instrumentation.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
         "tests/memory-telemetry.test.ts",
@@ -23,9 +46,13 @@
         "tests/package/fixtures/paired-asset-brand.ts",
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/fixtures/tls-identity/verify-upstream.ts",
+        "scripts/tls-qualification.ts",
         "scripts/fixtures/ci-jsc-worker-scenario.ts",
         "scripts/fixtures/event-rejections-control.ts",
         "scripts/fixtures/quickjs-async-context.ts",
+        "scripts/fixtures/quickjs-frame-stack.ts",
+        "scripts/fixtures/quickjs-parser-stack.ts",
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
@@ -34,20 +61,22 @@
         "scripts/bun-suite-small-causes.ts",
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",
-        "scripts/check-encoded-slice.ts",
         "scripts/check-quickjs-async-context.ts",
         "scripts/check-quickjs-memory-telemetry.ts",
+        "scripts/check-quickjs-frame-stack.ts",
+        "scripts/check-quickjs-frame-wasi.ts",
+        "scripts/check-quickjs-parser-stack.ts",
         "scripts/crypto-review-vectors.mjs",
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
-        "scripts/hermes-import-delta.ts",
-        "scripts/hermes-hosts.ts",
+        "scripts/measure-require-depth.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
         "scripts/run-with-timeout.mts",
         "scripts/shared-sysroot-proof.ts",
+        "scripts/shared-nested-native.ts",
         "scripts/runtime-size.ts",
         "scripts/test-*.mjs",
         "scripts/transpile-runtime.ts",
@@ -72,11 +101,14 @@
       "entry": [
         "src/main.ts",
         "src/worker.ts",
+        "src/preview1-worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
         "guest-tests/*.test.ts",
+        "tests/fixtures/require-esm-meta/nested/meta.ts",
         "tests/browser-*.{ts,mjs}",
         "tests/ten-app-finishline.ts",
+        "tests/body-consumer-capability.ts",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
         "src/notification-worker.ts",
@@ -92,13 +124,16 @@
         "tests/persistence-browser-{main,worker}.ts",
         "tests/process-{bench-baseline,browser-main}.ts",
         "tests/runtime-proc-browser-main.ts",
-        "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,site-assets-host,startup-filesystem}.ts",
+        "tests/playground-preview-main.ts",
+        "tests/fixtures/{editor-execution,filesystem-lifecycle,module-records-hardening,safari-driver-listener,site-assets-host,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/wasm-transfer-page.ts",
-        "tests/hermes-host-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
-        "tests/worker-bootstrap-browser-main.ts"
+        "tests/worker-bootstrap-browser-main.ts",
+        "tests/shared-wasm-memory-browser{,-main}.ts",
+        "tests/explicit-profile-browser.ts",
+        "tests/shared-wasm-agent/worker.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx,js}",
@@ -108,7 +143,7 @@
       ],
       "ignoreDependencies": [
         "benchmark",
-        "miniflare"
+        "pg"
       ],
       "ignoreUnresolved": [
         "../src/subprocess.js"
@@ -117,7 +152,8 @@
     "sandbox": {
       "entry": [
         "src/main.ts",
-        "tests/*.{test.ts,mjs,js}"
+        "tests/*.{test.ts,mjs,js}",
+        "tests/next-dev.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
@@ -135,12 +171,14 @@
     }
   },
   "ignoreBinaries": [
-    "ninja",
+    "flock",
+    "mkfifo",
     "unshare",
     "rustc",
     "ss",
     "build.mjs",
-    "^c\\+\\+$"
+    "^c\\+\\+$",
+    "podman"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"

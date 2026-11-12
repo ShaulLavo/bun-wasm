@@ -23,7 +23,7 @@ for (const output of ["pipe", "file"] as const) {
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(output === "file" ? readFileSync(outputPath, "utf8") : result.stdout)
-        .toBe("Node descriptor translation, dynamic controls, churn, renumber, isolation and shared BADF checks passed\n");
+        .toBe("Node descriptor translation, startup cleanup, close errors, rights, dynamic controls, churn, renumber, isolation and shared BADF checks passed\n");
     } finally {
       if (typeof stdout === "number") closeSync(stdout);
       rmSync(scratch, { recursive: true, force: true });

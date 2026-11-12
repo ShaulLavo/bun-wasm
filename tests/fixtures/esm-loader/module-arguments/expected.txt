@@ -1,0 +1,4 @@
+undefined ReferenceError undefined
+function true,called function 
+3
+undefined ReferenceError

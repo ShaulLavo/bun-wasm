@@ -1,5 +1,5 @@
 import type { LinkPlanSource } from "waffle/link";
-import { appendCustomSection, programKind, programProfile, SHARED_GROUP_CORE_INITIALIZE, sharedGroupPair, verifyProgramSide, type PairedProgramFiles } from "./engine-kind.ts";
+import { appendCustomSection, programKind, programProfile, SHARED_GROUP_CORE_INITIALIZE_MEMORY, sharedGroupPair, verifyProgramSide, type PairedProgramFiles } from "./engine-kind.ts";
 
 /** Snapshot both inputs before hashing; the cache association owns kind and both exact bytes. */
 export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Promise<LinkPlanSource> {
@@ -9,7 +9,6 @@ export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Pro
   if (programKind(core) !== input.kind) throw new TypeError("Program kind does not match core declaration");
   verifyProgramSide(input.kind, side);
   const group = sharedGroupPair(core, input.side);
-  if (group && input.kind !== "quickjs") throw new TypeError(`A ${input.kind} pair is not qualified for the shared-group profile`);
   const digests = await Promise.all([input.core, input.side].map(bytes => crypto.subtle.digest("SHA-256", bytes)));
   const kind = new TextEncoder().encode(input.kind);
   const identity = Uint8Array.from(Array.from(kind).concat([0], Array.from(new Uint8Array(digests[0]!)), Array.from(new Uint8Array(digests[1]!))));
@@ -22,11 +21,13 @@ function linkPlan(files: PairedProgramFiles<Uint8Array>, group: boolean): LinkPl
     core: {
       id: "bun-core", source: files.core, cooperative: true,
       checkpoint: { module: "runtime_proc", name: "signal" },
-      initialize: group ? SHARED_GROUP_CORE_INITIALIZE.slice() : ["__wasm_call_ctors"],
+      initializeMemory: group ? SHARED_GROUP_CORE_INITIALIZE_MEMORY.slice() : [],
+      initialize: ["__wasm_call_ctors"],
     },
     libraries: [{
       id: files.kind, source: files.side, cooperative: true,
       checkpoint: { module: "env", name: "core_checkpoint" },
+      initializeMemory: programProfile(files.kind).initializeMemory.slice(),
       initialize: programProfile(files.kind).initialize.slice(),
     }],
     reserve: "bun_core_alloc",

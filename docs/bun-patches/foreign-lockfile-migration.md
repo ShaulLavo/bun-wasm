@@ -22,8 +22,17 @@ rejects transport queries, and keeps configured authorization out of URLs and lo
 records. Host error text and optional warnings use the credential-aware redactor.
 The lock writer checks decoded strings for embedded npm authentication and
 configured secrets before publication. The original cache adapter uses the same
-check before persistence or reuse. Native and TypeScript host redirect adapters
-validate package destinations and remove sensitive headers on full-origin changes.
+check before persistence or reuse and forwards the consumed unauthenticated
+tarball response before best-effort Cache Storage publication. Its private stored
+header preserves the final URL and redirect metadata through native cache cloning,
+then restores the original headers before returning a hit. The browser cache
+adapter in `web/src/net/install-cache.ts` also honors the guest's
+`Cache-Control: no-cache` directive, including case-insensitive directive lists
+and quoted extension values, so a forced refresh fetches and captures new
+tarball bytes instead of returning a warm hit. Request headers and authenticated
+cache bypass remain unchanged. This is an original host adapter correction, not
+an upstream patch. Native and TypeScript
+host redirect adapters validate package destinations and remove sensitive headers on full-origin changes.
 Host tracing prints metadata sizes rather than header values or payload text.
 These redirect, trace and decoded-metadata guards are original adapters. The
 portable verifier implements SHA-512, SHA-384, SHA-256 and SHA-1 and compares decoded

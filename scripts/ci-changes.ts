@@ -1,23 +1,35 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
+  "scripts/ci-jsc-artifact.ts",
+  "scripts/ci-main-coverage.ts",
+  "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/engine-producer.ts", "scripts/producer-closure.ts", "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh", "tests/test-stdout-busy-loop.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
-  "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
+  "scripts/native-profile-fixtures.ts", "scripts/ci-native-handoff.ts", "scripts/ci-changes.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "web/src/script-evaluation.ts",
   "tests/memory-telemetry.test.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
+  "scripts/check-quickjs-parser-stack.ts", "scripts/fixtures/quickjs-parser-stack.c", "scripts/fixtures/quickjs-parser-stack.ts",
+  "scripts/fixtures/quickjs-parser-stack.expected.txt",
+  "scripts/check-quickjs-frame-stack.ts", "scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-frame-stack.ts",
+  "scripts/fixtures/quickjs-frame-stack.expected.txt", "scripts/quickjs-native-check.ts",
+  "scripts/check-quickjs-frame-wasi.ts", "scripts/fixtures/quickjs-frame-wasi.c",
   "scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs",
   // Embedded in bun.wasm as the runtime module `direct_stream`.
   "web/src/native-direct-stream.ts",
 ]);
 const sharedSysrootFiles = new Set([
+  "scripts/ci-main-coverage.ts", "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
   ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
   "scripts/build-shared-wasi-libc.sh", "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts",
   "scripts/shared-sysroot-native.ts", "tests/fixtures/shared-sysroot/member.c", "patches/wasi-libc/group-grow.patch",
@@ -30,21 +42,76 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
   return paths.some(path => sharedSysrootFiles.has(path));
 }
 
-const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
-const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
+export const sharedNativeFiles: ReadonlySet<string> = new Set([
+  "scripts/ci-jsc-artifact.ts",
+  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/ci-spidermonkey-prebuild.ts", "scripts/ci-spidermonkey-prebuild.test.ts", "checks/quality-ci-spidermonkey-prebuild.json",
+  "scripts/spidermonkey-browser-ci.test.ts", "checks/quality-spidermonkey-browser-ci.json",
+  "scripts/spidermonkey-browser-stack.test.ts", "checks/quality-spidermonkey-browser-stack.json",
+  "web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts",
+  "checks/browser-guest-shared-wasm-memory.json",
+  "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
+  "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+  "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
+  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
+  "scripts/guest-source-manifest.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-build-receipt.ts",
+  "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-jsc.sh", "scripts/src/program-profile.ts", "scripts/src/engine-explicit-init.ts",
+  "scripts/src/engine-init.c", "scripts/quickjs-core-exports.txt", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts",
+  "scripts/build-wasi-sysroot.ts", "scripts/build-shared-wasi-libc.sh", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
+  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts",
+  "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts",
+  "web/src/native-direct-stream.ts", "src/engine-kind.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
+  // The shared Browser consumer's entry points, group-sensitive host and build/dependency inputs.
+  "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
+  "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
+  "web/src/program-profile.ts", "web/src/playground/playground.ts", "sandbox/src/sandbox.ts",
+  "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
+  "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
+  "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
+  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
+  "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts", "web/tests/shared-wasm-agent/worker.ts", "web/tests/shared-wasm-agent/lock.ts", "web/tests/shared-wasm-agent/observer.ts",
+  // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
+  "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
+]);
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
+export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
+  if (inputs.length === 0) return false;
+  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+}
+
+const nativeChecks = discoverChecks();
+const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
+const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths);
+const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  "scripts/ci-jsc-artifact.ts",
+  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
+  "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
+  "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
+  "scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt", "scripts/build-jsc.sh",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", ".github/workflows/ci.yml",
-  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+  // The parser reserve's host policy, executor defaults, probe and consumers (docs/stack-limits.md).
+  "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
+  "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
+  "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json", "checks/native-assignment-chain-depth.json",
+  // The interpreter frame gate the JSC side producer runs, and the getter fixture the embedding gate runs.
+  "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts", "checks/native-getter-dispatch.json",
 ]);
 
 const webGuestDirectories = [
@@ -55,12 +122,13 @@ const webGuestDirectories = [
 ];
 const webGuestFiles = new Set([
   "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
-  "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
+  "scripts/build-bun-tools.sh", "scripts/optimize-tools.ts", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
   "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
-  "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+  "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+  "web/src/module-records.ts",
 ]);
 const engineSpecificFiles = new Set([
   "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",
@@ -72,72 +140,84 @@ function sharedWebGuestInput(path: string): boolean {
   return webGuestFiles.has(path) || path.startsWith("web/scripts/node-") || webGuestDirectories.some(root => path.startsWith(root));
 }
 
+function excludedNativeInput(path: string): boolean {
+  if (path.startsWith("spidermonkey/") && path.endsWith(".md")) return true;
+  return runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
+    || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path);
+}
+
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
-  if (runtimeDeclaration.test(path)) return false;
-  return path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
+  if (excludedNativeInput(path)) return false;
+  return ordinarySpiderMonkeyInput(path) || path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
     || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
+}
+
+function ordinarySpiderMonkeyInput(path: string): boolean {
+  if (path.endsWith(".md")) return false;
+  return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
+    || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
 export function needsJsc(paths: readonly string[]): boolean {
   return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
 }
 
-const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/", "crates/bunwasm-engine-hermes/", "tests/hermes/", "tests/fixtures/readline-async-iterator/"];
-const hermesFiles = new Set([
-  "scripts/build-bun-hermes.sh", "scripts/build-engine-hermes.sh", "scripts/hermes-import-delta.ts",
-  // hermes/check-build.ts imports the native header receipt from the producer closure.
-  "scripts/producer-closure.ts",
-  "scripts/hermes-hosts.ts", "scripts/hermes-hosts.test.ts", "scripts/hermes-ci.test.ts", "checks/quality-hermes-ci.json", "checks/quality-hermes-hosts.json",
-  "crates/bunwasm-host/src/linked.rs", "crates/bunwasm-host/src/linked_relay.rs",
-  "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "web/build.ts",
-  "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c",
-  "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts",
-  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
-  "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts", "scripts/app-matrix/run.mjs",
-  "env.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock", "web/bun.lock", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
-]);
-const sharedDriverFiles = new Set(["driver.rs", "program.rs", "loader.rs", "natives.rs", "value_natives.rs", "client.rs", "transport.rs", "allocator.rs", "side_modules.rs"].map(name => `crates/bunwasm-engine-quickjs/src/${name}`));
-
-export function needsHermes(paths: readonly string[]): boolean {
-  return paths.some(path => hermesDirectories.some(root => path.startsWith(root)) || hermesFiles.has(path)
-    || sharedDriverFiles.has(path) || sharedWebGuestInput(path));
-}
-
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
-  return needsHermes(paths) || needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
+  return needsJsc(paths) || needsSharedNative(paths) || paths.some(path => nativeInput(path, checkInputs));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
   if (!/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) throw new Error("Expected full base and head commit IDs");
   if (/^0+$/.test(base)) return ["Cargo.toml"];
   const range = pullRequest ? `${base}...${head}` : `${base}..${head}`;
-  return execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", range], { encoding: "utf8" }).split("\0").filter(Boolean);
+  return execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", range], { encoding: "utf8", timeout: 5_000 }).split("\0").filter(Boolean);
 }
 
 function manifestInputs(ref: string): string | undefined {
-  const result = spawnSync("git", ["show", `${ref}:package.json`], { encoding: "utf8" });
+  const result = spawnSync("git", ["show", `${ref}:package.json`], { encoding: "utf8", timeout: 5_000 });
   if (result.status !== 0) return undefined;
   const manifest: unknown = JSON.parse(result.stdout);
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Invalid root package manifest");
   return JSON.stringify(Object.entries(manifest).filter(([key]) => key !== "version"));
 }
 
-function nativeChanges(paths: readonly string[], base: string, head: string, ancestor: string): string[] {
-  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(nativeCheckInputsAt);
+function nativeChanges(paths: readonly string[], base: string, head: string, checkInputs: readonly string[]): string[] {
   if (!paths.includes("package.json")) return paths.filter(path => needsRust([path], checkInputs));
   const before = manifestInputs(base);
   const after = manifestInputs(head);
   return paths.filter(path => needsRust([path], checkInputs) && (path !== "package.json" || before === undefined || after === undefined || before !== after));
 }
 
+export interface CheckSelection {
+  rust: boolean;
+  jsc: boolean;
+  shared: boolean;
+  shared_native: boolean;
+}
+
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[]): CheckSelection {
+  return { rust: native.length > 0, jsc: needsJsc(paths), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
+}
+
+export function selectChanges(base: string, head: string, pullRequest = false, inputsAt = nativeCheckInputsAt): CheckSelection {
+  const paths = changedPaths(base, head, pullRequest);
+  const ancestor = pullRequest && !/^0+$/.test(base)
+    ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8", timeout: 5_000 }).trim() : base;
+  const refs = Array.from(new Set([base, head, ancestor]));
+  const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
+  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const profileInputs = refs.flatMap(ref => inputsAt(ref, "shared-group"));
+  return classifyChanges(paths, native, profileInputs);
+}
+
+export function selectionOutput(selection: CheckSelection): string {
+  return Object.entries(selection).map(([key, value]) => `${key}=${value}`).join("\n");
+}
+
 if (import.meta.main) {
   const [base, head] = process.argv.slice(2);
   if (!base || !head) throw new Error("Usage: ci-changes.ts <base-sha> <head-sha>");
-  const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
-  const ancestor = process.env.GITHUB_EVENT_NAME === "pull_request" && !/^0+$/.test(base)
-    ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
-  const native = nativeChanges(paths, base, head, ancestor);
-  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nhermes=${needsHermes(native)}`);
+  console.log(selectionOutput(selectChanges(base, head, process.env.GITHUB_EVENT_NAME === "pull_request")));
 }

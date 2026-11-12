@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { expect, test } from "bun:test";
 import type { RuntimeNetworkHelper } from "waffle";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
@@ -80,7 +81,7 @@ function fixture(explicit = true, deferNetwork = false) {
   };
   const ready = runtime.processes().then(service => service.ready());
   void ready.catch(() => {});
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   return {
     runtime, signals, admission, admitting, activation, activating, fence, posts, events,
     allocations: () => allocations, releases: () => releases, stops: () => stops,
@@ -205,7 +206,7 @@ for (const explicit of [false, true]) test(`kill during a network await stops ${
 
 test("the ordinary root runner forwards exact pair inputs to its existing worker", async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareQuickjsProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair();
   const prepared = await prepareQuickjsProgram(core, side);
   const state = fixture();
@@ -214,8 +215,8 @@ test("the ordinary root runner forwards exact pair inputs to its existing worker
     state.admission.resolve();
     await until(() => state.posts.length === 1);
     expect(state.posts[0]!.module).toBe(prepared);
-    expect(state.posts[0]!.linkPlan).toEqual(programLinkPlan(prepared));
-    expect(state.posts[0]!.linkPlan?.libraries[0]?.source).toEqual(side);
+    expect(state.posts[0]!.linkPlan).toEqual(programMetadata(prepared).linkPlan);
+    expect(state.posts[0]!.memoryLimitBytes).toBe(programMetadata(prepared).memoryLimitBytes);
     expect(state.posts[0]!.engine).toBe("quickjs");
   } finally { await state.cleanup(run); }
 });

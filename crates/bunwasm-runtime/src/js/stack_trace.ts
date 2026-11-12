@@ -2,6 +2,8 @@
   "use strict";
   const { native } = internal;
   const capture = Error.captureStackTrace;
+  // JavaScriptCore and SpiderMonkey capture stack text natively and never consult the formatter.
+  const parseCapturedStack = native.engine === "jsc" || native.engine === "spidermonkey" || native.engine === "host" && !internal.hasNativeStackTrace;
   const defaultPrepare = Error.prepareStackTrace;
   const formatted = new WeakMap<object, unknown>();
   let formatting = false;
@@ -54,8 +56,9 @@
     getColumnNumber() { return this.#frame.column; }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
-    // JavaScriptCore names the frames of suspended awaiting callers `async <name>`.
-    isAsync() { return this.#frame.name.startsWith("async "); }
+    // Suspended awaiting callers are named `async <name>` by JavaScriptCore and `async*<name>`
+    // by SpiderMonkey.
+    isAsync() { return /^async[ *]/.test(this.#frame.name); }
   }
   internal.defineHidden(CallSite.prototype, methods);
 
@@ -71,7 +74,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
-      const sites = custom && native.engine === "jsc"
+      const sites = custom && parseCapturedStack
         ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
         : raw;
       value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
@@ -108,7 +111,7 @@
     });
   }
 
-  if (native.engine === "quickjs" || native.engine === "jsc") {
+  if (native.engine === "quickjs" || parseCapturedStack) {
     internal.defineHidden(Error, {
       captureStackTrace: function captureStackTrace(target: { stack?: unknown }, constructorOpt?: unknown) {
         validateCaptureTarget(target);

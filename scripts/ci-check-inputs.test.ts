@@ -31,21 +31,21 @@ function repository() {
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr);
-    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), inputs: result.stderr.trim() };
+    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), profile: result.stdout.trim().split("\n")[3], inputs: result.stderr.trim() };
   }
   git(["init", "-q"]);
   write("base.txt", "fixture\n");
   return { directory, git, write, commit, select };
 }
 
-const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime");
+const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime" || check.owner === "browser-guest");
 test.each(compiledChecks)("declared $owner check $path retains its blocking Rust owner", check => {
   const path = check.owner === "native" ? `${check.path}/index.ts` : check.path;
   expect(needsRust([path])).toBe(true);
 });
 
 for (const event of ["pull_request", "push"]) {
-  for (const owner of ["native", "runtime"] as const) {
+  for (const owner of ["native", "runtime", "browser-guest"] as const) {
     const input = owner === "native" ? "tests/fixtures/new-owned-case/index.ts" : "scripts/new-owned-case.test.ts";
     const checkPath = owner === "native" ? "tests/fixtures/new-owned-case" : input;
     test(`${event} reads ${owner} check paths from the head snapshot`, () => {
@@ -84,6 +84,60 @@ for (const event of ["pull_request", "push"]) {
   });
 }
 
+const largeMessageManifest = "checks/browser-guest-worker-large-message.json";
+const largeMessageHarness = "scripts/worker-large-message-browser.test.ts";
+const largeMessageSources = [
+  "web/src/shared-objects/broker.ts", "web/src/shared-objects/lane-overflow.ts",
+  "web/src/shared-objects/lane.ts", "web/src/shared-objects/protocol.ts", "web/src/shared-objects/service.ts",
+];
+
+for (const event of ["pull_request", "push"]) {
+  test.each([largeMessageHarness, largeMessageManifest].concat(largeMessageSources))(`${event} selects the real large-message gate for %s alone`, path => {
+    const repo = repository();
+    repo.write(largeMessageManifest, readFileSync(join(import.meta.dir, "..", largeMessageManifest), "utf8"));
+    for (const input of [largeMessageHarness].concat(largeMessageSources)) repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(path, path === largeMessageManifest ? `${readFileSync(join(repo.directory, path), "utf8")}\n` : "changed\n");
+    const selected = repo.select(base, repo.commit(), event);
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.profile).toBe("shared_native=false");
+    expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
+  });
+
+  test.each(["split", "shared-group"] as const)(`${event} retains removed %s Browser guest secondary inputs`, profile => {
+    const repo = repository();
+    const manifest = "checks/browser-guest-secondary.json";
+    const input = "web/src/secondary-input.ts";
+    repo.write(manifest, JSON.stringify({ owner: "browser-guest", path: "scripts/secondary.test.ts", profile, inputs: [input] }));
+    repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(input, "changed\n");
+    const changed = repo.commit();
+    const selectedChange = repo.select(base, changed, event);
+    expect(selectedChange.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selectedChange.profile).toBe(`shared_native=${profile === "shared-group"}`);
+    rmSync(join(repo.directory, manifest));
+    rmSync(join(repo.directory, input));
+    const selected = repo.select(changed, repo.commit(), event);
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.profile).toBe(`shared_native=${profile === "shared-group"}`);
+    expect(selected.inputs).toContain(input);
+  });
+
+  test(`${event} keeps unrelated Web source and docs outside the Browser guest producer`, () => {
+    const repo = repository();
+    repo.write(largeMessageManifest, readFileSync(join(import.meta.dir, "..", largeMessageManifest), "utf8"));
+    repo.write("checks/web-source-only.json", JSON.stringify({ owner: "web", path: "scripts/source-only.test.ts", localRuntime: true }));
+    const base = repo.commit();
+    repo.write("web/src/unrelated.ts", "source-only UI\n");
+    repo.write("scripts/source-only.test.ts", "source-only check\n");
+    repo.write("docs/unrelated.md", "docs\n");
+    const selected = repo.select(base, repo.commit(), event);
+    expect(selected.output).toBe("rust=false\njsc=false\nshared=false");
+    expect(selected.profile).toBe("shared_native=false");
+  });
+}
+
 test("deleted native ownership still gates a renamed input in a later PR commit", () => {
   const repo = repository();
   repo.write("checks/runtime-old-harness.json", JSON.stringify({ owner: "runtime", path: "scripts/old-harness.test.ts" }));
@@ -99,7 +153,7 @@ test("deleted native ownership still gates a renamed input in a later PR commit"
 
 test.each([
   "crates/bunwasm-runtime/src/js/process.ts", "crates/bunwasm-runtime/src/host.rs",
-  "web/src/engine-host.js", "web/scripts/node-host.ts", "web/src/native-direct-stream.ts",
+  "web/src/engine-host.js", "web/scripts/node-host.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts",
 ])("actual runtime and host glue %s still selects Rust and JSC", path => {
   expect(needsRust([path])).toBe(true);
   expect(needsJsc([path])).toBe(true);
@@ -184,4 +238,57 @@ test.each(unsafeSnapshots)("$event rejects $kind manifests in the $side snapshot
   rmSync(join(repo.directory, path));
   const repaired = repo.commit();
   expect(() => repo.select(side === "base" ? invalid : clean, side === "base" ? repaired : invalid, event)).toThrow();
+});
+
+for (const event of ["pull_request", "push"]) test(`${event} retains native-probe secondary and deleted inputs`, () => {
+  const repo = repository();
+  repo.write("checks/native-probe-fixture.json", JSON.stringify({ owner: "native-probe", path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-byte-driver.ts"] }));
+  repo.write("scripts/fixture-live.test.ts", "live source fixture\n");
+  repo.write("scripts/fixture-byte-driver.ts", "original fixture\n");
+  const base = repo.commit();
+  repo.write("scripts/fixture-byte-driver.ts", "changed fixture\n");
+  const changed = repo.commit();
+  expect(repo.select(base, changed, event).output).toBe("rust=true\njsc=false\nshared=false");
+  rmSync(join(repo.directory, "checks/native-probe-fixture.json"));
+  rmSync(join(repo.directory, "scripts/fixture-byte-driver.ts"));
+  const deleted = repo.commit();
+  expect(repo.select(changed, deleted, event).output).toBe("rust=true\njsc=false\nshared=false");
+});
+
+test("diverged TLS probe deletion still selects secondary inputs from its merge ancestor", () => {
+  const repo = repository();
+  repo.write("checks/native-probe-ancestor.json", JSON.stringify({ owner: "native-probe", path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-ancestor-driver.ts"] }));
+  repo.write("scripts/fixture-live.test.ts", "synthetic live check\n");
+  repo.write("scripts/fixture-ancestor-driver.ts", "before\n");
+  const ancestor = repo.commit();
+  repo.git(["checkout", "-qb", "target"]);
+  repo.write("target-only.txt", "force a distinct merge-ancestor fixture\n");
+  rmSync(join(repo.directory, "checks/native-probe-ancestor.json"));
+  const base = repo.commit();
+  repo.git(["checkout", "--detach", ancestor]);
+  rmSync(join(repo.directory, "checks/native-probe-ancestor.json"));
+  repo.commit();
+  repo.write("scripts/fixture-ancestor-driver.ts", "changed after both sides dropped metadata\n");
+  const head = repo.commit();
+  expect(repo.git(["merge-base", base, head])).toBe(ancestor);
+  const selected = repo.select(base, head, "pull_request");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+  expect(selected.inputs).toContain("scripts/fixture-ancestor-driver.ts");
+});
+
+for (const event of ["pull_request", "push"]) test(`${event} selects shared profiles from introduced and removed metadata`, () => {
+  const repo = repository();
+  const base = repo.commit();
+  const manifest = "checks/native-group.json";
+  const input = "tests/fixtures/group-only/guest.ts";
+  repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/group-only", profile: "shared-group" }));
+  repo.write(input, "group fixture\n");
+  const registered = repo.commit();
+  expect(repo.select(base, registered, event).profile).toBe("shared_native=true");
+  repo.write(input, "changed group fixture\n");
+  const changed = repo.commit();
+  expect(repo.select(registered, changed, event).profile).toBe("shared_native=true");
+  rmSync(join(repo.directory, manifest));
+  rmSync(join(repo.directory, input));
+  expect(repo.select(changed, repo.commit(), event).profile).toBe("shared_native=true");
 });

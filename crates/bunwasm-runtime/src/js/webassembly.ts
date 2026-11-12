@@ -1,27 +1,36 @@
 (function (internal: BunWasm.WasmInternal) {
   'use strict';
-  type MemoryState = { resource: number; buffer: ArrayBuffer; generation: bigint | undefined };
+  type MemoryState = { resource: number; generation: bigint | undefined; token?: number } & (
+    { kind: 'unshared'; buffer: ArrayBuffer } | { kind: 'shared'; buffer: SharedArrayBuffer; plain?: true }
+  );
   type Callback = { callback: (...args: unknown[]) => unknown; results: BunWasm.WasmType[] };
   type Callable = (...args: unknown[]) => unknown;
   const native = internal.native.wasm;
   const modules = new WeakMap<Module, BunWasm.WasmModule>();
   const memoryStates = new WeakMap<Memory, MemoryState>();
-  const tableStates = new WeakMap<Table, BunWasm.WasmTable>();
-  const globalStates = new WeakMap<Global, { id: number; name: string; type: BunWasm.WasmType; mutable: boolean }>();
+  type GlobalState = { id: number; name: string; type: BunWasm.WasmType; mutable: boolean };
+  const tableStates = new WeakMap<object, BunWasm.WasmTable>();
+  const globalStates = new WeakMap<object, GlobalState>();
+  const instanceExports = new WeakMap<Instance, Exports>();
   const memories = new Map<number, WeakRef<Memory>>();
   const memoryResources = new Map<number, WeakRef<MemoryState>>();
-  const memoryBufferStates = new WeakMap<ArrayBuffer, MemoryState>();
+  const memoryBufferStates = new WeakMap<ArrayBuffer | SharedArrayBuffer, MemoryState>();
   const tables = new Map<number, WeakRef<Table>>();
   const functions = new Map<number, Callable>();
   const functionStates = new WeakMap<object, BunWasm.WasmFunction>();
   const callbacks: Callback[] = [];
+  const nestedCallbacks = new Map<number, Callback>();
+  const freeNestedCallbacks: number[] = [];
+  let nextNestedCallback = 0;
   // Wasmi retains externrefs until Store teardown. These roots have the same runtime lifetime.
   const references = new Map<number, unknown>();
   const memoryCleanup = new FinalizationRegistry<{ resource: number; reference: WeakRef<Memory> }>(({ resource, reference }) => {
     if (memories.get(resource) === reference) memories.delete(resource);
   });
-  const memoryBuffers = new WeakSet<ArrayBuffer>();
-  internal.isWasmMemoryBuffer = value => value instanceof ArrayBuffer && memoryBuffers.has(value);
+  const memoryBuffers = new WeakSet<ArrayBuffer | SharedArrayBuffer>();
+  internal.isWasmMemoryBuffer = value => (value instanceof ArrayBuffer || (typeof SharedArrayBuffer === 'function' && value instanceof SharedArrayBuffer)) && memoryBuffers.has(value);
+  // Tables and Globals are capabilities of one member. They have no clone representation.
+  internal.isWasmCapability = value => isObject(value) && (tableStates.has(value) || globalStates.has(value));
   class CompileError extends Error { constructor(message: string) { super(message); this.name = 'CompileError'; } }
   class LinkError extends Error { constructor(message: string) { super(message); this.name = 'LinkError'; } }
   class RuntimeError extends Error { constructor(message: string) { super(message); this.name = 'RuntimeError'; } }
@@ -87,14 +96,14 @@
       if (maximum !== undefined && maximum < initial) throw new RangeError('WebAssembly.Memory maximum is smaller than initial');
       const shared = !!descriptor.shared;
       if (shared && maximum === undefined) throw new TypeError('Shared WebAssembly memories require a maximum');
-      if (shared) throw new LinkError('Shared WebAssembly memories are not supported');
+      if (shared && !native.sharedMemorySupported()) throw new LinkError('Shared WebAssembly memories are not supported');
       let resource: number;
-      try { resource = native.createMemory(initial, maximum); }
+      try { resource = shared && maximum !== undefined ? native.createSharedMemory(initial, maximum) : native.createMemory(initial, maximum); }
       catch (error) { throw new RangeError(message(error)); }
       rememberMemory(resource, this);
       refreshMemory(memoryState(this));
     }
-    get buffer() { return memoryState(this).buffer; }
+    get buffer() { const state = memoryState(this); if (state.kind === 'shared') refreshMemory(state); return state.buffer; }
     grow(delta: unknown) {
       const state = memoryState(this);
       const amount = count(delta);
@@ -145,15 +154,22 @@
     if (!state) throw new TypeError('Expected a WebAssembly.Global');
     return state;
   }
+  function isGlobal(value: unknown): value is Global {
+    return isObject(value) && globalStates.has(value);
+  }
+  function globalValue(state: GlobalState) {
+    if (state.type === 'v128') throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
+    return decode(native.global(state.id, state.name));
+  }
   class Global {
     constructor() { throw new LinkError('Standalone WebAssembly globals are not supported'); }
-    get value() { const state = globalState(this); return decode(native.global(state.id, state.name)); }
+    get value() { return globalValue(globalState(this)); }
     set value(value: unknown) {
       const state = globalState(this);
       if (!state.mutable) throw new TypeError('Immutable WebAssembly global');
       native.global(state.id, state.name, coerce(value, state.type));
     }
-    valueOf() { return this.value; }
+    valueOf() { return globalValue(globalState(this)); }
   }
   function memoryState(memory: Memory) {
     const state = memoryStates.get(memory);
@@ -167,11 +183,20 @@
       action(state);
     }
   }
+  function memoryResourceState(resource: number) {
+    const known = memoryResources.get(resource)?.deref();
+    if (known) return known;
+    const span = native.memorySpan(resource);
+    const state: MemoryState = span.shared
+      ? { kind: 'shared', resource, buffer: internal.native.wasmSharedMemoryBuffer(resource), generation: span.generation }
+      : { kind: 'unshared', resource, buffer: new ArrayBuffer(0), generation: undefined };
+    if (state.kind === 'shared') { memoryBufferStates.set(state.buffer, state); memoryBuffers.add(state.buffer); }
+    memoryResources.set(resource, new WeakRef(state));
+    return state;
+  }
   function rememberMemory(resource: number, memory: Memory) {
     const reference = new WeakRef(memory);
-    const state = memoryResources.get(resource)?.deref() ?? { resource, buffer: new ArrayBuffer(0), generation: undefined };
-    memoryStates.set(memory, state);
-    memoryResources.set(resource, new WeakRef(state));
+    memoryStates.set(memory, memoryResourceState(resource));
     memories.set(resource, reference);
     memoryCleanup.register(memory, { resource, reference });
   }
@@ -181,9 +206,13 @@
   function refreshMemory(memory: MemoryState) {
     const { generation } = native.memorySpan(memory.resource);
     if (memory.generation === generation) return;
-    const previous = memory.generation === undefined ? undefined : memory.buffer;
-    memoryBufferStates.delete(memory.buffer);
-    memory.buffer = internal.native.wasmMemoryBuffer(memory.resource, previous);
+    if (memory.kind === 'shared') {
+      memory.buffer = internal.native.wasmSharedMemoryBuffer(memory.resource);
+    } else {
+      const previous = memory.generation === undefined ? undefined : memory.buffer;
+      memoryBufferStates.delete(memory.buffer);
+      memory.buffer = internal.native.wasmMemoryBuffer(memory.resource, previous);
+    }
     memory.generation = generation;
     memoryBufferStates.set(memory.buffer, memory);
     memoryBuffers.add(memory.buffer);
@@ -235,12 +264,28 @@
     return fn;
   }
   function invoke(info: BunWasm.WasmFunction, args: unknown[]) {
+    if (info.results.includes('v128')) throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
     const inputs = info.params.map((type, index) => coerce(args[index], type));
-    let result = execute(() => native.call(info.id, inputs));
+    let result = info.backend === 'nested' ? nestedExecute(token => native.call(info.id, inputs, token)) : execute(() => native.call(info.id, inputs));
     while ('import' in result) result = imported(result);
     const values = result.values.map(decode);
     if (values.length === 1) return values[0];
     return values.length === 0 ? undefined : values;
+  }
+  function nestedCallback(id: number, args: BunWasm.WasmValue[]) {
+    const entry = nestedCallbacks.get(id);
+    if (!entry) throw new RuntimeError('Invalid nested callback');
+    return callbackResults(entry, args).map((value, index) => ({ type: entry.results[index], value }));
+  }
+  function nestedExecute<T>(action: (token: number) => T): T {
+    return internal.native.wasmNestedExecute(token => {
+      try { return action(token); }
+      catch (error) {
+        if (error instanceof Error && error.name === 'LinkError') throw new LinkError(error.message);
+        if (error instanceof Error && error.name === 'RuntimeError') throw new RuntimeError(error.message);
+        throw error;
+      }
+    }, nestedCallback);
   }
   function callbackResults(entry: Callback, args: BunWasm.WasmValue[]) {
     const value = entry.callback(...args.map(decode));
@@ -263,38 +308,90 @@
   type Exports = Record<string, Callable | Memory | Table | Global>;
   type Imports = Record<string, Record<string, unknown>>;
   class Instance {
-    declare readonly exports: Exports;
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
-      const bindings = info.imports.map(item => binding(item, imports[item.module]?.[item.name]));
+      const provisional: number[] = [];
+      const importedGlobals: (Global | undefined)[] = [];
+      const bindings = instanceBindings(info, imports, provisional, importedGlobals);
       let id: number;
-      try { id = native.instantiate(info.id, bindings); }
-      catch (error) { throw new LinkError(message(error)); }
-      finally { sync(refreshMemory); }
+      try { id = info.backend === 'nested' ? nestedExecute(token => native.instantiate(info.id, bindings, token)) : native.instantiate(info.id, bindings); }
+      catch (error) {
+        releaseCallbacks(info, provisional);
+        if (info.backend === 'nested') throw error;
+        throw new LinkError(message(error));
+      }
+      finally { if (info.backend !== 'nested') sync(refreshMemory); }
       const exports: Exports = Object.create(null);
-      for (const item of info.exports) installExport(id, exports, item);
-      sync(refreshMemory);
-      Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
+      const globals = new Map<number, Global>();
+      importedGlobals.forEach((global, index) => { if (global) globals.set(index, global); });
+      for (const item of info.exports) installExport(id, exports, item, globals);
+      if (info.backend !== 'nested') sync(refreshMemory);
+      instanceExports.set(this, Object.freeze(exports));
+    }
+    get exports() {
+      const exports = instanceExports.get(this);
+      if (!exports) throw new TypeError('Expected a WebAssembly.Instance');
+      return exports;
     }
   }
-  function binding(item: BunWasm.WasmImport, value: unknown): number | { kind: 'callback' | 'function'; id: number } {
+  Object.defineProperty(Instance.prototype, 'exports', { enumerable: true });
+  function retainNestedCallback(entry: Callback) {
+    const limit = native.nestedCallbackLimit();
+    if (nestedCallbacks.size >= limit) throw new RangeError('Nested callback resource limit');
+    const id = freeNestedCallbacks.pop() ?? nextNestedCallback++;
+    nestedCallbacks.set(id, entry);
+    return id;
+  }
+  function releaseCallbacks(info: BunWasm.WasmModule, provisional: number[]) {
+    for (const id of provisional) {
+      if (info.backend !== 'nested') { delete callbacks[id]; continue; }
+      if (nestedCallbacks.delete(id)) freeNestedCallbacks.push(id);
+    }
+  }
+  function instanceBindings(info: BunWasm.WasmModule, imports: Imports, provisional: number[], importedGlobals: (Global | undefined)[]) {
+    try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend, importedGlobals)); }
+    catch (error) { releaseCallbacks(info, provisional); throw error; }
+  }
+  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined, importedGlobals: (Global | undefined)[]): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
     if (item.kind === 'function' && typeof value === 'function') {
       const existing = functionStates.get(value);
       if (existing) return { kind: 'function', id: existing.id };
-      const id = callbacks.length;
-      callbacks.push({ callback: (...args) => value(...args), results: item.results });
+      const entry: Callback = { callback: (...args) => value(...args), results: item.results };
+      const id = backend === 'nested' ? retainNestedCallback(entry) : callbacks.push(entry) - 1;
+      provisional.push(id);
       return { kind: 'callback', id };
     }
     if (item.kind === 'memory' && value instanceof Memory) return memoryState(value).resource;
     if (item.kind === 'table' && value instanceof Table) return tableState(value).id;
+    if (item.kind === 'global' && backend === 'nested') return globalImport(item, value, importedGlobals);
     throw new LinkError(`Missing or unsupported WebAssembly import ${item.module}.${item.name}`);
   }
-  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport) {
+  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown, importedGlobals: (Global | undefined)[]) {
+    let input = value;
+    let global: Global | undefined;
+    if (isGlobal(value)) {
+      const state = globalState(value);
+      if (state.type !== item.type || state.mutable !== item.mutable) throw new LinkError('Incompatible WebAssembly global import');
+      input = globalValue(state);
+      global = value;
+    } else {
+      const expected = item.type === 'i64' ? 'bigint' : 'number';
+      if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
+    }
+    const imported = coerce(input, item.type);
+    // Global indices number imports first; retain the same privately validated object.
+    importedGlobals.push(global);
+    return imported;
+  }
+  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport, globals: Map<number, Global>) {
     const name = item.name;
     if (item.kind === 'function') { exports[name] = callable(native.functionIdentity(id, name)); return; }
     if (item.kind === 'global') {
+      const known = item.index === undefined ? undefined : globals.get(item.index);
+      if (known) { exports[name] = known; return; }
       const global: Global = Object.create(Global.prototype);
       globalStates.set(global, { id, name, type: item.type, mutable: item.mutable });
+      if (item.index !== undefined) globals.set(item.index, global);
       exports[name] = global;
       return;
     }
@@ -310,15 +407,145 @@
       exports[name] = table;
       return;
     }
-    const resource = native.memoryIdentity(id, name);
-    let memory = memories.get(resource)?.deref();
-    if (!memory) {
-      const created: Memory = Object.create(Memory.prototype);
-      rememberMemory(resource, created);
-      memory = created;
-    }
-    exports[name] = memory;
+    exports[name] = memoryObject(native.memoryIdentity(id, name));
   }
+  function memoryObject(resource: number) {
+    const known = memories.get(resource)?.deref();
+    if (known) return known;
+    const created: Memory = Object.create(Memory.prototype);
+    rememberMemory(resource, created);
+    return created;
+  }
+  // Workers of one group exchange references to objects its shm service owns. Every member
+  // leases the same region and shares the same compiled code; nothing is copied.
+  const sharedLength = typeof SharedArrayBuffer === 'function' ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')!.get! : undefined;
+  const sharedGrowable = typeof SharedArrayBuffer === 'function' ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'growable')?.get : undefined;
+  const localMemories = new Map<number, number>();
+  const localModules = new Map<number, BunWasm.WasmModule>();
+  const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
+  type PendingPublication = { token: number; users: number; committed: boolean; forget: () => void };
+  const pendingPublications = new Map<number, PendingPublication>();
+  function cloneError(reason: unknown) { return new DOMException(message(reason), 'DataCloneError'); }
+  function directoryToken(id: string, kind: string) {
+    const [prefix, value] = id.split('/');
+    const token = Number(value);
+    if (prefix !== kind || !Number.isInteger(token) || token <= 0) throw cloneError('Invalid shared object reference');
+    return token;
+  }
+  function attachedMemory(token: number) {
+    let resource = localMemories.get(token);
+    if (resource === undefined) {
+      try { resource = native.attachSharedMemory(token); }
+      catch (error) { throw cloneError(error); }
+      localMemories.set(token, resource);
+    }
+    const state = memoryResourceState(resource);
+    state.token = token;
+    return state;
+  }
+  function attachedModule(token: number) {
+    let info = localModules.get(token);
+    if (!info) {
+      try { info = native.attachSharedModule(token); }
+      catch (error) { throw cloneError(error); }
+      localModules.set(token, info);
+      moduleTokens.set(info, token);
+    }
+    // Structured clone gives each receipt a new Module over the same compiled code.
+    const module: Module = Object.create(Module.prototype);
+    modules.set(module, info);
+    return module;
+  }
+  // Each serialized buffer gets its own wrapper over the leased bytes; only the lease is shared.
+  function deliveredBuffer(state: MemoryState, byteLength: number) {
+    if (state.kind !== 'shared') throw cloneError('Expected a shared WebAssembly.Memory');
+    refreshMemory(state);
+    let view: SharedArrayBuffer;
+    try { view = internal.native.wasmSharedMemoryBuffer(state.resource, byteLength); }
+    catch (error) { throw cloneError(error); }
+    memoryBufferStates.set(view, state);
+    memoryBuffers.add(view);
+    return view;
+  }
+  // An ordinary buffer's lease belongs to its wrapper and ends when the engine finalizes it,
+  // so its state lives only as long as that wrapper and stays out of localMemories.
+  function plainBufferState(buffer: SharedArrayBuffer): MemoryState | undefined {
+    if (sharedGrowable?.call(buffer)) throw cloneError('Growable SharedArrayBuffer cannot be sent to a worker on this host');
+    const resource = internal.native.sharedBufferResource?.(buffer);
+    if (resource === undefined) return undefined;
+    const state: MemoryState = { kind: 'shared', resource, buffer, generation: native.memorySpan(resource).generation, plain: true };
+    memoryBufferStates.set(buffer, state);
+    return state;
+  }
+  function settlePublication(pending: PendingPublication, committed: boolean) {
+    pending.committed ||= committed;
+    if (--pending.users !== 0) return;
+    pendingPublications.delete(pending.token);
+    if (pending.committed) return;
+    // Cleanup cannot replace the clone error when a member is stopping.
+    try { pending.forget(); native.withdrawShared(pending.token); } catch { /* member stopping */ }
+  }
+  function beginPublication(): BunWasm.SharedPublication {
+    const used = new Set<PendingPublication>();
+    let settled = false;
+    function using(token: number) {
+      const pending = pendingPublications.get(token);
+      if (pending && !used.has(pending)) { used.add(pending); pending.users++; }
+      return token;
+    }
+    function staging(token: number, forget: () => void) {
+      pendingPublications.set(token, { token, users: 0, committed: false, forget });
+      return using(token);
+    }
+    function settle(committed: boolean) {
+      if (settled) return;
+      settled = true;
+      for (const pending of used) settlePublication(pending, committed);
+      used.clear();
+    }
+    function publishedMemory(state: MemoryState) {
+      if (state.kind !== 'shared') throw cloneError('Only shared WebAssembly memories can be sent to a worker');
+      if (state.token !== undefined) return using(state.token);
+      let token: number;
+      try { token = native.publishSharedMemory(state.resource); }
+      catch (error) { throw cloneError(error); }
+      state.token = token;
+      if (!state.plain) localMemories.set(token, state.resource);
+      return staging(token, () => { state.token = undefined; localMemories.delete(token); });
+    }
+    function publishedModule(info: BunWasm.WasmModule) {
+      if (info.backend !== 'nested') throw cloneError('Only WebAssembly modules with a shared memory can be sent to a worker');
+      const known = moduleTokens.get(info);
+      if (known !== undefined) return using(known);
+      let token: number;
+      try { token = native.publishSharedModule(info.id); }
+      catch (error) { throw cloneError(error); }
+      moduleTokens.set(info, token);
+      localModules.set(token, info);
+      return staging(token, () => { moduleTokens.delete(info); localModules.delete(token); });
+    }
+    function reference(buffer: SharedArrayBuffer): BunWasm.SharedReference {
+      const state = memoryBufferStates.get(buffer) ?? plainBufferState(buffer);
+      if (!state) throw cloneError('Only region-backed SharedArrayBuffers can be sent to a worker on this host');
+      return { id: `buf/${publishedMemory(state)}`, byteLength: sharedLength!.call(buffer) };
+    }
+    function referenceWasm(value: WebAssembly.Module | WebAssembly.Memory): BunWasm.SharedReference {
+      if (value instanceof Module) return { id: `mod/${publishedModule(description(value))}`, byteLength: 0 };
+      if (value instanceof Memory) return { id: `mem/${publishedMemory(memoryState(value))}`, byteLength: 0 };
+      throw cloneError('Expected a WebAssembly Module or Memory');
+    }
+    return { reference, referenceWasm, publish() {}, commit() { settle(true); }, abort() { settle(false); } };
+  }
+  internal.groupSharedObjects = {
+    begin: beginPublication,
+    read: reference => deliveredBuffer(attachedMemory(directoryToken(reference.id, 'buf')), reference.byteLength),
+    readWasm(reference) {
+      if (reference.id.startsWith('mod/')) return attachedModule(directoryToken(reference.id, 'mod'));
+      return memoryObject(attachedMemory(directoryToken(reference.id, 'mem')).resource);
+    },
+    // The directory is synchronous: a published reference is readable at once.
+    wait: () => null,
+  };
   async function compile(source: unknown) { return new Module(source); }
   async function instantiate(source: unknown, imports?: Imports) {
     if (source instanceof Module) return new Instance(source, imports);

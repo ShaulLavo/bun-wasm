@@ -278,11 +278,13 @@
       }
     }
     // Not a real separate realm: globals resolve through the context object
-    // first (`with`), then fall back to this realm's globals.
+    // first (`with`; Hermes has no `with`, see vm_context.ts), then fall back
+    // to this realm's globals.
     function runWith(code, context, filename) {
       if (!("globalThis" in context) && Object.isExtensible(context)) {
         Object.defineProperty(context, "globalThis", { value: context, writable: true, configurable: true });
       }
+      if (native.engine === "hermes") return internal.require("vm_context").run(String(code), context, filename);
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
       return runner(context, internal.prepareText(String(code), "eval", "vm-context", filename));
     }
@@ -540,7 +542,7 @@
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "ws": () => internal.require("ws_builtin"),
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
-    "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
+    "node:tls": lazy("node_tls"),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
     "node:dns": () => dns.module(),
     "node:dns/promises": () => dns.promises(),
@@ -568,30 +570,7 @@
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
-      callerSourceOrigin() {
-        const prepare = Error.prepareStackTrace;
-        let stack;
-        try {
-          Error.prepareStackTrace = internal.defaultPrepareStackTrace;
-          stack = new Error().stack;
-        } finally {
-          Error.prepareStackTrace = prepare;
-        }
-        const lines = String(stack || "").split("\n").slice(1);
-        const inspector = internal.require("inspect");
-        for (const raw of lines) {
-          const line = raw.trim();
-          if (!line || line === "Error") continue;
-          const frame = inspector.parseStack(line)[0];
-          if (frame) {
-            if (frame.file.startsWith("/")) return internal.pathToFileHref(frame.file);
-            return /^[a-z][a-z0-9+.-]*:/i.test(frame.file) ? frame.file : null;
-          }
-          if (/^(?:at (?:.* \()?|[^@]*@)bun-wasm:/.test(line) || /\(native\)$|@\[native code\]$/.test(line)) continue;
-          return null;
-        }
-        return null;
-      },
+      callerSourceOrigin: internal.require("caller_origin"),
       gcAndSweep: () => native.gc(),
       fullGC: () => native.gc(),
       edenGC: () => native.gc(),

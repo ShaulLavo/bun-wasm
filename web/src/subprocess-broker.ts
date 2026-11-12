@@ -1,14 +1,17 @@
+import { pairedEngineKinds } from "../../src/engine-kind.ts";
 // Bun's composition over the page runtime's process service. The service owns admission,
 // supervision, descriptors, signals and worker lifetimes; this adds Bun's engine programs, the
 // run that roots a process tree. Executable resolution belongs to the guest and its PATH.
 import type { ProcessExit } from "waffle/proc";
 import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
-import type { ProcessService, RuntimeSupervisor } from "waffle";
+import type { ProcessService, RuntimeSupervisor, MemoryDeclaration, SharedControlGrant } from "waffle";
+import type { RootMemoryGroupMember } from "waffle/runtime";
+import type { SharedLinkPlan } from "waffle/link";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
-import { bunLauncher, preview1Launcher, siblingWorkerUrl } from "./bun-launcher.js";
+import { bunLauncher, preview1Launcher, siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
 
@@ -20,6 +23,7 @@ export type ExecutableRegistration =
 
 export interface SubprocessBrokerOptions {
   network?: BunNetworkOptions;
+  preview1?: Preview1LauncherOptions;
   loadTools?(): Promise<WebAssembly.Module>;
   output?(fd: 1 | 2, data: Uint8Array): void;
   rootFilesystem?: FilesystemIdentity;
@@ -32,8 +36,10 @@ export class SubprocessBroker {
   private disposed = false;
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
+  private releaseRootLease?: () => void;
+  private rootGroup?: RootMemoryGroupMember;
   constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
-    installBunAdapters(runtime, workerUrl, options.loadTools, options.network);
+    installBunAdapters(runtime, workerUrl, options.loadTools, options.network, options.preview1);
   }
 
   register(name: string, entry: ExecutableRegistration): void {
@@ -61,7 +67,7 @@ export class SubprocessBroker {
     return this.service ??= await this.runtime.processes();
   }
   ready(): Promise<RuntimeSupervisor> { return this.processService().then(service => service.ready()); }
-  /** A single-use root worker from the runtime's precreated pool; the run terminates it. */
+  /** A single-use root worker from the page's service; the run owns its termination. */
   async takeWorker(workerUrl: string): Promise<Worker> { return (await this.runtime.processes()).takeWorker(workerUrl); }
   /** Resolves when `pid` has confirmed its exit, as its parent would observe it. */
   async wait(pid: number): Promise<ProcessExit> {
@@ -70,7 +76,7 @@ export class SubprocessBroker {
   }
 
   /** Roots this run's process tree at a worker the page started with `transport`. */
-  async adoptRuntimeRoot(transport: WorkerProcessTransport, cancelled?: () => boolean): Promise<boolean> {
+  async adoptRuntimeRoot(transport: WorkerProcessTransport, memory: readonly MemoryDeclaration[] | "group", cancelled?: () => boolean): Promise<SharedControlGrant | undefined> {
     if (this.disposed) throw new Error("Process broker is disposed");
     const { workerProcessState } = await import("waffle/proc/worker-client");
     const state = workerProcessState(transport);
@@ -78,12 +84,37 @@ export class SubprocessBroker {
     const service = await this.processService();
     if (this.disposed) throw new Error("Process broker is disposed");
     // Marker preparation may outlive a worker error and its already-confirmed run.
-    if (cancelled?.()) return false;
+    if (cancelled?.()) return;
     await service.adoptRuntimeRoot(transport, {
+      memory,
       filesystem: this.options.rootFilesystem, acknowledged: this.options.rootAcknowledged,
-      output: this.options.output, stop: this.options.stopRoot,
+      output: this.options.output, stop: this.options.stopRoot, retired: () => this.releaseRoot(),
     });
-    return true;
+    this.releaseRootLease = service.retainRoot(state.pid);
+    return service.rootControlGrant(state.pid);
+  }
+  rootControlAllocated(buffer: SharedArrayBuffer): void {
+    if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
+  }
+  /** Admits the adopted root as the first member of a new memory group. */
+  async admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): Promise<RootMemoryGroupMember> {
+    if (!this.root) throw new Error("Memory group admission needs an adopted root");
+    const service = await this.processService();
+    this.rootGroup = service.admitRootMemoryGroup(this.root.pid, program);
+    return this.rootGroup;
+  }
+  rootStopped(): void {
+    if (!this.root) return;
+    // A group root's lease reclaims its memory and also settles the root ticket.
+    if (this.rootGroup) this.rootGroup.stopped();
+    else if (!this.runtime.disposed) this.service?.rootStopped(this.root.pid);
+    this.rootGroup = undefined;
+    this.releaseRoot();
+  }
+  private releaseRoot(): void {
+    const release = this.releaseRootLease;
+    this.releaseRootLease = undefined;
+    release?.();
   }
   async runtimeMessage(message: WorkerProcessMessage, senderPid: number): Promise<void> {
     return (await this.processService()).runtimeMessage(message, senderPid);
@@ -115,6 +146,7 @@ export class SubprocessBroker {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (!this.options.stopRoot) this.releaseRoot();
   }
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
 }
@@ -122,10 +154,11 @@ export class SubprocessBroker {
 const programFiles = new WeakMap<ProcessRuntime, Promise<void>>();
 const installedAdapters = new WeakSet<ProcessRuntime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions): void {
+export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions, preview1?: Preview1LauncherOptions): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
-  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
+  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 }));
   const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
-  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
+  const engines: readonly Engine[] = pairedEngineKinds;
+  for (const engine of engines.concat(["browser"])) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
 }

@@ -4,10 +4,15 @@
 (function (native) {
   "use strict";
 
-  const internal = { native, sharedObjects: native.sharedObjects };
+  const apply = Reflect.apply;
+
+  const internal = { native, sharedObjects: native.sharedObjects,
+    stringIsWellFormed: Function.prototype.call.bind(String.prototype.isWellFormed) };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {
+    const branded = native.isModuleNamespaceObject?.(value);
+    if (branded !== undefined) return branded;
     return value !== null && typeof value === "object" && Object.getPrototypeOf(value) === null &&
       Object.prototype.toString.call(value) === "[object Module]";
   }
@@ -49,12 +54,14 @@
     return typeof fn === "function" && (fn === Error || fn.prototype instanceof Error);
   }
 
-  // V8 (the host engine in browsers/Node): eval'd code (CommonJS) names its
+  internal.hasNativeStackTrace = internal.require("stack_capability");
+
+  // V8 (the host engine in Chromium/Node): eval'd code (CommonJS) names its
   // file through //# sourceURL, and strict-mode frames hide their function,
   // so top-level code is recognised by its enclosing position (1:1).
-  // Only V8 calls Error.prepareStackTrace among host engines (JavaScriptCore
-  // and SpiderMonkey stacks are parsed in inspect.js).
-  const isV8 = native.engine === "host";
+  // Host JavaScriptCore captures text but ignores prepareStackTrace. Probe before
+  // installing our formatter so native V8 CallSites stay native.
+  const isV8 = native.engine === "host" && internal.hasNativeStackTrace;
   function v8TopLevel(site) {
     return typeof site.getEnclosingLineNumber === "function" && site.getEnclosingLineNumber() === 1 && site.getEnclosingColumnNumber() === 1;
   }
@@ -85,11 +92,17 @@
     return `${file}:${line}:${col}`;
   }
 
-  function formatCallSite(site) {
+  function callSiteName(file, site) {
+    if (typeof file === "string" && file.startsWith("bunwasm:hot:")) return file;
+    return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
+  }
+
+  function formatCallSite(site, keepIdentity = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
-    const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
+    const hotName = typeof rawFile === "string" && rawFile.startsWith("bunwasm:hot:");
+    const file = callSiteName(rawFile, site);
     const name = site.getFunctionName();
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
@@ -101,19 +114,20 @@
       if (mapped) [line, col] = mapped;
       if (isV8 && !generated) col = pastNew(file, line, col);
     }
+    const shown = !keepIdentity && hotName ? internal.hotDisplayName?.(file) || file : file;
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
-    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(file, line, col);
+    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
     const label = name || "<anonymous>";
     if (site.isNative()) return `${label} (native)`;
     if (file === null || file === undefined) {
       const evalFrame = typeof site.isEval === "function" && site.isEval();
       return `${label} (${evalFrame ? "unknown" : "native"})`;
     }
-    return `${label} (${formatPosition(file, line, col)})`;
+    return `${label} (${formatPosition(shown, line, col)})`;
   }
 
-  // CommonJS wrappers (registered by evaluateModule) and ES module bodies,
+  // CommonJS wrappers (registered by wrapperArguments) and ES module bodies,
   // which QuickJS represents as nameless functions printing as native code.
   const topLevelFunctions = new WeakSet();
   internal.topLevelFunctions = topLevelFunctions;
@@ -127,10 +141,16 @@
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
     let out = "";
-    for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
+    let raw = "";
+    for (let i = start; i < callsites.length; i++) {
+      out += `    at ${formatCallSite(callsites[i])}\n`;
+      if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
+    }
+    if (internal.hotRun) internal.hotErrorStacks.set(error, raw);
     return out;
   };
   internal.defaultPrepareStackTrace = Error.prepareStackTrace;
+  internal.hotErrorStacks = new WeakMap();
 
   function isErrorConstructorFrame(site) {
     return site.isConstructor() && isErrorConstructor(site.getFunction());
@@ -523,6 +543,7 @@
   // --- CommonJS ---------------------------------------------------------------
 
   const moduleCache = Object.create(null);
+  const esmNamespaces = new WeakMap();
   let mainModule;
   const compileModule = internal.require("module_compile");
 
@@ -538,14 +559,8 @@
       defineHidden(this, { parent });
     }
     _compile(content, filename) {
-      return callModuleWrapper(this, compileModule(content, filename), filename);
-    }
-    require(spec) {
-      if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
-        const exposed = internal.require("node_stream_internals").modules;
-        if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
-      }
-      return requireFrom(spec, this);
+      const wrapper = compileModule(content, filename);
+      return apply(wrapper, this.exports, wrapperArguments(this, wrapper, filename));
     }
   }
 
@@ -570,53 +585,63 @@
     const kind = format || native.moduleFormat(path);
     const mod = new Module(path, undefined);
     moduleCache[path] = mod;
+    evaluateModule(mod, path, kind);
+    return mod;
+  }
+
+  // The entry points outside require(): the main module and ES module imports.
+  function evaluateModule(mod, path, kind) {
     try {
-      evaluateModule(mod, path, kind);
+      const wrapper = moduleWrapper(mod, path, kind);
+      if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, path));
+      if (kind === "esm") selectCommonJsExport(mod);
     } catch (err) {
       delete moduleCache[path];
       throw err;
     }
     mod.loaded = true;
-    return mod;
   }
 
-  function evaluateModule(mod, path, kind) {
+  function selectCommonJsExport(mod) {
+    const namespace = mod.exports;
+    const common = namespace["module.exports"];
+    if (common == null) return;
+    esmNamespaces.set(mod, namespace);
+    mod.exports = common;
+  }
+
+  // Data formats fill mod.exports here. Code formats return their compiled wrapper, and the
+  // caller runs it: a frame of this function under the module body would stay live for every
+  // nested require (docs/stack-limits.md).
+  function moduleWrapper(mod, path, kind) {
     if (kind === "json") {
       mod.exports = JSON.parse(native.readFileUtf8(path));
-      return;
+      return undefined;
     }
     if (kind === "html") {
       mod.exports = internal.require("html_server").create(path);
-      return;
+      return undefined;
     }
     if (kind === "text") {
       mod.exports = native.readFileUtf8(path);
-      return;
+      return undefined;
     }
-    if (kind === "esm") {
-      // The host engine can't evaluate an ES module synchronously: it runs
-      // the module converted to CommonJS by Bun's bundler instead.
-      if (native.compileEsmAsCjs) {
-        const wrapper = native.compileEsmAsCjs(path);
-        callModuleWrapper(mod, wrapper, path);
-        return;
-      }
-      mod.exports = native.requireEsm(path);
-      return;
-    }
-    const wrapper = native.compileCjs(path);
-    callModuleWrapper(mod, wrapper, path);
+    if (kind !== "esm") return native.compileCjs(path);
+    // The host engine can't evaluate an ES module synchronously: it runs
+    // the module converted to CommonJS by Bun's bundler instead.
+    if (native.compileEsmAsCjs) return native.compileEsmAsCjs(path);
+    mod.exports = native.requireEsm(path);
+    return undefined;
   }
 
-  function callModuleWrapper(mod, wrapper, path) {
+  function wrapperArguments(mod, wrapper, path) {
     topLevelFunctions.add(wrapper);
-    const require = makeRequire(path, mod);
-    if (wrapper.length !== 6) {
-      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-    }
+    const args = [mod.exports, makeRequire(path, mod), mod, path, dirname(path)];
+    if (wrapper.length !== 6) return args;
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    args.push(meta);
+    return args;
   }
 
   function resolveFrom(spec, parent, options) {
@@ -628,19 +653,49 @@
     return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  function requireFrom(spec, parent) {
-    const resolved = typeof spec === "string" && spec.startsWith("node:")
-      ? native.resolve(spec, parent.filename, true)
-      : resolveFrom(spec, parent);
-    if (isBuiltinId(resolved)) return internal.builtin(resolved);
-    return loadModule(resolved, null).exports;
+  // The whole require path lives in this one function, and the module body runs straight from
+  // it. Every JavaScript frame between a require call and the next module body costs each
+  // nested level about 320 bytes of QuickJS stack (docs/stack-limits.md), so the steps that
+  // finish before the body runs are calls, and the body's own call is not. Without an owner
+  // this is Module.prototype.require. A module's own require passes its module and still
+  // honors a replaced require method.
+  function requireFunction(owner) {
+    return function require(spec) {
+      const method = owner && owner.require;
+      if (owner && method !== moduleRequire) return apply(method, owner, [spec]);
+      const parent = owner || this;
+      if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
+        const exposed = internal.require("node_stream_internals").modules;
+        if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
+      }
+      const resolved = typeof spec === "string" && spec.startsWith("node:")
+        ? native.resolve(spec, parent.filename, true)
+        : resolveFrom(spec, parent);
+      if (isBuiltinId(resolved)) return internal.builtin(resolved);
+      internal.hotFileRequire?.();
+      const cached = moduleCache[resolved];
+      if (cached) return cached.exports;
+      const kind = native.moduleFormat(resolved);
+      const mod = new Module(resolved, undefined);
+      moduleCache[resolved] = mod;
+      try {
+        const wrapper = moduleWrapper(mod, resolved, kind);
+        if (wrapper) apply(wrapper, mod.exports, wrapperArguments(mod, wrapper, resolved));
+        if (kind === "esm") selectCommonJsExport(mod);
+      } catch (err) {
+        delete moduleCache[resolved];
+        throw err;
+      }
+      mod.loaded = true;
+      return mod.exports;
+    };
   }
+  const moduleRequire = requireFunction(undefined);
+  defineHidden(Module.prototype, { require: moduleRequire });
 
   function makeRequire(fromPath, mod) {
     const parent = mod || new Module(fromPath, undefined);
-    function require(spec) {
-      return parent.require(spec);
-    }
+    const require = requireFunction(parent);
     require.resolve = function resolve(spec, options) {
       const resolved = resolveFrom(spec, parent, options);
       return resolved === "node:" + spec ? spec : resolved;
@@ -669,6 +724,7 @@
   };
 
   internal.initImportMeta = function initImportMeta(meta, path, isMain) {
+    path = native.modulePath(path);
     defineHidden(meta, {
       url: pathToFileHref(path),
       dir: dirname(path),
@@ -678,6 +734,15 @@
       file: basename(path),
       main: isMain,
       require: makeRequire(path, undefined),
+      requireNamespace(spec) {
+        const resolved = native.resolve(String(spec), path, false);
+        const commonJsNamespace = internal.require("require_namespace");
+        if (isBuiltinId(resolved)) return commonJsNamespace(internal.builtin(resolved));
+        internal.hotFileRequire?.();
+        const format = native.moduleFormat(resolved);
+        const mod = loadModule(resolved, format);
+        return format === "esm" ? esmNamespaces.get(mod) ?? mod.exports : commonJsNamespace(mod.exports);
+      },
       resolve(spec) {
         const resolved = native.resolve(String(spec), path, false);
         return isBuiltinId(resolved) ? resolved : pathToFileHref(resolved);
@@ -697,6 +762,11 @@
     const scripts = internal.require("package_scripts");
     const stdin = requested.endsWith("/[stdin]") && native.mainArg() === "-";
     const path = stdin ? requested : scripts.resolve(requested);
+    if (native.runMode() === "hot") {
+      if (typeof path !== "string" || stdin || process.env.BUNWASM_WORKER_INIT) throw new Error("--hot supports only file-based ESM server entries, not package scripts, stdin or workers");
+      internal.hotRun = internal.require("hot_run");
+      return internal.hotRun.run(path);
+    }
     if (typeof path !== "string") return scripts.run(path);
     if (!stdin && !native.exists(path)) {
       // A worker's missing entry reaches its parent as Node's require error, as in Bun.
@@ -712,13 +782,7 @@
     mainModule = new Module(path, null);
     mainModule.id = ".";
     moduleCache[path] = mainModule;
-    try {
-      evaluateModule(mainModule, path, format);
-    } catch (err) {
-      delete moduleCache[path];
-      throw err;
-    }
-    mainModule.loaded = true;
+    evaluateModule(mainModule, path, format);
     return undefined;
   };
   internal.getMainModule = () => mainModule;
@@ -769,7 +833,6 @@
     const process = globalThis.process;
     if (!process || process._exiting) return;
     process._exiting = true;
-    internal.cancelIoWaiters();
     function reportExitError(err) {
       // An exception inside an exit handler is itself fatal.
       if (internal.workerError) internal.workerError(err);
@@ -777,6 +840,9 @@
       if (!internal.workerError) printError(err);
     }
     try {
+      internal.hotRun?.dispose();
+      try { internal.cancelIoWaiters(); }
+      catch (err) { reportExitError(err); }
       process.emit("exit", code);
     } catch (err) {
       reportExitError(err);
@@ -786,9 +852,21 @@
       } catch (err) {
         reportExitError(err);
       }
-      internal.cancelIoWaiters();
-      if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
-      native.closeAllDirs();
+      try { internal.cancelIoWaiters(); }
+      catch (err) { reportExitError(err); }
+      try {
+        native.tlsDispose();
+      } catch (err) {
+        reportExitError(err);
+      }
+      try {
+        if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
+      } catch (err) {
+        reportExitError(err);
+      } finally {
+        try { native.closeAllDirs(); }
+        catch (err) { reportExitError(err); }
+      }
     }
   }
   internal.emitExit = emitExit;
@@ -814,6 +892,8 @@
     }
     printError(err);
   }
+
+  internal.reportHotError = printFatal;
 
   internal.handleUncaught = function handleUncaught(err) {
     if (listenerCount("uncaughtException") > 0) {
@@ -888,9 +968,21 @@
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
+  // A group guest's workers share Module and Memory objects through its host. The polyfill
+  // owns them, so it loads only when a worker actually sends or receives one.
+  if (!internal.sharedObjects && native.wasm?.sharedMemorySupported?.()) {
+    const group = () => { internal.require("webassembly"); return internal.groupSharedObjects; };
+    internal.sharedObjects = {
+      begin: () => group().begin(),
+      read: reference => group().read(reference),
+      readWasm: reference => group().readWasm(reference),
+      wait: () => null,
+    };
+  }
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("import_requests");
   internal.require("source_prepare");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");

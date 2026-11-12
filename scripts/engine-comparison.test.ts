@@ -6,12 +6,12 @@ const row = (stage: string, status: "pass" | "fail" | "blocked", fields = {}) =>
 
 test("fixed census denominator preserves blocked, missing and entirely absent arms", () => {
   const input = parseMatrixReport({ provenance: {}, results: [row("install", "pass"), row("dev", "fail"), row("dev:hmr", "blocked"), row("build", "pass", { host: "native" })] });
-  const [quickjs, jsc, hermes] = reduceCensus([input], apps, "playground");
+  const [quickjs, jsc] = reduceCensus([input], apps, "playground");
   expect(quickjs?.stages).toEqual({ expected: 4, pass: 1, fail: 1, blocked: 1, notRun: 1, measurementError: 0, passRate: 0.25, executedPassRate: 0.5 });
   expect(quickjs?.apps.fail).toBe(1);
   expect(jsc?.stages.notRun).toBe(4);
-  expect(hermes?.stages.notRun).toBe(4);
-  expect(hermes?.stages.executedPassRate).toBeNull();
+  expect(reduceCensus([input], apps, "playground")).toHaveLength(5);
+  expect(jsc?.stages.executedPassRate).toBeNull();
 });
 
 test("duplicate reports cannot inflate the numerator", () => {
@@ -34,17 +34,18 @@ test("only successful measured times enter distributions, missing stays null", (
   expect(result?.cells[3]?.durationMs).toBeNull();
 });
 
-test("matrix boundary rejects invalid status and timings", () => {
+test("matrix boundary rejects invalid status, timings and launcher hashes", () => {
   expect(() => parseMatrixReport({ provenance: {}, results: [row("install", "pass", { status: "green" })] })).toThrow("status");
   expect(() => parseMatrixReport({ provenance: {}, results: [row("install", "pass", { durationMs: -1 })] })).toThrow("duration");
+  expect(() => parseMatrixReport({ provenance: { launcher_sha256: "not-a-hash" }, results: [row("install", "pass")] })).toThrow("launcher");
 });
 
 test("registration derives probes from existing product checks before execution", () => {
-  const plan = registerCensus(["vite-react", "hono"], "playground", 6);
+  const plan = registerCensus(["vite-react", "hono"], "playground", 10);
   expect(plan.apps.find(app => app.id === "vite-react")?.stages).toContain("dev:hmr");
   expect(plan.apps.find(app => app.id === "hono")?.stages).toContain("start:params-query");
-  expect(plan.order).toHaveLength(6);
-  expect(new Set(plan.order.map(order => order.join(","))).size).toBe(6);
+  expect(plan.order).toHaveLength(10);
+  expect(new Set(plan.order.map(order => order.join(","))).size).toBe(10);
   expect(() => registerCensus(["typo"], "native", 1)).toThrow("unknown");
-  expect(() => registerCensus(["hono"], "native", 2)).toThrow("six");
+  expect(() => registerCensus(["hono"], "native", 3)).toThrow("blocks");
 });

@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/tls-pg-client.test.ts",
+  "localRuntime": true
+}

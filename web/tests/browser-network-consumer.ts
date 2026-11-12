@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
+import { fixtureGuestResponse } from "./fixture-guest-response";
 
 const names = process.argv.slice(2);
 assert.ok(names.length > 0 && names.every(name => ["chromium", "firefox", "webkit"].includes(name)), "explicit known browsers required");
@@ -138,7 +139,8 @@ try {
     const pathname = new URL(request.url).pathname;
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     if (pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
-    if (pathname === "/bun-guest.wasm") return new Response(guest, { headers: { ...headers, "Content-Type": "application/wasm" } });
+    const response = fixtureGuestResponse(pathname, guest, headers);
+    if (response) return response;
     const path = resolve(out, `.${pathname === "/" ? "/index.html" : pathname}`);
     if (!path.startsWith(out + sep) || !await Bun.file(path).exists()) return new Response(null, { status: 404, headers });
     return new Response(Bun.file(path), { headers });

@@ -9,6 +9,8 @@ import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./t
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  native-quality:\n")[0]!;
+const sharedPrebuild = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
+const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
 const web = workflow.split("\n  web:\n")[1]!.split("\n  process-bundles:\n")[0]!;
 
@@ -116,7 +118,7 @@ test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
   expect(steps).toHaveLength(2);
   for (const step of steps) {
     const gate = step.split("      - ")[0]!;
-    expect(gate).toContain("shell: bash"); // Explicit Bash enables GitHub's -eo pipefail.
+    expect(gate).toContain("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}");
     expect(gate).toContain("2>&1 | tee dist/web-guests-");
   }
 });
@@ -173,15 +175,22 @@ test("the prebuild job saves its completed cache, and the native job imports it 
     expect(names.filter(value => value === step)).toHaveLength(1);
     expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(importer));
   }
-  expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(prebuild.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(sharedPrebuild.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
+  expect(shared).not.toContain("bash scripts/build-jsc.sh");
+  expect(shared).toContain("JSC_PROFILE: shared-group");
+  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(2);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   const script = prebuild.split(`      - name: ${owner}\n`)[1]!.split("      - name: Save the JSC prebuild cache")[0]!;
   expect(script).toContain('wait "$jsc_pid"\n          [[ "$(cat "$jsc_completion")" == verified ]]\n          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(script).not.toContain("run_native_checks");
   expect(script).not.toContain("continue-on-error");
   expect(script).not.toContain("uses: actions/cache/save");
-  expect(rust).toContain('mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"');
+  expect(rust).toContain('tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"');
   expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
+  expect(rust).toContain("dist/*.wasm.embedding.json");
+  expect(rust).toContain("${{ runner.temp }}/jsc/engine/engine-link.map");
+  expect(rust).not.toContain("name: jsc-embedding-receipts");
   expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
 });
 

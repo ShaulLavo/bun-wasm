@@ -13,6 +13,9 @@ engine-split = []
 engine-host = []
 
 [dependencies]
+bunwasm-nested = { path = "../bunwasm-nested" }
+wasmparser = "=0.228.0"
+serde = { version = "1", features = ["derive"] }
 bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
 bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
 bun_glob = { path = "../../vendor/bun/src/glob" }

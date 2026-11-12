@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
-import { importedMemory } from "../../src/engine-kind.ts";
+import { importedMemory, isSupportedPairedEngine, pairedEngines, programProfile, type SupportedPairedEngine } from "../../src/engine-kind.ts";
 import { sharedGroupMaxPages, type ProgramProfile } from "./program-profile.ts";
 
 function readU32(bytes: Uint8Array, cursor: { offset: number }): number {
@@ -70,11 +70,26 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
 
 
 /**
- * A shared-group side imports the group memory and must never export it (Waffle group admission).
- * Only QuickJS is qualified for the shared-group profile; JSC and Hermes inputs have no atomics.
+ * A side's decoded `env.memory` import must match its program profile. A shared-group side
+ * declares the group address space exactly, like its core: wasm-ld's implicit 65536-page
+ * maximum would also instantiate against a narrower group memory, but it would hide a side
+ * linked for another stage. A split side imports its core's unshared memory.
  */
-export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" | "jsc" | "hermes", profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
-    assert(profile === "split" || engine === "quickjs", `${engine} is not qualified for the shared-group profile`);
+export function assertSideMemory(bytes: Uint8Array, profile: ProgramProfile): void {
+    const memory = importedMemory(bytes);
+    if (profile === "split") {
+        assert.equal(memory?.shared, false, "side memory sharing must match its program profile");
+        return;
+    }
+    assert.deepEqual(memory, { shared: true, maximum: sharedGroupMaxPages() }, "side memory must match its program profile: shared, at the group address space");
+}
+
+/**
+ * A shared-group side imports the group memory and must never export it (Waffle group admission).
+ * Only QuickJS and JSC are qualified for the shared-group profile; other engines' inputs have no atomics.
+ */
+export function convertEngineInitializers(bytes: Uint8Array, engine: SupportedPairedEngine, profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
+    assert(profile === "split" || engine === "quickjs" || engine === "jsc", `${engine} is not qualified for the shared-group profile`);
     const input = Buffer.from(bytes);
     const before = sections(input);
     const start = before.find((entry) => entry.id === 8);
@@ -84,13 +99,16 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" |
     const original = exportsOf(exportSection.payload);
     assert(original.some((entry) => entry.name === "__wasm_apply_data_relocs" && entry.kind === 0));
     assert(original.some((entry) => entry.name === "__wasm_call_ctors" && entry.kind === 0));
-    assert(!original.some((entry) => ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors",
-        "jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors",
-        "hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors"].includes(entry.name)), "side is already converted or has contradictory initializers");
+    const initializers = pairedEngines.flatMap(kind => {
+        const profile = programProfile(kind);
+        const memory: readonly string[] = profile.initializeMemory;
+        return memory.concat([profile.initialize[0]]);
+    });
+    assert(!original.some(entry => initializers.includes(entry.name)), "side is already converted or has contradictory initializers");
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
     const memories = imports.filter((entry) => entry.kind === "memory");
     assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "sole core-owned memory import");
-    assert.equal(importedMemory(input)?.shared, profile === "shared-group", "side memory sharing must match its program profile");
+    assertSideMemory(input, profile);
     assert.deepEqual(imports.filter((entry) => entry.kind === "table"),
         [{ module: "env", name: "__indirect_function_table", kind: "table" }], "sole core-owned table import");
     assert(!original.some((entry) => entry.kind === 2 || entry.name === "memory"), "side must not already export memory");
@@ -139,7 +157,7 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
     assert.equal(WebAssembly.Module.customSections(module, "dylink.0").length, 1, "PIE core has one dylink.0 section");
     assert.deepEqual(WebAssembly.Module.imports(module).filter((entry) => entry.kind === "memory"),
         [{ module: "env", name: "memory", kind: "memory" }], "PIE core imports the group memory");
-    assert.deepEqual(importedMemory(input), { shared: true, maximum: sharedGroupMaxPages() }, "group memory is shared at the guest memory maximum");
+    assert.deepEqual(importedMemory(input), { shared: true, maximum: sharedGroupMaxPages() }, "group memory is shared at the group address space");
     const original = exportsOf(exportSection.payload);
     assert(!original.some((entry) => entry.kind === 2), "PIE core must not export memory");
     assert(!original.some((entry) => entry.name === "core_initialize_memory"), "core is already converted");
@@ -158,8 +176,8 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
 
 if (import.meta.main) {
     const [engine, input, output, flag] = process.argv.slice(2);
-    const usage = "usage: engine-explicit-init.ts quickjs|jsc|hermes|core input.wasm output.wasm [--group]";
-    assert((engine === "quickjs" || engine === "jsc" || engine === "hermes" || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
+    const usage = "usage: engine-explicit-init.ts quickjs|jsc|core input.wasm output.wasm [--group]";
+    assert((isSupportedPairedEngine(engine) || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
     if (engine === "core") assert.equal(flag, "--group", "only a shared-group core has an explicit initializer");
     const bytes = readFileSync(input);
     writeFileSync(output, engine === "core" ? convertCoreInitializers(bytes) : convertEngineInitializers(bytes, engine, flag ? "shared-group" : "split"));

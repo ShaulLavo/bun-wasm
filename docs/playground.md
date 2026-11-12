@@ -16,6 +16,57 @@ The build gzips each engine's wasm from `../dist` into `dist/<name>.wasm.gz`; th
 it. If one is missing the build still succeeds and that engine says it is missing. `?wasm=<url>`
 loads a different module at runtime; `?trace` logs every WASI call to the worker's console.
 
+## Run Vite with React
+
+Open `/playground/?template=vite-react` on the deployed site, or choose **Vite + React**
+in the playground header. This creates a separate workspace from the general examples.
+
+Run these commands in its terminal:
+
+```sh
+bun install
+bun run dev
+```
+
+Open the printed preview link. Edit `src/App.tsx` and save with Ctrl-S or Cmd-S.
+React Fast Refresh updates the preview without losing the counter state.
+
+To test the production output, stop the dev server with Ctrl-C, then run:
+
+```sh
+bun run build
+bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort
+```
+
+The browser regression is `bun web/tests/browser-vite-react.ts` after building `web/`.
+Set `VITE_PLAYGROUND_URL` to test a deployed playground instead of a local build.
+
+## Run Next.js and its production build
+
+Open `/playground/?template=next`, or choose **Next.js** in the playground header.
+The separate workspace contains a Pages Router app and the matching SWC WASM compiler.
+
+```sh
+bun install
+bun run dev
+```
+
+Open the printed preview link. Edit `pages/index.tsx` and save to see hot updates.
+To serve a production build, stop the dev server with Ctrl-C, then run:
+
+```sh
+NEXT_TELEMETRY_DISABLED=1 bun run build
+bun run start
+```
+
+Open the new preview link. The build runs inside the guest; no prebuilt Next output is shipped.
+Stop the production server before starting development again because both use port 5173.
+
+After building `web/`, run `bun web/tests/browser-next-production.ts` for the Chromium check.
+Set `NEXT_PLAYGROUND_URL` to check a deployed playground and `NEXT_PRODUCTION_REPORTS`
+to retain its build log, generated build ID, served HTML, asset responses, and screenshot.
+The check requires hydrated counter clicks and rejects development assets or HMR.
+
 ## Engines
 
 The header dropdown (`?engine=`) picks what runs the program:
@@ -30,8 +81,8 @@ With `browser`, the wasm's `_start` sets the program up and returns; the worker 
 instance to `src/engine-host.js`, which runs the runtime's JS and the user's code on the worker's
 own engine (V8 or JavaScriptCore, with JIT). `bun build`, `--version` and `--help` still finish
 inside `_start`. Networking is the same as on the wasm engines (below), through the same
-`NetHost`. ES modules are served by the service worker's `./__bunwasm/` scope so that imports can
-form cycles (`src/sw.ts`; docs/engine-browser.md). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
+`NetHost`. Browser ES modules load as registration records, so cycles do not need service-worker
+control. The preview still needs its own service worker (`src/sw.ts`; docs/engine-browser.md). (`JSC_WASM` is not `BUN_JSC_WASM` because Bun refuses to start when a
 `BUN_JSC_*` variable is not a JSC option.)
 
 ## Preview
@@ -55,9 +106,9 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Browser-engine module loading also creates `blob:` URLs for acyclic modules. If the host sets a
+Browser-engine module loading creates `blob:` URLs for module records. If the host sets a
 Content-Security-Policy, its `script-src` must allow `blob:` (alongside the policy's existing
-Wasm and eval permissions). Import cycles use the service worker's same-origin module URLs.
+Wasm and eval permissions). The record loader links import cycles without a per-module service-worker URL.
 
 ## Networking
 
@@ -138,8 +189,12 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   as it happens, and uses the live filesystem service.
   Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may
   clean up and retain its own exit code. A second stop request sends SIGKILL. Completed writes remain visible.
-- `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
-  `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
+- `bash-web/session`: `BrowserSession` connects xterm input, resize, output, and shell state
+  to the page-owned runtime. bash-web owns the input queue, output batching, display newline
+  conversion, and interactive shell. The playground selects zsh-style editing by default.
+  The default prompt is provided by `bash-web/prompt` from the same borrowed filesystem; it reads
+  `$HOME/.config/bash-web/prompt.json` when present. Use `?prompt=off` only for transcript or
+  measurement controls that require the plain `$ ` fallback.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
   networking; the sandbox (../sandbox/) uses it too. Every run roots a generic Waffle process
   tree, so the root, its children and the shell spawn through the page runtime's one service.
@@ -188,11 +243,22 @@ process has its own revocable identity. Calling `terminate()` is not proof of de
 revokes first, then waits for the filesystem's shared critical-section admission fence before
 reaping locks and requesting termination; an ordinary guest exit acknowledgement also proves
 quiescence. Killed
-process buffers are never reused for another process. Node workers use their real preopens.
+filesystem identities are not reused for another process. Node workers use their real preopens.
+
+A root's canonical Waffle observation survives logical result selection and collection.
+Successful native `Worker.terminate()` return ends that observation. A void return ends it
+synchronously, and a returned promise ends it only when fulfilled. Late observers receive
+`terminated`, not the old exit code or a fabricated signal. Throwing or rejected stops keep
+the selected observation and report their failure. This lifecycle boundary does not prove
+physical reader closure and does not replace filesystem, terminal, notification or memory-group
+cleanup. `run.done` resolves after its filesystem fence without waiting for native termination.
+A Worker acquired after cancellation still belongs to that run's separate stop obligation.
+
 
 Browser children do not share the parent's networking ring. The browser engine
 still has direct host `fetch`; QuickJS/JSC children have no networking slots.
-The playground's root stdin remains EOF, and children inherit it as EOF. Inherited output goes
+Interactive playground commands and their children inherit the shell's live terminal input,
+including through base tools such as `env`. Standalone noninteractive roots keep EOF input. Inherited output goes
 to the root's stdout/stderr through its terminal descriptions.
 
 Run `node --no-warnings web/tests/subprocess.mjs` for Node worker checks, or build

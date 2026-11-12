@@ -1,0 +1,6 @@
+keys ReferenceError
+descriptor ReferenceError
+define ReferenceError
+read ReferenceError
+own keys late,Symbol(Symbol.toStringTag) true
+after late 1

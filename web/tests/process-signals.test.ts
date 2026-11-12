@@ -28,7 +28,7 @@ function fixture() {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
       env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
-      closeAllDirs() {},
+      tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
       hostSignal(signal: number, mode: number) {
         if (signal === 0) {

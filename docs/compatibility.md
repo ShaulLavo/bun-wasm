@@ -44,9 +44,12 @@ The three engines differ in these ways, which follow from the `browser` engine r
 | Promise state | Known only for promises settled where the host sees it. Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
 | `AsyncLocalStorage` across `await` | Carried by transpiler hooks. Code that skips the transpiler (`eval`, `new Function`) is not covered. |
 | `require()` of an ES module | Runs a converted CommonJS copy, separate from the ES module instance when the file is also imported. |
-| Import cycles | Need a module store (a service worker in the browser). Without it a cycle throws `ERR_CIRCULAR_IMPORT`. |
+| Import cycles | Work with or without a service worker, with live bindings and hoisted functions. |
+| `Function.prototype.toString` of module code | Keeps names and structure. Formatting, comments and literal spelling may differ from the file. |
 | `process.memoryUsage()` | Reads `performance.memory` where available (Chromium), else zeros. |
 | Raw `err.stack` strings | Follow the host engine's format. Printed errors (uncaught errors, `console.log(err)`, `bun test`) match the other engines. |
+
+Hermes remains withdrawn from normal publication. In the retained Hermes revision `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`, `Object.isSealed` and `Object.isFrozen` return false for sealed or frozen objects wrapped in an empty-handler Proxy. This known engine limitation has no workaround; it does not affect the supported Browser engines. See [Dormant Hermes source](hermes-engine.md#known-engine-limitation).
 
 ## Real apps
 

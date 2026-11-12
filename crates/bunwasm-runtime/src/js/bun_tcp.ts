@@ -84,6 +84,7 @@ declare namespace Tcp {
     once(event: "error", listener: (error: Error) => void): unknown;
     once(event: "close", listener: (hadError: boolean) => void): unknown;
   };
+  type Waiter = { ref: boolean; step(): boolean | "progress" };
   interface Internal extends Pick<BunWasm.Internal, "native" | "nextTick"> {
     native: BunWasm.Native & { hostLocalPort(handle: number): number };
     builtin(name: "node:net"): { Socket: new() => NodeSocket };
@@ -92,11 +93,12 @@ declare namespace Tcp {
       error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
     };
     require(name: "net_hostname"): (hostname: string, allowBrackets?: boolean) => string;
+    require(name: "net_listener"): { inContext<T extends Waiter>(context: unknown, waiter: T): T };
   }
   type Transport = {
     listenOrThrow(hostname: string, port: number): number;
-    acceptLoop(handle: number, onConnection: (connection: unknown) => void): { ref: boolean };
-    waiters: Set<{ ref: boolean }>;
+    acceptLoop(handle: number, onConnection: (connection: unknown) => void): Waiter;
+    waiters: Set<Waiter>;
   };
 }
 (function (internal: Tcp.Internal) {
@@ -178,26 +180,33 @@ declare namespace Tcp {
       const hostname = options.hostname || "0.0.0.0";
       const handle = listenOrThrow(hostname, port(options.port));
       const owned = new Set<Tcp.Socket<Data>>();
+      // Cleared on stop, so a stopped listener that stays reachable no longer holds the
+      // listen-time frame; accepted sockets keep their own reads until they close.
+      let accepting: Tcp.Waiter | null = null;
       const listener: Tcp.Listener<Data> = {
         hostname, port: native.hostLocalPort(handle), data: options.data as Data,
         _sockets: owned,
         stop(force = false) {
-          waiters.delete(accepting);
+          if (accepting) waiters.delete(accepting);
+          accepting = null;
           native.hostClose(handle);
           if (force) for (const socket of owned) socket.terminate();
         },
-        ref() { accepting.ref = true; return this; },
-        unref() { accepting.ref = false; return this; },
+        ref() { if (accepting) accepting.ref = true; return this; },
+        unref() { if (accepting) accepting.ref = false; return this; },
         reload(next) { options = Object.assign({}, options, next); },
         [Symbol.dispose]() { this.stop(true); },
       };
-      const accepting = acceptLoop(handle, conn => {
+      // Accepted connections and their callbacks run in the frame current at listen(), as
+      // native Bun's do; the host enters every I/O turn at the root frame. node:net servers bind
+      // their accept loop the same way.
+      accepting = internal.require("net_listener").inContext(native.getAsyncContext(), acceptLoop(handle, conn => {
         const socket = new Socket();
         socket._attach(conn);
         const wrapped = wrap(socket, options, listener);
         owned.add(wrapped);
         wrapped._open();
-      });
+      }));
       return listener;
     }
     function connect<Data = undefined>(options: Tcp.Options<Data>): Promise<Tcp.Socket<Data>> {

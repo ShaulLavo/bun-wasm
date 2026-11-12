@@ -52,8 +52,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("needs.quality.outputs.rust == 'true'");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps), byId("jsc-artifact", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
@@ -107,7 +107,7 @@ test("each setup cache has one immediate save after its successful producer", ()
     const output = named(`Save completed ${id} setup`, list);
     const build = step(id === "rustup-cache" ? "uses" : "name", producer, list);
     expect(list.indexOf(output)).toBe(list.indexOf(build) + 1);
-    const scope = id === "sources-cache" ? "github.event_name == 'push' && github.ref == 'refs/heads/main' && " : "";
+    const scope = "github.event_name == 'push' && github.ref == 'refs/heads/main' && ";
     expect(field(output, "if")).toBe(`${scope}steps.${id}.outputs.cache-hit != 'true'`);
     expect(field(field(output, "with"), "key")).toBe(`\${{ steps.${id}.outputs.cache-primary-key }}`);
     expect(field(field(output, "with"), "path")).toBe(field(field(restore, "with"), "path"));

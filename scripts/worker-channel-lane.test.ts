@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createSharedLaneBuffer, openSharedLane } from "../web/src/shared-objects/lane";
-import type { SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
 import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 
@@ -9,6 +9,7 @@ const setup = (lanes = true) => brokerClients(cleanup, { lanes });
 type Client = ReturnType<ReturnType<typeof setup>["client"]>;
 /** Restores a transferred port once its shared backings are attached, as worker startup and receive do. */
 async function restore(graph: Graph, into: Client): Promise<SourcePort> {
+  await into.service.ready;
   await new Promise<void>(resolve => { if (!into.runtime.codec.wait(graph, resolve)) resolve(); });
   const port = into.runtime.codec.decode(graph);
   if (!(port instanceof into.runtime.MessagePort)) throw new Error("Missing restored port");
@@ -16,8 +17,10 @@ async function restore(graph: Graph, into: Client): Promise<SourcePort> {
 }
 async function connection(lanes = true) {
   const { broker, client } = setup(lanes), sender = client(), receiver = client();
+  await Promise.all([sender.service.ready, receiver.service.ready]);
   const channel = new sender.runtime.MessageChannel();
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
   cleanup.add(() => { channel.port1.close(); target.close(); });
   return { broker, client, sender, receiver, source: channel.port1, target };
 }
@@ -33,18 +36,25 @@ test("a complete packet is visible to the peer's owner as soon as postMessage re
   expect(broker.inspectRoutes().pending).toBe(0);
 });
 
+const notAttached = "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED";
+function receiveAfterAttach(runtime: Client["runtime"], port: SourcePort) {
+  try { return runtime.receiveMessageOnPort(port); }
+  catch (error) { if ((error as { code?: string }).code === notAttached) return undefined; throw error; }
+}
+
 // Limitation, not parity: a SharedArrayBuffer published with the packet attaches through the
 // receiver's event loop, so the complete frame is visible at once but decodes only after that.
-test("limitation: a fresh SharedArrayBuffer decodes after it attaches, in order and exactly once", async () => {
+// A receive in that window fails by name, keeping the frame, instead of looking like an empty queue.
+test("limitation: a fresh SharedArrayBuffer fails by name until it attaches, in order and exactly once", async () => {
   const { sender, receiver, source, target } = await connection();
   await tick();
   const shared = new SharedArrayBuffer(8);
   Atomics.store(new Int32Array(shared), 0, 7);
   source.postMessage("before"); source.postMessage({ shared, alias: shared }); source.postMessage("after");
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
-  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  expect(() => receiver.runtime.receiveMessageOnPort(target)).toThrow(expect.objectContaining({ code: notAttached }));
   let received: { message: unknown } | undefined;
-  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiver.runtime.receiveMessageOnPort(target); }
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiveAfterAttach(receiver.runtime, target); }
   const value = received?.message;
   if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
   expect("alias" in value && value.alias).toBe(value.shared);
@@ -83,11 +93,16 @@ test("a full lane rejects a message before anything detaches", async () => {
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
 });
 
-test("a message larger than the lane is rejected before anything detaches", async () => {
-  const { receiver, source, target } = await connection();
-  const buffer = new ArrayBuffer(8);
-  expect(() => source.postMessage({ text: "x".repeat(1024 * 1024), buffer }, [buffer])).toThrow("byte limit between processes");
+test("a message beyond the encoded overflow cap rejects before anything detaches", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const buffer = new ArrayBuffer(8), carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  expect(() => source.postMessage({ text: "x".repeat(64 * 1024 * 1024), buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("encoded limit");
   expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still attached");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still attached" });
+  expect(sender.service.inspect().staged).toBe(0);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
   source.postMessage("still open");
   expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "still open" });
 });
@@ -134,7 +149,7 @@ test("a refused send to a retired peer releases its staged shared backing for a 
   expect(buffer.byteLength).toBe(8);
   channel.port1.postMessage({ shared, port: reply.port2 }, [reply.port2]);
   let received: { message: unknown } | undefined;
-  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = live.runtime.receiveMessageOnPort(target); }
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiveAfterAttach(live.runtime, target); }
   const value = received?.message;
   if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
   if (!("port" in value) || !(value.port instanceof live.runtime.MessagePort)) throw new Error("Missing transferred port");
@@ -249,4 +264,18 @@ test("lane frames stay invisible until commit and wrap around the ring", () => {
   right.close();
   expect(left.peerClosed()).toBe(true);
   expect(() => left.reserve("late")).toThrow("peer is closed");
+});
+
+for (const local of [true, false]) test(`lane-less close keeps same-turn synchronous receive without events, local=${local}`, async () => {
+  const runtime = local ? sourcePorts() : setup(false).client().runtime;
+  cleanup.add(() => runtime.__fixtureShutdown());
+  const { port1, port2 } = new runtime.MessageChannel(), received: unknown[] = [];
+  port1.on("message", value => received.push(value));
+  port1.close(); port2.postMessage("same turn");
+  expect(runtime.receiveMessageOnPort(port1)).toEqual({ message: "same turn" });
+  await tick(); await tick();
+  expect(received).toEqual([]);
+  port2.postMessage("after disentangle");
+  expect(runtime.receiveMessageOnPort(port1)).toBeUndefined();
+  port2.close();
 });

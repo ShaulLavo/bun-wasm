@@ -1,15 +1,31 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
-import { parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
+import { captureProgramInputs, parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
 import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } from "./guest-receipt-fixture.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
 const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+
+test("fixture Git failures preserve the command and subprocess result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-fixture-git-error-"));
+  try {
+    let failure: unknown;
+    try { fixtureGit(root, "not-a-fixture-command"); }
+    catch (error) { failure = error; }
+    if (!(failure instanceof Error)) throw new Error("Expected fixture Git failure", { cause: failure });
+    expect(failure.cause).toMatchObject({ exitCode: 1 });
+    expect(failure.cause).toHaveProperty("stdout");
+    expect(failure.cause).toHaveProperty("stderr");
+    expect(failure.message).toContain("status 1");
+    expect(failure.message).toContain("not-a-fixture-command");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function quickjsNativeProducerFragment(): string {
   const parsed: unknown = Bun.YAML.parse(workflow);
@@ -120,7 +136,7 @@ async function snapshot(fixture: Parameters<typeof receiptCli>[0]) {
   return path;
 }
 
-for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
+for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h", "ssl/handshake.cc"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
   await withCliReceiptFixture(async fixture => {
     await writeFile(join(fixture.root, "vendor/boringssl", path), "original compiled input\n");
     const inputs = await snapshot(fixture);
@@ -294,6 +310,7 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   }
   await writeFile(join(root, "jsc/common.sh"), (await readFile(join(root, "jsc/common.sh"), "utf8")) + "\ncheck_jsc_inputs_stamp() { :; }\n");
   await writeFile(join(root, "scripts/jsc-embedding.ts"), 'if (process.argv[2] === "inputs") console.log("{}");\n');
+  await writeFile(join(root, "scripts/jsc-cloop-frame.ts"), 'const [command, path, ...extra] = process.argv.slice(2);\nif (command !== "check" || !path || extra.length || !WebAssembly.validate(await Bun.file(path).bytes())) throw new Error("Expected one valid synthetic side for the fixture-only frame check");\n');
   await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(temporary)}\nexport CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"\n`);
   await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
   await executable(join(root, "scripts/sync-crypto.sh"), "exit 0");
@@ -613,5 +630,20 @@ test.each(["wasmtime", "node"])("transpiler example rejects missing %s before sy
     expect(result.stderr.toString()).toContain(`transpiler example requires '${missing}' on PATH`);
     expect(await Bun.file(setupTrace).exists()).toBe(false);
     expect(await Bun.file(compileTrace).exists()).toBe(false);
+  });
+});
+
+
+test("TLS source drift changes the core inputs without invalidating separate engine inputs", async () => {
+  await withReceiptFixture(async options => {
+    const core = () => captureProgramInputs(options, "core", { features: ["engine-split"] });
+    const quickjs = () => captureProgramInputs({ ...options, build: "quickjs" }, "quickjs");
+    const jsc = () => captureProgramInputs({ ...options, build: "jsc" }, "jsc");
+    const before = await Promise.all([core(), quickjs(), jsc()]);
+    await writeFile(join(options.boringssl, "ssl/handshake.cc"), "changed TLS implementation\n");
+    const after = await Promise.all([core(), quickjs(), jsc()]);
+    expect(after[0]?.contentSha256).not.toBe(before[0]?.contentSha256);
+    expect(after[1]).toEqual(before[1]);
+    expect(after[2]).toEqual(before[2]);
   });
 });

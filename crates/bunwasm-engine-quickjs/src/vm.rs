@@ -36,12 +36,16 @@ pub struct QuickJsMemoryTelemetry {
     pub failed_category: u64,
     pub failed_size_known: u64,
     pub counters_valid: u64,
+    pub automatic_gc_count: u64,
+    pub malloc_size_after_automatic_gc: u64,
+    pub malloc_gc_threshold: u64,
+    pub current_malloc_size: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<QuickJsMemoryTelemetry>() == 96);
+const _: () = assert!(std::mem::size_of::<QuickJsMemoryTelemetry>() == 128);
 static NO_MEMORY_TELEMETRY: QuickJsMemoryTelemetry = QuickJsMemoryTelemetry {
     abi_version: 1,
-    byte_size: 96,
+    byte_size: 128,
     refresh_sequence: 0,
     malloc_size: u64::MAX,
     memory_used_size: u64::MAX,
@@ -52,6 +56,10 @@ static NO_MEMORY_TELEMETRY: QuickJsMemoryTelemetry = QuickJsMemoryTelemetry {
     failed_category: 0,
     failed_size_known: 0,
     counters_valid: 0,
+    automatic_gc_count: 0,
+    malloc_size_after_automatic_gc: u64::MAX,
+    malloc_gc_threshold: u64::MAX,
+    current_malloc_size: u64::MAX,
 };
 
 thread_local! {
@@ -108,6 +116,7 @@ unsafe extern "C" {
     /// The async context promise reactions capture and restore (new reference).
     fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
     fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
+    fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
 }
 
 /// Erase a value's lifetime (all values belong to the one context).
@@ -144,6 +153,38 @@ const INTERRUPT_POLLS: u32 = 8;
 /// QuickJS-ng. Cheap to clone (a reference to the engine).
 #[derive(Clone)]
 pub struct QuickJs(Rc<Inner>);
+
+/// Allocate every SharedArrayBuffer of a group member from a region the core leases.
+#[cfg(bun_wasm_shared_group)]
+unsafe fn install_shared_buffer_storage(runtime: *mut qjs::JSRuntime) {
+    use std::ffi::c_void;
+    unsafe extern "C" {
+        fn bun_shared_buffer_alloc(bytes: u32) -> u32;
+        fn bun_shared_buffer_release(address: u32);
+    }
+    unsafe extern "C" fn allocate(_: *mut c_void, size: qjs::size_t) -> *mut c_void {
+        // SAFETY: the core returns a stable region address, or 0 for failure.
+        unsafe { bun_shared_buffer_alloc(size) as usize as *mut c_void }
+    }
+    unsafe extern "C" fn release(_: *mut c_void, data: *mut c_void) {
+        // SAFETY: an unknown address leaves the core's ledger unchanged.
+        unsafe { bun_shared_buffer_release(data as usize as u32) }
+    }
+    // Non-owning region views share the lease that created them.
+    unsafe extern "C" fn duplicate(_: *mut c_void, _: *mut c_void) {}
+    let functions = qjs::JSSharedArrayBufferFunctions {
+        sab_alloc: Some(allocate),
+        sab_free: Some(release),
+        sab_dup: Some(duplicate),
+        sab_opaque: std::ptr::null_mut(),
+    };
+    // SAFETY: QuickJS copies the table; the runtime is live and has no buffers yet.
+    unsafe { qjs::JS_SetSharedArrayBufferFunctions(runtime, &functions) };
+}
+
+/// The engine the shared nested bridge (`nested_bridge.rs`) is compiled for.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) type NestedEngine = QuickJs;
 
 impl QuickJs {
     fn ctx(&self) -> &Ctx<'static> {
@@ -249,6 +290,11 @@ impl Engine for QuickJs {
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
         // SAFETY: the context and its runtime are live and retained by Inner.
         let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        #[cfg(bun_wasm_shared_group)]
+        unsafe {
+            qjs::JS_SetCanBlock(runtime_raw, true);
+            install_shared_buffer_storage(runtime_raw);
+        };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
@@ -470,6 +516,11 @@ impl Engine for QuickJs {
         v.is_promise()
     }
 
+    fn is_module_namespace(&self, v: &V) -> Option<bool> {
+        // SAFETY: the helper reads only the class ID of this live value.
+        Some(unsafe { JS_bunwasm_IsModuleNamespace(v.as_raw()) })
+    }
+
     fn is_proxy(&self, v: &V) -> bool {
         v.is_proxy()
     }
@@ -492,6 +543,38 @@ impl Engine for QuickJs {
                 JS_bunwasm_NewWasmMemoryBuffer(self.raw(), data, length),
             )
         }
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn nested_execute(&self, operation: &V, callback: &V) -> Result<V, V> {
+        crate::nested_bridge::execute(self, operation, callback)
+    }
+
+    unsafe fn shared_wasm_memory_buffer(&self, data: *mut u8, length: usize) -> Result<V, V> {
+        unsafe extern "C" {
+            fn JS_bunwasm_NewSharedWasmMemoryBuffer(
+                ctx: *mut qjs::JSContext,
+                data: *mut u8,
+                length: usize,
+            ) -> qjs::JSValue;
+        }
+        // SAFETY: the core validated this session's stable region and retains it
+        // until the member, engine roots and host instances have all stopped.
+        self.wrap(unsafe { JS_bunwasm_NewSharedWasmMemoryBuffer(self.raw(), data, length) })
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    fn shared_buffer_resource(&self, v: &V) -> Option<u32> {
+        unsafe extern "C" {
+            fn JS_bunwasm_SharedBufferData(value: qjs::JSValue) -> *mut u8;
+            fn bun_shared_buffer_resource(address: u32) -> u32;
+        }
+        // SAFETY: the helper checks the SharedArrayBuffer class and throws nothing, and the
+        // core only looks the address up in its own ledger.
+        let resource = unsafe {
+            bun_shared_buffer_resource(JS_bunwasm_SharedBufferData(v.as_raw()) as usize as u32)
+        };
+        (resource != 0).then_some(resource)
     }
 
     fn detach_wasm_memory_buffer(&self, v: &V) -> bool {
@@ -812,7 +895,7 @@ mod tests {
         let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
         // SAFETY: the bound runtime is live for this test; accessors return fixed cached data.
         let initial = unsafe { *quickjs_memory_telemetry() };
-        assert_eq!(initial.byte_size, 96);
+        assert_eq!(initial.byte_size, 128);
         assert_eq!(initial.counters_valid, 0);
         let baseline = engine.memory_usage();
         assert_eq!(memory_field(&baseline, "rss"), Val::Null);
@@ -869,6 +952,104 @@ mod tests {
             Val::Str("quickjs.arrayBuffer".into())
         );
         std::mem::forget(engine);
+    }
+
+    #[test]
+    fn memory_telemetry_observes_direct_module_declarations() {
+        let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
+        for _ in 0..10_000 {
+            let value = engine
+                .eval_script(
+                    "(() => { const a = {}; a.self = a; a.payload = 'x'.repeat(4096); return a; })()",
+                    "automatic-gc-warmup",
+                    1,
+                )
+                .unwrap();
+            drop(value);
+            // SAFETY: this is a cached, allocation-free readout.
+            if unsafe { (*quickjs_memory_telemetry()).automatic_gc_count } > 0 {
+                break;
+            }
+        }
+        let mut samples = Vec::new();
+        for generation in 0..6 {
+            let name = format!("/reload/{generation}.mjs");
+            let payload = "x".repeat(16 * 1024);
+            let source = format!(
+                "export const generation = {generation}; export const payload = {payload:?};"
+            );
+            let promise = engine.eval_module(&name, &source).unwrap();
+            drop(promise);
+            while engine.run_jobs() {}
+            engine.gc();
+            // SAFETY: the runtime is live and the refresh is after a normal module turn.
+            let telemetry = unsafe { *quickjs_memory_telemetry_refresh() };
+            samples.push((
+                name,
+                telemetry.malloc_size,
+                telemetry.memory_used_size,
+                telemetry.automatic_gc_count,
+                telemetry.malloc_size_after_automatic_gc,
+                telemetry.malloc_gc_threshold,
+                telemetry.current_malloc_size,
+            ));
+        }
+        for (name, malloc, structural, gc_count, after_gc, threshold, current) in &samples {
+            println!(
+                "{{\"path\":{name:?},\"mallocBytes\":{malloc},\"structuralBytes\":{structural},\"automaticGcCount\":{gc_count},\"mallocBytesAfterAutomaticGc\":{after_gc},\"mallocGcThreshold\":{threshold},\"currentMallocBytes\":{current}}}"
+            );
+        }
+        let mut changed_path_samples = Vec::new();
+        for generation in 0..4 {
+            let source = format!(
+                "export const generation = {generation}; export const payload = {payload:?};",
+                payload = "y".repeat(16 * 1024)
+            );
+            let result = engine.eval_module("/reload/changed.mjs", &source);
+            let Ok(promise) = result else {
+                break;
+            };
+            drop(promise);
+            while engine.run_jobs() {}
+            engine.gc();
+            // SAFETY: the runtime is live and the refresh is after a normal module turn.
+            let telemetry = unsafe { *quickjs_memory_telemetry_refresh() };
+            changed_path_samples.push((
+                generation,
+                telemetry.malloc_size,
+                telemetry.memory_used_size,
+                telemetry.automatic_gc_count,
+                telemetry.malloc_size_after_automatic_gc,
+                telemetry.current_malloc_size,
+            ));
+        }
+        for (generation, malloc, structural, gc_count, after_gc, current) in &changed_path_samples {
+            println!(
+                "{{\"path\":\"/reload/changed.mjs\",\"generation\":{generation},\"mallocBytes\":{malloc},\"structuralBytes\":{structural},\"automaticGcCount\":{gc_count},\"mallocBytesAfterAutomaticGc\":{after_gc},\"currentMallocBytes\":{current}}}"
+            );
+        }
+        std::mem::forget(engine);
+        assert_eq!(
+            samples.len(),
+            6,
+            "all six unique declarations must complete"
+        );
+        assert_eq!(
+            changed_path_samples.len(),
+            4,
+            "all four same-path declarations must complete"
+        );
+        let valid = samples
+            .iter()
+            .all(|sample| sample.3 > 0 && sample.4 != u64::MAX && sample.6 >= sample.4)
+            && samples.windows(2).all(|pair| pair[1].3 >= pair[0].3)
+            && changed_path_samples.windows(2).all(|pair| {
+                pair[1].1 > pair[0].1
+                    && pair[1].2 > pair[0].2
+                    && pair[1].3 == pair[0].3
+                    && pair[1].4 == pair[0].4
+            });
+        assert!(valid);
     }
 
     #[test]

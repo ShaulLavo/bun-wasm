@@ -25,7 +25,9 @@ mod encoding;
 pub mod engine_host;
 mod glob;
 pub mod host;
+mod hot_run;
 mod html_rewriter;
+pub mod import_requests;
 pub mod init;
 pub mod install;
 mod intl;
@@ -40,6 +42,7 @@ mod semver;
 mod sourcemap;
 mod sqlite;
 mod streams;
+mod tls;
 pub mod transpiler;
 mod wasm;
 mod x509;
@@ -55,7 +58,7 @@ compile_error!("bunwasm-runtime needs an engine: feature engine-split or engine-
 pub use data::{NativeError, Val};
 pub use transpiler::{
     BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader,
-    PassthroughTranspiler, Transpiled, Transpiler,
+    PassthroughTranspiler, RecordError, Transpiled, Transpiler,
 };
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
@@ -73,7 +76,15 @@ pub enum Entry {
     Test(Vec<String>),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunMode {
+    #[default]
+    Once,
+    Hot,
+}
+
 pub struct Options {
+    pub mode: RunMode,
     pub entry: Entry,
     /// Arguments after the entry point, exposed through `process.argv`.
     pub args: Vec<String>,
@@ -88,6 +99,7 @@ pub struct Options {
 /// natives and the event loop.
 pub(crate) struct State {
     resolver: resolve::Resolver,
+    import_requests: RefCell<import_requests::ImportRequests>,
     transpiler: Box<dyn Transpiler>,
     /// Absolute path of the entry module (for `import.meta.main`).
     main: RefCell<String>,
@@ -104,6 +116,8 @@ pub(crate) struct State {
     /// Stack-position fixups for files whose evaluated code differs from the
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
+    /// The original file most recently read for an error excerpt.
+    last_original: RefCell<Option<(String, Rc<str>)>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
     /// Set when `process.nextTick` queued work.
     /// Handled signals dequeued by a synchronous sleep, delivered at the next checkpoint.
@@ -111,9 +125,11 @@ pub(crate) struct State {
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
     directories: Rc<RefCell<directory::Directories>>,
+    tls: tls::SharedRegistry,
     start: Instant,
     argv: Vec<String>,
     exec_argv: Vec<String>,
+    mode: RunMode,
 }
 
 impl State {
@@ -130,6 +146,7 @@ impl State {
     ) -> Self {
         State {
             resolver: resolve::Resolver::with_conditions(conditions),
+            import_requests: RefCell::new(import_requests::ImportRequests::default()),
             transpiler,
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),
@@ -140,14 +157,17 @@ impl State {
             #[cfg(feature = "engine-host")]
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
+            last_original: RefCell::new(None),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             deferred_signals: RefCell::new(host::DeferredSignals::default()),
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
+            tls: tls::new_shared_registry(tls::snapshot_startup_extras()),
             start: Instant::now(),
             argv,
             exec_argv,
+            mode: RunMode::Once,
         }
     }
 
@@ -175,6 +195,10 @@ impl State {
 
     pub(crate) fn flush(&self) {
         let _ = self.flush_stdout();
+    }
+
+    pub(crate) fn dispose_tls(&self) {
+        self.tls.borrow_mut().dispose();
     }
 
     /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`). Only
@@ -214,6 +238,7 @@ impl State {
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
+        self.dispose_tls();
         self.directories.borrow_mut().close_all();
         self.flush();
         // The linked engine program remains rooted until process exit.
@@ -229,8 +254,9 @@ pub fn run(options: Options) -> i32 {
         conditions,
         exec_argv,
         transpiler,
+        mode,
     } = options;
-    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, transpiler);
+    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, mode, transpiler);
     engine_host::init(entry, state, main_path)
 }
 
@@ -258,6 +284,7 @@ fn new_state(
     args: &[String],
     conditions: &[String],
     exec_argv: &[String],
+    mode: RunMode,
     transpiler: Box<dyn Transpiler>,
 ) -> (Rc<State>, String) {
     let cwd = std::env::current_dir()
@@ -280,12 +307,13 @@ fn new_state(
         .chain(script)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let state = Rc::new(State::with_conditions(
-        argv,
-        conditions.to_vec(),
-        exec_argv.to_vec(),
-        transpiler,
-    ));
+    if mode == RunMode::Hot {
+        transpiler.use_module_records();
+    }
+    let mut state =
+        State::with_conditions(argv, conditions.to_vec(), exec_argv.to_vec(), transpiler);
+    state.mode = mode;
+    let state = Rc::new(state);
     *state.main.borrow_mut() = main_path.clone();
     if let Entry::File(arg) = entry {
         *state.main_arg.borrow_mut() = arg.clone();

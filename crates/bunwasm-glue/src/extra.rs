@@ -10,10 +10,10 @@ use bun_core::String as BunString;
 #[unsafe(no_mangle)]
 extern "C" fn errno_location() -> *mut c_int {
     unsafe extern "C" {
-        static mut errno: c_int;
+        fn __errno_location() -> *mut c_int;
     }
-    // SAFETY: address of wasi-libc's errno.
-    &raw mut errno
+    // SAFETY: wasi-libc's accessor has no preconditions.
+    unsafe { __errno_location() }
 }
 
 // ── WTF strings: never created without JavaScriptCore ─────────────────────
@@ -238,18 +238,6 @@ fn __bun_resolver_parse_dependency(
 ) -> Option<bun_install_types::resolver_hooks::DependencyVersion> {
     None
 }
-
-// ── BoringSSL: reachable from TLS option parsing, never called here ───────
-
-macro_rules! unreachable_c {
-    ($($name:ident),* $(,)?) => {$(
-        #[unsafe(no_mangle)]
-        extern "C" fn $name() -> usize {
-            unreachable!(concat!(stringify!($name), ": TLS is not available in bun-wasm"))
-        }
-    )*};
-}
-unreachable_c!(i2d_SSL_SESSION, SSL_SESSION_up_ref, SSL_SESSION_free);
 
 /// Macro evaluation requires a JS engine, not the standalone parser adapter.
 #[allow(clippy::too_many_arguments)] // Exact ABI declared by bun_js_parser::Macro.

@@ -1,3 +1,4 @@
+import { fixtureModule } from "./process-module-fixture.ts";
 import { expect, spyOn, test } from "bun:test";
 import { createRuntime } from "waffle";
 import { FilesystemService, MemoryBackend, type FilesystemConnection } from "waffle/fs";
@@ -44,7 +45,7 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
   let entered = false;
   const diagnostics = spyOn(console, "error").mockImplementation(() => {});
   try {
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     const hooks = { stdout() {}, stderr() {} };
     const first = startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, hooks);
     const second = startRun({ runtime, engine: "quickjs", module, args: [], env: {}, moduleScope: false }, hooks);
@@ -117,7 +118,7 @@ for (const generic of [false, true]) test(`same-task page disposal owns an unadm
       transport.data = { filesystem };
       section = new FilesystemSection(filesystem); section.enter(); held = true;
     }
-    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     const run = startRun({ runtime, engine: "quickjs", module, args: [], env: {}, moduleScope: false, runtimeProcess: transport }, { stdout() {}, stderr() {} });
     // No preparation/microtask drain between starting the run and page disposal.
     disposal = runtime.dispose();

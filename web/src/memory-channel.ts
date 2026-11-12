@@ -1,4 +1,5 @@
 import type { MemorySnapshot } from "./memory-telemetry.ts";
+import { createNativeSharedBuffer } from "./shared-objects/native.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -6,7 +7,7 @@ const payloadOffset = 32;
 const byteLength = 8192;
 type Reader = { sample(refresh?: boolean): MemorySnapshot; finish(): MemorySnapshot };
 
-export function createMemoryChannel(): SharedArrayBuffer { return new SharedArrayBuffer(byteLength); }
+export function createMemoryChannel(): SharedArrayBuffer { return createNativeSharedBuffer(byteLength); }
 export function requestMemoryChannel(buffer: SharedArrayBuffer, refresh: boolean): number {
   const words = new Int32Array(buffer, 0, 8);
   Atomics.store(words, 1, Number(refresh));
@@ -25,12 +26,40 @@ export function readMemoryChannel(buffer: SharedArrayBuffer): unknown {
     if (!length) return null;
     if (length < 0 || length > buffer.byteLength - payloadOffset) throw new RangeError("Invalid telemetry frame length");
     const bytes = new Uint8Array(buffer, payloadOffset, length).slice();
-    if (Atomics.load(words, 3) === sequence) return JSON.parse(decoder.decode(bytes));
+    if (Atomics.load(words, 3) === sequence) return expandCounterGroups(JSON.parse(decoder.decode(bytes)));
   }
   return null;
 }
+function groupSnapshotCounters(snapshot: MemorySnapshot): unknown {
+  if (!Object.keys(snapshot.engineCounters).some(name => name.indexOf(".") > 0)) return snapshot;
+  const plain: [string, number | null][] = [];
+  const groups = new Map<string, Map<string, number | null>>();
+  for (const [name, value] of Object.entries(snapshot.engineCounters)) {
+    const dot = name.indexOf(".");
+    if (dot <= 0) { plain.push([name, value]); continue; }
+    const prefix = name.slice(0, dot);
+    let group = groups.get(prefix);
+    if (!group) { group = new Map(); groups.set(prefix, group); }
+    group.set(name.slice(dot + 1), value);
+  }
+  return { ...snapshot, engineCounters: Object.fromEntries(plain),
+    counterGroups: Object.fromEntries(Array.from(groups, ([prefix, values]) => [prefix, Object.fromEntries(values)])) };
+}
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function expandCounterGroups(value: unknown): unknown {
+  if (!record(value) || !("counterGroups" in value)) return value;
+  const { counterGroups, ...snapshot } = value;
+  if (!record(counterGroups) || !record(snapshot.engineCounters)) throw new TypeError("Invalid telemetry counter groups");
+  const grouped = Object.entries(counterGroups).flatMap(([prefix, counters]) => {
+    if (!prefix || !record(counters)) throw new TypeError("Invalid telemetry counter group");
+    return Object.entries(counters).map(([name, count]): [string, unknown] => [`${prefix}.${name}`, count]);
+  });
+  return { ...snapshot, engineCounters: Object.fromEntries(Object.entries(snapshot.engineCounters).concat(grouped)) };
+}
 function writeMemoryChannel(buffer: SharedArrayBuffer, snapshot: MemorySnapshot, generation: number, normal: boolean): void {
-  const bytes = encoder.encode(JSON.stringify(snapshot));
+  const bytes = encoder.encode(JSON.stringify(groupSnapshotCounters(snapshot)));
   if (bytes.byteLength > buffer.byteLength - payloadOffset) throw new RangeError("Telemetry frame exceeds fixed capacity");
   const words = new Int32Array(buffer, 0, 8);
   Atomics.add(words, 3, 1);
@@ -77,21 +106,32 @@ export function createMemoryPublisher(buffer: SharedArrayBuffer, reader: Reader)
   return { capture: (normal = false, force = false) => publish(normal, force, false), finish: () => publish(false, true, true) };
 }
 
+type LinkedBindings = Readonly<Record<string, WebAssembly.ModuleImports | undefined>>;
+
 function observeMemoryImport(
   namespace: string,
   name: string,
   value: WebAssembly.ImportValue,
   capture: (normal: boolean, force: boolean) => void,
   side: boolean,
+  linked: LinkedBindings | undefined,
 ): [string, WebAssembly.ImportValue] {
   if (typeof value !== "function") return [name, value];
   const normal = side && namespace === "env" && (name === "bun_core_idle" || name === "bun_core_poll");
+  // A function the linker bound from another module of the group is a call between WebAssembly
+  // modules, such as the engine's malloc and free. A JavaScript observer there would put a host
+  // round trip on every one of those calls. Only the two event-loop waits are observed.
+  if (!normal && linked?.[namespace]?.[name] === value) return [name, value];
   const force = namespace === "wasi_snapshot_preview1" && (name === "fd_write" || name === "proc_exit");
   return [name, (...args: unknown[]) => { capture(normal, force); return Reflect.apply(value, undefined, args); }];
 }
 
-export function observeMemoryImports(imports: WebAssembly.Imports, capture: (normal: boolean, force: boolean) => void, side: boolean): WebAssembly.Imports {
+/**
+ * Wraps host imports so each call can answer a pending telemetry request. `linked` holds the
+ * bindings the linker supplied for a side module; those keep their direct calls.
+ */
+export function observeMemoryImports(imports: WebAssembly.Imports, capture: (normal: boolean, force: boolean) => void, side: boolean, linked?: LinkedBindings): WebAssembly.Imports {
   const result: WebAssembly.Imports = {};
-  for (const [namespace, entries] of Object.entries(imports)) result[namespace] = Object.fromEntries(Object.entries(entries).map(([name, value]) => observeMemoryImport(namespace, name, value, capture, side)));
+  for (const [namespace, entries] of Object.entries(imports)) result[namespace] = Object.fromEntries(Object.entries(entries).map(([name, value]) => observeMemoryImport(namespace, name, value, capture, side, linked)));
   return result;
 }

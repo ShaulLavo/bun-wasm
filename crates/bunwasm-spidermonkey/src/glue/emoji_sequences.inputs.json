@@ -1,0 +1,71 @@
+{
+  "profile": {
+    "intlApi": false,
+    "irregexpUnicode": "icu4x-subset",
+    "stringProperties": "generated-unicode-emoji"
+  },
+  "unicodeVersion": "18.0.0",
+  "emojiVersion": "18.0",
+  "inputs": [
+    {
+      "name": "emoji-sequences.txt",
+      "url": "https://www.unicode.org/Public/18.0.0/emoji/emoji-sequences.txt",
+      "sha256": "1823dce71f3dd9cb0ad1976797baee4ffbdc1909756f43af8ce4c57f732843a4"
+    },
+    {
+      "name": "emoji-zwj-sequences.txt",
+      "url": "https://www.unicode.org/Public/18.0.0/emoji/emoji-zwj-sequences.txt",
+      "sha256": "f61b5213bdf85a57741a9f903cb38d0f39a3d13be6ff4aca3b39857e859a9191"
+    }
+  ],
+  "generator": [
+    {
+      "path": "spidermonkey/emoji-sequences.ts",
+      "sha256": "48df529b0502db66950b66375f457c09b8dd18697351c9a0668dbdcad0fb5e42",
+      "bytes": 12054
+    },
+    {
+      "path": "spidermonkey/generate-emoji-sequences.ts",
+      "sha256": "70231de45edda50c2dae5131bf2dceb272c05515c9a97d5363780d55f67d6a2f",
+      "bytes": 1684
+    },
+    {
+      "path": "crates/bunwasm-spidermonkey/src/glue/emoji.rs",
+      "sha256": "49c424e5f854ca809cd4302bd40e159e9c81286551c67377a0d560b26d394f62",
+      "bytes": 1939
+    }
+  ],
+  "output": {
+    "path": "crates/bunwasm-spidermonkey/src/glue/emoji_sequences.rs",
+    "sha256": "af34475cbee2f676c78e1ee2d2679d2cd33d6f205fab5bae28ca3c9d53247006",
+    "bytes": 91484
+  },
+  "properties": {
+    "Emoji_Keycap_Sequence": {
+      "count": 12,
+      "checksum": "854375afd9a21e45"
+    },
+    "RGI_Emoji_Modifier_Sequence": {
+      "count": 675,
+      "checksum": "66ba0d062f171b0a"
+    },
+    "RGI_Emoji_Flag_Sequence": {
+      "count": 259,
+      "checksum": "75b97c52bf736712"
+    },
+    "RGI_Emoji_Tag_Sequence": {
+      "count": 3,
+      "checksum": "7c15482c5f713a16"
+    },
+    "RGI_Emoji_ZWJ_Sequence": {
+      "count": 1614,
+      "checksum": "2c2801f73b4844e8"
+    }
+  },
+  "basicEmoji": {
+    "source": "ICU4X 2.4.0 compiled data",
+    "inputRanges": 301,
+    "inputStrings": 207
+  },
+  "unsupported": []
+}

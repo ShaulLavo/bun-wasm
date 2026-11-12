@@ -1,0 +1,270 @@
+[
+  {
+    "name": "cn-equal",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "cn-case-insensitive",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "A.COM"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "cn-trailing-dot",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com."
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "cn-mismatch",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "b.com"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "cn-leading-dot-rejected",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": ".a.com"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "cn-wildcard-one-label",
+    "hostname": "b.a.com",
+    "cert": {
+      "subject": {
+        "CN": "*.a.com"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "cn-wildcard-tld-rejected",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "*.com"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "cn-wildcard-multiple-rejected",
+    "hostname": "b.a.com",
+    "cert": {
+      "subject": {
+        "CN": "b**.a.com"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "cn-wildcard-embedded",
+    "hostname": "bxa.a.com",
+    "cert": {
+      "subject": {
+        "CN": "ab*cd.a.com"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "san-wins-over-cn",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "b.com"
+      },
+      "subjectaltname": "DNS:a.com"
+    },
+    "valid": true
+  },
+  {
+    "name": "san-mismatch-does-not-fallback-to-cn",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      },
+      "subjectaltname": "DNS:b.com"
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported-san-allows-cn",
+    "hostname": "a.b.a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.b.a.com"
+      },
+      "subjectaltname": "URI:https://a.b.a.com/"
+    },
+    "valid": true
+  },
+  {
+    "name": "empty-dns-san-suppresses-cn",
+    "hostname": "a.com",
+    "cert": {
+      "subject": {
+        "CN": "a.com"
+      },
+      "subjectaltname": "DNS:"
+    },
+    "valid": false
+  },
+  {
+    "name": "empty-certificate",
+    "hostname": "a.com",
+    "cert": {},
+    "valid": false
+  },
+  {
+    "name": "quoted-comma-san",
+    "hostname": "example.com",
+    "cert": {
+      "subjectaltname": "DNS:\"foo,bar.example\", DNS:example.com"
+    },
+    "valid": true
+  },
+  {
+    "name": "quoted-escaped-san",
+    "hostname": "example.com",
+    "cert": {
+      "subjectaltname": "DNS:\"foo\\\"bar.example\", DNS:example.com"
+    },
+    "valid": true
+  },
+  {
+    "name": "malformed-quoted-san",
+    "hostname": "a.com",
+    "cert": {
+      "subjectaltname": "DNS:\"a.com"
+    },
+    "throws": "ERR_TLS_CERT_ALTNAME_FORMAT"
+  },
+  {
+    "name": "unicode-host-idna",
+    "hostname": "測試.example",
+    "cert": {
+      "subjectaltname": "DNS:xn--g6w251d.example"
+    },
+    "valid": true
+  },
+  {
+    "name": "idna-wildcard-is-literal",
+    "hostname": "xn--foobar.example",
+    "cert": {
+      "subjectaltname": "DNS:xn--*.example"
+    },
+    "valid": false
+  },
+  {
+    "name": "fullwidth-dot-idna",
+    "hostname": "a。example.com",
+    "cert": {
+      "subjectaltname": "DNS:a.example.com"
+    },
+    "valid": true
+  },
+  {
+    "name": "nul-host-rejected",
+    "hostname": "a\u0000.example.com",
+    "cert": {
+      "subjectaltname": "DNS:a.example.com"
+    },
+    "valid": false
+  },
+  {
+    "name": "path-host-rejected",
+    "hostname": "a/example.com",
+    "cert": {
+      "subjectaltname": "DNS:a.example.com"
+    },
+    "valid": false
+  },
+  {
+    "name": "ipv4-san",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subject": {
+        "CN": "8.8.8.8"
+      },
+      "subjectaltname": "IP Address:8.8.8.8"
+    },
+    "valid": true
+  },
+  {
+    "name": "ipv4-dns-san-rejected",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subjectaltname": "DNS:8.8.8.8"
+    },
+    "valid": false
+  },
+  {
+    "name": "ipv6-canonical-match",
+    "hostname": "2001:db8::1",
+    "cert": {
+      "subjectaltname": "IP Address:2001:DB8:0:0:0:0:0:1"
+    },
+    "valid": true
+  },
+  {
+    "name": "ipv6-nonmatch",
+    "hostname": "::1",
+    "cert": {
+      "subjectaltname": "IP Address:::2"
+    },
+    "valid": false
+  },
+  {
+    "name": "ipv6-zone-id-matches",
+    "hostname": "fe80::1%eth0",
+    "cert": {
+      "subjectaltname": "IP Address:FE80::1"
+    },
+    "valid": true
+  },
+  {
+    "name": "cidr-is-not-ip-san",
+    "hostname": "8.8.8.8",
+    "cert": {
+      "subjectaltname": "IP Address:8.8.8.0/24"
+    },
+    "valid": false
+  },
+  {
+    "name": "cn-array",
+    "hostname": "foo.com",
+    "cert": {
+      "subject": {
+        "CN": [
+          "bar.com",
+          "foo.com"
+        ]
+      }
+    },
+    "valid": true
+  }
+]

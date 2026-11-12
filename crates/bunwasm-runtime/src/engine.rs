@@ -107,6 +107,17 @@ pub trait Engine: Sized + 'static {
         args: &[Self::Value],
     ) -> Result<Self::Value, Self::Value>;
 
+    /// Run a shared nested execution entry with side-owned callback/exception roots.
+    fn nested_execute(
+        &self,
+        _operation: &Self::Value,
+        _callback: &Self::Value,
+    ) -> Result<Self::Value, Self::Value> {
+        Err(self.error_value(&NativeError::type_error(
+            "This engine has no nested invocation bridge",
+        )))
+    }
+
     // --- evaluation ---
     /// Evaluate a classic script whose first line is line `first_line` (1 is
     /// normal; the CommonJS wrapper uses -1 so the file starts at line 1).
@@ -142,6 +153,10 @@ pub trait Engine: Sized + 'static {
     // --- introspection for console.log / util.types ---
     fn is_promise(&self, v: &Self::Value) -> bool;
     fn is_proxy(&self, v: &Self::Value) -> bool;
+    /// None means this engine has no native namespace brand check.
+    fn is_module_namespace(&self, _v: &Self::Value) -> Option<bool> {
+        None
+    }
     fn is_detachable_buffer(&self, v: &Self::Value) -> bool;
     fn detach_buffer(&self, v: &Self::Value);
     /// A `WebAssembly.Memory` buffer over `length` bytes at `data`, without copying.
@@ -152,6 +167,26 @@ pub trait Engine: Sized + 'static {
     /// The bytes must stay valid until [`Engine::detach_wasm_memory_buffer`] detaches
     /// the buffer, and no JavaScript may run while they are invalid.
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> Self::Value;
+    /// A real SAB prefix view over session-owned, stable shared region storage.
+    ///
+    /// # Safety
+    /// The region lease outlives the engine and every view. Growth never moves it.
+    unsafe fn shared_wasm_memory_buffer(
+        &self,
+        _data: *mut u8,
+        _length: usize,
+    ) -> Result<Self::Value, Self::Value> {
+        Err(self.error_value(&NativeError::type_error(
+            "This engine has no shared-region buffer adapter",
+        )))
+    }
+
+    /// The region resource behind a SharedArrayBuffer this member allocated, or None for any
+    /// other value. The engine reads the address from its own object; JS never supplies one.
+    fn shared_buffer_resource(&self, _value: &Self::Value) -> Option<u32> {
+        None
+    }
+
     /// Detach a buffer from [`Engine::wasm_memory_buffer`], and every view of it.
     /// Already detached ones are accepted; false for any other value.
     fn detach_wasm_memory_buffer(&self, v: &Self::Value) -> bool;

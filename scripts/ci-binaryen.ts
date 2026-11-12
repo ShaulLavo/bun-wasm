@@ -1,3 +1,4 @@
+import { releaseDownload } from "./ci-release-download";
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -22,8 +23,9 @@ export async function installBinaryen(tools: string) {
     const cached = await Bun.file(archive).exists();
     const input = cached ? archive : join(stage, archiveName);
     if (!cached) {
-      execFileSync("curl", ["--fail", "--location", "--silent", "--show-error", "--connect-timeout", "15", "--max-time", "180",
-        `https://github.com/WebAssembly/binaryen/releases/download/${binaryenPin.release}/${archiveName}`, "-o", input]);
+      const response = await releaseDownload(`https://github.com/WebAssembly/binaryen/releases/download/${binaryenPin.release}/${archiveName}`);
+      if (!response.ok) throw new Error(`Binaryen download failed: ${response.status}`);
+      await Bun.write(input, response);
     }
     await verifyBinaryenArchive(input);
     if (!cached) await rename(input, archive);

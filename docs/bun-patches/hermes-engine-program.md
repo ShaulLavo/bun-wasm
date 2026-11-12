@@ -5,6 +5,21 @@ bun-wasm `404a956ffdf3fbee9c94b4875be0afe3fbe09df5`. The Hermes VM, its patch an
 are recorded separately ([Hermes on WASI](hermes-wasi.md),
 [async context](hermes-async-context.md)). Design: `docs/hermes-engine.md`.
 
+## Publication withdrawal
+
+On November 1, 2026, the owner withdrew Hermes from normal publication. The VM,
+shim, upstream patch, and engine adapter sources remain dormant. Current engine
+metadata, native and package loaders, input and receipt scopes, executable paths,
+telemetry readers, web staging, and release CI no longer select Hermes. The old
+host registration description below records the original implementation, not a
+current capability. No original artifact or receipt is deleted or relabeled.
+Original compiler-input receipt helpers and their synthetic regressions now live
+in `hermes/consumer-receipt.ts` and `hermes/consumer-receipt.test.ts`, outside
+normal publication qualification. Their evidence format and validators are unchanged. Import-delta, native telemetry,
+and source fixture probes also remain under `hermes/`, outside normal discovery.
+The dormant side recipe points to the relocated import-delta tool.
+Restoration requirements are in [Dormant Hermes source](../hermes-engine.md).
+
 ## Classification
 
 | Source | Class | Origin and change |

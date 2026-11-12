@@ -12,8 +12,11 @@ function fixture(engine: "jsc" | "quickjs") {
   const put = (base: number, index: number, value: bigint) => view.setBigUint64(base + index * 8, value, true);
   for (let index = 0; index < 24; index++) put(256, index, 0xffffffffffffffffn);
   put(128, 0, 1n); put(128, 1, 80n); put(128, 2, 10000n); put(128, 3, 20000n); put(128, 5, 0n);
-  put(256, 0, 1n); put(256, 1, engine === "jsc" ? 192n : 96n); put(256, 2, 1n);
+  put(256, 0, 1n); put(256, 1, engine === "jsc" ? 192n : 128n); put(256, 2, 1n);
   put(256, engine === "jsc" ? 21 : 9, 0n);
+  if (engine === "quickjs") {
+    put(256, 12, 0n); put(256, 13, 5000n); put(256, 14, 10000n); put(256, 15, 6000n);
+  }
   let refreshes = 0;
   let trap = false;
   const core = { exports: { memory, bun_memory_telemetry: () => 128 } };
@@ -80,10 +83,15 @@ test("a refresh trap disables all subsequent refreshes and cached reading surviv
 test("QuickJS backing stores, first failure and unknown values retain their separate meanings", () => {
   const f = fixture("quickjs");
   f.put(256, 3, 6000n); f.put(256, 5, 2048n); f.put(256, 6, 2n); f.put(256, 11, 1n);
+  f.put(256, 12, 3n); f.put(256, 13, 5000n); f.put(256, 14, 10000n); f.put(256, 15, 6000n);
   const value = f.reader.sample(true);
   expect(value.arrayBufferBytes).toBe(2048);
   expect(value.engineCounters.mallocBytes).toBe(6000);
   expect(value.engineCounters.arrayBufferCount).toBe(2);
+  expect(value.engineCounters.automaticGcCount).toBe(3);
+  expect(value.engineCounters.mallocBytesAfterAutomaticGc).toBe(5000);
+  expect(value.engineCounters.mallocGcThreshold).toBe(10000);
+  expect(value.engineCounters.currentMallocBytes).toBe(6000);
   expect(value.wasmCapacityBytes).toBe(65536);
   expect(value.failedAllocation).toBeNull();
 });
@@ -177,6 +185,30 @@ test("host import observation distinguishes the two event-loop waits from arbitr
     call();
   }
   expect(calls).toEqual([[true, false], [false, false], [false, true]]);
+});
+
+test("functions the linker bound from another module keep their direct calls, except the two waits", () => {
+  const calls: [boolean, boolean][] = [];
+  const linked = { env: { malloc: () => 0, bun_core_idle: () => 0, bun_core_poll: () => 0 } };
+  const imports = { env: { ...linked.env, host: () => 0 }, wasi_snapshot_preview1: { fd_write: () => 0 } };
+  const observed = observeMemoryImports(imports, (normal, force) => { calls.push([normal, force]); }, true, linked);
+  expect(observed.env?.malloc).toBe(linked.env.malloc);
+  for (const [namespace, name] of [["env", "malloc"], ["env", "bun_core_idle"], ["env", "bun_core_poll"], ["env", "host"], ["wasi_snapshot_preview1", "fd_write"]]) {
+    const call = observed[namespace!]?.[name!];
+    if (typeof call !== "function") throw new Error("missing observed import");
+    call();
+  }
+  expect(calls).toEqual([[true, false], [true, false], [false, false], [false, true]]);
+});
+
+test("a host function replacing a linked name is still observed", () => {
+  const calls: [boolean, boolean][] = [];
+  const linked = { env: { malloc: () => 0 } };
+  const observed = observeMemoryImports({ env: { malloc: () => 1 } }, (normal, force) => { calls.push([normal, force]); }, true, linked);
+  const call = observed.env?.malloc;
+  if (typeof call !== "function") throw new Error("missing observed import");
+  expect(call()).toBe(1);
+  expect(calls).toEqual([[false, false]]);
 });
 
 test("a late shared frame cannot resurrect a process ended while a phase sample awaits", async () => {

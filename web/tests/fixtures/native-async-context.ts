@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { createScriptEvaluation } from "../../src/script-evaluation.ts";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../../src/buffer-transfer.ts";
 import { nextMetadataSources } from "./next-metadata-source.ts";
 import { createNodeAsyncContext } from "../../scripts/async-context.ts";
+import { builtinsSource, engineHostSource, runInContextSource } from "./engine-host-context.ts";
 
 const native = process.argv[2] === "native";
 const context = createContext({
@@ -13,14 +13,7 @@ const context = createContext({
   createScriptEvaluation, isWasmMemoryBuffer, transferArrayBuffers, SLOT_NAMES: [], assert,
   continuation: native ? createNodeAsyncContext() : undefined,
 });
-const hostSource = readFileSync(new URL("../../src/engine-host.js", import.meta.url), "utf8")
-  .replace(/^import .*;\n/gm, "")
-  .replace("export function startEngineHost", "function startEngineHost");
-const bootstrap = readFileSync(new URL("../../../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
-const start = bootstrap.indexOf("  function runInContext(context, fn, thisArg, args) {");
-const end = bootstrap.indexOf("  internal.runInContext = runInContext;", start);
-assert(start >= 0 && end > start);
-runInContext(`${hostSource}
+runInContext(`${engineHostSource()}
   const host = Object.assign(Object.create(EngineHost.prototype), {
     o: { asyncContext: continuation }, internal: {}, promiseStates: new WeakMap(), tickQueued: false,
     asyncContext: undefined,
@@ -28,10 +21,8 @@ runInContext(`${hostSource}
   const native = host.valueNatives();
   host.native = native;
   const internal = { native, builtinFactories: {}, require: () => ({}) };
-  ${bootstrap.slice(start, end)}
-  internal.runInContext = runInContext;
-`, context);
-runInContext(readFileSync(new URL("../../../crates/bunwasm-runtime/src/js/builtins.js", import.meta.url), "utf8") + "(internal);", context);
+  ${runInContextSource()}`, context);
+runInContext(builtinsSource(), context);
 runInContext(`
   const storage = new (internal.builtinFactories['node:async_hooks']().AsyncLocalStorage)();
   host.installGlobals();

@@ -229,7 +229,12 @@ measurements and reproducer. These paths still end in a wasm trap:
   `crates/bunwasm-glue/src/bun_native.rs` returns 0 on the main thread, so
   `StackCheck::is_safe_to_recurse` always succeeds. Give the main thread a
   shadow-stack bound and measure the transpiler's host-per-shadow ratio before
-  choosing it.
+  choosing it. Measured on November 10, 2026 on the JSC guest: a required `.cjs`
+  file that is one chained assignment (`exports.a0 = exports.a1 = … = void 0`)
+  recurses through `P::parse_expr_common` and `parse_suffix`, two host frames and
+  about 690 host bytes per target, and traps the native launcher's 16 MiB stack
+  near 24,000 targets. JSC's parser reserve (`docs/stack-limits.md`) does not
+  change this: the transpiler runs first and reads no engine setting.
 
 ## JSC subprocess disposal timing
 
@@ -1106,3 +1111,55 @@ until those controls and independent review pass. The implementing lane owns
 all probe processes, result pipes/files and private build scratch on every exit;
 the runtime coordinator owns retained evidence until the follow-up is accepted,
 then removes it. Preserve shared targets and caches.
+
+## CLI cwd flag before the command
+
+Status: Approved.
+
+The Vite terminal regression found an unrelated CLI parser gap. In the Browser
+engine, create `stdin-script/package.json` with `{"scripts":{"probe":"bun run ../stdin-probe.ts"}}`
+and a `stdin-probe.ts` in the parent folder. `bun --cwd stdin-script run probe`
+tries to open `/home/user/stdin-script` as a source file and fails with
+`EISDIR: illegal operation on a directory`. `sh -c 'cd stdin-script && bun run probe'`
+runs the intended script. This reproduced once in desktop Chromium on November 6
+with current main's guest. It is not the terminal EOF bug.
+
+`crates/bunwasm-cli/src/main.rs` has no `--cwd` parser branch. Add the global cwd
+option before command classification, then verify relative module resolution,
+package scripts, missing directories, and passthrough arguments on all engines.
+The terminal regression uses shell `cd` so it does not depend on this unsupported
+flag. The failing command and error above came from the live terminal, before the
+regression was changed to shell `cd`.
+
+## Generated-function imports with hooks and module records
+
+Status: Approved. Reproduced on November 6, 2026, during the Next playground work.
+
+The `function-import-review` fixture has two identical failures on main `16de0a5a3`
+and the caller-origin optimization candidate `c70cd3024` in the Browser engine with
+printed context hooks and module records:
+
+```text
+shadow with FAIL TypeError: __bunwasm_dynamicImport is not a function
+symbol rejection FAIL Error: assertion
+```
+
+Both guests pass `caller-source-origin`, its eval and explicit-sourceURL controls,
+and `function-import`. This is not introduced by the caller-origin fast path.
+Reproduce after building the Browser guest:
+
+```sh
+source env.sh
+scripts/test.sh --no-build --engine browser --context hooks --modules records function-import-review
+```
+
+Start with `tests/fixtures/function-import-review/nested/review.mjs:25-30`,
+`crates/bunwasm-runtime/src/js/function.ts:8-12`, and the generated-function path in
+`crates/bunwasm-runtime/src/js/source_prepare.ts`. Check the intrinsic import helper
+under a `with` Proxy that claims every name, and whether Symbol conversion rejects
+asynchronously with the guest's TypeError. Keep the upstream-style expectations.
+The paired raw output, exact direct-host command and cleanup are in
+`/work/reports/wave-20261106/next-dev-experiment/origin-paired-controls/` and
+`origin-guest-controls.py` in its parent directory. Both pairs ran to completion
+and produced identical output. Further diagnosis is deferred until the requested
+Next hot-edit and production increments ship.

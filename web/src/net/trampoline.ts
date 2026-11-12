@@ -111,10 +111,8 @@ const VIA_IMPORT = 0xffffffff;
 export const HOST_CALL_FD = 0x7fffb0b0;
 
 /** The guest's slot table, or null when the module has none (another program). */
-function slotTable(instance: WebAssembly.Instance): { view: DataView; ptr: number; count: number } | null {
-  const exports = instance.exports;
-  const slots = exports.bun_wasm_host_slots;
-  const memory = exports.memory;
+function slotTable(instance: WebAssembly.Instance, memory: unknown): { view: DataView; ptr: number; count: number } | null {
+  const slots = instance.exports.bun_wasm_host_slots;
   if (typeof slots !== "function" || !(memory instanceof WebAssembly.Memory)) return null;
   const ptr = (slots as () => number)() >>> 0;
   const view = memoryViews(memory).view();
@@ -129,8 +127,8 @@ function slotTable(instance: WebAssembly.Instance): { view: DataView; ptr: numbe
  * null when the module has no slot table. For engines where a cross-module function in the table
  * traps on call_indirect (`?slots=imports` in the playground).
  */
-export function installHostSlotsViaImport(instance: WebAssembly.Instance, impls: SlotImpls): ((slot: number, args: number[]) => number) | null {
-  const table = slotTable(instance);
+export function installHostSlotsViaImport(instance: WebAssembly.Instance, impls: SlotImpls, memory: unknown = instance.exports.memory): ((slot: number, args: number[]) => number) | null {
+  const table = slotTable(instance, memory);
   if (!table) return null;
   const fns: (SlotFunction | undefined)[] = SLOT_NAMES.map((slot) => impls[slot]);
   fns.forEach((fn, index) => {

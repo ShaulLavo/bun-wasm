@@ -138,7 +138,7 @@ test("JSC side uses PIC build-std and spills the VM side before conversion; stri
     expect(first).toContain("-DENGINE_CTOR_VALUE=jsc_ctor_value");
     expect(first).toContain("--shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry");
     expect(first).toContain("--export=jsc_register --export=jsc_run");
-    expect(first).toContain("--export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh");
+    expect(first).toContain("--export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh --export=jsc_allocation_boundary");
     expect(first).not.toContain("crt1");
     expect(first).not.toContain("-lc ");
     expect(first.indexOf("--spill-pointers")).toBeLessThan(first.indexOf("engine-explicit-init.ts jsc"));

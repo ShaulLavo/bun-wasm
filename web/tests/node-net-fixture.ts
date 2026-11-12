@@ -20,7 +20,7 @@ export function networkFixture(overrides: Record<string, unknown> = {}) {
     if (!fn) throw new Error(`Missing native ${name}`);
     return Reflect.apply(fn, null, args);
   };
-  const native = new Proxy({ hostCaps: { connect: true }, wake() {} }, {
+  const native = new Proxy({ hostCaps: { connect: true }, wake() {}, getAsyncContext: () => undefined }, {
     get(target, name: string) {
       if (name in overrides) return overrides[name];
       if (name === "latin1Decode") return (bytes: Uint8Array) => Buffer.from(bytes).toString("latin1");
@@ -36,6 +36,7 @@ export function networkFixture(overrides: Record<string, unknown> = {}) {
     toUint8: (value: Uint8Array) => value, printError: (error: unknown) => { throw error; },
     realTimers: { setImmediate }, concatBytes: (parts: readonly Uint8Array[]) => Buffer.concat(parts),
     ioPending: () => 0, pumpIo: () => false,
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => fn.apply(receiver, args),
     builtin: (name: string) => {
       if (name === "node:stream") return { Readable, Writable, Duplex, getDefaultHighWaterMark: () => getDefaultHighWaterMark(false) };
       if (name === "node:net") return net;

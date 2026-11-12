@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
 import { programProfile, type PairedEngine } from "../src/engine-kind.ts";
-import { producerEngines, requireClosureFiles, verifyLauncher } from "./producer-closure.ts";
+import { producerEngines, producerLauncherPath, producerLauncherReceiptPath, producerMember, requireClosureFiles, verifyManifestLauncher } from "./producer-closure.ts";
 
 export const firstFsSource = `
 const now = performance.now.bind(performance);
@@ -88,7 +88,7 @@ export function verifyMeasurementClosure(directory: string) {
   if (!value || typeof value !== "object" || !("schema" in value) || value.schema !== 1
     || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Invalid reusable producer closure");
   if (!("profile" in value) || value.profile !== "split" || !("engines" in value)
-    || !isDeepStrictEqual(value.engines, producerEngines("split"))) throw new Error("Measurement requires the canonical three-engine split closure");
+    || !isDeepStrictEqual(value.engines, producerEngines("split"))) throw new Error("Measurement requires the canonical supported paired-engine split closure");
   const files = value.files.map(artifactRecord);
   requireClosureFiles("split", files);
   const artifacts = files.map(file => {
@@ -97,10 +97,9 @@ export function verifyMeasurementClosure(directory: string) {
     return actual;
   });
   const source = sourceIdentity(value);
-  const launcher = join(unit, "launcher/bun-wasm");
-  const receipt = `${launcher}.launcher.json`;
-  const verified = verifyLauncher(launcher, JSON.parse(readFileSync(receipt, "utf8")), source);
-  if (!("launcher" in value) || !isDeepStrictEqual(value.launcher, { path: launcher, receipt, ...verified })) throw new Error("Manifest launcher differs from its original receipt");
+  verifyManifestLauncher(unit, "launcher" in value ? value.launcher : undefined, source);
+  const launcher = producerMember(unit, producerLauncherPath, "launcher");
+  const receipt = producerMember(unit, producerLauncherReceiptPath, "launcher receipt");
   return { source, manifest: fingerprint(manifestPath), launcher: fingerprint(launcher), launcherReceipt: fingerprint(receipt), artifacts };
 }
 

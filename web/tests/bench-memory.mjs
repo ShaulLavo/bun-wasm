@@ -52,7 +52,7 @@ async function sample(browser, item) {
     await context.addInitScript(countRootCommits);
     const page = await context.newPage();
     const start = performance.now();
-    await page.goto(new URL("playground/?engine=browser", base).href);
+    await page.goto(new URL("playground/?engine=browser&prompt=off", base).href);
     const status = await ready(page);
     const readyMs = performance.now() - start;
     assert.match(status, /ready/);

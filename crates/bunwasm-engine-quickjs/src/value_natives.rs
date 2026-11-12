@@ -53,6 +53,19 @@ fn eval_arguments<E: Engine>(e: &E, args: &[E::Value]) -> Result<(String, String
 
 pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
     let mut list: Vec<(&'static str, ValueFn<E>)> = Vec::new();
+    list.push((
+        "wasmNestedExecute",
+        Rc::new(|e: &E, args: &[E::Value]| e.nested_execute(&arg(e, args, 0), &arg(e, args, 1))),
+    ));
+    list.push((
+        "sharedBufferResource",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(match e.shared_buffer_resource(&arg(e, args, 0)) {
+                Some(resource) => e.value_from(Val::Num(f64::from(resource))),
+                None => e.undefined(),
+            })
+        }),
+    ));
     let c = core.clone();
     list.push((
         "compileCjs",
@@ -142,6 +155,13 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_promise(&arg(e, args, 0)).into()))),
     ));
     list.push((
+        "isModuleNamespaceObject",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            Ok(e.is_module_namespace(&arg(e, args, 0))
+                .map_or_else(|| e.undefined(), |branded| e.value_from(branded.into())))
+        }),
+    ));
+    list.push((
         "isError",
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_error(&arg(e, args, 0)).into()))),
     ));
@@ -229,7 +249,15 @@ pub(crate) fn bootstrap<E: Engine>(
     e.set(
         &native,
         "wasmMemoryBuffer",
-        e.new_function("wasmMemoryBuffer", wasm_memory_buffer(memory_span)),
+        e.new_function("wasmMemoryBuffer", wasm_memory_buffer(memory_span.clone())),
+    )?;
+    e.set(
+        &native,
+        "wasmSharedMemoryBuffer",
+        e.new_function(
+            "wasmSharedMemoryBuffer",
+            wasm_memory_buffer(memory_span.clone()),
+        ),
     )?;
     let mut groups = std::collections::HashMap::new();
     for (name, function) in functions {
@@ -256,19 +284,38 @@ pub(crate) fn bootstrap<E: Engine>(
 /// session's memory resource; JavaScript never supplies an address.
 fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
     Rc::new(move |e: &E, args: &[E::Value]| {
+        let span = memory_span(e, &[arg(e, args, 0)])?;
+        let shared = e.to_val(&e.get(&span, "shared")?) == Val::Bool(true);
+        let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
+        if shared {
+            let visible = visible_length(&e.to_val(&arg(e, args, 1)), length)
+                .map_err(|err| e.error_value(&err))?;
+            // SAFETY: group-backed resource storage stays stable and session-leased, and a
+            // shared length never shrinks, so a prefix of it stays inside the region.
+            return unsafe { e.shared_wasm_memory_buffer(data, visible) };
+        }
         let previous = arg(e, args, 1);
         if !e.is_undefined(&previous) && !e.detach_wasm_memory_buffer(&previous) {
             return Err(e.error_value(&NativeError::type_error(
                 "Expected a WebAssembly.Memory buffer",
             )));
         }
-        let span = memory_span(e, &[arg(e, args, 0)])?;
-        let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
         // SAFETY: the bytes lie inside this process's linear memory. Core's store keeps
         // them until the session ends and moves them only by growth, after which the
         // WebAssembly polyfill detaches this buffer before user code runs.
         Ok(unsafe { e.wasm_memory_buffer(data, length) })
     })
+}
+
+/// The requested prefix of a shared memory's current length, or all of it when not requested.
+fn visible_length(requested: &Val, length: usize) -> Result<usize, NativeError> {
+    match requested {
+        Val::Undefined => Ok(length),
+        Val::Num(value) if *value >= 0.0 && value.fract() == 0.0 && *value <= length as f64 => {
+            Ok(*value as usize)
+        }
+        _ => Err(NativeError::error("invalid shared memory view length")),
+    }
 }
 
 fn checked_span(span: &Val) -> Result<(*mut u8, usize), NativeError> {

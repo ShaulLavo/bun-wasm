@@ -33,10 +33,13 @@ function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: 
 }
 
 function runtimeContext() {
-  return createContext({
+  const context = createContext({
     process, URL, createScriptEvaluation, NativeString: String, transferArrayBuffers: () => {},
     isWasmMemoryBuffer: () => false, nativePromiseHasInstance: () => false,
   });
+  // engine-host.js captures its context's evaluator when it loads.
+  context.nativeEval = runInContext("globalThis.eval", context);
+  return context;
 }
 
 export function productionHostEvaluation(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation {
@@ -63,6 +66,7 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
     correctPreparedColumn: mapping.correctPreparedColumn,
     mapPosition: () => null,
     mainPath: () => filename,
+    modulePath: (name: string) => name,
     moduleFormat: (file: string) => file.endsWith(".json") ? "json" : "cjs",
     readFileUtf8: (file: string) => readFileSync(file, "utf8"),
     cwd: () => path.dirname(filename),

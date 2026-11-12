@@ -4,7 +4,7 @@ interface NamedModules {
 }
 
 interface ModuleOptions {
-  named?: NamedModules;
+  named: NamedModules;
   source(key: string): string;
   contentUrl(source: string, key: string): string;
   paths: Map<string, string>;
@@ -76,7 +76,6 @@ export class ContentModules {
   }
 
   private reserve(key: string): string {
-    if (!this.options.named) throw Object.assign(new Error(`Circular ES module imports are not supported by the browser engine yet (${key})`), { code: "ERR_CIRCULAR_IMPORT" });
     const store = this.options.named;
     const url = store.url(key);
     this.urls.set(key, { kind: "named", url, store, ready: false });

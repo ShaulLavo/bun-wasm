@@ -1419,6 +1419,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-spidermonkey"
+version = "0.0.53"
+dependencies = [
+ "bunwasm-spidermonkey",
+]
+
+[[package]]
 name = "bunwasm-glue"
 version = "0.0.53"
 dependencies = [
@@ -1512,6 +1519,7 @@ dependencies = [
  "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
+ "bunwasm-nested",
  "bunwasm-posix",
  "bunwasm-semver",
  "bytemuck",
@@ -1538,6 +1546,7 @@ dependencies = [
  "pbkdf2",
  "pkcs8",
  "rand_core 0.6.4",
+ "serde",
  "serde_json",
  "sha1",
  "sha2",
@@ -1547,6 +1556,7 @@ dependencies = [
  "tar",
  "url",
  "wasmi",
+ "wasmparser 0.228.0",
  "x25519-dalek",
  "zstd-sys",
 ]
@@ -1559,6 +1569,21 @@ dependencies = [
  "bun_core",
  "bun_semver",
  "bunwasm-bun-jsc",
+]
+
+[[package]]
+name = "bunwasm-spidermonkey"
+version = "0.0.53"
+dependencies = [
+ "cc",
+ "encoding_c",
+ "encoding_c_mem",
+ "icu_casemap",
+ "icu_collections",
+ "icu_normalizer",
+ "icu_properties",
+ "smallvec",
+ "write16",
 ]
 
 [[package]]
@@ -2296,6 +2321,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "encoding_c"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9af727805f3b0d79956bde5b35732669fb5c5d45a94893798e7b7e70cfbf9cc1"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
+name = "encoding_c_mem"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a80a16821fe8c7cab96e0c67b57cd7090e021e9615e6ce6ab0cf866c44ed1f0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2808,6 +2851,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "icu_casemap"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a6f143e9349267b80ae071a6ec25d4797c45756d8b2671a8b24b7b25b81ab94"
+dependencies = [
+ "icu_casemap_data",
+ "icu_collections",
+ "icu_locale_core",
+ "icu_properties",
+ "icu_provider",
+ "potential_utf",
+ "writeable",
+ "zerovec",
+]
+
+[[package]]
+name = "icu_casemap_data"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71a5c321208537711696af55bc2ab5dad939e4f6e0aef92dd6a2555deceedf3a"
+
+[[package]]
 name = "icu_collator"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2840,6 +2905,7 @@ checksum = "fe090a42a0d3140fed8c63263ed1fecc02422cb2f4bfe55cd8de2de1b8e105dd"
 dependencies = [
  "displaydoc",
  "potential_utf",
+ "serde",
  "utf8_iter",
  "yoke",
  "zerofrom",
@@ -5529,6 +5595,9 @@ name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936"
+dependencies = [
+ "smallvec",
+]
 
 [[package]]
 name = "writeable"

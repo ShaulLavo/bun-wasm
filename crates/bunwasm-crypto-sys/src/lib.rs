@@ -57,4 +57,5 @@ unsafe extern "C" {
     ) -> usize;
 }
 
+pub mod tls;
 pub mod x509;

@@ -89,7 +89,7 @@ test("matrix cleanup sends a trusted terminal Ctrl-C and waits for status 130", 
     await page.evaluate(installKeyboardStopFixture, server.url.href);
     const result = await serverCommand({ page, context, app: { id: "keyboard-fixture" }, engine: "browser",
       command: { name: "dev", args: ["run", "fixture.ts"], check: { kind: "http", text: "unused" } },
-      options: { timeout: 2000, cleanupTimeout: 2000, output: directory }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts fixture.ts\nfixture output\n",
+      options: { timeout: 2000, cleanupTimeout: 2000, output: directory }, terminalText: async () => "$ bun run .matrix-command.ts fixture.ts\nfixture output\n",
     });
     expect(result.status).toBe("fail");
     expect("harnessCleanup" in result ? result.harnessCleanup : undefined).toBeUndefined();

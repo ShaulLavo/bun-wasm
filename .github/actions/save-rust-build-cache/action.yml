@@ -1,0 +1,29 @@
+name: Save learned Rust compiler objects
+description: Save changed bounded object inventories on main and retain two snapshots per job
+inputs:
+  key:
+    description: Dependency namespace from the Rust object restore
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: budget
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      shell: bash
+      env:
+        CACHE_PATH: ${{ runner.temp }}/sccache
+        SNAPSHOT_PATH: ${{ runner.temp }}/sccache-inventory.json
+      run: |
+        bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" plan "$CACHE_PATH" "$SNAPSHOT_PATH"
+    - uses: actions/cache/save@v4
+      id: publish
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true'
+      with:
+        path: ${{ runner.temp }}/sccache
+        key: ${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Retain two compiler object snapshots after replacement is visible
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true' && steps.publish.outcome == 'success'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" prune "${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}"

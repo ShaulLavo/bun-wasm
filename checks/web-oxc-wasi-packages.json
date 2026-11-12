@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/oxc-wasi-packages/recipe.test.ts",
+  "localRuntime": true
+}

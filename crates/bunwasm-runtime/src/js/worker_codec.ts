@@ -112,10 +112,11 @@
           const meta = { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed };
           if (!snapshot.lane) return ["port", meta, queue];
-          return ["port", { ...meta, side: snapshot.lane.side }, queue, visit(snapshot.lane.buffer, true)];
+          return ["port", { ...meta, side: snapshot.lane.side, poolIndex: snapshot.lane.poolIndex }, queue, visit(snapshot.lane.buffer, true)];
         }
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
+        if (internal.isWasmCapability?.(object)) throw cloneError("WebAssembly tables and globals cannot be cloned");
         if (isSharedBuffer(object)) return sharedNode(object);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object, implicit);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object, implicit);
@@ -136,7 +137,7 @@
         }
         if (Array.isArray(object)) return ["array", object.length, entries(object, implicit)];
         if (object instanceof Number || object instanceof String || object instanceof Boolean || tag(object) === "BigInt") return ["boxed", visit(object.valueOf(), implicit)];
-        if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory"].includes(tag(object))) throw cloneError();
+        if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory", "WebAssembly.Table", "WebAssembly.Global"].includes(tag(object))) throw cloneError();
         return ["object", entries(object, implicit)];
       }
       function visit(value: unknown, implicit = false, bufferView = false): number {
@@ -189,7 +190,13 @@
           };
           const routes = sharedObjects?.routes;
           if (routes?.enabled) routes.transaction(stage, finish);
-          else { stage(); finish(); }
+          else {
+            stage();
+            // Without a broker transaction, delivery already made this receipt observable.
+            if (deliver) publication?.commit();
+            finish();
+          }
+          publication?.commit();
           phase = "committed";
         } catch (error) { abort(); throw error; }
       }
@@ -213,11 +220,20 @@
       hydrate(graph, memory);
       function hydrate(graph: Graph, values?: Map<number, unknown>) {
         for (const [index, node] of graph.nodes.entries()) {
-          if (node[0] === "shared") sharedObjects!.read({ id: node[1], byteLength: node[2] });
+          if (node[0] === "shared") cacheShared(node, index, values);
           if (node[0] === "wasm-module" || node[0] === "wasm-memory") cacheWasm(node, graph, index, values);
           if (node[0] !== "port") continue;
           for (const [, pending] of node[1].pending) hydrate(pending);
         }
+      }
+      function sharedBuffer(node: Extract<Node, ["shared", string, number]>) {
+        const buffer = sharedObjects!.read({ id: node[1], byteLength: node[2] });
+        if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
+        return buffer;
+      }
+      function cacheShared(node: Extract<Node, ["shared", string, number]>, index: number, values?: Map<number, unknown>) {
+        const buffer = sharedBuffer(node);
+        if (!values?.has(index)) values?.set(index, buffer);
       }
       function cacheWasm(node: WasmNode, graph: Graph, index: number, values?: Map<number, unknown>) {
         const value = readWasm(node);
@@ -268,12 +284,7 @@
             const buffer = node[2] ? new ArrayBuffer(bytes.length, { maxByteLength: node[2] }) : new ArrayBuffer(bytes.length);
             new Uint8Array(buffer).set(bytes); result = buffer; break;
           }
-          case "shared": {
-            const reference = { id: node[1], byteLength: node[2] };
-            const buffer = sharedObjects!.read(reference);
-            if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
-            result = buffer; break;
-          }
+          case "shared": result = sharedBuffer(node); break;
           case "wasm-module": case "wasm-memory": result = readWasm(node); break;
           case "node-buffer": result = readNodeBuffer(node); break;
           case "view": result = readView(node); break;
@@ -291,8 +302,8 @@
           case "boxed": result = Object(read(node[1])); break;
           case "port": {
             const queue: unknown[] = [];
-            const { side, ...meta } = node[1];
-            const lane = node.length === 4 && side !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side } : null;
+            const { side, poolIndex, ...meta } = node[1];
+            const lane = node.length === 4 && side !== undefined && poolIndex !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side, poolIndex } : null;
             const port = hooks.restore({ ...meta, queue, lane });
             memory.set(index, port); restored.push(port);
             const messages = read(node[2]);
@@ -381,9 +392,10 @@
     // A port node may name its channel's shared lane and the side of it this end reads.
     function validPortNode(node: unknown[]) {
       if (!validPort(node[1], depth, nodeBuffer, shared) || !ref(node[2])) return false;
-      const side = (node[1] as { side?: unknown }).side;
-      if (node.length === 3) return side === undefined;
-      return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1);
+      const { side, poolIndex } = node[1] as { side?: unknown; poolIndex?: unknown };
+      if (node.length === 3) return side === undefined && poolIndex === undefined;
+      return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1)
+        && (poolIndex === null || typeof poolIndex === "number" && Number.isInteger(poolIndex) && poolIndex >= 0 && poolIndex < 32);
     }
     function valid(node: unknown): boolean {
       if (!Array.isArray(node)) return false;

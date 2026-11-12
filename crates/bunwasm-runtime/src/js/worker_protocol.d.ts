@@ -13,7 +13,8 @@ declare namespace BunWasm {
     lane?: PortLane | null;
   }
   /** A channel's shared lane and which of its two rings this end reads. */
-  interface PortLane { buffer: SharedArrayBuffer; side: 0 | 1; }
+  interface LaneBacking { buffer: SharedArrayBuffer; poolIndex: number | null; }
+  interface PortLane extends LaneBacking { side: 0 | 1; }
   interface SharedLane {
     reserve(text: string): { commit(): void; abort(): void } | null;
     drain(consume: (text: string) => void): number;
@@ -29,7 +30,7 @@ declare namespace BunWasm {
     | ["node-buffer", number, number, number] | ["shared", string, number]
     | ["wasm-module", string] | ["wasm-memory", string, number]
     | ["error", string, string, string | null, number] | ["boxed", number]
-    | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number, number];
+    | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: never; poolIndex?: never }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side: 0 | 1; poolIndex: number | null }, number, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
   interface PortTransfer {
     snapshot: PortSnapshot;
@@ -52,11 +53,12 @@ declare namespace BunWasm {
     reference(buffer: SharedArrayBuffer): SharedReference;
     referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
     publish(): void;
+    commit(): void;
     abort(): void;
   }
   interface SharedObjects {
     readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
-    readonly lanes?: { create(): SharedArrayBuffer; open(buffer: SharedArrayBuffer, side: 0 | 1): SharedLane };
+    readonly lanes?: { create(): LaneBacking; open(backing: LaneBacking, side: 0 | 1): SharedLane };
     readonly routes?: {
       readonly owner: string;
       readonly enabled: boolean;
@@ -116,6 +118,8 @@ declare namespace BunWasm {
     /** Live executable-access query; the native bridge consumes/cancels its request. */
     procAccess(path: string, cwd: string): number;
     procSpawn(request: string): number;
+    /** Copied diagnostic text (at most 4096 UTF-8 bytes), or a negative errno. */
+    procSpawnError(pid: number): string | number;
     procJobOf(pid: number): number;
     procPipe(): [read: number, write: number] | number;
     /** WASI fd_close on a runtime descriptor. */
@@ -138,6 +142,7 @@ declare namespace BunWasm {
     base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
+    isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;
   }
   /** `subscriptions` lists what the idle event loop may sleep on (procPoll format); see net.js ioWait. */
@@ -149,6 +154,16 @@ declare namespace BunWasm {
     subscriptions?(): Uint8Array;
     /** A filesystem watch, stepped before the other waiters in each pump (see net.js pumpIo). */
     watch?: boolean;
+  }
+  /** The frame a resource's own callbacks run in, captured when it starts (resource_frame.ts). */
+  interface ResourceFrame {
+    /** Calls `callback` in the resource's frame; once released, calls nothing and returns undefined. */
+    run<This, Args extends readonly unknown[], R>(callback: (this: This, ...args: Args) => R, receiver: This, args: Args): R | undefined;
+    /** Runs the waiter's own step and fail in the frame, on the same waiter object. Once released,
+     * step reports done without running, and fail runs only for a step that threw before then. */
+    bind<W extends IoWaiter>(waiter: W): W;
+    /** Drops the frame. Idempotent; a dispatch already running keeps its frame until it returns. */
+    release(): void;
   }
   interface NetWaiterModule {
     addWaiter<W extends IoWaiter>(waiter: W): W;
@@ -176,6 +191,7 @@ declare namespace BunWasm {
     cancelIoWaiters(): void;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
+    require(name: "resource_frame"): { capture(): ResourceFrame };
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
     workerErrorData?: (error: unknown) => WorkerErrorData;
@@ -187,6 +203,7 @@ declare namespace BunWasm {
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;
     isWasmMemoryBuffer?: (value: unknown) => boolean;
+    isWasmCapability?: (value: unknown) => boolean;
   }
 }
 interface ArrayBuffer {
@@ -216,7 +233,11 @@ declare namespace BunWasm {
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
     workerNoWarnings?: boolean;
-    require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild };
+    require(name: "spawn"): {
+      spawn(argv: string[], options: Record<string, unknown>): WorkerChild;
+      spawnWorker(argv: string[], options: Record<string, unknown>, worker: object): WorkerChild;
+      which(command: string, options?: { PATH?: string; cwd?: string }): string | null;
+    };
     require(name: "worker_stdio"): {
       readable(source: ReadableStream<Uint8Array>): { stream: WorkerReadable; drained: Promise<void> };
       writable(sink: { write(chunk: unknown): unknown; end(): void }): WorkerWritable;

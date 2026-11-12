@@ -77,6 +77,21 @@
 #define CONFIG_ATOMICS
 #endif
 
+/* bun-wasm: a shared-group member (compiled with wasm atomics) runs Atomics on its
+   memory group. Waiters park in the group futex the core exports, so a notify from
+   any member process wakes them; the single-agent waiter list below is not used. */
+#ifdef BUN_WASM_SHARED_GROUP
+#if !defined(__wasi__) || !defined(__wasm_atomics__)
+#error shared-group QuickJS requires WASI with real wasm atomics
+#endif
+#include "quickjs-c-atomics.h"
+#define CONFIG_ATOMICS
+#define BUN_GROUP_FUTEX
+int32_t bun_futex_wait32(uint32_t addr, int32_t expected, int64_t timeout_ns);
+int32_t bun_futex_wait64(uint32_t addr, int64_t expected, int64_t timeout_ns);
+int32_t bun_futex_wake(uint32_t addr, uint32_t count);
+#endif
+
 #ifndef __GNUC__
 #define __extension__
 #endif
@@ -324,6 +339,23 @@ typedef struct JSValueLink {
     JSValueConst value;
 } JSValueLink;
 
+/* bun-wasm: how many bytes the frame stack of ordinary bytecode calls may
+   cost the allocator, and the largest value JS_SetMaxFrameStackSize accepts
+   (docs/stack-limits.md). A plain recursive call costs about 121 bytes on
+   wasm32, so the default holds about 34,000 of them: more than the 20,685
+   the largest native budget allowed before these frames left the C stack. */
+#define JS_FRAME_STACK_LIMIT_DEFAULT ((size_t)4 * 1024 * 1024)
+#define JS_FRAME_STACK_LIMIT_MAX ((size_t)4 * 1024 * 1024)
+/* bun-wasm: the frame stack takes its storage in segments, each one request
+   to the runtime's allocator. A request is a multiple of the quantum less
+   the slack, so that an allocator which acquires backing in 64 KiB steps
+   (wasm32 linear memory, the mapped default below) can serve it from one
+   step with room for its own header. The slack is a sizing choice only:
+   what a segment is charged comes from the allocator's declared bound. */
+#define JS_FRAME_SEGMENT_QUANTUM ((size_t)64 * 1024)
+#define JS_FRAME_SEGMENT_SLACK ((size_t)256)
+#define JS_FRAME_SEGMENT_REQUEST (JS_FRAME_SEGMENT_QUANTUM - JS_FRAME_SEGMENT_SLACK)
+
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
@@ -366,6 +398,22 @@ struct JSRuntime {
     uintptr_t stack_size; /* in bytes, 0 if no limit */
     uintptr_t stack_top;
     uintptr_t stack_limit; /* lower stack limit */
+
+    /* bun-wasm: ordinary bytecode frames live in this runtime-owned frame
+       stack, not on the C stack (docs/bun-patches/quickjs-frame-stack.md).
+       frame_committed is the sum, over the segments held, of the backing the
+       allocator declared it may have to acquire for each, the idle spare
+       included; frame_limit bounds it. malloc_bound is that declaration,
+       NULL when the allocator has made none. frame_busy is set while the
+       allocator is being asked for a bound or a segment, or is taking one
+       back. */
+    struct JSFrameChunk *frame_chunk; /* segment holding the newest frame */
+    struct JSFrameChunk *frame_spare; /* at most one emptied default segment */
+    size_t frame_live;      /* bytes of live frames */
+    size_t frame_committed; /* bytes charged for all segments */
+    size_t frame_limit;     /* refusal threshold for frame_committed */
+    JSMallocBoundFunc *malloc_bound;
+    bool frame_busy;
 
     JSValue current_exception;
     /* true if inside an out of memory error, to avoid recursing */
@@ -1440,6 +1488,7 @@ static JSProperty *add_property(JSContext *ctx,
 static void free_property(JSRuntime *rt, JSProperty *pr, int prop_flags);
 static int JS_ToBigInt64Free(JSContext *ctx, int64_t *pres, JSValue val);
 static JSValue JS_ThrowStackOverflow(JSContext *ctx);
+static void js_frame_free_all(JSRuntime *rt);
 static JSValue JS_ThrowTypeErrorRevokedProxy(JSContext *ctx);
 static JSValue js_proxy_getPrototypeOf(JSContext *ctx, JSValueConst obj);
 static int js_proxy_setPrototypeOf(JSContext *ctx, JSValueConst obj,
@@ -1723,8 +1772,12 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
         }
 #endif
         JS_RunGC(rt);
+        rt->bunwasm_memory_telemetry.automatic_gc_count++;
+        rt->bunwasm_memory_telemetry.malloc_size_after_automatic_gc =
+            rt->malloc_state.malloc_size;
         rt->malloc_gc_threshold = rt->malloc_state.malloc_size +
             (rt->malloc_state.malloc_size >> 1);
+        rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
     }
 }
 
@@ -2094,6 +2147,47 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
     return NULL;
 }
 
+/* bun-wasm: one request of 'size' bytes, not zero, made directly to the
+   registered allocator: no pooled arena and no arena block header, so the
+   request the allocator sees is exactly the one its bound was declared for.
+   The memory limit, the counters and the failure record are those of
+   js_malloc_rt. '*pcounted' is what the block adds to malloc_size, and
+   js_free_block_rt takes it back. An allocator that reports no usable size
+   is counted the bytes requested, so the block still counts toward the
+   memory limit. */
+static void *js_malloc_block_rt(JSRuntime *rt, size_t size, size_t *pcounted)
+{
+    void *ptr;
+    size_t usable;
+    JSMallocState *s = &rt->malloc_state;
+
+    /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
+    if (unlikely(s->malloc_size + size > s->malloc_limit - 1))
+        goto fail;
+
+    ptr = rt->mf.js_malloc(s->opaque, size);
+    if (!ptr)
+        goto fail;
+
+    usable = rt->mf.js_malloc_usable_size(ptr);
+    *pcounted = (usable != 0 ? usable : size) + MALLOC_OVERHEAD;
+    s->malloc_count++;
+    s->malloc_size += *pcounted;
+    return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_MALLOC);
+    return NULL;
+}
+
+static void js_free_block_rt(JSRuntime *rt, void *ptr, size_t counted)
+{
+    JSMallocState *s = &rt->malloc_state;
+
+    s->malloc_count--;
+    s->malloc_size -= counted;
+    rt->mf.js_free(s->opaque, ptr);
+}
+
 void js_free_rt(JSRuntime *rt, void *ptr)
 {
     JSMallocState *s;
@@ -2422,6 +2516,9 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
         .malloc_size = UINT64_MAX, .memory_used_size = UINT64_MAX,
         .array_buffer_size = UINT64_MAX, .array_buffer_count = UINT64_MAX,
         .wasm_capacity = UINT64_MAX, .failed_size = UINT64_MAX,
+        .malloc_size_after_automatic_gc = UINT64_MAX,
+        .malloc_gc_threshold = UINT64_MAX,
+        .current_malloc_size = UINT64_MAX,
     };
     rt->mf = *mf;
     if (!rt->mf.js_malloc_usable_size) {
@@ -2434,6 +2531,8 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->malloc_state = ms;
     js_arena_init(rt);
     rt->malloc_gc_threshold = 256 * 1024;
+    rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
+    rt->bunwasm_memory_telemetry.current_malloc_size = rt->malloc_state.malloc_size;
 
     init_list_head(&rt->context_list);
     init_list_head(&rt->gc_obj_list);
@@ -2468,6 +2567,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->js_class_id_alloc = JS_CLASS_INIT_COUNT;
 
     rt->stack_size = JS_DEFAULT_STACK_SIZE;
+    rt->frame_limit = JS_FRAME_STACK_LIMIT_DEFAULT;
 
     JS_UpdateStackTop(rt);
 
@@ -2502,6 +2602,185 @@ int JS_AddRuntimeFinalizer(JSRuntime *rt, JSRuntimeFinalizer *finalizer,
     return 0;
 }
 
+/* bun-wasm: the default callbacks and what they declare for the frame stack
+   (JSMallocBoundFunc in quickjs.h; docs/bun-patches/quickjs-frame-stack.md
+   has the derivations).
+
+   On wasm32 they are libc's, unchanged, and JS_DefaultMallocBound states
+   what wasi-libc's dlmalloc can acquire for a request.
+
+   No such statement can be made for the malloc of glibc or of Apple's libc:
+   top padding, arena heaps, fallback mappings, huge pages, size-ranged
+   regions, tunables and replacement allocators all change what a request
+   acquires. On those hosts the callbacks instead serve every request of at
+   least one frame segment from a private anonymous mapping of its own, so
+   that what such a block acquires is known exactly and goes back to the
+   system when it is freed. Smaller requests stay with libc and have no
+   bound. Every large block the default callbacks serve takes this path,
+   not only the frame stack's: malloc, calloc, realloc, free and the usable
+   size keep their meaning across it. Nothing is declared on any other
+   host. */
+#if !defined(__wasi__) && \
+    (defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__))
+#include <stddef.h>
+#include <sys/mman.h>
+#define JS_DEF_MAPPED_BLOCKS 1
+#else
+#define JS_DEF_MAPPED_BLOCKS 0
+#endif
+
+#if JS_DEF_MAPPED_BLOCKS
+/* A mapping starts with this header and the block follows it. malloc aligns
+   a block for max_align_t, and a mapped block is aligned the same way: the
+   header's size is a multiple of that alignment, or nothing is mapped. The
+   mappings are kept in a list, and an address is a mapped block only if the
+   list holds its header, never because of what memory before it contains. */
+typedef struct JSDefMapping {
+    _Alignas(64) struct JSDefMapping *next;
+    size_t length; /* of the whole mapping */
+} JSDefMapping;
+
+static pthread_mutex_t js_def_map_lock = PTHREAD_MUTEX_INITIALIZER;
+static JSDefMapping *js_def_map_list;
+
+/* The page size, or zero while it cannot be read or used. Once read it is
+   kept, so every block is told apart by the value it was mapped under. */
+static size_t js_def_page_size(void)
+{
+    static size_t known;
+    size_t page = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    long answer;
+
+    if (page != 0)
+        return page;
+    answer = sysconf(_SC_PAGESIZE);
+    if (answer < (long)sizeof(JSDefMapping) || (answer & (answer - 1)) != 0)
+        return 0;
+    __atomic_store_n(&known, (size_t)answer, __ATOMIC_RELAXED);
+    return (size_t)answer;
+}
+
+/* The length of the mapping a request of 'size' bytes gets, or zero when
+   the request stays with libc: a small request, an unreadable page size, or
+   a target whose malloc alignment the header does not preserve. */
+static size_t js_def_map_length(size_t size)
+{
+    size_t page = js_def_page_size();
+
+    if (size < JS_FRAME_SEGMENT_REQUEST)
+        return 0;
+    if (sizeof(JSDefMapping) % _Alignof(max_align_t) != 0)
+        return 0;
+    if (page == 0 || size > SIZE_MAX - sizeof(JSDefMapping) - page)
+        return 0;
+    return (size + sizeof(JSDefMapping) + page - 1) & ~(page - 1);
+}
+
+/* The mapping 'ptr' is the block of, or NULL for a libc block. Only an
+   address one header into a page can be a mapped block, which spares every
+   other address the list. */
+static JSDefMapping *js_def_mapping(const void *ptr)
+{
+    JSDefMapping *map = (JSDefMapping *)((uintptr_t)ptr - sizeof(JSDefMapping));
+    JSDefMapping *held;
+    size_t page = js_def_page_size();
+
+    if (page == 0 || ((uintptr_t)ptr & (page - 1)) != sizeof(JSDefMapping))
+        return NULL;
+    pthread_mutex_lock(&js_def_map_lock);
+    for (held = js_def_map_list; held && held != map; held = held->next)
+        ;
+    pthread_mutex_unlock(&js_def_map_lock);
+    return held;
+}
+
+static void *js_def_map(size_t length)
+{
+    JSDefMapping *map = mmap(NULL, length, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    if (map == MAP_FAILED)
+        return NULL;
+    map->length = length;
+    pthread_mutex_lock(&js_def_map_lock);
+    map->next = js_def_map_list;
+    js_def_map_list = map;
+    pthread_mutex_unlock(&js_def_map_lock);
+    return map + 1;
+}
+
+static void js_def_unmap(JSDefMapping *map)
+{
+    JSDefMapping **link;
+
+    pthread_mutex_lock(&js_def_map_lock);
+    for (link = &js_def_map_list; *link != map; link = &(*link)->next)
+        ;
+    *link = map->next;
+    pthread_mutex_unlock(&js_def_map_lock);
+    if (munmap(map, map->length) != 0) {
+        fputs("fatal: QuickJS allocator could not unmap backing\n", stderr);
+        _Exit(EXIT_FAILURE);
+    }
+}
+
+static size_t js_def_malloc_usable_size(const void *ptr)
+{
+    JSDefMapping *map = ptr ? js_def_mapping(ptr) : NULL;
+
+    if (map)
+        return map->length - sizeof(JSDefMapping);
+    return js__malloc_usable_size(ptr);
+}
+
+static void *js_def_malloc(void *opaque, size_t size)
+{
+    size_t length = js_def_map_length(size);
+
+    return length ? js_def_map(length) : malloc(size);
+}
+
+static void *js_def_calloc(void *opaque, size_t count, size_t size)
+{
+    size_t length = 0;
+
+    if (size != 0 && count <= SIZE_MAX / size)
+        length = js_def_map_length(count * size);
+    /* a fresh anonymous mapping is zero already */
+    return length ? js_def_map(length) : calloc(count, size);
+}
+
+static void js_def_free(void *opaque, void *ptr)
+{
+    JSDefMapping *map = ptr ? js_def_mapping(ptr) : NULL;
+
+    if (map)
+        js_def_unmap(map);
+    else
+        free(ptr);
+}
+
+static void *js_def_realloc(void *opaque, void *ptr, size_t size)
+{
+    size_t kept;
+    void *moved;
+
+    if (!ptr)
+        return js_def_malloc(opaque, size);
+    if (!js_def_mapping(ptr) && !js_def_map_length(size))
+        return realloc(ptr, size);
+    /* into a mapping, out of one, or between two: move the contents */
+    moved = js_def_malloc(opaque, size);
+    if (!moved)
+        return NULL;
+    kept = js_def_malloc_usable_size(ptr);
+    memcpy(moved, ptr, kept < size ? kept : size);
+    js_def_free(opaque, ptr);
+    return moved;
+}
+#else
+#define js_def_malloc_usable_size js__malloc_usable_size
+
 static void *js_def_calloc(void *opaque, size_t count, size_t size)
 {
     return calloc(count, size);
@@ -2521,18 +2800,78 @@ static void *js_def_realloc(void *opaque, void *ptr, size_t size)
 {
     return realloc(ptr, size);
 }
+#endif
 
 static const JSMallocFunctions def_malloc_funcs = {
     js_def_calloc,
     js_def_malloc,
     js_def_free,
     js_def_realloc,
-    js__malloc_usable_size
+    js_def_malloc_usable_size
 };
+
+const JSMallocFunctions *JS_GetDefaultMallocFunctions(void)
+{
+    return &def_malloc_funcs;
+}
+
+/* The most backing one js_def_malloc(size) can make the default allocator
+   newly acquire, or zero where it cannot be stated. */
+size_t JS_DefaultMallocBound(void *opaque, size_t size)
+{
+#if defined(__wasi__) && __SIZEOF_SIZE_T__ == 4
+    /* The core's wasi-libc dlmalloc, which this module imports: no mmap, no
+       trim, a 64 KiB granularity, bookkeeping kept inside its segments. One
+       malloc asks sbrk for at most granularity_align(nb + SYS_ALLOC_PADDING)
+       in total, nb being request2size(size), on every growth path:
+       - split profile, contiguous growth: the first request is that
+         amount; with a top chunk it is the same rounding of what the top
+         lacks; and when a supplement follows a non-adjacent extension the
+         two sum to exactly that amount. The linker's initial heap is
+         existing memory. sbrk grows this program's own memory by exactly
+         the pages asked for, and nothing else grows it.
+       - shared-group profile (BUN_WASM_SHARED_GROUP), noncontiguous
+         growth: one sbrk of that amount, passed to the group provider.
+         The bound holds there only for a provider that grants exactly the
+         pages asked for and keeps freed pages reusable
+         (docs/bun-patches/quickjs-frame-stack.md names the Waffle revision
+         this rests on).
+       The values are dlmalloc's for 4-byte sizes and 16-byte alignment. */
+    const size_t chunk_overhead = 4, alignment = 16, granularity = 65536;
+    const size_t top_foot_size = 8 + 32 + 16;
+    const size_t sys_alloc_padding = top_foot_size + alignment;
+    size_t nb;
+
+    if (size > SIZE_MAX - 2 * granularity)
+        return 0;
+    nb = (size + chunk_overhead + alignment - 1) & ~(alignment - 1);
+    return (nb + sys_alloc_padding + granularity - 1) & ~(granularity - 1);
+#elif JS_DEF_MAPPED_BLOCKS
+    return js_def_map_length(size);
+#else
+    return 0;
+#endif
+}
+
+/* The declaration may change only when no charge made under the current
+   one is outstanding, for a segment in use or spare, and the allocator is
+   neither being asked for one nor taking one back. Otherwise -1, and
+   nothing changes. */
+int JS_SetMallocBound(JSRuntime *rt, JSMallocBoundFunc *bound)
+{
+    if (rt->frame_committed != 0 || rt->frame_busy)
+        return -1;
+    rt->malloc_bound = bound;
+    return 0;
+}
 
 JSRuntime *JS_NewRuntime(void)
 {
-    return JS_NewRuntime2(&def_malloc_funcs, NULL);
+    JSRuntime *rt = JS_NewRuntime2(&def_malloc_funcs, NULL);
+
+    if (rt)
+        rt->malloc_bound = JS_DefaultMallocBound;
+    return rt;
 }
 
 void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
@@ -2807,6 +3146,7 @@ void JS_FreeRuntime(JSRuntime *rt)
             JS_FreeAtomRT(rt, cl->class_name);
         }
     }
+    js_frame_free_all(rt);
     js_free_rt(rt, rt->class_array);
 
 #ifdef ENABLE_DUMPS // JS_DUMP_ATOM_LEAKS
@@ -3233,6 +3573,378 @@ void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size)
 {
     rt->stack_size = stack_size;
     update_stack_limit(rt);
+}
+
+/* bun-wasm: the frame stack (docs/bun-patches/quickjs-frame-stack.md).
+
+   An ordinary bytecode call keeps its JSStackFrame, copied arguments,
+   locals, operand slots and closure-slot table in one record here instead
+   of on the C stack. That storage adds no native call frame, so it is
+   bounded by its own byte limit and not by the native stack budget.
+
+   Chunks never move while a frame in them is live: closures and the frame
+   list hold addresses into them. Frames are pushed and popped in strict
+   stack order. Coroutine frames keep their own heap allocation and never
+   come here.
+
+   What the limit bounds, for every chunk held: all the backing the
+   runtime's allocator may have had to newly acquire from its own source to
+   serve that chunk's one request. The allocator declares that bound before
+   the request (JSMallocBoundFunc), and the rules are:
+   - the charge is reserved before the allocator is asked, only when it
+     fits what the limit has left, and is taken back if the request fails;
+   - a chunk keeps the charge it was taken under until it is freed;
+   - a request the allocator serves from storage it already had is charged
+     in full all the same;
+   - a chunk's charge ends once the allocator has taken the block back,
+     and the storage is then the allocator's to release or to reuse;
+   - the declaration cannot change while any chunk is held. */
+#define JS_FRAME_ALIGN ((size_t)8)
+
+/* One segment: one block from the runtime's allocator. */
+typedef struct JSFrameChunk {
+    _Alignas(8) struct JSFrameChunk *prev; /* the chunk below this one */
+    size_t payload; /* bytes available after this header */
+    size_t top;     /* bytes of payload in use */
+    size_t charge;  /* the bound the allocator declared for this block */
+    size_t counted; /* what the block adds to the runtime's malloc_size */
+} JSFrameChunk;
+
+/* How a record entered its inline callee, kept so the return releases the
+   right operand slots. */
+#define JS_FRAME_CALL_METHOD 1 /* the receiver sits below the function */
+#define JS_FRAME_CALL_TAIL   2 /* the result is this record's own result */
+
+/* The record of one ordinary bytecode call. Only js_frame_push creates one;
+   native and coroutine JSStackFrame values are never cast to it. */
+typedef struct JSExecFrame {
+    JSStackFrame frame;
+    size_t allocation_size; /* bytes this record takes from its chunk */
+    /* The call this record executes; the function is frame.cur_func. These
+       are borrowed: the C caller, or the calling record's operand slots,
+       keep them alive until it returns. actual_argc and actual_argv are
+       what the caller passed, which frame.arg_count and frame.arg_buf are
+       not when formals were padded or copied. */
+    JSValueConst this_obj, new_target;
+    JSValueConst *actual_argv;
+    int actual_argc;
+    JSContext *caller_ctx; /* the realm that made the call */
+    /* The ordinary record whose dispatch loop entered this one, or NULL when
+       this record was entered from C and ends its interpreter activation. */
+    struct JSExecFrame *ordinary_caller;
+    /* Written by this record just before it enters an inline callee, and
+       read when that callee returns. Its pc is frame.cur_pc. Coroutine
+       frames are never inline callers, so their cur_sp is never used here. */
+    JSValue *saved_sp;
+    int call_argc;
+    uint8_t call_kind; /* JS_FRAME_CALL_* */
+} JSExecFrame;
+
+/* True for a callee the dispatch loop may enter without a C call: an
+   ordinary bytecode function. Generators and async functions have their
+   own classes; bound functions, proxies and native functions keep their
+   dispatcher. A class called without new still fails in its own bytecode. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
+static inline bool js_frame_inline_callee(JSValueConst func_obj)
+{
+    JSObject *p;
+
+    if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+        return false;
+    p = JS_VALUE_GET_OBJ(func_obj);
+    return p->class_id == JS_CLASS_BYTECODE_FUNCTION &&
+        p->u.func.function_bytecode->func_kind == JS_FUNC_NORMAL;
+}
+
+#define JS_FRAME_HEADER_SIZE \
+    ((sizeof(JSExecFrame) + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1))
+
+/* Gives a chunk back to the allocator. Its charge ends only once the
+   allocator has the block again. */
+static void js_frame_free_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    size_t charge = chunk->charge;
+    bool busy = rt->frame_busy;
+
+    rt->frame_busy = true;
+    js_free_block_rt(rt, chunk, chunk->counted);
+    rt->frame_committed -= charge;
+    rt->frame_busy = busy;
+}
+
+/* The request for a segment whose payload holds 'size' bytes: the smallest
+   multiple of the quantum, less the slack, that does. Zero when no such
+   size exists. */
+static size_t js_frame_segment_request(size_t size)
+{
+    size_t fixed = sizeof(JSFrameChunk) + JS_FRAME_SEGMENT_SLACK;
+    size_t quanta;
+
+    if (size > SIZE_MAX - fixed - JS_FRAME_SEGMENT_QUANTUM)
+        return 0;
+    quanta = (size + fixed + JS_FRAME_SEGMENT_QUANTUM - 1) / JS_FRAME_SEGMENT_QUANTUM;
+    return quanta * JS_FRAME_SEGMENT_QUANTUM - JS_FRAME_SEGMENT_SLACK;
+}
+
+/* What the allocator declares a request of 'request' bytes may make it
+   acquire. Zero when it declares nothing for that request, or less than the
+   request itself, which no block can cost. */
+static size_t js_frame_declared(JSRuntime *rt, size_t request)
+{
+    size_t bound;
+
+    if (request == 0)
+        return 0;
+    bound = rt->malloc_bound(rt->malloc_state.opaque, request);
+    return bound < request ? 0 : bound;
+}
+
+/* How taking a chunk ended. */
+enum {
+    JS_FRAME_TAKEN,
+    JS_FRAME_OVER_LIMIT,   /* a declared bound exceeds what the limit has left */
+    JS_FRAME_NO_BOUND,     /* the allocator declares no bound for the block */
+    JS_FRAME_NO_MEMORY,    /* the allocator returned nothing */
+    JS_FRAME_BROKEN_BOUND, /* the allocator reported more than it declared */
+};
+
+/* Takes a chunk whose payload holds 'size' bytes from the allocator and
+   charges it, or changes nothing. A whole segment is asked for when its
+   bound fits what the limit has left, otherwise a block of exactly this
+   frame's size. The allocator is never asked for a block whose bound does
+   not fit. */
+static int js_frame_take_chunk(JSRuntime *rt, size_t size, JSFrameChunk **pchunk)
+{
+    size_t room = rt->frame_limit - rt->frame_committed;
+    size_t exact = sizeof(JSFrameChunk) + size;
+    size_t request = js_frame_segment_request(size);
+    size_t charge = js_frame_declared(rt, request);
+    size_t exact_charge, counted, usable;
+    JSFrameChunk *chunk;
+
+    if (charge == 0 || charge > room) {
+        exact_charge = js_frame_declared(rt, exact);
+        if (charge == 0 && exact_charge == 0)
+            return JS_FRAME_NO_BOUND;
+        if (exact_charge == 0 || exact_charge > room)
+            return JS_FRAME_OVER_LIMIT;
+        request = exact;
+        charge = exact_charge;
+    }
+    rt->frame_committed += charge;
+    chunk = js_malloc_block_rt(rt, request, &counted);
+    if (!chunk) {
+        rt->frame_committed -= charge;
+        return JS_FRAME_NO_MEMORY;
+    }
+    /* A diagnostic, not the enforcement: the limit rests on the declared
+       bound, and an allocator that reports more usable bytes for the block
+       than it declared has shown that bound to be wrong. */
+    usable = rt->mf.js_malloc_usable_size(chunk);
+    if (usable > charge) {
+        js_free_block_rt(rt, chunk, counted);
+        rt->frame_committed -= charge;
+        return JS_FRAME_BROKEN_BOUND;
+    }
+    chunk->payload = request - sizeof(JSFrameChunk);
+    chunk->charge = charge;
+    chunk->counted = counted;
+    *pchunk = chunk;
+    return JS_FRAME_TAKEN;
+}
+
+/* The newest chunk, with room for 'size' bytes: the idle spare when it is
+   large enough, else a new one. NULL with a pending error otherwise, and
+   then no frame, link or count has changed: an InternalError when the
+   allocator declares no bound or broke the one it declared (a mistake in
+   how the runtime was set up), the stack RangeError when a valid bound does
+   not fit what the limit has left, the allocator's error when it has no
+   memory. The one thing a failure can cost is the spare, released first
+   when it cannot serve the frame so that the limit never pays for both. */
+static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_spare;
+    int taken = JS_FRAME_OVER_LIMIT;
+
+    if (!rt->malloc_bound) {
+        JS_ThrowInternalError(ctx, "no allocator block bound for frame storage");
+        return NULL;
+    }
+    if (chunk && chunk->payload >= size) {
+        rt->frame_spare = NULL;
+        goto link;
+    }
+    if (chunk) {
+        rt->frame_spare = NULL;
+        js_frame_free_chunk(rt, chunk);
+    }
+    if (rt->frame_committed <= rt->frame_limit) {
+        rt->frame_busy = true;
+        taken = js_frame_take_chunk(rt, size, &chunk);
+        rt->frame_busy = false;
+    }
+    switch (taken) {
+    case JS_FRAME_TAKEN:
+        break;
+    case JS_FRAME_NO_BOUND:
+        JS_ThrowInternalError(ctx, "no allocator block bound for frame storage");
+        return NULL;
+    case JS_FRAME_BROKEN_BOUND:
+        JS_ThrowInternalError(ctx, "allocator exceeded its declared block bound");
+        return NULL;
+    case JS_FRAME_NO_MEMORY:
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    default:
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+ link:
+    chunk->top = 0;
+    chunk->prev = rt->frame_chunk;
+    rt->frame_chunk = chunk;
+    return chunk;
+}
+
+/* Every call pushes and pops a record, so the step that only moves the top
+   of the current chunk is inlined at any optimization level: the guest is
+   built for size, which would otherwise leave each step a call. What a
+   chunk boundary, a refusal or an emptied chunk needs stays out of line. */
+#if defined(__GNUC__) || defined(__clang__)
+#define js_frame_inline static inline __attribute__((always_inline))
+#else
+#define js_frame_inline static inline
+#endif
+
+/* Bytes of one ordinary record: header, 'slots' values, then the closure
+   slots, rounded so the next record is aligned. The counts are 16-bit
+   bytecode fields, so the sum cannot overflow; a zero return says it would. */
+js_frame_inline size_t js_frame_record_size(size_t slots, size_t var_refs)
+{
+    size_t size = JS_FRAME_HEADER_SIZE;
+
+    if (slots > (SIZE_MAX - size) / sizeof(JSValue))
+        return 0;
+    size += slots * sizeof(JSValue);
+    if (var_refs > (SIZE_MAX - size - JS_FRAME_ALIGN) / sizeof(JSVarRef *))
+        return 0;
+    size += var_refs * sizeof(JSVarRef *);
+    return (size + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1);
+}
+
+/* The record of 'size' bytes when the current chunk has no room for it, or
+   'size' is the zero js_frame_record_size returns for an impossible record. */
+static no_inline JSExecFrame *js_frame_push_chunk(JSContext *ctx, size_t size)
+{
+    JSFrameChunk *chunk;
+    JSExecFrame *frame;
+
+    if (size == 0) {
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+    chunk = js_frame_new_chunk(ctx, size);
+    if (!chunk)
+        return NULL;
+    frame = (JSExecFrame *)(chunk + 1);
+    chunk->top = size;
+    ctx->rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
+/* The record for one ordinary call, uninitialised and not yet linked into
+   the frame list. NULL with a pending exception on refusal. */
+js_frame_inline JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = js_frame_record_size(slots, var_refs);
+    JSExecFrame *frame;
+
+    if (unlikely(size == 0 || !chunk || chunk->payload - chunk->top < size))
+        return js_frame_push_chunk(ctx, size);
+    frame = (JSExecFrame *)((uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top += size;
+    rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
+/* Unlinks the newest chunk once its last record has left. One emptied chunk
+   of at most a default segment is kept, still charged, so a call at a chunk
+   boundary does not allocate and free on every iteration. Any other goes
+   back to the allocator at once. */
+static no_inline void js_frame_pop_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    rt->frame_chunk = chunk->prev;
+    if (!rt->frame_spare &&
+        chunk->payload <= JS_FRAME_SEGMENT_REQUEST - sizeof(JSFrameChunk))
+        rt->frame_spare = chunk;
+    else
+        js_frame_free_chunk(rt, chunk);
+}
+
+/* Releases the newest record. Its values are already freed and it is no
+   longer in the frame list. */
+js_frame_inline void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
+{
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = frame->allocation_size;
+
+    assert((uint8_t *)frame + size == (uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top -= size;
+    rt->frame_live -= size;
+    if (unlikely(chunk->top == 0))
+        js_frame_pop_chunk(rt, chunk);
+}
+
+static void js_frame_free_all(JSRuntime *rt)
+{
+    JSFrameChunk *chunk, *prev;
+
+    assert(rt->frame_live == 0);
+    for (chunk = rt->frame_chunk; chunk; chunk = prev) {
+        prev = chunk->prev;
+        js_frame_free_chunk(rt, chunk);
+    }
+    rt->frame_chunk = NULL;
+    if (rt->frame_spare)
+        js_frame_free_chunk(rt, rt->frame_spare);
+    rt->frame_spare = NULL;
+}
+
+/* Sets how many bytes the frame stack may cost the allocator. Zero is a
+   real limit: no ordinary call fits. Returns -1 and changes nothing when the
+   value is above the supported range or below what live frames already
+   hold, or while the allocator is being asked for a chunk; an idle spare is
+   released to make a lower value fit. */
+int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes)
+{
+    size_t spare;
+
+    if (bytes > JS_FRAME_STACK_LIMIT_MAX || rt->frame_busy)
+        return -1;
+    spare = rt->frame_spare ? rt->frame_spare->charge : 0;
+    if (bytes < rt->frame_committed - spare)
+        return -1;
+    if (bytes < rt->frame_committed) {
+        js_frame_free_chunk(rt, rt->frame_spare);
+        rt->frame_spare = NULL;
+    }
+    rt->frame_limit = bytes;
+    return 0;
+}
+
+void JS_GetFrameStackUsage(JSRuntime *rt, size_t *plive, size_t *pcommitted,
+                           size_t *plimit)
+{
+    *plive = rt->frame_live;
+    *pcommitted = rt->frame_committed;
+    *plimit = rt->frame_limit;
 }
 
 void JS_UpdateStackTop(JSRuntime *rt)
@@ -8048,6 +8760,8 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
 /* bun-wasm: accessor only returns cached bytes, including a failure latched in-place. */
 const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt)
 {
+    rt->bunwasm_memory_telemetry.current_malloc_size = rt->malloc_state.malloc_size;
+    rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
     return &rt->bunwasm_memory_telemetry;
 }
 
@@ -8058,6 +8772,7 @@ const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt)
     JSBunwasmMemoryTelemetry *cache = &rt->bunwasm_memory_telemetry;
     JS_ComputeMemoryUsage(rt, &usage);
     cache->malloc_size = usage.malloc_size;
+    cache->current_malloc_size = rt->malloc_state.malloc_size;
     cache->memory_used_size = usage.memory_used_size;
     cache->array_buffer_size = usage.array_buffer_size;
     cache->array_buffer_count = usage.array_buffer_count;
@@ -18237,8 +18952,30 @@ static bool needs_backtrace(JSValue exc)
     return can_store_error_stack(exc) || can_add_backtrace(exc);
 }
 
+/* Native calls must not retain the bytecode interpreter's locals while
+   reentering JavaScript. Keep dispatch outside that large activation. */
+static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
+                              JSValueConst this_obj, JSValueConst new_target,
+                              int argc, JSValueConst *argv, int flags);
+
+static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
+                              JSValueConst this_obj, JSValueConst new_target,
+                              int argc, JSValueConst *argv, int flags)
+{
+    if (js_poll_interrupts(ctx))
+        return JS_EXCEPTION;
+    if (JS_VALUE_GET_TAG(func_obj) == JS_TAG_OBJECT &&
+        JS_VALUE_GET_OBJ(func_obj)->class_id != JS_CLASS_BYTECODE_FUNCTION) {
+        JSClassCall *call = ctx->rt->class_array[JS_VALUE_GET_OBJ(func_obj)->class_id].call;
+        if (!call)
+            return JS_ThrowTypeErrorNotAFunction(ctx);
+        return call(ctx, func_obj, this_obj, argc, argv, flags);
+    }
+    return JS_CallBytecode(ctx, func_obj, this_obj, new_target, argc, argv, flags);
+}
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
-static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
                                int argc, JSValueConst *argv, int flags)
 {
@@ -18246,12 +18983,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSContext *ctx;
     JSObject *p;
     JSFunctionBytecode *b;
-    JSStackFrame sf_s, *sf = &sf_s;
+    JSStackFrame *sf;
+    /* the frame-stack record of an ordinary call; NULL while resuming a
+       coroutine, whose frame belongs to its own heap allocation */
+    JSExecFrame *owned = NULL;
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
+    /* the call being made; shared by the call opcodes and inline_call */
+    int call_argc, call_kind;
+    JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
-    size_t alloca_size;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_STEP
 #define DUMP_BYTECODE_OR_DONT(pc) \
@@ -18278,8 +19020,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define BREAK           SWITCH(pc)
 #endif
 
-    if (js_poll_interrupts(caller_ctx))
-        return JS_EXCEPTION;
     if (unlikely(JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)) {
         if (flags & JS_CALL_FLAG_GENERATOR) {
             JSAsyncFunctionState *s = JS_VALUE_GET_PTR(func_obj);
@@ -18303,20 +19043,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             else
                 goto restart;
         } else {
-            goto not_a_function;
+            return JS_ThrowTypeErrorNotAFunction(caller_ctx);
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
-    if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
-        JSClassCall *call_func;
-        call_func = rt->class_array[p->class_id].call;
-        if (!call_func) {
-        not_a_function:
-            return JS_ThrowTypeErrorNotAFunction(caller_ctx);
-        }
-        return call_func(caller_ctx, func_obj, this_obj, argc,
-                         argv, flags);
-    }
     b = p->u.func.function_bytecode;
 
     if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
@@ -18325,11 +19055,35 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         arg_allocated_size = 0;
     }
 
-    alloca_size = sizeof(JSValue) * (arg_allocated_size + b->var_count +
-                                     b->stack_size) +
-        sizeof(JSVarRef *) * b->var_ref_count;
-    if (js_check_stack_overflow(rt, alloca_size))
+    /* bun-wasm: this activation's own C frame is checked against the native
+       budget, once for every call the loop below then runs without another
+       C call. The fixed reservation stands for the frame storage this
+       function no longer takes from the C stack, so the budget keeps
+       covering the host stack one C entry costs: without it the guard
+       allowed more native reentries than the host stack holds, first through
+       Reflect.construct (docs/stack-limits.md has the measurement). A call's
+       storage is checked by js_frame_push against the frame-stack limit
+       instead, and fails before anything is linked. */
+    js_reserve_wasm_frame(48);
+    if (js_check_stack_overflow(rt, 0))
         return JS_ThrowStackOverflow(caller_ctx);
+    owned = js_frame_push(caller_ctx,
+                          (size_t)arg_allocated_size + b->var_count + b->stack_size,
+                          b->var_ref_count);
+    if (unlikely(!owned))
+        return JS_EXCEPTION;
+    owned->ordinary_caller = NULL;
+
+    /* Entered from C above, and from inline_call below with the callee's
+       record pushed and func_obj, this_obj, new_target, argc, argv,
+       caller_ctx, flags, p, b and arg_allocated_size already the callee's. */
+ enter_frame:
+    sf = &owned->frame;
+    owned->this_obj = this_obj;
+    owned->new_target = new_target;
+    owned->actual_argc = argc;
+    owned->actual_argv = argv;
+    owned->caller_ctx = caller_ctx;
 
     sf->is_strict_mode = b->is_strict_mode;
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
@@ -18338,7 +19092,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_func = unsafe_unconst(func_obj);
     var_refs = p->u.func.var_refs;
 
-    local_buf = alloca(alloca_size);
+    local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
     if (unlikely(arg_allocated_size)) {
         int n = min_int(argc, b->arg_count);
         arg_buf = local_buf;
@@ -18377,9 +19131,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
  restart:
     for(;;) {
-        int call_argc;
-        JSValue *call_argv;
-
         SWITCH(pc) {
         CASE(OP_push_i32):
             *sp++ = js_int32(get_u32(pc));
@@ -18738,6 +19489,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -18775,6 +19530,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = JS_FRAME_CALL_METHOD |
+                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -21147,7 +21907,85 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    /* bun-wasm: only an ordinary call owns a frame-stack record. It is
+       unlinked and its values are freed before its storage can be reused. */
+    if (!owned)
+        return ret_val;
+    {
+        JSExecFrame *caller = owned->ordinary_caller;
+        int below;
+
+        js_frame_pop(rt, owned);
+        if (!caller)
+            return ret_val;
+        /* The call was entered by inline_call: continue the calling record
+           where JS_CallInternal would have returned to it. */
+        owned = caller;
+        sf = &owned->frame;
+        func_obj = sf->cur_func;
+        this_obj = owned->this_obj;
+        new_target = owned->new_target;
+        argc = owned->actual_argc;
+        argv = owned->actual_argv;
+        caller_ctx = owned->caller_ctx;
+        p = JS_VALUE_GET_OBJ(func_obj);
+        b = p->u.func.function_bytecode;
+        ctx = b->realm;
+        var_refs = p->u.func.var_refs;
+        local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
+        arg_buf = sf->arg_buf;
+        var_buf = sf->var_buf;
+        stack_buf = var_buf + b->var_count;
+        pc = sf->cur_pc;
+        sp = owned->saved_sp;
+        if (unlikely(JS_IsException(ret_val)))
+            goto exception;
+        if (owned->call_kind & JS_FRAME_CALL_TAIL)
+            goto done;
+        below = owned->call_kind & JS_FRAME_CALL_METHOD ? 2 : 1;
+        for(i = -below; i < owned->call_argc; i++)
+            JS_FreeValue(ctx, sp[i - owned->call_argc]);
+        sp -= owned->call_argc + below;
+        *sp++ = ret_val;
+        goto restart;
+    }
+
+    /* bun-wasm: an ordinary record calls an ordinary bytecode function
+       without a C call. The callee's record is pushed first, so a refusal
+       or an interrupt is thrown in the calling record with nothing changed.
+       The operands stay in the calling record until the callee returns. */
+ inline_call:
+    {
+        JSObject *callee_p = JS_VALUE_GET_OBJ(call_argv[-1]);
+        JSFunctionBytecode *callee_b = callee_p->u.func.function_bytecode;
+        JSExecFrame *callee;
+
+        if (unlikely(js_poll_interrupts(ctx)))
+            goto exception;
+        arg_allocated_size =
+            call_argc < callee_b->arg_count ? callee_b->arg_count : 0;
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + callee_b->var_count +
+                               callee_b->stack_size,
+                               callee_b->var_ref_count);
+        if (unlikely(!callee))
+            goto exception;
+        owned->saved_sp = sp;
+        owned->call_argc = call_argc;
+        owned->call_kind = call_kind;
+        callee->ordinary_caller = owned;
+        owned = callee;
+        caller_ctx = ctx;
+        func_obj = call_argv[-1];
+        this_obj = call_kind & JS_FRAME_CALL_METHOD ? call_argv[-2] : JS_UNDEFINED;
+        new_target = JS_UNDEFINED;
+        argc = call_argc;
+        argv = vc(call_argv);
+        flags = 0;
+        p = callee_p;
+        b = callee_b;
+        goto enter_frame;
+    }
 }
 
 JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
@@ -22601,6 +23439,64 @@ typedef struct JSToken {
     } u;
 } JSToken;
 
+/* bun-wasm: statements that contain statements keep their parser state in
+   these records instead of C frames, so statement nesting does not grow the
+   native stack (docs/bun-patches/quickjs-statement-parser-stack.md). The
+   limit counts records suspended at once in one parse, including those of
+   enclosing functions. It is not a count of source statements: a braced
+   `if` holds two records, an unbraced one holds one. */
+#define JS_PARSE_STMT_DEPTH_MAX 10000
+#define JS_PARSE_STMT_CHUNK 16
+
+enum {
+    JS_STMT_LABELED,
+    JS_STMT_BLOCK,
+    JS_STMT_IF,
+    JS_STMT_WHILE,
+    JS_STMT_DO,
+    JS_STMT_FOR,
+    JS_STMT_FOR_IN_OF,
+    JS_STMT_SWITCH,
+    JS_STMT_TRY,
+    JS_STMT_WITH,
+};
+
+typedef struct JSParseStmtFrame {
+    uint8_t kind;
+    uint8_t state;        /* which child statement was begun last */
+    uint8_t has_using_be; /* using_be is linked (BLOCK and FOR_IN_OF) */
+    JSAtom label_name;    /* owned by the record, JS_ATOM_NULL if none */
+    BlockEnv be;          /* linked into fd->top_break while the statement is open */
+    BlockEnv using_be;
+    union {
+        struct { int scope_level; } block;
+        struct { int label1, mask; } if_;
+        struct { int label_cont, label_break, label1; } loop;
+        struct {
+            int label_cont, label_break, label_body, label_test;
+            int pos_cont, pos_body, block_scope_level, for_scope_level;
+        } for_;
+        struct {
+            int label_cont, label_break, label_next;
+            int block_scope_level, using_scope_level;
+            int source_line_num, source_col_num;
+            bool is_for_of, is_async, scope_has_using;
+        } for_in_of;
+        struct { int label_case, label_break, default_label_pos; } switch_;
+        struct {
+            int label_catch, label_catch2, label_finally, label_end;
+            int saved_eval_ret_idx;
+        } try_;
+        struct { int label_break; } labeled;
+    } u;
+} JSParseStmtFrame;
+
+/* Records never move: fd->top_break holds BlockEnv addresses. */
+typedef struct JSParseStmtChunk {
+    struct JSParseStmtChunk *prev, *next;
+    JSParseStmtFrame frames[JS_PARSE_STMT_CHUNK];
+} JSParseStmtChunk;
+
 typedef struct JSParseState {
     JSContext *ctx;
     int last_line_num;  /* line number of last token */
@@ -22622,6 +23518,11 @@ typedef struct JSParseState {
     JSFunctionDef *cur_func;
     bool is_module; /* parsing a module */
     bool allow_html_comments;
+
+    /* bun-wasm: suspended statement records, zeroed by js_parse_init */
+    JSParseStmtChunk *stmt_first; /* owned chunk list */
+    JSParseStmtChunk *stmt_top;   /* chunk holding the top record */
+    uint32_t stmt_depth;          /* records suspended in all enclosing functions */
 } JSParseState;
 
 typedef struct JSOpCode {
@@ -26818,7 +27719,9 @@ static int js_parse_destructuring_element(JSParseState *s, int tok,
 
     if (has_ellipsis < 0) {
         /* pre-parse destructuration target for spread detection */
-        js_parse_skip_parens_token(s, &skip_bits, false);
+        /* bun-wasm: -1 means the lookahead could not restore its position */
+        if (js_parse_skip_parens_token(s, &skip_bits, false) == -1)
+            return -1;
         has_ellipsis = skip_bits & SKIP_HAS_ELLIPSIS;
     }
 
@@ -26895,9 +27798,14 @@ static int js_parse_destructuring_element(JSParseState *s, int tok,
             if (prop_type == PROP_TYPE_IDENT) {
                 if (next_token(s))
                     goto prop_error;
-                if ((s->token.val == '[' || s->token.val == '{')
-                    &&  ((tok1 = js_parse_skip_parens_token(s, &skip_bits, false)) == ',' ||
-                         tok1 == '=' || tok1 == '}')) {
+                tok1 = 0;
+                if (s->token.val == '[' || s->token.val == '{') {
+                    tok1 = js_parse_skip_parens_token(s, &skip_bits, false);
+                    /* bun-wasm: the lookahead could not restore its position */
+                    if (tok1 == -1)
+                        goto prop_error;
+                }
+                if (tok1 == ',' || tok1 == '=' || tok1 == '}') {
                     if (prop_name == JS_ATOM_NULL) {
                         /* computed property name on stack */
                         if (has_ellipsis) {
@@ -27121,15 +28029,20 @@ static int js_parse_destructuring_element(JSParseState *s, int tok,
                     return js_parse_error(s, "missing binding pattern...");
                 has_spread = true;
             }
+            tok1 = 0;
+            if (s->token.val == '[' || s->token.val == '{') {
+                tok1 = js_parse_skip_parens_token(s, &skip_bits, false);
+                /* bun-wasm: the lookahead could not restore its position */
+                if (tok1 == -1)
+                    return -1;
+            }
             if (s->token.val == ',') {
                 /* do nothing, skip the value, has_spread is false */
                 emit_op(s, OP_for_of_next);
                 emit_u8(s, 0);
                 emit_op(s, OP_drop);
                 emit_op(s, OP_drop);
-            } else if ((s->token.val == '[' || s->token.val == '{')
-                   &&  ((tok1 = js_parse_skip_parens_token(s, &skip_bits, false)) == ',' ||
-                        tok1 == '=' || tok1 == ']')) {
+            } else if (tok1 == ',' || tok1 == '=' || tok1 == ']') {
                 if (has_spread) {
                     if (tok1 == '=')
                         return js_parse_error(s, "rest element cannot have a default value");
@@ -27456,7 +28369,13 @@ static __exception int js_parse_postfix_expr(JSParseState *s, int parse_flags)
     case '[':
         {
             int skip_bits;
-            if (js_parse_skip_parens_token(s, &skip_bits, false) == '=') {
+            int skip_tok = js_parse_skip_parens_token(s, &skip_bits, false);
+            /* bun-wasm: the lookahead could not restore its position. Treating
+               that as "no assignment follows" parsed a literal from a stale
+               token and replaced the pending overflow with a SyntaxError. */
+            if (skip_tok == -1)
+                return -1;
+            if (skip_tok == '=') {
                 if (js_parse_destructuring_element(s, 0, false, false, skip_bits & SKIP_HAS_ELLIPSIS, true, false) < 0)
                     return -1;
             } else {
@@ -28438,11 +29357,19 @@ static __exception int js_parse_cond_expr(JSParseState *s, int parse_flags)
 static __exception int js_parse_assign_expr2(JSParseState *s, int parse_flags)
 {
     int opcode, op, scope;
+    int arrow_tok = 0;
     JSAtom name0 = JS_ATOM_NULL;
     JSAtom name;
 
     js_parse_reserve_wasm_frame();
 
+    if (s->token.val == '(') {
+        arrow_tok = js_parse_skip_parens_token(s, NULL, true);
+        /* bun-wasm: -1 means the lookahead could not restore its position.
+           Real tokens are negative too, so only -1 is tested. */
+        if (arrow_tok == -1)
+            return -1;
+    }
     if (s->token.val == TOK_YIELD) {
         bool is_star = false, is_async;
 
@@ -28580,8 +29507,7 @@ static __exception int js_parse_assign_expr2(JSParseState *s, int parse_flags)
             emit_label(s, label_next);
         }
         return 0;
-    } else if (s->token.val == '(' &&
-               js_parse_skip_parens_token(s, NULL, true) == TOK_ARROW) {
+    } else if (arrow_tok == TOK_ARROW) {
         return js_parse_function_decl(s, JS_PARSE_FUNC_ARROW,
                                       JS_FUNC_NORMAL, JS_ATOM_NULL,
                                       s->token.ptr, s->token.line_num,
@@ -28602,8 +29528,13 @@ static __exception int js_parse_assign_expr2(JSParseState *s, int parse_flags)
         js_parse_get_pos(s, &pos);
         if (next_token(s))
             return -1;
-        if ((s->token.val == '(' &&
-             js_parse_skip_parens_token(s, NULL, true) == TOK_ARROW) ||
+        if (s->token.val == '(') {
+            arrow_tok = js_parse_skip_parens_token(s, NULL, true);
+            /* bun-wasm: the lookahead could not restore its position */
+            if (arrow_tok == -1)
+                return -1;
+        }
+        if (arrow_tok == TOK_ARROW ||
             (s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved &&
              peek_token(s, true) == TOK_ARROW)) {
             return js_parse_function_decl(s, JS_PARSE_FUNC_ARROW,
@@ -28989,65 +29920,168 @@ static void emit_return(JSParseState *s, bool hasval)
 static __exception int js_parse_statement_or_decl(JSParseState *s,
                                                   int decl_mask);
 
-static __exception int js_parse_statement(JSParseState *s)
+/* bun-wasm: results of the statement steps below. A step either finishes
+   its statement or asks the driver to parse a child statement next. */
+enum {
+    JS_STMT_DONE,        /* the statement is complete */
+    JS_STMT_CHILD,       /* parse a child statement with the returned mask */
+    JS_STMT_CHILD_BLOCK, /* parse a child block */
+};
+
+static JSParseStmtFrame *js_parse_stmt_top(JSParseState *s)
 {
-    return js_parse_statement_or_decl(s, 0);
+    return &s->stmt_top->frames[(s->stmt_depth - 1) % JS_PARSE_STMT_CHUNK];
 }
 
-static __exception int js_parse_block(JSParseState *s)
+/* The chunk that will hold record number s->stmt_depth. */
+static JSParseStmtChunk *js_parse_stmt_next_chunk(JSParseState *s)
+{
+    JSParseStmtChunk *prev = s->stmt_depth == 0 ? NULL : s->stmt_top;
+    JSParseStmtChunk **plink = prev ? &prev->next : &s->stmt_first;
+    JSParseStmtChunk *chunk = *plink;
+
+    if (chunk)
+        return chunk;
+    chunk = js_malloc(s->ctx, sizeof(*chunk));
+    if (!chunk)
+        return NULL;
+    chunk->prev = prev;
+    chunk->next = NULL;
+    *plink = chunk;
+    return chunk;
+}
+
+/* Returns NULL with a pending RangeError at the record limit, or with the
+   allocator's error. Takes the label atom only on success. The record's
+   storage is stable before any BlockEnv in it is linked. */
+static JSParseStmtFrame *js_parse_stmt_push(JSParseState *s, int kind,
+                                            JSAtom *plabel_name)
+{
+    uint32_t index = s->stmt_depth % JS_PARSE_STMT_CHUNK;
+    JSParseStmtChunk *chunk = s->stmt_top;
+    JSParseStmtFrame *frame;
+
+    if (s->stmt_depth >= JS_PARSE_STMT_DEPTH_MAX) {
+        JS_ThrowStackOverflow(s->ctx);
+        return NULL;
+    }
+    if (index == 0) {
+        chunk = js_parse_stmt_next_chunk(s);
+        if (!chunk)
+            return NULL;
+        s->stmt_top = chunk;
+    }
+    frame = &chunk->frames[index];
+    frame->kind = kind;
+    frame->state = 0;
+    frame->has_using_be = 0;
+    frame->label_name = *plabel_name;
+    *plabel_name = JS_ATOM_NULL;
+    s->stmt_depth++;
+    return frame;
+}
+
+static void js_parse_stmt_pop(JSParseState *s)
+{
+    JS_FreeAtom(s->ctx, js_parse_stmt_top(s)->label_name);
+    s->stmt_depth--;
+    if (s->stmt_depth != 0 && s->stmt_depth % JS_PARSE_STMT_CHUNK == 0)
+        s->stmt_top = s->stmt_top->prev;
+}
+
+/* Failure in the driver that started at 'base' in function 'owner': unlink
+   every break entry linked since, then drop its records and their atoms.
+   'owner' is still alive here; nested functions unwound their own records. */
+static void js_parse_stmt_unwind(JSParseState *s, JSFunctionDef *owner,
+                                 uint32_t base, BlockEnv *saved_break)
+{
+    owner->top_break = saved_break;
+    while (s->stmt_depth > base)
+        js_parse_stmt_pop(s);
+}
+
+/* Releases the record pool. Every record is already popped. */
+static void js_parse_stmt_free(JSParseState *s)
+{
+    JSParseStmtChunk *chunk, *next;
+
+    for (chunk = s->stmt_first; chunk; chunk = next) {
+        next = chunk->next;
+        js_free(s->ctx, chunk);
+    }
+    s->stmt_first = NULL;
+    s->stmt_top = NULL;
+}
+
+static __exception int js_parse_stmt_begin_block(JSParseState *s, int *pmask)
 {
     JSFunctionDef *fd = s->cur_func;
+    JSAtom label_name = JS_ATOM_NULL;
+    JSParseStmtFrame *frame;
 
     if (js_parse_expect(s, '{'))
         return -1;
+    if (s->token.val == '}') {
+        if (next_token(s))
+            return -1;
+        return JS_STMT_DONE;
+    }
+    frame = js_parse_stmt_push(s, JS_STMT_BLOCK, &label_name);
+    if (!frame)
+        return -1;
+    push_scope(s);
+    frame->u.block.scope_level = fd->scope_level;
+    *pmask = DECL_MASK_ALL;
+    return JS_STMT_CHILD;
+}
+
+/* After each statement of a block. */
+static no_inline __exception int js_parse_stmt_resume_block(JSParseState *s,
+                                                           JSParseStmtFrame *frame,
+                                                           int *pmask)
+{
+    JSFunctionDef *fd = s->cur_func;
+    int scope_level = frame->u.block.scope_level;
+
+    if (!frame->has_using_be && fd->scopes[scope_level].has_using) {
+        frame->has_using_be = 1;
+        push_break_entry(fd, &frame->using_be, JS_ATOM_NULL, -1, -1, 1);
+        frame->using_be.has_using = true;
+        frame->using_be.using_scope_level = scope_level;
+    }
     if (s->token.val != '}') {
-        BlockEnv using_be;
-        int has_using_be = 0;
-        int scope_level;
+        *pmask = DECL_MASK_ALL;
+        return JS_STMT_CHILD;
+    }
+    if (frame->has_using_be) {
+        int label_catch = fd->scopes[scope_level].using_label_catch;
+        int label_end = fd->scopes[scope_level].using_label_end;
 
-        push_scope(s);
-        scope_level = fd->scope_level;
-        for(;;) {
-            if (js_parse_statement_or_decl(s, DECL_MASK_ALL))
-                return -1;
-            if (!has_using_be && fd->scopes[scope_level].has_using) {
-                has_using_be = 1;
-                push_break_entry(fd, &using_be, JS_ATOM_NULL, -1, -1, 1);
-                using_be.has_using = true;
-                using_be.using_scope_level = scope_level;
-            }
-            if (s->token.val == '}')
-                break;
-        }
-        if (has_using_be) {
-            int label_catch = fd->scopes[scope_level].using_label_catch;
-            int label_end = fd->scopes[scope_level].using_label_end;
+        pop_break_entry(fd);
 
-            pop_break_entry(fd);
-
-            if (js_is_live_code(s)) {
-                emit_op(s, OP_drop);  /* drop catch_offset */
-                emit_op(s, OP_using_dispose_init);  /* initial error_state: no error */
-                emit_op(s, OP_dispose_scope);
-                emit_u16(s, scope_level);
-                emit_op(s, OP_using_dispose_end);
-                emit_goto(s, OP_goto, label_end);
-            }
-
-            emit_label(s, label_catch);
-            /* Stack: exception_value (= initial error_state) */
+        if (js_is_live_code(s)) {
+            emit_op(s, OP_drop);  /* drop catch_offset */
+            emit_op(s, OP_using_dispose_init);  /* initial error_state: no error */
             emit_op(s, OP_dispose_scope);
             emit_u16(s, scope_level);
-            /* Stack: final_error_state (original or SuppressedError) */
-            emit_op(s, OP_throw);
-
-            emit_label(s, label_end);
+            emit_op(s, OP_using_dispose_end);
+            emit_goto(s, OP_goto, label_end);
         }
-        pop_scope(s);
+
+        emit_label(s, label_catch);
+        /* Stack: exception_value (= initial error_state) */
+        emit_op(s, OP_dispose_scope);
+        emit_u16(s, scope_level);
+        /* Stack: final_error_state (original or SuppressedError) */
+        emit_op(s, OP_throw);
+
+        emit_label(s, label_end);
     }
+    pop_scope(s);
+    js_parse_stmt_pop(s);
     if (next_token(s))
         return -1;
-    return 0;
+    return JS_STMT_DONE;
 }
 
 /* allowed parse_flags: PF_IN_ACCEPTED */
@@ -29175,8 +30209,14 @@ static __exception int js_parse_var(JSParseState *s, int parse_flags, int tok,
             JS_FreeAtom(ctx, name);
         } else {
             int skip_bits;
-            if ((s->token.val == '[' || s->token.val == '{')
-            &&  js_parse_skip_parens_token(s, &skip_bits, false) == '=') {
+            int skip_tok = 0;
+            if (s->token.val == '[' || s->token.val == '{') {
+                skip_tok = js_parse_skip_parens_token(s, &skip_bits, false);
+                /* bun-wasm: the lookahead could not restore its position */
+                if (skip_tok == -1)
+                    return -1;
+            }
+            if (skip_tok == '=') {
                 /* using declarations do not allow binding patterns */
                 if (tok == TOK_USING) {
                     return js_parse_error(s, "binding patterns are not allowed in using declarations");
@@ -29277,10 +30317,13 @@ static int is_using(JSParseState *s, bool is_for_of)
 
 /* XXX: handle IteratorClose when exiting the loop before the
    enumeration is done */
-static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
-                                          bool is_async,
-                                          int source_line_num,
-                                          int source_col_num)
+/* bun-wasm: the head of a for-in or for-of statement, up to its body. The
+   record keeps what js_parse_stmt_resume_for_in_of needs after the body. */
+static no_inline __exception int js_parse_for_in_of(JSParseState *s,
+                                                    JSParseStmtFrame *frame,
+                                                    bool is_async,
+                                                    int source_line_num,
+                                                    int source_col_num)
 {
     JSContext *ctx = s->ctx;
     JSFunctionDef *fd = s->cur_func;
@@ -29289,8 +30332,9 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
     int tok, tok1, opcode, scope, block_scope_level;
     int label_next, label_expr, label_cont, label_body, label_break;
     int pos_next, pos_expr;
-    BlockEnv break_entry;
+    BlockEnv *break_entry = &frame->be;
 
+    frame->kind = JS_STMT_FOR_IN_OF;
     has_initializer = false;
     has_destructuring = false;
     is_for_of = false;
@@ -29307,9 +30351,9 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
 
     /* local for_in scope starts here so individual elements
        can be closed in statement. */
-    push_break_entry(s->cur_func, &break_entry,
-                     label_name, label_break, label_cont, 1);
-    break_entry.scope_level = block_scope_level;
+    push_break_entry(s->cur_func, break_entry,
+                     frame->label_name, label_break, label_cont, 1);
+    break_entry->scope_level = block_scope_level;
 
     label_expr = emit_goto(s, OP_goto, -1);
 
@@ -29407,8 +30451,14 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
         return js_parse_error(s, "'for of' expression cannot start with 'async'");
     } else {
         int skip_bits;
-        if ((s->token.val == '[' || s->token.val == '{')
-        &&  ((tok1 = js_parse_skip_parens_token(s, &skip_bits, false)) == TOK_IN || tok1 == TOK_OF)) {
+        tok1 = 0;
+        if (s->token.val == '[' || s->token.val == '{') {
+            tok1 = js_parse_skip_parens_token(s, &skip_bits, false);
+            /* bun-wasm: the lookahead could not restore its position */
+            if (tok1 == -1)
+                return -1;
+        }
+        if (tok1 == TOK_IN || tok1 == TOK_OF) {
             if (js_parse_destructuring_element(s, 0, false, true, skip_bits & SKIP_HAS_ELLIPSIS, true, false) < 0)
                 return -1;
         } else {
@@ -29479,9 +30529,9 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
         /* set has_iterator after the iterable expression is parsed so
            that a yield in the expression does not try to close a
            not-yet-created iterator */
-        break_entry.has_iterator = true;
-        break_entry.is_async_iterator = is_async;
-        break_entry.drop_count += 2;
+        break_entry->has_iterator = true;
+        break_entry->is_async_iterator = is_async;
+        break_entry->drop_count += 2;
         if (is_async)
             emit_op(s, OP_for_await_of_start);
         else
@@ -29520,21 +30570,47 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
     {
         bool scope_has_using = fd->scopes[fd->scope_level].has_using;
         int using_scope_level = fd->scope_level;
-        BlockEnv using_be;
-        int had_using_be = 0;
 
         if (scope_has_using) {
             emit_goto(s, OP_catch, fd->scopes[using_scope_level].using_label_catch);
-            push_break_entry(fd, &using_be, JS_ATOM_NULL, -1, -1, 1);
-            using_be.has_using = true;
-            using_be.using_scope_level = using_scope_level;
-            had_using_be = 1;
+            push_break_entry(fd, &frame->using_be, JS_ATOM_NULL, -1, -1, 1);
+            frame->using_be.has_using = true;
+            frame->using_be.using_scope_level = using_scope_level;
+            frame->has_using_be = 1;
         }
+        frame->u.for_in_of.label_cont = label_cont;
+        frame->u.for_in_of.label_break = label_break;
+        frame->u.for_in_of.label_next = label_next;
+        frame->u.for_in_of.block_scope_level = block_scope_level;
+        frame->u.for_in_of.using_scope_level = using_scope_level;
+        frame->u.for_in_of.source_line_num = source_line_num;
+        frame->u.for_in_of.source_col_num = source_col_num;
+        frame->u.for_in_of.is_for_of = is_for_of;
+        frame->u.for_in_of.is_async = is_async;
+        frame->u.for_in_of.scope_has_using = scope_has_using;
+    }
+    return 0;
+}
 
-        if (js_parse_statement(s))
-            return -1;
+/* After the body of a for-in or for-of statement. */
+static no_inline __exception int js_parse_stmt_resume_for_in_of(JSParseState *s,
+                                                               JSParseStmtFrame *frame)
+{
+    JSFunctionDef *fd = s->cur_func;
+    int label_cont = frame->u.for_in_of.label_cont;
+    int label_break = frame->u.for_in_of.label_break;
+    int label_next = frame->u.for_in_of.label_next;
+    int block_scope_level = frame->u.for_in_of.block_scope_level;
+    int source_line_num = frame->u.for_in_of.source_line_num;
+    int source_col_num = frame->u.for_in_of.source_col_num;
+    bool is_for_of = frame->u.for_in_of.is_for_of;
+    bool is_async = frame->u.for_in_of.is_async;
 
-        if (had_using_be) {
+    {
+        bool scope_has_using = frame->u.for_in_of.scope_has_using;
+        int using_scope_level = frame->u.for_in_of.using_scope_level;
+
+        if (frame->has_using_be) {
             pop_break_entry(fd);
         }
 
@@ -29595,7 +30671,8 @@ static __exception int js_parse_for_in_of(JSParseState *s, int label_name,
     }
     pop_break_entry(s->cur_func);
     pop_scope(s);
-    return 0;
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
 }
 
 static void set_eval_ret_undefined(JSParseState *s)
@@ -29607,14 +30684,22 @@ static void set_eval_ret_undefined(JSParseState *s)
     }
 }
 
-static __exception int js_parse_statement_or_decl(JSParseState *s,
-                                                  int decl_mask)
+static __exception int js_parse_stmt_switch_clauses(JSParseState *s,
+                                                    JSParseStmtFrame *frame,
+                                                    int *pmask);
+
+/* bun-wasm: parses one statement up to its first child statement. Returns
+   JS_STMT_DONE when the statement had no child, or JS_STMT_CHILD /
+   JS_STMT_CHILD_BLOCK after pushing the record that the matching resume
+   step below continues from. The driver is js_parse_statement_or_decl. */
+static __exception int js_parse_stmt_begin(JSParseState *s, int decl_mask,
+                                           int *pmask)
 {
     JSContext *ctx = s->ctx;
     JSAtom label_name;
+    JSParseStmtFrame *frame;
     int tok;
 
-    js_reserve_wasm_frame(96);
     /* specific label handling */
     /* XXX: support multiple labels on loop statements */
     label_name = JS_ATOM_NULL;
@@ -29639,31 +30724,29 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
         &&  s->token.val != TOK_WHILE) {
             /* labelled regular statement */
             JSFunctionDef *fd = s->cur_func;
-            int label_break, mask;
-            BlockEnv break_entry;
+            int label_break;
 
+            frame = js_parse_stmt_push(s, JS_STMT_LABELED, &label_name);
+            if (!frame)
+                goto fail;
             label_break = new_label(s);
-            push_break_entry(fd, &break_entry, label_name, label_break, -1, 0);
+            frame->u.labeled.label_break = label_break;
+            push_break_entry(fd, &frame->be, frame->label_name, label_break, -1, 0);
             fd->top_break->is_regular_stmt = 1;
             if (!fd->is_strict_mode &&
                 (decl_mask & DECL_MASK_FUNC_WITH_LABEL)) {
-                mask = DECL_MASK_FUNC | DECL_MASK_FUNC_WITH_LABEL;
+                *pmask = DECL_MASK_FUNC | DECL_MASK_FUNC_WITH_LABEL;
             } else {
-                mask = 0;
+                *pmask = 0;
             }
-            if (js_parse_statement_or_decl(s, mask))
-                goto fail;
-            emit_label(s, label_break);
-            pop_break_entry(fd);
-            goto done;
+            return JS_STMT_CHILD;
         }
     }
 
     switch(tok = s->token.val) {
     case '{':
-        if (js_parse_block(s))
-            goto fail;
-        break;
+        /* a label before a block took the labelled statement path above */
+        return js_parse_stmt_begin_block(s, pmask);
     case TOK_RETURN:
         if (s->cur_func->is_eval) {
             js_parse_error(s, "return not in a function");
@@ -29747,7 +30830,6 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
         break;
     case TOK_IF:
         {
-            int label1, label2, mask;
             if (next_token(s))
                 goto fail;
             /* create a new scope for `let f;if(1) function f(){}` */
@@ -29755,40 +30837,31 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             set_eval_ret_undefined(s);
             if (js_parse_expr_paren(s))
                 goto fail;
-            label1 = emit_goto(s, OP_if_false, -1);
-            if (s->cur_func->is_strict_mode)
-                mask = 0;
-            else
-                mask = DECL_MASK_FUNC; /* Annex B.3.4 */
-
-            if (js_parse_statement_or_decl(s, mask))
+            frame = js_parse_stmt_push(s, JS_STMT_IF, &label_name);
+            if (!frame)
                 goto fail;
-
-            if (s->token.val == TOK_ELSE) {
-                label2 = emit_goto(s, OP_goto, -1);
-                if (next_token(s))
-                    goto fail;
-
-                emit_label(s, label1);
-                if (js_parse_statement_or_decl(s, mask))
-                    goto fail;
-
-                label1 = label2;
-            }
-            emit_label(s, label1);
-            pop_scope(s);
+            frame->u.if_.label1 = emit_goto(s, OP_if_false, -1);
+            if (s->cur_func->is_strict_mode)
+                frame->u.if_.mask = 0;
+            else
+                frame->u.if_.mask = DECL_MASK_FUNC; /* Annex B.3.4 */
+            *pmask = frame->u.if_.mask;
+            return JS_STMT_CHILD;
         }
-        break;
     case TOK_WHILE:
         {
             int label_cont, label_break;
-            BlockEnv break_entry;
 
+            frame = js_parse_stmt_push(s, JS_STMT_WHILE, &label_name);
+            if (!frame)
+                goto fail;
             label_cont = new_label(s);
             label_break = new_label(s);
+            frame->u.loop.label_cont = label_cont;
+            frame->u.loop.label_break = label_break;
 
-            push_break_entry(s->cur_func, &break_entry,
-                             label_name, label_break, label_cont, 0);
+            push_break_entry(s->cur_func, &frame->be,
+                             frame->label_name, label_break, label_cont, 0);
 
             if (next_token(s))
                 goto fail;
@@ -29799,27 +30872,25 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             if (js_parse_expr_paren(s))
                 goto fail;
             emit_goto(s, OP_if_false, label_break);
-
-            if (js_parse_statement(s))
-                goto fail;
-            emit_goto(s, OP_goto, label_cont);
-
-            emit_label(s, label_break);
-
-            pop_break_entry(s->cur_func);
+            *pmask = 0;
+            return JS_STMT_CHILD;
         }
-        break;
     case TOK_DO:
         {
             int label_cont, label_break, label1;
-            BlockEnv break_entry;
 
+            frame = js_parse_stmt_push(s, JS_STMT_DO, &label_name);
+            if (!frame)
+                goto fail;
             label_cont = new_label(s);
             label_break = new_label(s);
             label1 = new_label(s);
+            frame->u.loop.label_cont = label_cont;
+            frame->u.loop.label_break = label_break;
+            frame->u.loop.label1 = label1;
 
-            push_break_entry(s->cur_func, &break_entry,
-                             label_name, label_break, label_cont, 0);
+            push_break_entry(s->cur_func, &frame->be,
+                             frame->label_name, label_break, label_cont, 0);
 
             if (next_token(s))
                 goto fail;
@@ -29827,33 +30898,15 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             emit_label(s, label1);
 
             set_eval_ret_undefined(s);
-
-            if (js_parse_statement(s))
-                goto fail;
-
-            emit_label(s, label_cont);
-            if (js_parse_expect(s, TOK_WHILE))
-                goto fail;
-            if (js_parse_expr_paren(s))
-                goto fail;
-            /* Insert semicolon if missing */
-            if (s->token.val == ';') {
-                if (next_token(s))
-                    goto fail;
-            }
-            emit_goto(s, OP_if_true, label1);
-
-            emit_label(s, label_break);
-
-            pop_break_entry(s->cur_func);
+            *pmask = 0;
+            return JS_STMT_CHILD;
         }
-        break;
     case TOK_FOR:
         {
             int label_cont, label_break, label_body, label_test;
             int pos_cont, pos_body, block_scope_level;
             int for_scope_level;
-            BlockEnv break_entry;
+            BlockEnv *break_entry;
             int tok, bits;
             int source_line_num, source_col_num;
             bool is_async;
@@ -29867,7 +30920,9 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             bits = 0;
             is_async = false;
             if (s->token.val == '(') {
-                js_parse_skip_parens_token(s, &bits, false);
+                /* bun-wasm: the lookahead could not restore its position */
+                if (js_parse_skip_parens_token(s, &bits, false) == -1)
+                    goto fail;
             } else if (s->token.val == TOK_AWAIT) {
                 if (!(s->cur_func->func_kind & JS_FUNC_ASYNC)) {
                     js_parse_error(s, "for await is only valid in asynchronous functions");
@@ -29880,13 +30935,18 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             }
             if (js_parse_expect(s, '('))
                 goto fail;
+            frame = js_parse_stmt_push(s, JS_STMT_FOR, &label_name);
+            if (!frame)
+                goto fail;
+            break_entry = &frame->be;
 
             if (!(bits & SKIP_HAS_SEMI)) {
                 /* parse for/in or for/of */
-                if (js_parse_for_in_of(s, label_name, is_async,
+                if (js_parse_for_in_of(s, frame, is_async,
                                        source_line_num, source_col_num))
                     goto fail;
-                break;
+                *pmask = 0;
+                return JS_STMT_CHILD;
             }
             block_scope_level = s->cur_func->scope_level;
 
@@ -29967,12 +31027,12 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             label_body = new_label(s);
             label_break = new_label(s);
 
-            push_break_entry(s->cur_func, &break_entry,
-                             label_name, label_break, label_cont, 0);
+            push_break_entry(s->cur_func, break_entry,
+                             frame->label_name, label_break, label_cont, 0);
             if (s->cur_func->scopes[for_scope_level].has_using) {
-                break_entry.has_using = true;
-                break_entry.using_scope_level = for_scope_level;
-                break_entry.drop_count = 1; /* catch_offset from OP_catch */
+                break_entry->has_using = true;
+                break_entry->using_scope_level = for_scope_level;
+                break_entry->drop_count = 1; /* catch_offset from OP_catch */
             }
 
             /* test expression */
@@ -29990,7 +31050,7 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
 
             if (s->token.val == ')') {
                 /* no end expression */
-                break_entry.label_cont = label_cont = label_test;
+                break_entry->label_cont = label_cont = label_test;
                 pos_cont = 0; /* avoid warning */
             } else {
                 /* skip the end expression */
@@ -30009,62 +31069,17 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
 
             pos_body = s->cur_func->byte_code.size;
             emit_label(s, label_body);
-            if (js_parse_statement(s))
-                goto fail;
-
-            /* close the closures before the next iteration */
-            /* XXX: check continue case */
-            close_scopes(s, s->cur_func->scope_level, block_scope_level);
-
-            if (label_test != label_body && label_cont != label_test) {
-                /* move the increment code here */
-                DynBuf *bc = &s->cur_func->byte_code;
-                int chunk_size = pos_body - pos_cont;
-                int offset = bc->size - pos_cont;
-                int i;
-                if (dbuf_claim(bc, chunk_size))
-                    return -1;
-                dbuf_put(bc, bc->buf + pos_cont, chunk_size);
-                memset(bc->buf + pos_cont, OP_nop, chunk_size);
-                /* increment part ends with a goto */
-                s->cur_func->last_opcode_pos = bc->size - 5;
-                /* relocate labels */
-                for (i = label_cont; i < s->cur_func->label_count; i++) {
-                    LabelSlot *ls = &s->cur_func->label_slots[i];
-                    if (ls->pos >= pos_cont && ls->pos < pos_body)
-                        ls->pos += offset;
-                }
-            } else {
-                emit_goto(s, OP_goto, label_cont);
-            }
-
-            emit_label(s, label_break);
-
-            pop_break_entry(s->cur_func);
-
-            if (s->cur_func->scopes[for_scope_level].has_using) {
-                int label_catch = s->cur_func->scopes[for_scope_level].using_label_catch;
-                int label_end = s->cur_func->scopes[for_scope_level].using_label_end;
-
-                /* Normal exit: drop catch_offset, dispose */
-                emit_op(s, OP_drop);
-                emit_op(s, OP_using_dispose_init);
-                emit_op(s, OP_dispose_scope);
-                emit_u16(s, for_scope_level);
-                emit_op(s, OP_using_dispose_end);
-                emit_goto(s, OP_goto, label_end);
-
-                /* Catch handler: exception on stack */
-                emit_label(s, label_catch);
-                emit_op(s, OP_dispose_scope);
-                emit_u16(s, for_scope_level);
-                emit_op(s, OP_throw);
-
-                emit_label(s, label_end);
-            }
-            pop_scope(s);
+            frame->u.for_.label_cont = label_cont;
+            frame->u.for_.label_break = label_break;
+            frame->u.for_.label_body = label_body;
+            frame->u.for_.label_test = label_test;
+            frame->u.for_.pos_cont = pos_cont;
+            frame->u.for_.pos_body = pos_body;
+            frame->u.for_.block_scope_level = block_scope_level;
+            frame->u.for_.for_scope_level = for_scope_level;
+            *pmask = 0;
+            return JS_STMT_CHILD;
         }
-        break;
     case TOK_BREAK:
     case TOK_CONTINUE:
         {
@@ -30089,9 +31104,7 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
         break;
     case TOK_SWITCH:
         {
-            int label_case, label_break, label1;
-            int default_label_pos;
-            BlockEnv break_entry;
+            int label_break;
 
             if (next_token(s))
                 goto fail;
@@ -30100,275 +31113,49 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             if (js_parse_expr_paren(s))
                 goto fail;
 
+            frame = js_parse_stmt_push(s, JS_STMT_SWITCH, &label_name);
+            if (!frame)
+                goto fail;
             push_scope(s);
             label_break = new_label(s);
-            push_break_entry(s->cur_func, &break_entry,
-                             label_name, label_break, -1, 1);
+            push_break_entry(s->cur_func, &frame->be,
+                             frame->label_name, label_break, -1, 1);
 
             if (js_parse_expect(s, '{'))
                 goto fail;
 
-            default_label_pos = -1;
-            label_case = -1;
-            while (s->token.val != '}') {
-                if (s->token.val == TOK_CASE) {
-                    label1 = -1;
-                    if (label_case >= 0) {
-                        /* skip the case if needed */
-                        label1 = emit_goto(s, OP_goto, -1);
-                    }
-                    emit_label(s, label_case);
-                    label_case = -1;
-                    for (;;) {
-                        /* parse a sequence of case clauses */
-                        if (next_token(s))
-                            goto fail;
-                        emit_op(s, OP_dup);
-                        if (js_parse_expr(s))
-                            goto fail;
-                        if (js_parse_expect(s, ':'))
-                            goto fail;
-                        emit_op(s, OP_strict_eq);
-                        if (s->token.val == TOK_CASE) {
-                            label1 = emit_goto(s, OP_if_true, label1);
-                        } else {
-                            label_case = emit_goto(s, OP_if_false, -1);
-                            emit_label(s, label1);
-                            break;
-                        }
-                    }
-                } else if (s->token.val == TOK_DEFAULT) {
-                    if (next_token(s))
-                        goto fail;
-                    if (js_parse_expect(s, ':'))
-                        goto fail;
-                    if (default_label_pos >= 0) {
-                        js_parse_error(s, "duplicate default");
-                        goto fail;
-                    }
-                    if (label_case < 0) {
-                        /* falling thru direct from switch expression */
-                        label_case = emit_goto(s, OP_goto, -1);
-                    }
-                    /* Emit a dummy label opcode. Label will be patched after
-                       the end of the switch body. Do not use emit_label(s, 0)
-                       because it would clobber label 0 address, preventing
-                       proper optimizer operation.
-                     */
-                    emit_op(s, OP_label);
-                    emit_u32(s, 0);
-                    default_label_pos = s->cur_func->byte_code.size - 4;
-                } else {
-                    if (label_case < 0) {
-                        /* falling thru direct from switch expression */
-                        js_parse_error(s, "invalid switch statement");
-                        goto fail;
-                    }
-                    /* `using` / `await using` declarations are not allowed
-                       directly within a CaseClause or DefaultClause
-                       (early error per spec). */
-                    if (token_is_pseudo_keyword(s, JS_ATOM_using)) {
-                        int u = is_using(s, false);
-                        if (u < 0)
-                            goto fail;
-                        if (u) {
-                            js_parse_error(s, "using declaration is not allowed in this context");
-                            goto fail;
-                        }
-                    }
-                    if (s->token.val == TOK_AWAIT &&
-                        (s->cur_func->func_kind & JS_FUNC_ASYNC)) {
-                        JSParsePos pos;
-                        int u;
-                        js_parse_get_pos(s, &pos);
-                        if (next_token(s))
-                            goto fail;
-                        u = is_using(s, false);
-                        if (u < 0)
-                            goto fail;
-                        if (js_parse_seek_token(s, &pos))
-                            goto fail;
-                        if (u) {
-                            js_parse_error(s, "await using declaration is not allowed in this context");
-                            goto fail;
-                        }
-                    }
-                    if (js_parse_statement_or_decl(s, DECL_MASK_ALL))
-                        goto fail;
-                }
-            }
-            if (js_parse_expect(s, '}'))
-                goto fail;
-            if (default_label_pos >= 0) {
-                /* Ugly patch for the `default` label, shameful and risky */
-                put_u32(s->cur_func->byte_code.buf + default_label_pos,
-                        label_case);
-                s->cur_func->label_slots[label_case].pos = default_label_pos + 4;
-            } else {
-                emit_label(s, label_case);
-            }
-            emit_label(s, label_break);
-            emit_op(s, OP_drop); /* drop the switch expression */
-
-            pop_break_entry(s->cur_func);
-            pop_scope(s);
+            frame->u.switch_.label_break = label_break;
+            frame->u.switch_.default_label_pos = -1;
+            frame->u.switch_.label_case = -1;
+            return js_parse_stmt_switch_clauses(s, frame, pmask);
         }
-        break;
     case TOK_TRY:
         {
             int label_catch, label_catch2, label_finally, label_end;
-            JSAtom name;
-            BlockEnv block_env;
 
             set_eval_ret_undefined(s);
             if (next_token(s))
+                goto fail;
+            frame = js_parse_stmt_push(s, JS_STMT_TRY, &label_name);
+            if (!frame)
                 goto fail;
             label_catch = new_label(s);
             label_catch2 = new_label(s);
             label_finally = new_label(s);
             label_end = new_label(s);
+            frame->u.try_.label_catch = label_catch;
+            frame->u.try_.label_catch2 = label_catch2;
+            frame->u.try_.label_finally = label_finally;
+            frame->u.try_.label_end = label_end;
+            frame->u.try_.saved_eval_ret_idx = 0;
 
             emit_goto(s, OP_catch, label_catch);
 
-            push_break_entry(s->cur_func, &block_env,
+            push_break_entry(s->cur_func, &frame->be,
                              JS_ATOM_NULL, -1, -1, 1);
-            block_env.label_finally = label_finally;
-
-            if (js_parse_block(s))
-                goto fail;
-
-            pop_break_entry(s->cur_func);
-
-            if (js_is_live_code(s)) {
-                /* drop the catch offset */
-                emit_op(s, OP_drop);
-                /* must push dummy value to keep same stack size */
-                emit_op(s, OP_undefined);
-                emit_goto(s, OP_gosub, label_finally);
-                emit_op(s, OP_drop);
-
-                emit_goto(s, OP_goto, label_end);
-            }
-
-            if (s->token.val == TOK_CATCH) {
-                if (next_token(s))
-                    goto fail;
-
-                push_scope(s);  /* catch variable */
-                emit_label(s, label_catch);
-
-                if (s->token.val == '{') {
-                    /* support optional-catch-binding feature */
-                    emit_op(s, OP_drop);    /* pop the exception object */
-                } else {
-                    if (js_parse_expect(s, '('))
-                        goto fail;
-                    if (!(s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved)) {
-                        if (s->token.val == '[' || s->token.val == '{') {
-                            /* XXX: TOK_LET is not completely correct */
-                            if (js_parse_destructuring_element(s, TOK_LET, false, true, -1, true, false) < 0)
-                                goto fail;
-                        } else {
-                            js_parse_error(s, "identifier expected");
-                            goto fail;
-                        }
-                    } else {
-                        name = JS_DupAtom(ctx, s->token.u.ident.atom);
-                        if (next_token(s)
-                        ||  js_define_var(s, name, TOK_CATCH) < 0) {
-                            JS_FreeAtom(ctx, name);
-                            goto fail;
-                        }
-                        /* store the exception value in the catch variable */
-                        emit_op(s, OP_scope_put_var);
-                        emit_u32(s, name);
-                        emit_u16(s, s->cur_func->scope_level);
-                    }
-                    if (js_parse_expect(s, ')'))
-                        goto fail;
-                }
-                /* XXX: should keep the address to nop it out if there is no finally block */
-                emit_goto(s, OP_catch, label_catch2);
-
-                push_scope(s);  /* catch block */
-                push_break_entry(s->cur_func, &block_env, JS_ATOM_NULL,
-                                 -1, -1, 1);
-                block_env.label_finally = label_finally;
-
-                if (js_parse_block(s))
-                    goto fail;
-
-                pop_break_entry(s->cur_func);
-                pop_scope(s);  /* catch block */
-                pop_scope(s);  /* catch variable */
-
-                if (js_is_live_code(s)) {
-                    /* drop the catch2 offset */
-                    emit_op(s, OP_drop);
-                    /* XXX: should keep the address to nop it out if there is no finally block */
-                    /* must push dummy value to keep same stack size */
-                    emit_op(s, OP_undefined);
-                    emit_goto(s, OP_gosub, label_finally);
-                    emit_op(s, OP_drop);
-                    emit_goto(s, OP_goto, label_end);
-                }
-                /* catch exceptions thrown in the catch block to execute the
-                 * finally clause and rethrow the exception */
-                emit_label(s, label_catch2);
-                /* catch value is at TOS, no need to push undefined */
-                emit_goto(s, OP_gosub, label_finally);
-                emit_op(s, OP_throw);
-
-            } else if (s->token.val == TOK_FINALLY) {
-                /* finally without catch : execute the finally clause
-                 * and rethrow the exception */
-                emit_label(s, label_catch);
-                /* catch value is at TOS, no need to push undefined */
-                emit_goto(s, OP_gosub, label_finally);
-                emit_op(s, OP_throw);
-            } else {
-                js_parse_error(s, "expecting catch or finally");
-                goto fail;
-            }
-            emit_label(s, label_finally);
-            if (s->token.val == TOK_FINALLY) {
-                int saved_eval_ret_idx = 0; /* avoid warning */
-
-                if (next_token(s))
-                    goto fail;
-                /* on the stack: ret_value gosub_ret_value */
-                push_break_entry(s->cur_func, &block_env, JS_ATOM_NULL,
-                                 -1, -1, 2);
-
-                if (s->cur_func->eval_ret_idx >= 0) {
-                    /* 'finally' updates eval_ret only if not a normal
-                       termination */
-                    saved_eval_ret_idx =
-                        add_var(s->ctx, s->cur_func, JS_ATOM__ret_);
-                    if (saved_eval_ret_idx < 0)
-                        goto fail;
-                    emit_op(s, OP_get_loc);
-                    emit_u16(s, s->cur_func->eval_ret_idx);
-                    emit_op(s, OP_put_loc);
-                    emit_u16(s, saved_eval_ret_idx);
-                    set_eval_ret_undefined(s);
-                }
-
-                if (js_parse_block(s))
-                    goto fail;
-
-                if (s->cur_func->eval_ret_idx >= 0) {
-                    emit_op(s, OP_get_loc);
-                    emit_u16(s, saved_eval_ret_idx);
-                    emit_op(s, OP_put_loc);
-                    emit_u16(s, s->cur_func->eval_ret_idx);
-                }
-                pop_break_entry(s->cur_func);
-            }
-            emit_op(s, OP_ret);
-            emit_label(s, label_end);
+            frame->be.label_finally = label_finally;
+            return JS_STMT_CHILD_BLOCK;
         }
-        break;
     case ';':
         /* empty statement */
         if (next_token(s))
@@ -30387,6 +31174,9 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             if (js_parse_expr_paren(s))
                 goto fail;
 
+            frame = js_parse_stmt_push(s, JS_STMT_WITH, &label_name);
+            if (!frame)
+                goto fail;
             push_scope(s);
             with_idx = define_var(s, s->cur_func, JS_ATOM__with_,
                                   JS_VAR_DEF_WITH);
@@ -30397,13 +31187,9 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
             emit_u16(s, with_idx);
 
             set_eval_ret_undefined(s);
-            if (js_parse_statement(s))
-                goto fail;
-
-            /* Popping scope drops lexical context for the with object variable */
-            pop_scope(s);
+            *pmask = 0;
+            return JS_STMT_CHILD;
         }
-        break;
     case TOK_FUNCTION:
         /* ES6 Annex B.3.2 and B.3.3 semantics */
         if (!(decl_mask & DECL_MASK_FUNC))
@@ -30513,10 +31299,470 @@ static __exception int js_parse_statement_or_decl(JSParseState *s,
     }
 done:
     JS_FreeAtom(ctx, label_name);
-    return 0;
+    return JS_STMT_DONE;
 fail:
     JS_FreeAtom(ctx, label_name);
     return -1;
+}
+
+/* Parses case and default clauses up to the next statement of the switch
+   body, or finishes the switch at its closing brace. */
+static no_inline __exception int js_parse_stmt_switch_clauses(JSParseState *s,
+                                                             JSParseStmtFrame *frame,
+                                                             int *pmask)
+{
+    int label_case = frame->u.switch_.label_case;
+    int default_label_pos = frame->u.switch_.default_label_pos;
+    int label1;
+
+    while (s->token.val != '}') {
+        if (s->token.val == TOK_CASE) {
+            label1 = -1;
+            if (label_case >= 0) {
+                /* skip the case if needed */
+                label1 = emit_goto(s, OP_goto, -1);
+            }
+            emit_label(s, label_case);
+            label_case = -1;
+            for (;;) {
+                /* parse a sequence of case clauses */
+                if (next_token(s))
+                    return -1;
+                emit_op(s, OP_dup);
+                if (js_parse_expr(s))
+                    return -1;
+                if (js_parse_expect(s, ':'))
+                    return -1;
+                emit_op(s, OP_strict_eq);
+                if (s->token.val == TOK_CASE) {
+                    label1 = emit_goto(s, OP_if_true, label1);
+                } else {
+                    label_case = emit_goto(s, OP_if_false, -1);
+                    emit_label(s, label1);
+                    break;
+                }
+            }
+        } else if (s->token.val == TOK_DEFAULT) {
+            if (next_token(s))
+                return -1;
+            if (js_parse_expect(s, ':'))
+                return -1;
+            if (default_label_pos >= 0)
+                return js_parse_error(s, "duplicate default");
+            if (label_case < 0) {
+                /* falling thru direct from switch expression */
+                label_case = emit_goto(s, OP_goto, -1);
+            }
+            /* Emit a dummy label opcode. Label will be patched after
+               the end of the switch body. Do not use emit_label(s, 0)
+               because it would clobber label 0 address, preventing
+               proper optimizer operation.
+             */
+            emit_op(s, OP_label);
+            emit_u32(s, 0);
+            default_label_pos = s->cur_func->byte_code.size - 4;
+        } else {
+            if (label_case < 0) {
+                /* falling thru direct from switch expression */
+                return js_parse_error(s, "invalid switch statement");
+            }
+            /* `using` / `await using` declarations are not allowed
+               directly within a CaseClause or DefaultClause
+               (early error per spec). */
+            if (token_is_pseudo_keyword(s, JS_ATOM_using)) {
+                int u = is_using(s, false);
+                if (u < 0)
+                    return -1;
+                if (u)
+                    return js_parse_error(s, "using declaration is not allowed in this context");
+            }
+            if (s->token.val == TOK_AWAIT &&
+                (s->cur_func->func_kind & JS_FUNC_ASYNC)) {
+                JSParsePos pos;
+                int u;
+                js_parse_get_pos(s, &pos);
+                if (next_token(s))
+                    return -1;
+                u = is_using(s, false);
+                if (u < 0)
+                    return -1;
+                if (js_parse_seek_token(s, &pos))
+                    return -1;
+                if (u)
+                    return js_parse_error(s, "await using declaration is not allowed in this context");
+            }
+            frame->u.switch_.label_case = label_case;
+            frame->u.switch_.default_label_pos = default_label_pos;
+            *pmask = DECL_MASK_ALL;
+            return JS_STMT_CHILD;
+        }
+    }
+    if (js_parse_expect(s, '}'))
+        return -1;
+    if (default_label_pos >= 0) {
+        /* Ugly patch for the `default` label, shameful and risky */
+        put_u32(s->cur_func->byte_code.buf + default_label_pos,
+                label_case);
+        s->cur_func->label_slots[label_case].pos = default_label_pos + 4;
+    } else {
+        emit_label(s, label_case);
+    }
+    emit_label(s, frame->u.switch_.label_break);
+    emit_op(s, OP_drop); /* drop the switch expression */
+
+    pop_break_entry(s->cur_func);
+    pop_scope(s);
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* After the body of an ordinary for statement. */
+static no_inline __exception int js_parse_stmt_resume_for(JSParseState *s,
+                                                         JSParseStmtFrame *frame)
+{
+    int label_cont = frame->u.for_.label_cont;
+    int label_break = frame->u.for_.label_break;
+    int label_body = frame->u.for_.label_body;
+    int label_test = frame->u.for_.label_test;
+    int pos_cont = frame->u.for_.pos_cont;
+    int pos_body = frame->u.for_.pos_body;
+    int block_scope_level = frame->u.for_.block_scope_level;
+    int for_scope_level = frame->u.for_.for_scope_level;
+
+    /* close the closures before the next iteration */
+    /* XXX: check continue case */
+    close_scopes(s, s->cur_func->scope_level, block_scope_level);
+
+    if (label_test != label_body && label_cont != label_test) {
+        /* move the increment code here */
+        DynBuf *bc = &s->cur_func->byte_code;
+        int chunk_size = pos_body - pos_cont;
+        int offset = bc->size - pos_cont;
+        int i;
+        if (dbuf_claim(bc, chunk_size))
+            return -1;
+        dbuf_put(bc, bc->buf + pos_cont, chunk_size);
+        memset(bc->buf + pos_cont, OP_nop, chunk_size);
+        /* increment part ends with a goto */
+        s->cur_func->last_opcode_pos = bc->size - 5;
+        /* relocate labels */
+        for (i = label_cont; i < s->cur_func->label_count; i++) {
+            LabelSlot *ls = &s->cur_func->label_slots[i];
+            if (ls->pos >= pos_cont && ls->pos < pos_body)
+                ls->pos += offset;
+        }
+    } else {
+        emit_goto(s, OP_goto, label_cont);
+    }
+
+    emit_label(s, label_break);
+
+    pop_break_entry(s->cur_func);
+
+    if (s->cur_func->scopes[for_scope_level].has_using) {
+        int label_catch = s->cur_func->scopes[for_scope_level].using_label_catch;
+        int label_end = s->cur_func->scopes[for_scope_level].using_label_end;
+
+        /* Normal exit: drop catch_offset, dispose */
+        emit_op(s, OP_drop);
+        emit_op(s, OP_using_dispose_init);
+        emit_op(s, OP_dispose_scope);
+        emit_u16(s, for_scope_level);
+        emit_op(s, OP_using_dispose_end);
+        emit_goto(s, OP_goto, label_end);
+
+        /* Catch handler: exception on stack */
+        emit_label(s, label_catch);
+        emit_op(s, OP_dispose_scope);
+        emit_u16(s, for_scope_level);
+        emit_op(s, OP_throw);
+
+        emit_label(s, label_end);
+    }
+    pop_scope(s);
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* The finally clause, or the end of a try statement without one. */
+static __exception int js_parse_stmt_try_finally(JSParseState *s,
+                                                 JSParseStmtFrame *frame)
+{
+    emit_label(s, frame->u.try_.label_finally);
+    if (s->token.val == TOK_FINALLY) {
+        int saved_eval_ret_idx = 0; /* avoid warning */
+
+        if (next_token(s))
+            return -1;
+        /* on the stack: ret_value gosub_ret_value */
+        push_break_entry(s->cur_func, &frame->be, JS_ATOM_NULL,
+                         -1, -1, 2);
+
+        if (s->cur_func->eval_ret_idx >= 0) {
+            /* 'finally' updates eval_ret only if not a normal
+               termination */
+            saved_eval_ret_idx =
+                add_var(s->ctx, s->cur_func, JS_ATOM__ret_);
+            if (saved_eval_ret_idx < 0)
+                return -1;
+            emit_op(s, OP_get_loc);
+            emit_u16(s, s->cur_func->eval_ret_idx);
+            emit_op(s, OP_put_loc);
+            emit_u16(s, saved_eval_ret_idx);
+            set_eval_ret_undefined(s);
+        }
+        frame->u.try_.saved_eval_ret_idx = saved_eval_ret_idx;
+        frame->state = 2;
+        return JS_STMT_CHILD_BLOCK;
+    }
+    emit_op(s, OP_ret);
+    emit_label(s, frame->u.try_.label_end);
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* The catch clause up to its block. */
+static __exception int js_parse_stmt_try_catch(JSParseState *s,
+                                               JSParseStmtFrame *frame)
+{
+    JSContext *ctx = s->ctx;
+    JSAtom name;
+
+    if (next_token(s))
+        return -1;
+
+    push_scope(s);  /* catch variable */
+    emit_label(s, frame->u.try_.label_catch);
+
+    if (s->token.val == '{') {
+        /* support optional-catch-binding feature */
+        emit_op(s, OP_drop);    /* pop the exception object */
+    } else {
+        if (js_parse_expect(s, '('))
+            return -1;
+        if (!(s->token.val == TOK_IDENT && !s->token.u.ident.is_reserved)) {
+            if (s->token.val == '[' || s->token.val == '{') {
+                /* XXX: TOK_LET is not completely correct */
+                if (js_parse_destructuring_element(s, TOK_LET, false, true, -1, true, false) < 0)
+                    return -1;
+            } else {
+                return js_parse_error(s, "identifier expected");
+            }
+        } else {
+            name = JS_DupAtom(ctx, s->token.u.ident.atom);
+            if (next_token(s)
+            ||  js_define_var(s, name, TOK_CATCH) < 0) {
+                JS_FreeAtom(ctx, name);
+                return -1;
+            }
+            /* store the exception value in the catch variable */
+            emit_op(s, OP_scope_put_var);
+            emit_u32(s, name);
+            emit_u16(s, s->cur_func->scope_level);
+        }
+        if (js_parse_expect(s, ')'))
+            return -1;
+    }
+    /* XXX: should keep the address to nop it out if there is no finally block */
+    emit_goto(s, OP_catch, frame->u.try_.label_catch2);
+
+    push_scope(s);  /* catch block */
+    push_break_entry(s->cur_func, &frame->be, JS_ATOM_NULL,
+                     -1, -1, 1);
+    frame->be.label_finally = frame->u.try_.label_finally;
+    frame->state = 1;
+    return JS_STMT_CHILD_BLOCK;
+}
+
+/* After the try block (state 0), the catch block (1) or the finally block (2). */
+static no_inline __exception int js_parse_stmt_resume_try(JSParseState *s,
+                                                         JSParseStmtFrame *frame)
+{
+    int label_finally = frame->u.try_.label_finally;
+    int label_end = frame->u.try_.label_end;
+
+    if (frame->state == 2) {
+        if (s->cur_func->eval_ret_idx >= 0) {
+            emit_op(s, OP_get_loc);
+            emit_u16(s, frame->u.try_.saved_eval_ret_idx);
+            emit_op(s, OP_put_loc);
+            emit_u16(s, s->cur_func->eval_ret_idx);
+        }
+        pop_break_entry(s->cur_func);
+        emit_op(s, OP_ret);
+        emit_label(s, label_end);
+        js_parse_stmt_pop(s);
+        return JS_STMT_DONE;
+    }
+    if (frame->state == 1) {
+        pop_break_entry(s->cur_func);
+        pop_scope(s);  /* catch block */
+        pop_scope(s);  /* catch variable */
+
+        if (js_is_live_code(s)) {
+            /* drop the catch2 offset */
+            emit_op(s, OP_drop);
+            /* XXX: should keep the address to nop it out if there is no finally block */
+            /* must push dummy value to keep same stack size */
+            emit_op(s, OP_undefined);
+            emit_goto(s, OP_gosub, label_finally);
+            emit_op(s, OP_drop);
+            emit_goto(s, OP_goto, label_end);
+        }
+        /* catch exceptions thrown in the catch block to execute the
+         * finally clause and rethrow the exception */
+        emit_label(s, frame->u.try_.label_catch2);
+        /* catch value is at TOS, no need to push undefined */
+        emit_goto(s, OP_gosub, label_finally);
+        emit_op(s, OP_throw);
+        return js_parse_stmt_try_finally(s, frame);
+    }
+
+    pop_break_entry(s->cur_func);
+
+    if (js_is_live_code(s)) {
+        /* drop the catch offset */
+        emit_op(s, OP_drop);
+        /* must push dummy value to keep same stack size */
+        emit_op(s, OP_undefined);
+        emit_goto(s, OP_gosub, label_finally);
+        emit_op(s, OP_drop);
+
+        emit_goto(s, OP_goto, label_end);
+    }
+
+    if (s->token.val == TOK_CATCH)
+        return js_parse_stmt_try_catch(s, frame);
+    if (s->token.val != TOK_FINALLY)
+        return js_parse_error(s, "expecting catch or finally");
+    /* finally without catch : execute the finally clause
+     * and rethrow the exception */
+    emit_label(s, frame->u.try_.label_catch);
+    /* catch value is at TOS, no need to push undefined */
+    emit_goto(s, OP_gosub, label_finally);
+    emit_op(s, OP_throw);
+    return js_parse_stmt_try_finally(s, frame);
+}
+
+/* After the body of a do-while statement. */
+static no_inline __exception int js_parse_stmt_resume_do(JSParseState *s,
+                                                        JSParseStmtFrame *frame)
+{
+    emit_label(s, frame->u.loop.label_cont);
+    if (js_parse_expect(s, TOK_WHILE))
+        return -1;
+    if (js_parse_expr_paren(s))
+        return -1;
+    /* Insert semicolon if missing */
+    if (s->token.val == ';') {
+        if (next_token(s))
+            return -1;
+    }
+    emit_goto(s, OP_if_true, frame->u.loop.label1);
+
+    emit_label(s, frame->u.loop.label_break);
+
+    pop_break_entry(s->cur_func);
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* After a branch of an if statement: state 0 is the first branch. */
+static __exception int js_parse_stmt_resume_if(JSParseState *s,
+                                               JSParseStmtFrame *frame,
+                                               int *pmask)
+{
+    if (frame->state == 0 && s->token.val == TOK_ELSE) {
+        int label2 = emit_goto(s, OP_goto, -1);
+        if (next_token(s))
+            return -1;
+
+        emit_label(s, frame->u.if_.label1);
+        frame->u.if_.label1 = label2;
+        frame->state = 1;
+        *pmask = frame->u.if_.mask;
+        return JS_STMT_CHILD;
+    }
+    emit_label(s, frame->u.if_.label1);
+    pop_scope(s);
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* The statement on top of the record stack just finished one child: run
+   the code that followed the recursive call in the upstream parser. */
+static __exception int js_parse_stmt_resume(JSParseState *s, int *pmask)
+{
+    JSParseStmtFrame *frame = js_parse_stmt_top(s);
+
+    switch (frame->kind) {
+    case JS_STMT_BLOCK:
+        return js_parse_stmt_resume_block(s, frame, pmask);
+    case JS_STMT_IF:
+        return js_parse_stmt_resume_if(s, frame, pmask);
+    case JS_STMT_LABELED:
+        emit_label(s, frame->u.labeled.label_break);
+        pop_break_entry(s->cur_func);
+        break;
+    case JS_STMT_WHILE:
+        emit_goto(s, OP_goto, frame->u.loop.label_cont);
+        emit_label(s, frame->u.loop.label_break);
+        pop_break_entry(s->cur_func);
+        break;
+    case JS_STMT_DO:
+        return js_parse_stmt_resume_do(s, frame);
+    case JS_STMT_FOR:
+        return js_parse_stmt_resume_for(s, frame);
+    case JS_STMT_FOR_IN_OF:
+        return js_parse_stmt_resume_for_in_of(s, frame);
+    case JS_STMT_SWITCH:
+        return js_parse_stmt_switch_clauses(s, frame, pmask);
+    case JS_STMT_TRY:
+        return js_parse_stmt_resume_try(s, frame);
+    default:
+        /* JS_STMT_WITH: popping the scope drops the lexical context of
+           the with object variable */
+        pop_scope(s);
+        break;
+    }
+    js_parse_stmt_pop(s);
+    return JS_STMT_DONE;
+}
+
+/* bun-wasm: the statement parser is a loop over heap records instead of a
+   recursive function, so nested statements add no native frames. Functions
+   inside expressions still re-enter it through js_parse_function_decl2;
+   each entry owns the records above its starting depth.
+
+   Not inlined: js_parse_source_element also parses nested function
+   declarations without entering this function, and that cycle must not
+   carry this frame and its reservation. */
+static no_inline __exception int js_parse_statement_or_decl(JSParseState *s,
+                                                           int decl_mask)
+{
+    JSFunctionDef *owner = s->cur_func;
+    BlockEnv *saved_break = owner->top_break;
+    uint32_t base = s->stmt_depth;
+    int mask = decl_mask;
+    int r = JS_STMT_CHILD;
+
+    js_reserve_wasm_frame(96);
+    for (;;) {
+        if (r == JS_STMT_CHILD)
+            r = js_parse_stmt_begin(s, mask, &mask);
+        else if (r == JS_STMT_CHILD_BLOCK)
+            r = js_parse_stmt_begin_block(s, &mask);
+        else if (s->stmt_depth == base)
+            break;
+        else
+            r = js_parse_stmt_resume(s, &mask);
+        if (r < 0) {
+            js_parse_stmt_unwind(s, owner, base, saved_break);
+            return -1;
+        }
+    }
+    assert(owner->top_break == saved_break);
+    return 0;
 }
 
 #endif // QJS_DISABLE_PARSER
@@ -31396,7 +32642,14 @@ static __exception int get_exported_names(JSContext *ctx,
 /* Unfortunately, the spec gives a different behavior from GetOwnProperty ! */
 static int js_module_ns_has(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
-    return (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL);
+    if (find_own_property1(JS_VALUE_GET_OBJ(obj), atom) != NULL)
+        return true;
+    return JS_HasProperty(ctx, ctx->class_proto[JS_CLASS_MODULE_NS], atom);
+}
+
+bool JS_bunwasm_IsModuleNamespace(JSValueConst value)
+{
+    return JS_GetClassID(value) == JS_CLASS_MODULE_NS;
 }
 
 static const JSClassExoticMethods js_module_ns_exotic_methods = {
@@ -37862,13 +39115,13 @@ static __exception int js_parse_function_decl2(JSParseState *s,
         fd->defined_arg_count = 1;
     } else if (func_type != JS_PARSE_FUNC_CLASS_STATIC_INIT) {
         if (s->token.val == '(') {
-            int skip_bits;
+            int skip_bits, skip_token;
             /* if there is an '=' inside the parameter list, we
                consider there is a parameter expression inside */
-            js_parse_skip_parens_token(s, &skip_bits, false);
+            skip_token = js_parse_skip_parens_token(s, &skip_bits, false);
             if (skip_bits & SKIP_HAS_ASSIGNMENT)
                 fd->has_parameter_expressions = true;
-            if (next_token(s))
+            if (skip_token == -1 || next_token(s))
                 goto fail;
         } else {
             if (js_parse_expect(s, '('))
@@ -38515,6 +39768,10 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    /* bun-wasm: every statement record is popped by now. Release the pool
+       before function creation, module resolution and execution, which can
+       all start another parse. */
+    js_parse_stmt_free(s);
     if (!err)
         err = js_share_function_sources(ctx, fd);
     if (err) {
@@ -59247,6 +60504,14 @@ int JS_AddIntrinsicBaseObjects(JSContext *ctx)
         return -1;
     JS_FreeValue(ctx, obj1);
 
+    /* Bun namespaces inherit the marker without replacing their canonical object. */
+    ctx->class_proto[JS_CLASS_MODULE_NS] = JS_NewObjectProto(ctx, JS_NULL);
+    if (JS_IsException(ctx->class_proto[JS_CLASS_MODULE_NS]))
+        return -1;
+    if (JS_DefinePropertyValueStr(ctx, ctx->class_proto[JS_CLASS_MODULE_NS],
+                                  "__esModule", JS_TRUE, 0) < 0)
+        return -1;
+
     /* Function */
     ft.generic_magic = js_function_constructor;
     obj1 = JS_NewCConstructor(ctx, JS_CLASS_BYTECODE_FUNCTION, "Function",
@@ -59529,6 +60794,13 @@ static void *js_bunwasm_shared_array_buffer_mallocz(JSContext *ctx, size_t size)
 {
     JSRuntime *rt = ctx->rt;
     void *ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Regions are outside the malloc accounting, and cycles never refcount to zero. */
+    if (!ptr) {
+        JS_RunGC(rt);
+        ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+    }
+#endif
     if (!ptr) {
         js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_ARRAY_BUFFER);
         JS_ThrowOutOfMemory(ctx);
@@ -59586,6 +60858,15 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         JS_ThrowRangeError(ctx, "invalid max array buffer length");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Each wrapper keeps its own length here, so growth cannot be shared between members. */
+    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
+        *max_len > len) {
+        JS_ThrowTypeError(ctx, "growable SharedArrayBuffer is not supported "
+                          "in a shared-group guest");
+        goto fail;
+    }
+#endif
     if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
         *max_len > len && !rt->sab_funcs.sab_alloc) {
         JS_ThrowTypeError(ctx,
@@ -59717,6 +60998,27 @@ JSValue JS_bunwasm_NewWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_t len)
     return obj;
 }
 
+/* Session-owned shared region. Prefix views never detach or free their backing. */
+JSValue JS_bunwasm_NewSharedWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_t len)
+{
+#ifdef BUN_WASM_SHARED_GROUP
+    JSValue obj = JS_NewArrayBuffer(ctx, buf, len, 0, NULL, NULL, true);
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_SHARED_ARRAY_BUFFER);
+    if (abuf)
+        abuf->wasm_memory = true;
+    return obj;
+#else
+    return JS_ThrowTypeError(ctx, "shared Wasm memory requires the shared-group profile");
+#endif
+}
+
+/* The storage of a SharedArrayBuffer, or NULL for any other value. Throws nothing. */
+uint8_t *JS_bunwasm_SharedBufferData(JSValueConst obj)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_SHARED_ARRAY_BUFFER);
+    return abuf ? abuf->data : NULL;
+}
+
 /* Detach a WebAssembly.Memory buffer and its views; false for other values. */
 bool JS_bunwasm_DetachWasmMemoryBuffer(JSContext *ctx, JSValueConst obj)
 {
@@ -59812,7 +61114,8 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
                 p1->u.array.u.ptr = NULL;
             }
         }
-        if (abuf->shared && rt->sab_funcs.sab_free) {
+        /* A wasm_memory wrapper never owns its region, even over an allocated buffer. */
+        if (abuf->shared && rt->sab_funcs.sab_free && !abuf->wasm_memory) {
             rt->sab_funcs.sab_free(rt->sab_funcs.sab_opaque, abuf->data);
         } else {
             if (abuf->realloc_func)
@@ -60243,6 +61546,13 @@ static JSValue js_array_buffer_slice(JSContext *ctx,
         JS_ThrowTypeError(ctx, "cannot use identical ArrayBuffer");
         goto fail;
     }
+#ifdef BUN_WASM_SHARED_GROUP
+    /* Distinct wrappers can view one region, so compare the shared block, not the object. */
+    if (abuf->shared && new_abuf->data == abuf->data) {
+        JS_ThrowTypeError(ctx, "cannot use identical SharedArrayBuffer storage");
+        goto fail;
+    }
+#endif
     if (new_abuf->detached) {
         JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
         goto fail;
@@ -63147,6 +64457,7 @@ static JSValue js_atomics_isLockFree(JSContext *ctx,
     return js_bool(ret);
 }
 
+#ifndef BUN_GROUP_FUTEX
 typedef struct JSAtomicsWaiter {
     struct list_head link;
     bool linked;
@@ -63158,6 +64469,7 @@ static js_once_t js_atomics_once = JS_ONCE_INIT;
 static js_mutex_t js_atomics_mutex;
 static struct list_head js_atomics_waiter_list =
     LIST_HEAD_INIT(js_atomics_waiter_list);
+#endif
 
 // no-op: Atomics.pause() is not allowed to block or yield to another
 // thread, only to hint the CPU that it should back off for a bit;
@@ -63195,7 +64507,9 @@ static JSValue js_atomics_wait(JSContext *ctx,
     int64_t timeout;
     uint64_t idx;
     JSObject *p;
+#ifndef BUN_GROUP_FUTEX
     JSAtomicsWaiter waiter_s, *waiter;
+#endif
     int ret, size_log2, res;
     double d;
 
@@ -63228,6 +64542,22 @@ static JSValue js_atomics_wait(JSContext *ctx,
 
     ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
 
+#ifdef BUN_GROUP_FUTEX
+    (void)res;
+    /* Milliseconds to nanoseconds; beyond i64 nanoseconds (292 years) waits forever. */
+    timeout = isnan(d) || d >= (double)INT64_MAX / 1e6 ? -1 : (int64_t)(fmax(d, 0) * 1e6);
+    if (size_log2 == 3)
+        ret = bun_futex_wait64((uintptr_t)ptr, v, timeout);
+    else
+        ret = bun_futex_wait32((uintptr_t)ptr, (int32_t)v, timeout);
+    switch (ret) {
+    case 0: return JS_AtomToString(ctx, JS_ATOM_ok);
+    case 1: return JS_AtomToString(ctx, JS_ATOM_not_equal);
+    case 2: return JS_AtomToString(ctx, JS_ATOM_timed_out);
+    case -27: __builtin_trap(); /* EINTR: the host cancelled this member; it is terminating */
+    default: return JS_ThrowTypeError(ctx, "Atomics.wait failed in the memory group (errno %d)", -ret);
+    }
+#else
     /* XXX: inefficient if large number of waiters, should hash on
        'ptr' value */
     js_mutex_lock(&js_atomics_mutex);
@@ -63262,20 +64592,23 @@ static JSValue js_atomics_wait(JSContext *ctx,
     } else {
         return JS_AtomToString(ctx, JS_ATOM_ok);
     }
+#endif
 }
 
 static JSValue js_atomics_notify(JSContext *ctx,
                                  JSValueConst this_obj,
                                  int argc, JSValueConst *argv)
 {
+#ifndef BUN_GROUP_FUTEX
     struct list_head *el, *el1, waiter_list;
+    JSAtomicsWaiter *waiter;
+#endif
     int size_log2;
     int32_t count, n;
     void *ptr;
     uint64_t idx;
     JSObject *p;
     JSArrayBuffer *abuf;
-    JSAtomicsWaiter *waiter;
 
     p = js_atomics_get_buf(ctx, argv[0], argv[1], &abuf, &idx, 1);
     if (!p)
@@ -63294,6 +64627,14 @@ static JSValue js_atomics_notify(JSContext *ctx,
         return JS_ThrowRangeError(ctx, "out-of-bound access");
 
     n = 0;
+#ifdef BUN_GROUP_FUTEX
+    if (abuf->shared && count > 0) {
+        ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
+        n = bun_futex_wake((uintptr_t)ptr, (uint32_t)count);
+        if (n < 0)
+            return JS_ThrowTypeError(ctx, "Atomics.notify failed in the memory group (errno %d)", -n);
+    }
+#else
     if (abuf->shared && count > 0) {
         ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
 
@@ -63316,6 +64657,7 @@ static JSValue js_atomics_notify(JSContext *ctx,
         }
         js_mutex_unlock(&js_atomics_mutex);
     }
+#endif
     return js_int32(n);
 }
 
@@ -63340,14 +64682,18 @@ static const JSCFunctionListEntry js_atomics_obj[] = {
     JS_OBJECT_DEF("Atomics", js_atomics_funcs, countof(js_atomics_funcs), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE ),
 };
 
+#ifndef BUN_GROUP_FUTEX
 static void js__atomics_init(void) {
     js_mutex_init(&js_atomics_mutex);
 }
+#endif
 
 /* TODO(saghul) make this public and not dependent on typed arrays? */
 static int JS_AddIntrinsicAtomics(JSContext *ctx)
 {
+#ifndef BUN_GROUP_FUTEX
     js_once(&js_atomics_once, js__atomics_init);
+#endif
 
     /* add Atomics as autoinit object */
     return JS_SetPropertyFunctionList(ctx, ctx->global_obj, js_atomics_obj, countof(js_atomics_obj));

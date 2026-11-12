@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
+import { stageReleasePackages, verifyStagedResolutions } from "./ci-stage-release-packages";
+import release from "./waffle-release-inputs.json";
 
 interface OwnedCommand {
   exited: Promise<number>;
@@ -52,7 +54,7 @@ function cleanup(): Promise<void> {
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 
-test("a clean consumer install prepares Waffle Node exports from the pinned Git commit", async () => {
+test("a clean consumer install prepares Waffle Node exports from the pinned release", async () => {
   const root = resolve(import.meta.dir, "..");
   const source = join(root, "web");
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-waffle-install-"));
@@ -67,6 +69,11 @@ test("a clean consumer install prepares Waffle Node exports from the pinned Git 
     mkdirSync(config, { recursive: true });
     mkdirSync(consumer, { recursive: true });
     for (const file of ["package.json", "bun.lock"]) writeFileSync(join(consumer, file), readFileSync(join(source, file)));
+    if (process.env.CI_RELEASE_CACHE) {
+      const locations = await stageReleasePackages(source, consumer);
+      verifyStagedResolutions(readFileSync(join(source, "bun.lock"), "utf8"), readFileSync(join(consumer, "bun.lock"), "utf8"), locations);
+    }
+    expect(readdirSync(cache)).toEqual([]);
     expect(existsSync(join(consumer, "node_modules"))).toBe(false);
     await run("bun", ["install", "--frozen-lockfile"], consumer, {
       BUN_INSTALL_CACHE_DIR: cache,
@@ -75,8 +82,10 @@ test("a clean consumer install prepares Waffle Node exports from the pinned Git 
     });
     const metadata = JSON.parse(readFileSync(join(consumer, "node_modules/waffle/package.json"), "utf8")) as {
       name: string;
+      version: string;
       exports: Record<string, { node?: string }>;
     };
+    expect(metadata.version).toBe(release.version);
     const nodeEntries = Object.entries(metadata.exports).filter(([, target]) => target.node !== undefined);
     for (const [, target] of nodeEntries) expect(existsSync(join(consumer, "node_modules/waffle", target.node!))).toBe(true);
     const specifiers = nodeEntries.map(([key]) => key === "." ? metadata.name : `${metadata.name}${key.slice(1)}`);

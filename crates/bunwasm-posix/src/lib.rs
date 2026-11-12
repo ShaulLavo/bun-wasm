@@ -15,10 +15,11 @@ mod process;
 
 pub(crate) fn set_errno(e: c_int) {
     unsafe extern "C" {
-        static mut errno: c_int;
+        fn __errno_location() -> *mut c_int;
     }
-    // SAFETY: wasi-libc's errno is a plain (thread-local in -threads) int.
-    unsafe { errno = e };
+    // SAFETY: wasi-libc's accessor returns this program's errno, a plain global or, in a
+    // shared-group member, thread-local; a plain `static` of the latter is its TLS offset.
+    unsafe { *__errno_location() = e };
 }
 
 pub(crate) fn fail<T: From<i8>>(e: c_int) -> T {

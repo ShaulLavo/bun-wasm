@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./b.mjs\",\"./c.mjs\"],i:[[1,\"c\"]],x:[[\"c\",1,\"c\"]],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;const __bunwasm_ns1_0=__bunwasm_m.n[1];yield;\n}}.__bunwasm_cjs__})",
+  "/b.mjs": "({r:[\"./a.mjs\"],i:[[0,\"c\"]],x:[],s:[],e:[],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;const __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"b:\" + __bunwasm_ns0_0.c);\n\n}}.__bunwasm_cjs__})",
+  "/c.mjs": "({r:[],i:[],x:[],s:[],e:[[\"c\",\"c\"]],a:false,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"c\":()=>c});yield;yield;const c = \"ready\";\nconsole.log(\"c\");\n\n}}.__bunwasm_cjs__})",
+  "/main.mjs": "({r:[],i:[],x:[],s:[],e:[],a:true,f:{__bunwasm_cjs__:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;try {\n  (yield __bunwasm_m.import(\"./a.mjs\"));\n  console.log(\"complete\");\n} catch (error) {\n  console.log(error.constructor.name);\n}\n\n}}.__bunwasm_cjs__})"
+ },
+ "cjs": {}
+}

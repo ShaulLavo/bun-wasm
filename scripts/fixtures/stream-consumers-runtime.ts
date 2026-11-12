@@ -102,6 +102,7 @@ export function sourceRuntime(scratch: string) {
   const bootstrap: (native: object) => Runtime = loadPolyfill("bootstrap");
   let tick: () => void;
   const runtime = bootstrap({
+    modulePath: (name: string) => name,
     engine: "jsc",
     platformInfo: { version: "1.4.4", arch: "wasm32", os: "linux", revision: "a145d020" },
     mainPath: () => "/entry.ts",

@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/tls-fixtures-source.test.ts",
+  "localRuntime": true
+}

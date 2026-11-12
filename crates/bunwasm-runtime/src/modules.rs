@@ -45,6 +45,23 @@ fn is_cjs_wrapper(code: &str) -> bool {
     code.starts_with(CJS_WRAPPER_PREFIX) || code.starts_with(CJS_META_WRAPPER_PREFIX)
 }
 
+#[derive(Clone)]
+pub enum Original {
+    /// Read back on a cache miss. Changed files have no new excerpt.
+    File,
+    /// Standard input, which cannot be read twice.
+    Text(Rc<str>),
+}
+
+impl Original {
+    fn loaded(source: &str, stdin: bool) -> Self {
+        if stdin {
+            return Self::Text(Rc::from(source));
+        }
+        Self::File
+    }
+}
+
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
 pub struct PositionMap {
@@ -52,8 +69,8 @@ pub struct PositionMap {
     pub record: Option<crate::sourcemap::SourceMap>,
     /// Source map from transpiled to original code.
     pub map: Option<crate::sourcemap::SourceMap>,
-    /// Original source, for error excerpts (only kept when mapped).
-    pub original: Option<Rc<str>>,
+    /// Where the original source comes from, for error excerpts (only when mapped).
+    pub original: Option<Original>,
     /// Characters injected at the start of line 1 (the ESM prologue).
     pub line1_shift: u32,
     /// Lines injected above the file's line 1 (the host engine's CommonJS
@@ -160,11 +177,31 @@ pub fn resolve_error(
 /// source line, a caret, `error: message` and the location. The transpiler
 /// formats each error as `file:line:col: message`.
 fn build_error(report: &str, source: &str) -> NativeError {
+    let (message, text) = formatted_report(report, source, "error");
+    NativeError::error(message)
+        .prop("name", "BuildError")
+        .prop("__bunwasmFormatted", text)
+}
+
+/// Preparation and registration keep invalid module source as `SyntaxError`;
+/// infrastructure and printer failures retain their `BuildError` contract.
+pub(crate) fn module_compile_error(error: crate::RecordError, source: &str) -> NativeError {
+    let report = match error {
+        crate::RecordError::Syntax(report) => report,
+        crate::RecordError::Other(report) => return build_error(&report, source),
+    };
+    let (message, text) = formatted_report(&report, source, "SyntaxError");
+    NativeError::syntax_error(message).prop("__bunwasmFormatted", text)
+}
+
+/// The first message of a transpiler report and the report formatted like Bun's build
+/// errors.
+fn formatted_report(report: &str, source: &str, label: &str) -> (String, String) {
     let mut text = String::new();
     let mut first_message = None;
     for entry in report.lines().filter(|l| !l.trim().is_empty()) {
         let Some((file, line, col, message)) = parse_location(entry) else {
-            text.push_str(&format!("error: {entry}\n"));
+            text.push_str(&format!("{label}: {entry}\n"));
             first_message.get_or_insert_with(|| entry.to_owned());
             continue;
         };
@@ -176,12 +213,12 @@ fn build_error(report: &str, source: &str) -> NativeError {
                 " ".repeat(gutter.len() + col.saturating_sub(1))
             ));
         }
-        text.push_str(&format!("error: {message}\n    at {file}:{line}:{col}\n\n"));
+        text.push_str(&format!(
+            "{label}: {message}\n    at {file}:{line}:{col}\n\n"
+        ));
     }
     let message = first_message.unwrap_or_else(|| report.trim().to_owned());
-    NativeError::error(message)
-        .prop("name", "BuildError")
-        .prop("__bunwasmFormatted", text)
+    (message, text)
 }
 
 /// Split `file:line:col: message`.
@@ -288,7 +325,7 @@ fn uses_identifier(source: &str, name: &str) -> bool {
 }
 
 /// A shebang line is not valid JS; blank it out but keep the line.
-fn strip_shebang(source: &str) -> String {
+pub(crate) fn strip_shebang(source: &str) -> String {
     if let Some(stripped) = source.strip_prefix("#!") {
         format!("//{stripped}")
     } else {
@@ -298,7 +335,7 @@ fn strip_shebang(source: &str) -> String {
 
 /// Bun lets ES modules use `require`, `__dirname` and `__filename`. Define
 /// them on line 1 (no newline) so line numbers stay intact.
-fn esm_prologue(source: &str) -> String {
+pub(crate) fn esm_prologue(source: &str) -> String {
     let mut prologue = String::new();
     let bindings = [
         ("require", "import.meta.require"),
@@ -320,13 +357,21 @@ fn read_stdin() -> std::io::Result<Vec<u8>> {
 }
 
 impl State {
-    #[cfg(feature = "engine-split")]
-    pub fn module_record(&self, name: &str, code: &str) -> Result<String, NativeError> {
+    /// The registration record of the ES module `name` (its prepared `code`), as a script
+    /// expression or, `as_module`, as an ES module default-exporting it.
+    #[cfg(any(feature = "engine-split", feature = "engine-host"))]
+    pub fn module_record(
+        &self,
+        name: &str,
+        code: &str,
+        as_module: bool,
+    ) -> Result<String, NativeError> {
         let source = esm_source(self, name, code);
-        let out = self
-            .transpiler
-            .register(&source, name)
-            .map_err(|message| build_error(&message, &source))?;
+        let out = match as_module {
+            true => self.transpiler.register_module(&source, name),
+            false => self.transpiler.register(&source, name),
+        }
+        .map_err(|error| module_compile_error(error, &source))?;
         self.positions
             .borrow_mut()
             .entry(name.to_owned())
@@ -334,7 +379,7 @@ impl State {
             .record = out
             .mappings
             .filter(|m| !m.is_empty())
-            .map(|m| crate::sourcemap::SourceMap::parse(&m));
+            .map(crate::sourcemap::SourceMap::new);
         Ok(out.code)
     }
 
@@ -368,6 +413,9 @@ impl State {
     /// Read, transpile and classify a file. Results are cached while the
     /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        if let Some(code) = self.load_text_module(path)? {
+            return Ok((Rc::from(code), Format::Esm));
+        }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
@@ -417,11 +465,7 @@ impl State {
                 (source, Format::Cjs)
             }
             _ => {
-                let adapted = next_swc::adapt(&raw, path);
-                let out = self
-                    .transpiler
-                    .transpile_with_map(&adapted, path, loader)
-                    .map_err(|msg| build_error(&msg, &raw))?;
+                let out = self.prepare_javascript(&raw, path, loader)?;
                 let format = self.detect_format(path, &out.code, out.module_kind);
                 #[cfg(feature = "engine-host")]
                 self.source_imports
@@ -430,8 +474,8 @@ impl State {
                 if let Some(mappings) = out.mappings.filter(|m| !m.is_empty()) {
                     let mut positions = self.positions.borrow_mut();
                     let entry = positions.entry(path.to_owned()).or_default();
-                    entry.map = Some(crate::sourcemap::SourceMap::parse(&mappings));
-                    entry.original = Some(Rc::from(raw.as_str()));
+                    entry.map = Some(crate::sourcemap::SourceMap::new(mappings));
+                    entry.original = Some(Original::loaded(&raw, stdin));
                 }
                 (out.code, format)
             }
@@ -443,7 +487,21 @@ impl State {
         Ok(entry)
     }
 
-    fn detect_format(
+    pub(crate) fn prepare_javascript(
+        &self,
+        raw: &str,
+        path: &str,
+        loader: SourceLoader,
+    ) -> Result<crate::Transpiled, NativeError> {
+        let adapted = next_swc::adapt(raw, path);
+        self.transpiler
+            .prepare_module(&adapted, path, loader, &mut |request| {
+                self.intern_import_request(request)
+            })
+            .map_err(|error| module_compile_error(error, raw))
+    }
+
+    pub(crate) fn detect_format(
         &self,
         path: &str,
         code: &str,
@@ -473,20 +531,36 @@ impl State {
     }
 
     pub fn source_line(&self, file: &str, line: usize) -> Option<String> {
-        if let Some(original) = self
+        let index = line.checked_sub(1)?;
+        let original = self
             .positions
             .borrow()
             .get(file)
-            .and_then(|p| p.original.clone())
+            .and_then(|p| p.original.clone());
+        let text = match original {
+            Some(Original::File) => self.original_file_text(file)?,
+            Some(Original::Text(text)) => text,
+            None => self.sources.borrow().get(file)?.0.clone(),
+        };
+        text.lines().nth(index).map(str::to_owned)
+    }
+
+    /// The file `path` as it was loaded. Stack formatting asks for several lines of one
+    /// file in a row, so the last file read is kept. That snapshot remains valid
+    /// for the loaded code even if the file later changes or disappears.
+    fn original_file_text(&self, path: &str) -> Option<Rc<str>> {
+        if let Some((cached, text)) = &*self.last_original.borrow()
+            && cached == path
         {
-            return original
-                .lines()
-                .nth(line.checked_sub(1)?)
-                .map(str::to_owned);
+            return Some(text.clone());
         }
-        let sources = self.sources.borrow();
-        let (code, _) = sources.get(file)?;
-        code.lines().nth(line.checked_sub(1)?).map(str::to_owned)
+        let raw = std::fs::read(path).ok()?;
+        if self.source_digests.borrow().get(path) != Some(&self.source_digest(&raw)) {
+            return None;
+        }
+        let text: Rc<str> = Rc::from(String::from_utf8_lossy(&raw).as_ref());
+        *self.last_original.borrow_mut() = Some((path.to_owned(), text.clone()));
+        Some(text)
     }
 
     /// Original position for a stack frame, if the file needs any fixup.
@@ -523,14 +597,11 @@ impl State {
         if let Some(mappings) = out.mappings.as_ref().filter(|m| !m.is_empty()) {
             let mut positions = self.positions.borrow_mut();
             if !positions.contains_key(path) {
-                let original = std::fs::read_to_string(path)
-                    .ok()
-                    .map(|s| Rc::from(s.as_str()));
                 positions.insert(
                     path.to_owned(),
                     PositionMap {
-                        map: Some(crate::sourcemap::SourceMap::parse(mappings)),
-                        original,
+                        map: Some(crate::sourcemap::SourceMap::new(mappings.as_str())),
+                        original: Some(Original::File),
                         ..Default::default()
                     },
                 );
@@ -563,12 +634,16 @@ impl State {
         Ok(imports)
     }
 
+    pub(crate) fn source_digest(&self, raw: &[u8]) -> u64 {
+        bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw)
+    }
+
     /// Forget what was cached for `path` when its content changed since.
     /// Dev servers rewrite their output in place (webpack's server chunks),
     /// and `delete require.cache[path]` then expects the new code. The key
     /// includes the printed hooks' version, like every cache of hooked text.
     fn revalidate(&self, path: &str, raw: &[u8]) {
-        let digest = bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw);
+        let digest = self.source_digest(raw);
         let previous = self
             .source_digests
             .borrow_mut()
@@ -578,6 +653,7 @@ impl State {
         }
         self.sources.borrow_mut().remove(path);
         self.positions.borrow_mut().remove(path);
+        self.last_original.borrow_mut().take();
         #[cfg(feature = "engine-host")]
         {
             self.source_imports.borrow_mut().remove(path);
@@ -683,12 +759,52 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 mod tests {
     use super::*;
 
+    /// A record's invalid source is a SyntaxError with the source line and location; any other
+    /// record failure stays a build error.
+    #[test]
+    fn module_compile_errors_keep_syntax_and_build_classes() {
+        use crate::data::ErrorKind;
+        let source = "console.log(1);\nexport const = ;\n";
+        let formatted = |error: &NativeError| format!("{:?}", error.props);
+        let syntax = module_compile_error(
+            crate::RecordError::Syntax("/bad.mjs:2:14: Unexpected \"=\"\n".into()),
+            source,
+        );
+        assert_eq!(syntax.kind, ErrorKind::SyntaxError);
+        assert_eq!(syntax.message, "Unexpected \"=\"");
+        assert!(
+            formatted(&syntax).contains("2 | export const = ;"),
+            "{}",
+            formatted(&syntax)
+        );
+        assert!(
+            formatted(&syntax).contains("SyntaxError: Unexpected"),
+            "{}",
+            formatted(&syntax)
+        );
+        assert!(
+            !formatted(&syntax).contains("BuildError"),
+            "{}",
+            formatted(&syntax)
+        );
+        let other = module_compile_error(
+            crate::RecordError::Other("failed to print /bad.mjs: Oom".into()),
+            source,
+        );
+        assert_eq!(other.kind, ErrorKind::Error);
+        assert!(
+            formatted(&other).contains("BuildError"),
+            "{}",
+            formatted(&other)
+        );
+    }
+
     #[test]
     fn record_positions_compose_before_prologue_and_transpile_maps() {
         let positions = PositionMap {
-            record: Some(crate::sourcemap::SourceMap::parse("oGAAG;AACH")),
+            record: Some(crate::sourcemap::SourceMap::new("oGAAG;AACH")),
             line1_shift: 3,
-            map: Some(crate::sourcemap::SourceMap::parse("AAEK;AACA")),
+            map: Some(crate::sourcemap::SourceMap::new("AAEK;AACA")),
             ..Default::default()
         };
         assert_eq!(positions.original_position(1, 101), (3, 6));
@@ -704,7 +820,7 @@ mod tests {
             Ok(source.to_owned())
         }
 
-        fn register(&self, source: &str, _: &str) -> Result<crate::Transpiled, String> {
+        fn register(&self, source: &str, _: &str) -> Result<crate::Transpiled, crate::RecordError> {
             Ok(crate::Transpiled {
                 code: source.to_owned(),
                 mappings: Some("AAAA".into()),
@@ -734,7 +850,7 @@ mod tests {
         let state = State::new(Vec::new(), Box::new(RecordTranspiler));
         let source = "console.log(require('fs'), import.meta.url);";
         assert_eq!(
-            state.module_record("/m.mjs", source).unwrap(),
+            state.module_record("/m.mjs", source, false).unwrap(),
             esm_source(&state, "/m.mjs", source)
         );
         assert!(state.positions.borrow()["/m.mjs"].record.is_some());
@@ -753,6 +869,59 @@ mod tests {
             state.lower_script("console.log(1);", "/m.cjs").unwrap(),
             "console.log(1);"
         );
+    }
+
+    struct MappedTranspiler;
+
+    impl crate::Transpiler for MappedTranspiler {
+        fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
+            Ok(source.to_uppercase())
+        }
+
+        fn transpile_with_map(
+            &self,
+            source: &str,
+            _: &str,
+            _: SourceLoader,
+        ) -> Result<crate::Transpiled, String> {
+            Ok(crate::Transpiled {
+                code: source.to_uppercase(),
+                mappings: Some("AAAA".into()),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn original_lines_come_from_the_file_as_loaded() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mapped.js");
+        let other = dir.join("other.js");
+        let path = file.to_str().unwrap();
+        let other_path = other.to_str().unwrap();
+        let state = State::new(Vec::new(), Box::new(MappedTranspiler));
+        std::fs::write(&file, "first\nsecond\n").unwrap();
+        std::fs::write(&other, "other\n").unwrap();
+        assert_eq!(&*state.load_source(path).unwrap().0, "FIRST\nSECOND\n");
+        state.load_source(other_path).unwrap();
+        assert!(matches!(
+            state.positions.borrow()[path].original,
+            Some(Original::File)
+        ));
+
+        assert_eq!(state.source_line(path, 2).as_deref(), Some("second"));
+        assert_eq!(state.source_line(path, 3), None);
+        assert_eq!(state.source_line(path, 0), None);
+
+        // An edit that has not been loaded yet never shows lines the running code lacks.
+        assert_eq!(state.source_line(other_path, 1).as_deref(), Some("other"));
+        std::fs::write(&file, "edited\nlater\n").unwrap();
+        assert_eq!(state.source_line(path, 1), None);
+
+        state.load_source(path).unwrap();
+        assert_eq!(state.source_line(path, 2).as_deref(), Some("later"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

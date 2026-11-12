@@ -58,7 +58,7 @@ async function checkBrowser(name, base) {
 }
 
 async function checkGuest(page, base, name, engine) {
-  await page.goto(`${base}?engine=${engine}`);
+  await page.goto(`${base}?engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/grow.js", guest);
   const result = await run(page, "bun run grow.js", 120000);

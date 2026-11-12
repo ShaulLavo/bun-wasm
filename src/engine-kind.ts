@@ -1,32 +1,52 @@
-export type PairedEngine = "quickjs" | "jsc" | "hermes";
+export const pairedEngines = ["quickjs", "jsc"] as const;
+export type SupportedPairedEngine = typeof pairedEngines[number];
+/** Explicit host loading includes experiments, independently of publication defaults. */
+export const pairedEngineKinds = ["quickjs", "jsc", "spidermonkey"] as const;
+export type PairedEngine = typeof pairedEngineKinds[number];
+export type Engine = PairedEngine | "browser";
 export type ProgramKind = "single" | PairedEngine;
 export type ProgramFiles<T> =
   | { readonly kind: "single"; readonly core: T }
-  | { readonly kind: "quickjs"; readonly core: T; readonly side: T }
-  | { readonly kind: "jsc"; readonly core: T; readonly side: T }
-  | { readonly kind: "hermes"; readonly core: T; readonly side: T };
+  | { [K in PairedEngine]: { readonly kind: K; readonly core: T; readonly side: T } }[PairedEngine];
 export type PairedProgramFiles<T> = Exclude<ProgramFiles<T>, { kind: "single" }>;
 
 export const ENGINE_SECTION = "bun-wasm-engine";
 const profiles = {
-  quickjs: { core: "bun.wasm", side: "quickjs.wasm", initialize: ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register"], run: "quickjs_run" },
-  jsc: { core: "bun-jsc.wasm", side: "jsc-engine.wasm", initialize: ["jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors", "jsc_register"], run: "jsc_run" },
-  hermes: { core: "bun-hermes.wasm", side: "hermes-engine.wasm", initialize: ["hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors", "hermes_register"], run: "hermes_run" },
+  quickjs: { core: "bun.wasm", side: "quickjs.wasm", initializeMemory: ["quickjs_initialize_memory", "quickjs_apply_data_relocs"], initialize: ["quickjs_call_ctors", "quickjs_register"], run: "quickjs_run" },
+  spidermonkey: { core: "bun-spidermonkey.wasm", side: "spidermonkey-engine.wasm", initializeMemory: ["spidermonkey_initialize_memory", "spidermonkey_apply_data_relocs"], initialize: ["spidermonkey_call_ctors", "spidermonkey_register"], run: "spidermonkey_run" },
+  jsc: { core: "bun-jsc.wasm", side: "jsc-engine.wasm", initializeMemory: ["jsc_initialize_memory", "jsc_apply_data_relocs"], initialize: ["jsc_call_ctors", "jsc_register"], run: "jsc_run" },
 } as const;
-const pairedEngines: readonly PairedEngine[] = ["quickjs", "jsc", "hermes"];
+
+export function isSupportedPairedEngine(value: unknown): value is SupportedPairedEngine {
+  return pairedEngines.some(engine => engine === value);
+}
 
 export function isPairedEngine(value: unknown): value is PairedEngine {
-  return pairedEngines.some(engine => engine === value);
+  return pairedEngineKinds.some(engine => engine === value);
 }
 
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 
-/** Explicit initialization of a shared-group (PIE) core, before its side links. */
-export const SHARED_GROUP_CORE_INITIALIZE = ["core_initialize_memory", "__wasm_apply_data_relocs", "__wasm_call_ctors"] as const;
+/**
+ * The Waffle group policy a Bun group needs: the 2 GiB group address space every group core and
+ * side declares (crates/bunwasm-cli/group-address-space.txt), the 1 GiB guest memory maximum as
+ * the pages its members may hold together (crates/bunwasm-cli/max-memory.txt; regions are not
+ * counted), and 8 MiB member stacks. This file ships in the package and cannot read the
+ * repository, so tests/package/max-memory.test.ts pins both numbers to their authorities.
+ */
+export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } as const;
+
+/** Initialize a shared-group (PIE) core's data before constructors. */
+export const SHARED_GROUP_CORE_INITIALIZE_MEMORY = ["core_initialize_memory", "__wasm_apply_data_relocs"] as const;
+
+/** A relocatable core runs only as a memory group member. */
+export function isSharedGroupCore(core: WebAssembly.Module): boolean {
+  return WebAssembly.Module.customSections(core, "dylink.0").length === 1;
+}
 
 /** A shared-group pair is a relocatable core and a side that imports a shared memory. Mixed halves are refused. */
 export function sharedGroupPair(core: WebAssembly.Module, side: Uint8Array): boolean {
-  const group = WebAssembly.Module.customSections(core, "dylink.0").length === 1;
+  const group = isSharedGroupCore(core);
   if (group !== (importedMemory(side)?.shared ?? false)) throw new TypeError("Core and engine side were built for different program profiles");
   return group;
 }
@@ -50,11 +70,16 @@ function readName(cursor: Cursor): string {
   return new TextDecoder().decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
 }
 
-function readLimits(cursor: Cursor): { shared: boolean; maximum: number | undefined } {
+function readMemoryLimits(cursor: Cursor): { initial: number; shared: boolean; maximum: number | undefined } {
   const flags = readUnsigned(cursor);
   if (flags > 3) throw new TypeError("Unsupported memory or table limits");
-  readUnsigned(cursor);
-  return { shared: (flags & 2) !== 0, maximum: flags & 1 ? readUnsigned(cursor) : undefined };
+  const initial = readUnsigned(cursor);
+  return { initial, shared: (flags & 2) !== 0, maximum: flags & 1 ? readUnsigned(cursor) : undefined };
+}
+
+function readLimits(cursor: Cursor): { shared: boolean; maximum: number | undefined } {
+  const { shared, maximum } = readMemoryLimits(cursor);
+  return { shared, maximum };
 }
 
 /** Skip one non-memory import descriptor. */
@@ -64,6 +89,7 @@ function skipImport(cursor: Cursor, kind: number | undefined): void {
     cursor.at++;
     readLimits(cursor);
   } else if (kind === 3) cursor.at += 2;
+  else if (kind === 4) { readUnsigned(cursor); readUnsigned(cursor); }
   else throw new TypeError(`Unsupported import kind ${kind}`);
 }
 
@@ -104,25 +130,60 @@ function memoryImport(imports: Cursor): { shared: boolean; maximum: number | und
   return undefined;
 }
 
+type MemoryLimits = ReturnType<typeof readMemoryLimits> & { origin: "defined" | "imported" };
+function memoryDeclaration(cursor: Cursor, origin: MemoryLimits["origin"]): MemoryLimits {
+  return { ...readMemoryLimits(cursor), origin };
+}
+
+function importedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): void {
+  for (let count = readUnsigned(cursor); count > 0; count--) {
+    readName(cursor); readName(cursor);
+    const kind = cursor.bytes[cursor.at++];
+    if (kind === 2) declarations.push(memoryDeclaration(cursor, "imported"));
+    else skipImport(cursor, kind);
+  }
+}
+
+function definedDeclarations(cursor: Cursor, declarations: MemoryLimits[]): void {
+  for (let count = readUnsigned(cursor); count > 0; count--) declarations.push(memoryDeclaration(cursor, "defined"));
+}
+
+/** Read all actual memories, including non-env imports and unexported definitions. */
+export function wasmMemoryLimits(bytes: Uint8Array): readonly MemoryLimits[] {
+  const module: Cursor = { bytes, at: 8 };
+  const declarations: MemoryLimits[] = [];
+  while (module.at < bytes.length) {
+    const id = bytes[module.at++];
+    const size = readUnsigned(module);
+    const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };
+    module.at += size;
+    if (id === 2) importedDeclarations(section, declarations);
+    if (id === 5) definedDeclarations(section, declarations);
+  }
+  return declarations;
+}
+
 export function programKind(module: WebAssembly.Module): ProgramKind {
   const sections = WebAssembly.Module.customSections(module, ENGINE_SECTION);
   const binding = WebAssembly.Module.exports(module).find(entry => entry.name === "bun_core_bind_engine");
   if (!sections.length && !binding) return "single";
   if (sections.length !== 1 || binding?.kind !== "function") throw new TypeError("Paired core requires exactly one bun-wasm-engine section and bind function");
   const bytes = new Uint8Array(sections[0]!);
-  const kind = pairedEngines.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
+  const kind = pairedEngineKinds.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
   if (kind) return kind;
-  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc or hermes");
+  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc or spidermonkey");
 }
 
 export function verifyProgramSide(kind: PairedEngine, module: WebAssembly.Module): void {
   if (programKind(module) !== "single") throw new TypeError("Engine companion cannot be a paired core");
   const names = new Set(WebAssembly.Module.exports(module).filter(entry => entry.kind === "function").map(entry => entry.name));
   const profile = programProfile(kind);
-  const required: readonly string[] = profile.initialize;
+  const memory: readonly string[] = profile.initializeMemory;
+  const required = memory.concat(profile.initialize);
   if (required.concat([profile.run]).some(name => !names.has(name))) throw new TypeError(`Invalid ${kind} companion initializer/RUN profile`);
-  for (const other of pairedEngines.filter(engine => engine !== kind).map(programProfile)) {
-    const forbidden: readonly string[] = other.initialize;
+  for (const other of pairedEngineKinds.filter(engine => engine !== kind).map(programProfile)) {
+    const memory: readonly string[] = other.initializeMemory;
+    const forbidden = memory.concat(other.initialize);
     if (forbidden.concat([other.run]).some(name => names.has(name))) throw new TypeError("Contradictory engine companion profile");
   }
 }
@@ -175,7 +236,6 @@ export function programKindForBuild(build: unknown): ProgramKind {
   switch (build) {
     case "quickjs": case "quickjs-minimal": return "quickjs";
     case "jsc": return "jsc";
-    case "hermes": return "hermes";
     case "browser": case "source-cache-browser": case "tools": return "single";
     default: throw new TypeError(`Unknown guest build: ${String(build)}`);
   }

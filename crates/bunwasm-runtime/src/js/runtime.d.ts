@@ -1,6 +1,6 @@
 declare namespace BunWasm {
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
-  type PrepareGoal = "script" | "eval" | "wrapper";
+  type PrepareGoal = "script" | "eval" | "wrapper" | "vm-context";
   interface PreparedSource {
     version: number;
     alreadyPrepared: boolean;
@@ -9,12 +9,19 @@ declare namespace BunWasm {
     fallback: string | null;
     spreadEval: number;
     unhookedAwaitUsing: number;
+    /** Goal "vm-context": the scope parameter no declaration in the source shadows. */
+    scope?: string;
   }
   interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
+    stringIsWellFormed(value: string): boolean;
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
     prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
+    /** `(function (scope, scope_typeof) {…})` source for `evalScript(text, name, 0)`: references the
+     * source leaves free read their scope parameter, and the final top-level expression statement
+     * returns. Throws SyntaxError before anything runs when the parser rejects the source. */
+    prepareContextScript(source: string, name: string): string;
     preparedColumns: Map<string, PreparedColumns>;
     preparation: {
       version: number; realm: string; counters: Record<string, number>;
@@ -33,15 +40,22 @@ declare namespace BunWasm {
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
+    resolveImport(specifier: string, referrer: string, mode: "inferred" | "text"): string;
+    modulePath(name: string): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     nodePath: {
       resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
-      lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
-      lexical(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
-      lexical(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
-      join(windows: boolean, paths: Uint8Array[]): Uint8Array;
-      relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
+      lexicalString(windows: boolean, operation: "isAbsolute", path: string): boolean;
+      lexicalString(windows: boolean, operation: "parse", path: string): Record<"root" | "dir" | "base" | "ext" | "name", string>;
+      lexicalString(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: string, suffix?: string): string;
+      lexicalUnits(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
+      lexicalUnits(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
+      lexicalUnits(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
+      joinString(windows: boolean, paths: readonly string[]): string;
+      joinUnits(windows: boolean, paths: readonly Uint8Array[]): Uint8Array;
+      relativeString(windows: boolean, from: string, to: string): string;
+      relativeUnits(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
     };
     hostCaps: Record<string, boolean>;
     hostLocalAddr(handle: number): string | number;
@@ -56,7 +70,7 @@ declare namespace BunWasm {
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
-    readonly engine: "quickjs" | "jsc" | "host";
+    readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;
@@ -84,11 +98,12 @@ declare namespace BunWasm {
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
       isIPv6(value: string): boolean;
+      isTcpListenOptions(value: { path?: unknown; port?: unknown }): boolean;
       port(value?: unknown): number;
       error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
     };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
-    runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
+    runInContext<This, Args extends readonly unknown[], R>(context: unknown, callback: (this: This, ...args: Args) => R, receiver: This, args: Args): R;
     handleUncaught(error: unknown): boolean;
   }
   interface AsyncResourceOptions { triggerAsyncId?: number; requireManualDestroy?: boolean }
@@ -98,8 +113,12 @@ declare namespace BunWasm {
     triggerAsyncId(): number;
     emitDestroy(): this;
   }
+  interface AsyncHooks {
+    AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource };
+    AsyncLocalStorage: new<T>() => { getStore(): T | undefined; run<R>(store: T, callback: () => R): R };
+  }
   interface Internal {
-    builtin(name: "node:async_hooks"): { AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource } };
+    builtin(name: "node:async_hooks"): AsyncHooks;
   }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {
@@ -129,6 +148,7 @@ declare namespace BunWasm {
 declare namespace BunWasm {
   interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
   interface RuntimeProcess {
+    exitCode?: number;
     cwd(): string;
     nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
     emitWarning?(warning: Error): void;
@@ -298,7 +318,8 @@ declare namespace BunWasm {
   }
 }
 
-declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare function __bunwasm_meta(meta: object, path: string): void;
+declare function __bunwasm_dynamicImport(from: string): (specifier: unknown, options?: unknown) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }
   interface InspectOptions {
@@ -339,6 +360,7 @@ declare namespace BunWasm {
     evalBuiltin(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
     isPromise(value: unknown): boolean;
     isProxy(value: unknown): boolean;
+    isModuleNamespaceObject?(value: unknown): boolean | undefined;
     isError(value: unknown): boolean;
   }
   interface Internal {
@@ -353,6 +375,10 @@ declare namespace BunWasm {
     builtin(name: "node:os" | "node:crypto" | "node:zlib"): { readonly constants: object };
     builtin(name: string): unknown;
     defineHidden(target: object, values: object): void;
+    hasNativeStackTrace: boolean;
+    displayName?(file: string | null, isEval: boolean): string | null;
+    pathToFileHref(path: string): string;
+    require(name: "caller_origin"): () => string | null;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;
@@ -497,4 +523,4 @@ declare namespace BunWasm {
   }
 }
 
-interface String { toWellFormed(): string }
+interface String { toWellFormed(): string; isWellFormed(): boolean }

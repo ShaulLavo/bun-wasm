@@ -27,6 +27,10 @@ The runtime talks to a JavaScript engine through the `Engine` trait in `crates/b
 - `jsc` runs JS on JavaScriptCore without JIT, compiled into the wasm. Guest: `bun-jsc.wasm`.
 - `browser` runs JS on the host's own engine. Guest: `bun-browser.wasm`.
 
+SpiderMonkey is an additional opt-in experiment, not a supported publication or default engine.
+Its interpreter and portable-baseline tiers share one split guest and companion.
+[SpiderMonkey host integration](../spidermonkey-host-plumbing.md) describes explicit selection and its limits.
+
 Bun's engine is JavaScriptCore, so the obvious plan is to run Bun's real runtime on it. Two facts stand in the way. JavaScriptCore cannot JIT inside wasm, so it runs as an interpreter. And Bun's C++ bindings are tied to JavaScriptCore internals and assume a 64-bit machine. A spike found a single-threaded port of the real runtime feasible but large. The runtime started on QuickJS and kept it as the default engine, and JavaScriptCore stays an experiment that shows how far Bun's own engine gets. See [ADR 001](../adr/001-three-engines-behind-one-runtime.md).
 
 The `browser` engine goes the other way. It leaves the engine out of the wasm and runs the runtime's JavaScript on the engine the page already has: V8 in Chromium, JavaScriptCore with JIT in Safari. The guest keeps argument parsing, resolution, the transpiler, the bundler, SQLite and the filesystem. The engine runs with JIT, and it is the least faithful of the three: promise state, `AsyncLocalStorage` and import cycles need workarounds. [The browser engine](../engine-browser.md) lists them.

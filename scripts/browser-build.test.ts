@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -42,6 +42,32 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     expect(context.sameErrorClass).toBe(true);
     expect(installed.relativeInput(join(cached, "proc/supervisor.ts"))).toBe("proc/supervisor.ts");
     expect(installed.relativeInput(join(dirname(cached), "unrelated/proc/supervisor.ts"))).toBeUndefined();
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+for (const directFirst of [false, true]) test(`consumer runtime keeps file and package imports in one module identity, direct first: ${directFirst}`, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-runtime-identity-"));
+  try {
+    const consumer = join(scratch, "consumer");
+    const cached = join(scratch, "cache.runtime..git");
+    await mkdir(cached, { recursive: true });
+    await mkdir(join(consumer, "node_modules"), { recursive: true });
+    await writeFile(join(cached, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./core": "./core.ts" } }));
+    await writeFile(join(cached, "token.ts"), 'export const token = Symbol("runtime-owned-token");');
+    await writeFile(join(cached, "core.ts"), 'export { token } from "./token.js";');
+    await symlink(cached, join(consumer, "node_modules/waffle"));
+    const entry = join(consumer, "main.ts");
+    const direct = 'import { token as direct } from "./node_modules/waffle/token.ts";';
+    const exported = 'import { token as exported } from "waffle/core";';
+    const imports = directFirst ? [direct, exported] : [exported, direct];
+    await writeFile(entry, imports.concat(["globalThis.sameToken = direct === exported;"]).join("\n"));
+    const config = browserBuildConfig([entry], join(scratch, "output"), { splitting: false });
+    const result = await Bun.build({ ...config, format: "iife" });
+    expect(result.success).toBe(true);
+    const context = { sameToken: false };
+    runInNewContext(await result.outputs[0]!.text(), context);
+    const identities = Object.keys(result.metafile!.inputs).filter(path => path.endsWith("/token.ts")).length;
+    expect({ sameToken: context.sameToken, identities }).toEqual({ sameToken: true, identities: 1 });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
@@ -126,13 +152,15 @@ for (const failure of ["missing", "corrupt"]) test(`browser build rejects a ${fa
     const installed = resolveRuntimePackage(import.meta.filename);
     const loader = installed.source("waffle/network");
     const dependency = join(scratch, "node_modules/waffle");
-    await mkdir(join(dependency, "browser/net"), { recursive: true });
-    await writeFile(join(dependency, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./network": "./browser/net/module.ts" } }));
-    await Bun.write(join(dependency, "browser/net/module.ts"), Bun.file(loader));
-    await Bun.write(join(dependency, "browser/net/network.sha256"), Bun.file(join(dirname(loader), "network.sha256")));
-    if (failure === "corrupt") await writeFile(join(dependency, "browser/net/network.wasm"), "not the selected asset");
+    await cp(installed.physical, dependency, { recursive: true });
     const main = join(scratch, "main.ts");
     await writeFile(main, 'export { loadNetworkModule } from "waffle/network";');
+    const valid = join(scratch, "valid");
+    expect((await Bun.build(browserBuildConfig([main], valid))).success).toBe(true);
+    expect(await Bun.file(join(valid, "network.wasm")).bytes()).toEqual(await Bun.file(join(dirname(loader), "network.wasm")).bytes());
+    const artifact = join(dirname(resolveRuntimePackage(main).source("waffle/network")), "network.wasm");
+    if (failure === "corrupt") await writeFile(artifact, "not the selected asset");
+    else await rm(artifact);
     const config = browserBuildConfig([main], join(scratch, "dist"));
     await expect(Bun.build(config)).rejects.toThrow(failure === "corrupt" ? "checksum mismatch" : "ENOENT");
     expect(await Bun.file(join(scratch, "dist/network.wasm")).exists()).toBe(false);

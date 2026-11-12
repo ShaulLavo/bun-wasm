@@ -11,8 +11,9 @@ import {
 import { createR2Publisher, publishGuest, verifyPublicGuest } from "../../scripts/publish-guest.ts";
 import type { GuestFile } from "../../scripts/guest-artifact.ts";
 import type { GuestPublisher } from "../../scripts/publish-guest.ts";
-import { loadBunWasm, programLinkPlan } from "../../src/assets";
+import { loadBunWasm, programMetadata } from "../../src/assets";
 import { quickjsPair } from "./quickjs-plan-fixture";
+import { linkedFixtureValue } from "./linked-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const artifact = prepareGuest({ kind: "single", core: wasm });
@@ -153,7 +154,7 @@ test("CLI emits a paired descriptor for a split core and rejects a missing side"
     });
     expect(await readFile(outputPath, "utf8")).toContain('quickjs.wasm.gz');
     const module = await loadBunWasm({ asset: descriptor, fetch: async url => new Response(url === descriptor.core.url ? core : side) });
-    expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
+    expect(linkedFixtureValue(programMetadata(module).linkPlan)).toBe(42);
     await writeFile(join(scratch, "quickjs.wasm"), Uint8Array.from([0]));
     const invalid = Bun.spawnSync(command, { cwd: process.cwd() });
     expect(invalid.exitCode).not.toBe(0);

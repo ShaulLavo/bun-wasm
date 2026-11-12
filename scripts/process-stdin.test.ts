@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
+import { resourceFrames } from "./resource-frame-source";
 
 type Waiter = { ref: boolean; step(): boolean | "progress"; fail(error: unknown): void; subscriptions?(): Uint8Array };
 const stripTypeScriptTypes = (text: string) => new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${text}`) + ";globalThis.factory";
@@ -24,11 +25,13 @@ function fixture() {
     native, realTimers: { setImmediate }, nextTick: process.nextTick,
     builtin: () => ({ Readable }),
     addIoWaiter(waiter: Waiter) { waiters.add(waiter); return waiter; },
+    removeIoWaiter(waiter: Waiter) { waiters.delete(waiter); },
     require(name: string): unknown {
       if (name === "events") return require("node:events");
       if (name === "process_signals") return () => () => false;
       if (name === "buffer") return { Buffer };
       if (name === "net") return {};
+      if (name === "resource_frame") return resourceFrames();
       if (name === "process_stdin") {
         const text = readFileSync(new URL("../crates/bunwasm-runtime/src/js/process_stdin.ts", import.meta.url), "utf8");
         return runInNewContext(stripTypeScriptTypes(text), { Uint8Array, DataView, Error })(internal);
