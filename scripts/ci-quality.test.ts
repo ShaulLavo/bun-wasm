@@ -132,14 +132,15 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g) ?? []).toHaveLength(0);
-  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
+  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g) ?? []).toHaveLength(0);
+  expect(rust.match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
 });
 
 test("runtime tarball checks consume the existing Browser program before native fixture discovery", () => {
-  const ready = rust.indexOf("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
+  const ready = rust.indexOf("BROWSER_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=2 bash scripts/build-bun-browser.sh");
   expect(ready).toBeGreaterThan(0);
   expect(ready).toBeLessThan(rust.indexOf("bun scripts/test-checks.ts native"));
-  expect(rust.match(/ln -s source-cache-browser\/bun-browser\.wasm dist\/bun-browser\.wasm/g)).toHaveLength(1);
+  expect(rust).not.toContain("ln -s source-cache-browser");
   expect(selectChecks("runtime")).toContain("scripts/install-tarballs.test.ts");
 });
 
@@ -811,7 +812,7 @@ test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () =>
 
 test("source cache runs in real browsers using one source-built host guest", () => {
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(rust).toContain("--no-default-features --features engine-host,bun-build");
+  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
   expect(processes).toContain("needs: [quality, rust, process-bundles]");
@@ -821,7 +822,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(processes).toContain("bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}");
   expect(processes.match(/^    needs:/gm)).toHaveLength(1);
   expect(processes).toContain("needs.process-bundles.result == 'success'");
-  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
+  const hostBuild = rust.indexOf("name: Build the standard Browser guest once");
   const save = rust.indexOf("name: Save the refined native Cargo cache once per input revision");
   expect(hostBuild).toBeGreaterThan(-1);
   expect(save).toBeGreaterThan(hostBuild);
@@ -1107,7 +1108,7 @@ for (const { id, saveName, condition, workflowCompatible } of [
     expect(contract.condition).toBe(condition);
     const inputs = nativeCacheInputs(contract.primary);
     const saved = expandNativeKey(contract.save, inputs);
-    for (const path of ["scripts/build-bun-tools.sh", ".github/workflows/ci.yml"]) {
+    for (const path of ["scripts/build-bun-tools.sh", "scripts/build-bun-browser.sh", ".github/workflows/ci.yml"]) {
       assertProducerMutation(contract, inputs, saved, path, path.endsWith(".sh") || workflowCompatible);
     }
   });
@@ -1461,7 +1462,7 @@ test("the JSC guest builds once in the background, overlapping only other builds
   expect(start).toBeGreaterThan(rust.indexOf("name: Save the native quality checkpoint"));
   expect(start).toBeGreaterThan(rust.indexOf("name: Install the Web host dependencies"));
   expect(start).toBeLessThan(rust.indexOf("name: Build native fixtures after the cache checkpoint"));
-  expect(wait).toBeGreaterThan(rust.indexOf("name: Build one host-engine guest"));
+  expect(wait).toBeGreaterThan(rust.indexOf("name: Build the standard Browser guest once"));
   expect(wait).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
   expect(wait).toBeLessThan(rust.indexOf("name: Build the single tools fixture"));
   expect(rust.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);

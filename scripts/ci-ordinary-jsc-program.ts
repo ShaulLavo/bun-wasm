@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { prepareProgram } from "../src/assets.ts";
 import { tagProgramCore, wasmMemoryLimits } from "../src/engine-kind.ts";
@@ -9,6 +8,7 @@ import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions, type 
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
 import { git, hash } from "./guest-source-manifest.ts";
 import { jscEmbeddingArchives, verifyEmbeddingReceipt } from "./jsc-embedding.ts";
+import { writeProgramDelivery } from "./ci-program-delivery.ts";
 
 type Source = ProgramInputSnapshot["source"];
 export const ordinaryJscFiles = ["bun-jsc.wasm", "jsc-engine.wasm", "bun-core.wasm.core.json", "jsc-engine.wasm.engine.json", "bun-jsc.wasm.build.json", "bun-jsc.wasm.embedding.json"] as const;
@@ -62,20 +62,12 @@ export async function verifyOrdinaryJscProgram(directory: string, coreReceipt: s
     capacity: { maximumMemoryBytes: 16384 * 65536, coreMemory: coreMemory[0], sideMemory: sideMemory[0], environment: { BUN_WASM_STACK_KIB: jscStackBudgets.other } },
     files: ordinaryJscFiles.map((name, index) => ({ name, ...artifactIdentity(files[index]!) })),
   };
-  return { files, delivery };
+  return { files: ordinaryJscFiles.map((name, index) => ({ name, bytes: files[index]! })), delivery };
 }
 
 export async function exportOrdinaryJscProgram(directory: string, coreReceipt: string, output: string, source: Source): Promise<void> {
   const verified = await verifyOrdinaryJscProgram(directory, coreReceipt, source);
-  await mkdir(output);
-  try {
-    for (const [index, name] of ordinaryJscFiles.entries()) await Bun.write(join(output, name), verified.files[index]!);
-    await Bun.write(join(output, "source.txt"), `${source.head}\n${source.tree}\n`);
-    await Bun.write(join(output, "delivery.json"), JSON.stringify(verified.delivery, null, 2) + "\n");
-  } catch (error) {
-    await rm(output, { recursive: true, force: true });
-    throw error;
-  }
+  await writeProgramDelivery(output, verified.files, verified.delivery);
 }
 
 if (import.meta.main) {

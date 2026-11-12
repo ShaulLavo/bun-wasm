@@ -116,5 +116,6 @@ test("the normal Rust job exports only selected JSC after its existing blocking 
   expect(steps.indexOf(upload)).toBe(steps.indexOf(exporter) + 1);
   expect(needsRust(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
+  expect(needsJsc(["scripts/ci-program-delivery.ts"])).toBe(true);
   expect(discoverChecks().filter(check => check.path === "scripts/ci-ordinary-jsc-program.test.ts")).toEqual([{ owner: "quality", path: "scripts/ci-ordinary-jsc-program.test.ts", localRuntime: false, batch: "default" }]);
 });

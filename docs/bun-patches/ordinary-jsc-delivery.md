@@ -7,6 +7,7 @@ original receipts and their existing patch records.
 | Source | Class | Change and reason |
 | --- | --- | --- |
 | `scripts/ci-ordinary-jsc-program.ts` | Original adapter | Verify the existing private split pair and its core, side, composed-build, and embedding receipts, then retain the original bytes for consumers. Record composing source and cached component origins separately. |
+| `scripts/ci-program-delivery.ts` | Original adapter | Write verified raw program files and delivery metadata into a new directory, shared by JSC and Browser exports. Remove only that directory on a failed write. |
 | `scripts/jsc-embedding.ts` | Original adapter | Share the existing archive path list with the delivery verifier so embedding identity cannot diverge from the normal writer. The receipt format and blocking checks stay unchanged. |
 | `.github/workflows/ci.yml` | Original adapter | Export only selected ordinary JSC after its existing embedding and native fixture gates. Upload the complete directory without compiling another guest. |
 
