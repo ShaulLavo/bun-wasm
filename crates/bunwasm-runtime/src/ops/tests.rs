@@ -608,10 +608,7 @@ fn a_word_call_returns_through_its_frame_when_nothing_can_be_allocated() {
     let data = allocated_frame(&transport, dispatch.op(), vec![]);
     transport.exhaust();
     // The allocating bridge now fails after its native ran. The word call beside it cannot.
-    assert_eq!(
-        transport.dispatch(&dispatch, data.0),
-        Status::ResourceLimit
-    );
+    assert_eq!(transport.dispatch(&dispatch, data.0), Status::ResourceLimit);
     let before = WORD_CALLS.with(Cell::get);
     for round in 0..3 {
         let words = [round, 2, 3, 4, 5, 6, 7, u32::MAX];
@@ -625,7 +622,11 @@ fn a_word_call_returns_through_its_frame_when_nothing_can_be_allocated() {
     assert_eq!(WORD_CALLS.with(Cell::get), before + 3);
     write_word_frame(&transport, frame, 1, 1, [9, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(transport.dispatch(&dispatch, frame), Status::Ok);
-    assert_eq!(word_result(&transport, frame), -9, "a result keeps its sign");
+    assert_eq!(
+        word_result(&transport, frame),
+        -9,
+        "a result keeps its sign"
+    );
     assert_eq!(
         transport.live_allocations(),
         3,

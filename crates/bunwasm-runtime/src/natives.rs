@@ -2252,7 +2252,11 @@ mod write_once_tests {
     }
 
     fn write(table: &Table, fd: i32, bytes: &[u8], token: u64) -> Val {
-        let args = [fd.into(), Val::Bytes(bytes.to_vec()), Val::Num(token as f64)];
+        let args = [
+            fd.into(),
+            Val::Bytes(bytes.to_vec()),
+            Val::Num(token as f64),
+        ];
         (table.functions[0].1)(Args(&args)).unwrap()
     }
 
@@ -2273,11 +2277,19 @@ mod write_once_tests {
         // nor a token of B's own may read A's count.
         assert_eq!(result(&table, 6, 1), UNWRITTEN, "another channel's attempt");
         assert_eq!(result(&table, 6, 2), UNWRITTEN);
-        assert_eq!(result(&table, 4, 2), UNWRITTEN, "a later attempt that never ran");
+        assert_eq!(
+            result(&table, 4, 2),
+            UNWRITTEN,
+            "a later attempt that never ran"
+        );
         // B's write runs, and its lost reply is read back by B alone.
         assert_eq!(write(&table, 6, b"wake", 2), Val::from(604));
         assert_eq!(result(&table, 6, 2), 604);
-        assert_eq!(result(&table, 4, 1), UNWRITTEN, "only the last attempt is kept");
+        assert_eq!(
+            result(&table, 4, 1),
+            UNWRITTEN,
+            "only the last attempt is kept"
+        );
         // A token is 53 bits wide and both of its words count.
         let wide = (1 << 40) | 2;
         assert_eq!(write(&table, 6, b"x", wide), Val::from(601));

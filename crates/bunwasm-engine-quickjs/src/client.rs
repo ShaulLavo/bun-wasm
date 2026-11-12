@@ -37,7 +37,12 @@ impl CoreClient {
         let status = unsafe { bun_core_dispatch(self.word_frame) };
         assert_eq!(status, ops::Status::Ok as u32, "terminal core word call");
         // SAFETY: as above; core wrote the result at this 8-aligned offset.
-        unsafe { (self.word_frame as *const u8).add(ops::WordFrame::RESULT).cast::<i64>().read() }
+        unsafe {
+            (self.word_frame as *const u8)
+                .add(ops::WordFrame::RESULT)
+                .cast::<i64>()
+                .read()
+        }
     }
 
     pub(crate) fn call(self, op: u32, args: Vec<Val>) -> NativeResult {
