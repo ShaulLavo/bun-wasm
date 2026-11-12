@@ -1375,13 +1375,14 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +#define failIfStackOverflow() do { if (m_hasStackOverflow || !canRecurse()) [[unlikely]] failWithStackOverflow(); } while (0)
  #define semanticFail(...) do { internalFailWithMessage(false, __VA_ARGS__); } while (0)
  #define semanticFailIfTrue(cond, ...) do { if ((cond)) [[unlikely]] internalFailWithMessage(false, __VA_ARGS__); } while (0)
-@@ -89,2 +90,15 @@
+@@ -89,2 +90,16 @@
  std::atomic<unsigned> globalParseCount { 0 };
 +
 +#if OS(WASI)
-+// bun-wasm: bytes that parseStatement and parseAssignmentExpression leave out of their 2048-byte
-+// shadow-stack reservation. Zero-filled side data therefore means the full reservation, before
-+// and without any initializer. Written at most once, before the first parse (helpers.cpp).
++// bun-wasm: bytes that parseStatement, parseAssignmentExpression, parseAssignmentChainLevel and
++// parseAssignmentChainRest leave out of their 2048-byte shadow-stack reservation. Zero-filled side
++// data therefore means the full reservation, before and without any initializer. Written at most
++// once, before the first parse (helpers.cpp).
 +static uint32_t wasmParserReserveDiscount;
 +
 +void setWasmParserReserve(unsigned bytes)
@@ -1391,19 +1392,20 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +}
 +#endif
 
-@@ -2103,2 +2117,3 @@
+@@ -2103,2 +2118,3 @@
  {
 +    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
      DepthManager statementDepth(&m_statementDepth);
-@@ -4281,5 +4296,21 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseArrowFunc
+@@ -4281,5 +4297,22 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseArrowFunc
 
 +// bun-wasm: `a = b = c` used to parse each right side by calling parseAssignmentExpression again:
-+// one host frame and one stack reservation per target. The levels of a chain now run in one
-+// activation. A level that consumes an assignment operator is suspended on
-+// m_suspendedAssignmentLevels, its right side is parsed as a fresh level, and the result is handed
-+// back where upstream's call returned. parseAssignmentLevelStart and parseAssignmentLevelOperator
-+// are upstream's function cut at its operator loop, and both are inlined into the driver, so no
-+// route through it gains a host frame (docs/bun-patches/jsc-assignment-chains.md).
++// one host frame and one stack reservation per target. parseAssignmentLevelStart and
++// parseAssignmentLevelOperator are upstream's function cut at its operator loop, and three real
++// functions inline them. parseAssignmentExpression keeps upstream's straight-line shape and calls
++// parseAssignmentChainLevel where upstream called itself. A chain level that consumes another
++// operator publishes its record on m_suspendedAssignmentLevels and returns, and
++// parseAssignmentChainRest then runs the remaining levels one at a time, so a chain of any length
++// holds three parser frames (docs/bun-patches/jsc-assignment-chains.md).
  template <typename LexerType>
 -template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmentExpression(TreeBuilder& context)
 +template <typename Expression> ALWAYS_INLINE Expression Parser<LexerType>::finishAssignmentLevel(Expression result, AssignmentLevelState& state)
@@ -1418,7 +1420,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +{
 +    state = AssignmentLevelState::Failed;
      ASSERT(!hasError());
-@@ -4289,8 +4320,10 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+@@ -4289,8 +4322,10 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
      if (match(YIELD) && !canUseIdentifierYield())
 -        return parseYieldExpression(context);
 +        return finishAssignmentLevel(parseYieldExpression(context), state);
@@ -1434,7 +1436,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +    level.assignmentStack = 0;
 +    level.hadAssignment = false;
      bool maybeAssignmentPattern = match(OPENBRACE) || match(OPENBRACKET);
-@@ -4333,5 +4366,5 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+@@ -4333,5 +4368,5 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
              bool shouldReturnResult = false;
 -            TreeExpression result = parseArrowFunctionCandidate(context, *savePoint, location, isArrowFunctionToken, wasOpenParen, usedVariablesSize, shouldReturnResult);
 +            TreeExpression result = parseArrowFunctionCandidate(context, *savePoint, level.location, isArrowFunctionToken, wasOpenParen, usedVariablesSize, shouldReturnResult);
@@ -1442,7 +1444,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 -                return result;
 +                return finishAssignmentLevel(result, state);
          }
-@@ -4343,14 +4376,39 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+@@ -4343,14 +4378,37 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
      if (maybeAssignmentPattern && (!lhs || (match(EQUAL) && context.isObjectOrArrayLiteral(lhs))))
 -        return parseDestructuringAssignment(context, *savePoint, location, !lhs);
 +        return finishAssignmentLevel(parseDestructuringAssignment(context, *savePoint, level.location, !lhs), state);
@@ -1460,11 +1462,13 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +    return lhs;
 +}
 +
-+// Upstream's operator loop for a level whose operand is `lhs`. Where it called itself, it suspends
-+// the level. A resumed level first runs what followed that call, with the right side, or 0, as
-+// `lhs`. Upstream's locals are references into the level's record.
++// Upstream's operator loop for a level whose operand is `lhs`. Upstream's locals are references
++// into the level's record. `edge` is a constant at both call sites. Call: the right side is a
++// chain level, as upstream's call to itself, and what followed that call runs after it. Suspend:
++// the level publishes its record and returns. A resumed level, `lhs` its right side or 0, runs what
++// followed upstream's call at the top of the loop, so the loop keeps one entry.
 +template <typename LexerType>
-+template <typename TreeBuilder> ALWAYS_INLINE TreeExpression Parser<LexerType>::parseAssignmentLevelOperator(TreeBuilder& context, AssignmentLevel& level, TreeExpression lhs, AssignmentLevelState& state)
++template <typename TreeBuilder> ALWAYS_INLINE TreeExpression Parser<LexerType>::parseAssignmentLevelOperator(TreeBuilder& context, AssignmentLevel& level, TreeExpression lhs, bool resumed, AssignmentEdge edge)
 +{
 +    JSTextPosition& start = level.start;
 +    const JSTokenLocation& location = level.location;
@@ -1472,82 +1476,108 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +    const int initialNonLHSCount = level.initialNonLHSCount;
 +    int& assignmentStack = level.assignmentStack;
 +    bool& hadAssignment = level.hadAssignment;
-+    bool resumed = state == AssignmentLevelState::Resumed;
-+    state = AssignmentLevelState::Failed;
      Operator op;
 -    bool hadAssignment = false;
      while (true) {
-+        // What followed upstream's call, run at the top of the loop so the loop keeps one entry.
-+        if (resumed) {
-+            resumed = false;
++        if (resumed)
 +            failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
-+            if (initialNonLHSCount != m_parserState.nonLHSCount) {
-+                semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
-+                break;
-+            }
++        if (resumed && initialNonLHSCount != m_parserState.nonLHSCount) {
++            semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
++            break;
 +        }
++        resumed = false;
          switch (m_token.m_type) {
-@@ -4390,10 +4448,7 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+@@ -4390,3 +4448,14 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
          }
 -        lhs = parseAssignmentExpression(context);
--        failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
--        if (initialNonLHSCount != m_parserState.nonLHSCount) {
--            semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
--            break;
--        }
-+        state = AssignmentLevelState::Suspended;
-+        return lhs;
-     }
- end:
-+    state = AssignmentLevelState::Completed;
-     if (hadAssignment)
-@@ -4407,2 +4462,55 @@ end:
++        if (edge == AssignmentEdge::Suspend) {
++            // The driver ignores the returned expression.
++            suspendAssignmentLevel(level);
++            return lhs;
++        }
++#if ASSERT_ENABLED
++        size_t suspendedLevelCount = m_suspendedAssignmentLevels.size();
++#endif
++        lhs = parseAssignmentChainLevel(context, AssignmentLevelState::Fresh, 0);
++        if (m_assignmentLevelSuspended) [[unlikely]]
++            lhs = parseAssignmentChainRest(context);
++        ASSERT(!m_assignmentLevelSuspended && m_suspendedAssignmentLevels.size() == suspendedLevelCount);
+         failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
+@@ -4407,2 +4476,83 @@ end:
 
-+// The driver. Its reservation and frame are the only ones a chain uses: one per real call, as
-+// before for every other route. A suspended level's record is copied out of the vector, so no
-+// reference into it survives a later append.
++// The entry, with upstream's frame and reservation. Level 0 of every chain lives here.
 +template <typename LexerType>
 +template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmentExpression(TreeBuilder& context)
 +{
 +    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
-+    // The records above this count belong to this activation. A nested activation, such as a
-+    // parenthesized or argument expression inside a level, removes its own before it returns.
-+    size_t outerLevelCount = m_suspendedAssignmentLevels.size();
++    ASSERT(!m_assignmentLevelSuspended);
 +    AssignmentLevel level;
-+    AssignmentLevelState state = AssignmentLevelState::Fresh;
++    AssignmentLevelState state;
++    TreeExpression lhs = parseAssignmentLevelStart(context, level, state);
++    if (state != AssignmentLevelState::Operand)
++        return lhs;
++    return parseAssignmentLevelOperator(context, level, lhs, false, AssignmentEdge::Call);
++}
++
++// One right side, in the place of upstream's call to itself and with the same reservation. A fresh
++// level runs the entry's stack check first. A resumed level is a new activation too: with a right
++// side and no error it checks under its own reservation before it reduces, advances the lexer or
++// meets another operator. A failed right side only removes the level's record and propagates the
++// failure, as upstream's level did.
++template <typename LexerType>
++template <typename TreeBuilder> NEVER_INLINE TreeExpression Parser<LexerType>::parseAssignmentChainLevel(TreeBuilder& context, AssignmentLevelState state, TreeExpression lhs)
++{
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
++    ASSERT(!m_assignmentLevelSuspended);
++    AssignmentLevel level;
++    if (state == AssignmentLevelState::Resumed) {
++        resumeAssignmentLevel(level);
++        if (lhs && !hasError())
++            failIfStackOverflow();
++    } else {
++        lhs = parseAssignmentLevelStart(context, level, state);
++        if (state != AssignmentLevelState::Operand)
++            return lhs;
++    }
++    return parseAssignmentLevelOperator(context, level, lhs, state == AssignmentLevelState::Resumed, AssignmentEdge::Suspend);
++}
++
++// Entered by the entry only, directly after a chain level published its record. Runs the rest of
++// the chain one level at a time: a fresh level for each right side, then each published level
++// resumed with its right side or 0, innermost first. The records above its base are its own, and
++// it returns with them all removed and the flag clear. A failure never starts a fresh level.
++template <typename LexerType>
++template <typename TreeBuilder> NEVER_INLINE TreeExpression Parser<LexerType>::parseAssignmentChainRest(TreeBuilder& context)
++{
++    WASM_RESERVE_STACK(2048 - wasmParserReserveDiscount);
++    ASSERT(m_assignmentLevelSuspended && !m_suspendedAssignmentLevels.isEmpty());
++    size_t base = m_suspendedAssignmentLevels.size() - 1;
++    if (m_hasStackOverflow || !canRecurse()) [[unlikely]] {
++        // The published level ends as if its right side had failed: nothing is left to run.
++        m_assignmentLevelSuspended = false;
++        m_suspendedAssignmentLevels.shrink(base);
++        failWithStackOverflow();
++    }
 +    TreeExpression lhs = 0;
 +    while (true) {
-+        switch (state) {
-+        case AssignmentLevelState::Fresh:
-+            lhs = parseAssignmentLevelStart(context, level, state);
-+            continue;
-+        case AssignmentLevelState::Operand:
-+        case AssignmentLevelState::Resumed:
-+            lhs = parseAssignmentLevelOperator(context, level, lhs, state);
-+            continue;
-+        case AssignmentLevelState::Suspended:
-+            suspendAssignmentLevel(level);
-+            state = AssignmentLevelState::Fresh;
-+            continue;
-+        case AssignmentLevelState::Completed:
-+        case AssignmentLevelState::Failed:
-+            // A failed right side resumes its level too: the level runs upstream's failure check
-+            // and returns 0, so the failure drains every suspended level without a fresh one.
-+            if (m_suspendedAssignmentLevels.size() == outerLevelCount)
-+                return lhs;
-+            resumeAssignmentLevel(level);
-+            state = AssignmentLevelState::Resumed;
-+            continue;
-+        }
++        AssignmentLevelState entry = AssignmentLevelState::Resumed;
++        if (m_assignmentLevelSuspended) {
++            m_assignmentLevelSuspended = false;
++            entry = AssignmentLevelState::Fresh;
++        } else if (m_suspendedAssignmentLevels.size() == base)
++            return lhs;
++        ASSERT(m_suspendedAssignmentLevels.size() > base);
++        lhs = parseAssignmentChainLevel(context, entry, lhs);
 +    }
 +}
 +
-+// Out of line: only a chain reaches them, and inlined vector growth would enlarge the driver's
-+// host frame on every route through it.
++// Out of line: only a chain reaches them, and inlined vector growth would enlarge the chain level's
++// host frame. The flag is set only after the record is copied, and the level returns at once.
 +template <typename LexerType>
 +NEVER_INLINE void Parser<LexerType>::suspendAssignmentLevel(const AssignmentLevel& level)
 +{
 +    m_suspendedAssignmentLevels.append(level);
++    m_assignmentLevelSuspended = true;
 +}
 +
 +template <typename LexerType>
@@ -1557,7 +1587,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +}
 +
  template <typename LexerType>
-@@ -4446,2 +4554,4 @@
+@@ -4446,2 +4596,4 @@
  {
 +    WASM_RESERVE_STACK(2048);
 +    failIfStackOverflow();
@@ -1565,16 +1595,17 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
 --- a/Source/JavaScriptCore/parser/Parser.h
 +++ b/Source/JavaScriptCore/parser/Parser.h
-@@ -152,2 +152,8 @@
+@@ -152,2 +152,9 @@
  JS_EXPORT_PRIVATE extern std::atomic<unsigned> globalParseCount;
 +
 +#if OS(WASI)
-+// bun-wasm: sets the shadow-stack bytes parseStatement and parseAssignmentExpression reserve.
-+// Takes 512 through 2048 in multiples of 16. Call at most once, before the first parse.
++// bun-wasm: sets the shadow-stack bytes parseStatement, parseAssignmentExpression and its two chain
++// functions reserve. Takes 512 through 2048 in multiples of 16. Call at most once, before the
++// first parse.
 +JS_EXPORT_PRIVATE void setWasmParserReserve(unsigned bytes);
 +#endif
 
-@@ -1573,2 +1579,24 @@ private:
+@@ -1573,2 +1580,27 @@ private:
 
 +    // bun-wasm: what one level of an assignment chain keeps while its right side is parsed. These
 +    // are the locals of upstream's parseAssignmentExpression that were live across its call to
@@ -1588,29 +1619,37 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
 +        bool hadAssignment { false };
 +    };
 +
-+    // bun-wasm: where the level parseAssignmentExpression is running stands.
++    // bun-wasm: where one level of an assignment chain stands.
 +    enum class AssignmentLevelState : uint8_t {
 +        Fresh, // No token of the level is consumed.
 +        Operand, // Its first operand is parsed. The next token decides whether it is a target.
-+        Suspended, // An assignment operator is consumed. The right side is parsed as a fresh level.
-+        Resumed, // The right side came back, as an expression or as 0.
++        Resumed, // Its right side came back, as an expression or as 0.
 +        Completed, // The level produced its expression.
 +        Failed, // The level returned 0, as every failing macro does.
 +    };
 +
++    // bun-wasm: how a level obtains the right side of an operator it consumed. The entry calls the
++    // chain level. The chain level suspends: it publishes its record and returns to its driver.
++    enum class AssignmentEdge : uint8_t { Call, Suspend };
++
      // Used to determine type of error to report.
-@@ -1802,2 +1830,7 @@ private:
+@@ -1802,2 +1834,9 @@ private:
      template <class TreeBuilder> TreeExpression parseAssignmentExpression(TreeBuilder&);
++    template <class TreeBuilder> NEVER_INLINE TreeExpression parseAssignmentChainLevel(TreeBuilder&, AssignmentLevelState, TreeExpression);
++    template <class TreeBuilder> NEVER_INLINE TreeExpression parseAssignmentChainRest(TreeBuilder&);
 +    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelStart(TreeBuilder&, AssignmentLevel&, AssignmentLevelState&);
-+    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelOperator(TreeBuilder&, AssignmentLevel&, TreeExpression, AssignmentLevelState&);
++    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelOperator(TreeBuilder&, AssignmentLevel&, TreeExpression, bool resumed, AssignmentEdge);
 +    template <typename Expression> ALWAYS_INLINE Expression finishAssignmentLevel(Expression, AssignmentLevelState&);
 +    NEVER_INLINE void suspendAssignmentLevel(const AssignmentLevel&);
 +    NEVER_INLINE void resumeAssignmentLevel(AssignmentLevel&);
      template <typename TreeBuilder> NEVER_INLINE TreeExpression parseArrowFunctionCandidate(TreeBuilder&, SavePoint&, const JSTokenLocation&, bool isArrowFunctionToken, bool wasOpenParen, size_t usedVariablesSize, bool& shouldReturnResult);
-@@ -2133,2 +2166,5 @@ private:
+@@ -2133,2 +2172,8 @@ private:
      bool m_hasStackOverflow;
-+    // bun-wasm: the suspended levels of every parseAssignmentExpression activation of this parse,
-+    // innermost last. An activation removes exactly what it appended before it returns.
++    // bun-wasm: set only by a chain level that has just published its record and is returning to
++    // its caller, which hands it to a chain driver at once. Clear at every other function boundary.
++    bool m_assignmentLevelSuspended { false };
++    // bun-wasm: the suspended levels of every chain driver of this parse, innermost last. A driver
++    // removes exactly the records above its base before it returns.
 +    Vector<AssignmentLevel, 8> m_suspendedAssignmentLevels;
      ScopeStack m_scopeStack;
 diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp

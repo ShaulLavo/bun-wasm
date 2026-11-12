@@ -165,6 +165,11 @@ including `parseAwaitExpression`. `StackBounds.cpp`, the hard and soft limits, t
 exception reserve, the regexp matching errors and every budget are unchanged, and no upstream
 algorithm changes. Non-WASI builds compile as before: the macro discards its argument there.
 
+The chain functions of [JSC assignment chains](jsc-assignment-chains.md),
+`parseAssignmentChainLevel` and `parseAssignmentChainRest`, reserve the same `2048` minus the
+discount at their entries, so four sites read it: `parseStatement`, `parseAssignmentExpression`
+and those two.
+
 A runtime-sized reservation still dies when its function returns, so error paths need no release.
 On the final side the default's capacities equal the constant version's (98, 105 and 353
 assignment targets at 192, 208 and 800 KiB), so the frame costs did not change.

@@ -17,31 +17,49 @@ small real host stack when the reserve is lower.
 
 ## The change
 
-The levels of one chain now run inside one `parseAssignmentExpression` activation. Upstream's
-function is cut at its operator loop into two inlined steps:
+Upstream's function is cut at its operator loop into two always-inlined steps:
 
 - `parseAssignmentLevelStart` is upstream's code from the function's entry to its operator loop:
   the entry assertion and stack check, `yield`, the arrow function candidate, the destructuring
   retry and the first operand. Its early returns are unchanged.
 - `parseAssignmentLevelOperator` is upstream's operator loop, unchanged except at its call to
-  itself. There it suspends the level. A resumed level continues at the statement after that call,
-  with the right side, or 0 when it failed, as `lhs`. So a failed right side takes upstream's
-  failure check once per level, a level can still reach the operator loop a second time (after an
-  arrow or a bare `yield`), and the level reduces its own targets with its own location and counts.
-  Upstream's six live locals are references into the level's record.
+  itself. Upstream's six values that live across that call are references into the level's record.
 
-The driver, `parseAssignmentExpression` itself, keeps the reserve every real call had. It runs a
-level; on a suspension it copies the level's record onto `m_suspendedAssignmentLevels` and starts a
-fresh level for the right side; when a level completes or fails it copies its parent's record out
-and resumes it. The two vector operations are small out-of-line functions that only a chain calls. Each activation removes exactly the
-records it added before it returns, including after a failure, so a nested activation (a
-parenthesized expression, an argument, a subscript, a conditional branch) never sees or changes
-its caller's records. The vector is a member of the parser with inline room for eight records of
-44 bytes, so chains of up to eight targets allocate nothing and no record lives in a parser frame.
+Three real functions inline the two steps:
 
-Every other route through the function keeps its frames and its reserve, but not its exact frame
-size: see [Cost on other routes](#cost-on-other-routes). Bun's transpiler parses `require`d files
-first, with its own unguarded recursion; that is unchanged.
+| Function | Role |
+| --- | --- |
+| `parseAssignmentExpression` (the entry) | Upstream's straight-line function. Where upstream called itself for the right side, it calls the chain level, and only if that level suspended does it call the chain driver. What followed upstream's call runs after it, unchanged |
+| `parseAssignmentChainLevel` (the chain level) | One right side. A fresh level runs the entry's stack check. At its own operator it publishes its record on `m_suspendedAssignmentLevels`, sets `m_assignmentLevelSuspended` and returns. Resumed with its right side, or 0 when that failed, it removes its record and runs what followed upstream's call at the top of its loop |
+| `parseAssignmentChainRest` (the chain driver) | Entered only by the entry, directly after a chain level published its record. A loop that calls a fresh chain level for each right side and resumes each published level with its right side, innermost first, until only the records below its base remain |
+
+Each of the three reserves `2048` minus the parser reserve discount at its entry, so a chain of any
+length holds three parser frames and three reservations, and a nest with one operator per level
+(`a = f(b = f(…))`) holds upstream's two per level. Every route without an assignment operator
+runs only the entry, with upstream's frame and reservation.
+
+State and ownership:
+
+- The flag is set only after the record is copied, and the level returns at once. The entry reads
+  it immediately and hands it to the driver, which clears it before any further parsing. It is
+  clear at every other function entry and exit.
+- The driver owns the records above its base. It returns only with them all removed, on success
+  and on failure, so a nested chain (in a parenthesized expression, an argument, a subscript, a
+  conditional branch, an arrow candidate or a destructuring retry) never sees or changes its
+  caller's records. A failed level never starts a fresh one: each published level is resumed with
+  0, runs upstream's failure check and returns.
+- The driver checks the stack under its own reservation before it starts a level. If it refuses,
+  it drops its one published record and fails with the parser's stack error. A resumed level with a
+  right side and no error checks under its reservation before it reduces, advances the lexer or
+  meets another operator; with a failed right side it only removes its record and propagates.
+- The builder's own assignment stack is left as upstream leaves it after a failure: nothing is
+  truncated. Debug builds assert the flag and the record count at each boundary.
+
+The vector has inline room for eight records of 44 bytes, so chains of up to nine targets allocate
+nothing; the two vector operations are small out-of-line functions only a chain calls.
+
+Bun's transpiler parses `require`d files first, with its own unguarded recursion; that is
+unchanged.
 
 The tree the parser now accepts is deeper, and the code generator walks it recursively. Its
 `emitNode` checks only real shadow frames, which are small, so the nine emitters that recurse into

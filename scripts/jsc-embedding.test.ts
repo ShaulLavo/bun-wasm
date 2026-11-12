@@ -37,16 +37,17 @@ test("the JSC artifact check runs the busy-loop stdout handshake on the same gue
   expect(command!.slice(2)).toEqual([new URL("../tests/test-stdout-busy-loop.ts", import.meta.url).pathname, "--engine", "jsc", "--wasm", "/dist/bun-jsc.wasm"]);
 });
 
-test("only the two parser sites read the parser reserve; every other reservation stays constant", () => {
+test("only the four parser sites read the parser reserve; every other reservation stays constant", () => {
   const sites = patch.match(/^\+ *WASM_RESERVE_STACK\(.*\);$/gm) ?? [];
-  expect(sites).toHaveLength(22);
-  expect(sites.filter(site => site.includes("2048 - wasmParserReserveDiscount"))).toHaveLength(2);
+  expect(sites).toHaveLength(24);
+  // parseStatement, parseAssignmentExpression, parseAssignmentChainLevel and parseAssignmentChainRest.
+  expect(sites.filter(site => site.includes("2048 - wasmParserReserveDiscount"))).toHaveLength(4);
   expect(sites.filter(site => /WASM_RESERVE_STACK\((?:512|1024|2048)\);$/.test(site))).toHaveLength(20);
   const parser = patch.split("diff --git a/Source/JavaScriptCore/parser/Parser.cpp")[1]?.split("diff --git")[0] ?? "";
   // The discount is zero-initialized data: no initializer, so zero-filled memory means 2048.
   expect(parser).toContain("+static uint32_t wasmParserReserveDiscount;\n");
   expect(parser).toContain("+    RELEASE_ASSERT(bytes >= 512 && bytes <= 2048 && !(bytes % 16));\n+    wasmParserReserveDiscount = 2048 - bytes;\n");
-  expect(parser.match(/wasmParserReserveDiscount/g)).toHaveLength(4);
+  expect(parser.match(/wasmParserReserveDiscount/g)).toHaveLength(6);
   expect(parser).toMatch(/\+    WASM_RESERVE_STACK\(2048\);\n\+    failIfStackOverflow\(\);\n     ASSERT\(match\(AWAIT\)\);/);
   // One definition and one declaration: nothing in WebKit calls the setter.
   expect(patch.match(/setWasmParserReserve/g)).toHaveLength(2);

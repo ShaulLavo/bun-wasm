@@ -39,6 +39,10 @@ mixed nine forms, 18: [20,20,20,20,0,0,0,0] | base m3, base m4, get m4, base m5,
 mixed nine forms, 18, wide: 20 | base m3, base m4, get m4, base m5, get m5, set m4=20, set m3=20
 nested chain in a subscript: [3,3,3,3,"p","p"] | base outer, rhs, set outer=3
 nested chain in a call argument: [8,8,4,4] | rhs
+arrow default under a chain: [[2,2,2],2,2] | base s0, base s1, base s2, base s3, base s4, base s5, rhs, set s5=2,2,2, set s4=2,2,2, set s3=2,2,2, set s2=2,2,2, set s1=2,2,2, set s0=2,2,2
+destructuring default under a chain: [[],3,3] | base s0, base s1, base s2, base s3, base s4, base s5, rhs, set s5=, set s4=, set s3=, set s2=, set s1=, set s0=
+arrow default under a chain, wide: [[2,2,2],2,2] | base s0, base s1, base s2, base s3, base s4, base s5, rhs, set s5=2,2,2, set s4=2,2,2, set s3=2,2,2, set s2=2,2,2, set s1=2,2,2, set s0=2,2,2
+destructuring default under a chain, wide: [[],3,3] | base s0, base s1, base s2, base s3, base s4, base s5, rhs, set s5=, set s4=, set s3=, set s2=, set s1=, set s0=
 arrow right side: [2,true] | 
 async arrow right side: ["function",true] | 
 arrow with chained defaults: [1,1,2,2] | 
@@ -57,6 +61,11 @@ condition context: [0,0,1] | rhs
 unused result: [4,4] | rhs, base u, set u=4
 arrow then =: SyntaxError
 bare yield then =: SyntaxError
+arrow then = inside a chain: SyntaxError
+bare yield then = inside a chain: SyntaxError
+failed arrow default under a chain: SyntaxError
+failed parenthesized rest under a chain: SyntaxError
+failed destructuring default under a chain: SyntaxError
 literal target: SyntaxError
 operator target: SyntaxError
 new.target target: SyntaxError

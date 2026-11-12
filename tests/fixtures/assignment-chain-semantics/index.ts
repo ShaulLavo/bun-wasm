@@ -72,6 +72,16 @@ traced("mixed nine forms, 18, wide", `let ${levels(18, i => `r${i} = 0, `)}z; z 
 traced("nested chain in a subscript", `let a, b, c, ${levels(10, i => `k${i}, `)}z; z = a = b = h.b("outer")[(${levels(10, i => `k${i} = `)}"p")] = c = h.rhs(3); return [z, a, b, c, k0, k9];`);
 traced("nested chain in a call argument", "let a, b, c, d; const f = (v) => v * 2; a = b = f(c = d = h.rhs(4)); return [a, b, c, d];");
 
+// Speculative parses inside the right side of a running chain: the arrow candidate and the
+// destructuring retry each parse a nested chain, restore and parse again. Together the two chains
+// hold more records than the inline capacity.
+const outer = levels(6, i => `h.b("s${i}").p = `);
+const inner = levels(6, i => `q${i} = `);
+for (const wide of [false, true]) {
+  traced(`arrow default under a chain${wide ? ", wide" : ""}`, `let ${levels(6, i => `q${i}, `)}z; z = ${outer}((p = ${inner}h.rhs(2)) => [p, q0, q5])(); return [z, q0, q5];`, undefined, wide);
+  traced(`destructuring default under a chain${wide ? ", wide" : ""}`, `let ${levels(6, i => `q${i}, `)}z; z = ${outer}[${inner}h.rhs(3)] = []; return [z, q0, q5];`, undefined, wide);
+}
+
 // Right sides that only the top of an assignment level parses: arrows, yield and destructuring.
 traced("arrow right side", "let x, y; x = y = (v) => v + 1; return [x(1), x === y];");
 traced("async arrow right side", "let x, y; x = y = async v => v; return [typeof x, x === y];");
@@ -98,6 +108,13 @@ function syntaxError(label: string, body: string): void {
 // A level can reach its operator loop twice: after an arrow or a bare yield, `=` is not a target.
 syntaxError("arrow then =", "let a; a = () => {} = 1;");
 syntaxError("bare yield then =", "function* g() { let a; a = yield\n= 1; }");
+// The same second operator at a level inside the chain, which meets it after its right side came back.
+syntaxError("arrow then = inside a chain", "let a, b, c; a = b = c = () => {} = 1;");
+syntaxError("bare yield then = inside a chain", "function* g() { let a, b, c; a = b = c = yield\n= 1; }");
+// A speculative parse that fails both ways while an outer chain waits for it.
+syntaxError("failed arrow default under a chain", `let ${levels(6, i => `q${i}, `)}z; z = ${outer}(p = ${inner}) => 0;`);
+syntaxError("failed parenthesized rest under a chain", `let ${levels(6, i => `q${i}, `)}z; z = ${outer}(p = ${inner}1, ...rest);`);
+syntaxError("failed destructuring default under a chain", `let ${levels(6, i => `q${i}, `)}z; z = ${outer}[${inner}] = [];`);
 syntaxError("literal target", "let a; a = 1 = 2;");
 syntaxError("operator target", "let a, b, c; a = b + c = 1;");
 syntaxError("new.target target", "function f() { let a; a = new.target = 1; }");
