@@ -2,10 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, parseCheck } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
+import { needsRust } from "./ci-changes";
 
 const root = resolve(import.meta.dir, "..");
 const scratch: string[] = [];
@@ -167,6 +168,34 @@ test("each discovery group retains one command owner and browser deadlines stay 
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" local-runtime');
   expect(runtime.indexOf('BUN_WASM_CI_CHECKS')).toBeLessThan(runtime.indexOf('"$root/web/node_modules/.bin/tsc" -p'));
+});
+
+function sandboxPageInputs(): string[] {
+  const pending = [join(root, "sandbox/src/main.ts")];
+  const inputs = new Set<string>();
+  while (pending.length) {
+    const path = pending.pop()!;
+    if (inputs.has(path)) continue;
+    inputs.add(path);
+    if (!/\.[jt]sx?$/.test(path)) continue;
+    const loader = path.endsWith("tsx") ? "tsx" : path.endsWith("js") ? "js" : "ts";
+    const imports = new Bun.Transpiler({ loader }).scan(readFileSync(path, "utf8")).imports;
+    for (const imported of imports) {
+      if (!imported.path.startsWith(".")) continue;
+      const input = Bun.resolveSync(imported.path, dirname(path));
+      if (input.startsWith(`${root}/`) && !input.includes("/node_modules/")) pending.push(input);
+    }
+  }
+  return Array.from(inputs, path => relative(root, path)).sort();
+}
+
+test("every consumed sandbox page input selects its real guest regression", () => {
+  const check = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
+  expect(check?.owner).toBe("browser-guest");
+  for (const path of sandboxPageInputs()) {
+    expect(check?.inputs).toContain(path);
+    expect(needsRust([path])).toBe(true);
+  }
 });
 
 test("Web subprocess boundaries and fail-fast order are preserved by manifest batches", () => {

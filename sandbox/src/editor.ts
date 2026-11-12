@@ -74,9 +74,20 @@ export class Editor {
     return (path === this.path ? this.view.state : this.states.get(path))?.doc.toString() ?? "";
   }
 
-  /** Shows a save's outcome only while it is still the newest edit. */
+  /** A successful save cannot hide another document that still needs saving. */
   settle(revision: number, state: SaveState): boolean {
-    if (revision !== this.editRevision) return false;
+    let currentPending = false;
+    let otherPending = false;
+    for (const pending of this.pending.values()) {
+      currentPending ||= pending === revision;
+      otherPending ||= pending !== revision;
+    }
+    if (revision !== this.editRevision && (state.kind !== "ok" || !currentPending || otherPending)) return false;
+    if (state.kind === "ok" && otherPending) {
+      this.saveState = { text: "not saved: other files have pending changes", kind: "error" };
+      this.host.changed();
+      return false;
+    }
     this.saveState = state;
     this.host.changed();
     return true;

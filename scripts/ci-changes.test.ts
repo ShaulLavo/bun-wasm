@@ -105,8 +105,13 @@ test("JSC artifact inventory changes select ordinary and shared consumers", () =
   expect(needsSharedNative(paths)).toBe(true);
 });
 
-test.each(["src/index.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
+test.each(["src/index.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
+});
+
+test.each(["sandbox/src/main.ts", "sandbox/src/editor-pane.tsx", "sandbox/src/startup-output.ts"])("sandbox input %s selects its Browser guest producer without JSC", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsJsc([path])).toBe(false);
 });
 
 test.each(["crates/bunwasm-runtime/src/js/runtime.d.ts", "crates/bunwasm-runtime/src/js/worker_protocol.d.ts"])("type-only runtime declaration %s needs no native engine build", path => {

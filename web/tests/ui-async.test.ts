@@ -206,6 +206,40 @@ test("sandbox flushAll retries a failed save after its debounce timer was remove
   expect(editor.hasPending).toBe(false);
 });
 
+test("sandbox keeps failed-file warnings until every pending document is saved", async () => {
+  const page = await pageFixture();
+  const sandbox = new page.Sandbox("?mode=memory");
+  sandbox.start();
+  const editor = sandbox.editor!;
+  pageCleanups.push(async () => { editor.discard(); });
+  const write = page.fixture.fs.writeFile;
+  let failA = true;
+  page.fixture.fs.writeFile = async (path, data) => {
+    if (failA && path.endsWith("/a.ts")) throw new Error("errno 51");
+    await write(path, data);
+  };
+  await editor.open("a.ts");
+  editor.setText("A is still only in this editor");
+  await expect(editor.flush("a.ts")).rejects.toThrow("errno 51");
+  await editor.open("b.ts");
+  editor.setText("B saves successfully");
+  await editor.flush("b.ts");
+  expect(editor.hasPending).toBe(true);
+  expect(sandbox.failure).toBe("storage");
+  expect(sandbox.status.text).toContain("Keep this page open");
+  expect(editor.saveState.text).toContain("not saved");
+  await editor.open("a.ts");
+  expect(editor.view.state.doc.toString()).toBe("A is still only in this editor");
+  expect(editor.saveState.text).toContain("not saved");
+  failA = false;
+  await editor.flushAll();
+  expect(editor.hasPending).toBe(false);
+  expect(editor.saveState).toEqual({ text: "saved", kind: "ok" });
+  expect(sandbox.failure).toBeUndefined();
+  expect(sandbox.status.text).not.toContain("Keep this page open");
+  expect(page.fixture.files.get("/home/user/app/a.ts")).toBe("A is still only in this editor");
+});
+
 test("sandbox serializes saves while retaining text edited during a pending save", async () => {
   const { sandboxEditor: editor, fixture } = await editorFixture("sandbox");
   await editor.open("src/main.ts");
@@ -605,7 +639,7 @@ test("sandbox retries an exited installer after quota output, then checkpoints t
   const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
   const sandbox = new page.Sandbox("");
   let reclaims = 0;
-  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; }) });
+  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; }), initialize: async (_fs: unknown, seed: () => Promise<void>) => seed(), close() {} });
   sandbox.start();
   method<() => void>(sandbox, "terminalOpened")();
   await turn();
@@ -625,7 +659,7 @@ test("quota save failure retains pending text and offers Retry without reloading
   const { sandbox, sandboxEditor: editor, fixture, boundary, renderSandbox } = await editorFixture("sandbox");
   fixture.control.holdWrites = false;
   let reclaims = 0;
-  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; throw new Error("errno 51"); }) });
+  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; throw new Error("errno 51"); }), initialize: async (_fs: unknown, seed: () => Promise<void>) => seed(), close() {} });
   await editor.open("src/main.ts");
   editor.setText("pending source must stay here");
   const checkpoint = deferred<void>();
