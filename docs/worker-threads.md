@@ -274,6 +274,11 @@ the format (`crates/bunwasm-runtime/src/wasm/lane.rs`); `worker_lane.ts` wraps i
 - Waking: an idle receiver's event loop is woken by a small `port-wake` hint through the
   existing broker. The hint only affects how soon a `message` listener runs.
   `Atomics.wait` and the wait provider are unchanged.
+- Failure: a `postMessage` that throws has moved nothing, and one that returns has published
+  the whole message. Once buffers detach, the calls that move carried ports and publish the
+  frame go through a path that allocates nothing and cannot report an error. A receive that
+  fails while returning frames gets the same frames at the next receive.
+  [The lane's record](bun-patches/original-adapter-group-lane.md) describes that path.
 
 Observable changes on these engines:
 

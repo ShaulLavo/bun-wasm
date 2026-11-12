@@ -15,6 +15,10 @@ custody, and none of its code is reused.
 - `crates/bunwasm-runtime/src/js/bootstrap.js`: installs `groupLanes` in the shared-group service.
 - `crates/bunwasm-runtime/src/js/worker_threads.ts`, `worker_codec.ts`, `worker_protocol.d.ts`:
   ports use a group lane when the service has one.
+- `crates/bunwasm-runtime/src/data.rs`, `ops.rs`, `ops/abi.rs`, `natives.rs`, `split.rs` and
+  `crates/bunwasm-engine-quickjs/src/client.rs`, `natives.rs`, `driver.rs`: word natives, the
+  call path the lane's effects use (below). The engine files are the ones every split engine
+  compiles, so QuickJS, JSC, SpiderMonkey and Hermes all bind word natives the same way.
 
 ## Imports
 
@@ -45,13 +49,52 @@ from the release that carries it. There is no fallback for a host without it. Th
 - Segment region: magic, capacity, committed, next, sealed and read, then length-prefixed frames up
   to 64 MiB each.
 
+## Word natives
+
+A data native crosses the bridge in allocated buffers: the engine allocates and encodes a
+request, the core copies the frame, decodes the arguments, runs the native, then allocates and
+encodes a reply. Each of those allocations is checked, and a failed one reaches JavaScript as a
+catchable error. A failure before the native runs is a refusal. A failure after it ran is not: the
+effect happened and the caller was told it did not.
+
+A word native has no such step. Its arguments are up to eight unsigned 32-bit words and its
+result one signed 64-bit number, which JavaScript reads as a number.
+
+- The engine allocates one 48-byte frame at startup (`CoreClient::new`) and keeps it for life.
+  A call writes the operation, the session and the words into it, enters `bun_core_dispatch`
+  and reads the result from it. The transport tells a word frame from a data frame by its size.
+- The core reads the frame in place, runs the native and writes the result back
+  (`ops/abi.rs`, `word`). Nothing on either side allocates, encodes or decodes, and there is no
+  resource-limit status. A wrong session or operation is a broken engine and ends the guest.
+- A word native that can be refused returns -1 and keeps the reason, which `laneRefusal` reads.
+- The core export list and the linker inputs are unchanged. A core and an engine side still have
+  to come from the same source, as before: the description the core sends now lists word natives.
+
+Every lane native that changes group memory is a word native, and so are the read-only ones
+the close and retire paths call. Two natives carry text and stay data natives:
+
+- `laneReserve` stages a frame under the name of its end (slot, generation, side), not under an
+  id in its reply. If the reply is lost, `worker_lane.ts` aborts by the same end. Staging again
+  abandons an earlier frame first, and an end that moves or closes takes its frame with it.
+- `laneDrain` keeps the frames it read until `laneDrained` says JavaScript has them. A call
+  whose reply was lost returns the same frames again. This costs one extra copy of the drained
+  frames while the call is in progress. An end holding such frames refuses to transfer, since
+  they are in neither the lane nor the port's snapshot.
+
+`laneLedger` and `laneJoin` are data natives too; a repeated `laneLedger` returns what the first
+stored, and a failed `laneJoin` ends the starting worker.
+
+What this does not cover: an engine-level exception inside the runtime's own JavaScript between
+detachment and return, such as a stack overflow. That is the same exposure as any builtin
+written in JavaScript and is not specific to the lane.
+
 ## Rules
 
 - Staging may allocate and call the host, and refuses with `DataCloneError` before detachment.
   Commit is stores only, with no allocation, and one publication point: the ring cursor, a
-  segment's committed or next word, or the ring cursor after sealing. The engines' native-call
-  bridge still decodes each call's arguments into a new list (`ops.rs`), so the JavaScript path
-  between detachment and publication is allocation-free only inside the lane itself.
+  segment's committed or next word, or the ring cursor after sealing. Between detachment and
+  the return of `postMessage` the only native calls are word natives: the transfer of each
+  carried end, then the frame's commit.
 - A terminal end (Closed, or ClosedDead after an exit report) is reader-closed by its end word.
   A close, cascade, death declaration or release therefore writes nothing after its terminal
   swap except generation-checked swaps, and nothing counts dead ends but their end words. A
@@ -59,7 +102,11 @@ from the release that carries it. There is no fallback for a host without it. Th
   never used again.
 - Sweeps, which may call the group owner, run only on an event-loop step, never inside a
   synchronous receive. After its sweep the root retires broker records whose lane end a
-  cascade or release closed, and closes their peers.
+  cascade or release closed, and closes their peers. It rescans when the sum of all end epochs
+  changed. An end's epoch rises in the store that changes its state, so a closure needs no
+  second write to be noticed, and a member that dies right after closing an end has still
+  announced it. A full sweep also returns a lane whose finalizer died between its terminal swap
+  and the lane's release.
 - Receiving is atomic loads, stores and copies on group memory. It validates every cursor, length,
   slot and address before use and closes the direction on corruption, never writing through an
   address that failed validation.
@@ -77,6 +124,12 @@ custody cascade against adoption, the writer fence, exit reports before release,
 members, death at every creation host step, dead cleaners, two concurrent sweepers, group pins
 surviving the first member and a two-thread writer and reader. It also parks a death declaration,
 and one of two finalizers, before each of its memory accesses while another guest frees and
-reuses the slot, and checks near-limit epochs. `scripts/worker-group-lanes.test.ts` runs the real
-runtime JavaScript over relay-mode Waffle pipes with a small model of the native contract, as a
-codec and topology control.
+reuses the slot, and checks near-limit epochs. It kills a finalizer before each of its memory
+accesses and checks that a closed end has always changed the epoch sum and that the next full
+sweep leaves no lane behind. It covers a staged frame and a drained batch whose replies were
+lost. `ops/tests.rs` and `ops/memory_tests.rs` run a word call on a transport that can allocate
+nothing, beside a data call that fails there, and measure that it allocates nothing.
+`scripts/worker-group-lanes.test.ts` runs the real runtime JavaScript, `worker_lane.ts`
+included, over relay-mode Waffle pipes with a small model of the native contract, as a codec
+and topology control. Its model can fail a data native before or after it ran, and names the
+natives called after detachment.

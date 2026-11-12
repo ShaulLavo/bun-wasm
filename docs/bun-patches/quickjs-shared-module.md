@@ -73,6 +73,9 @@ Original adapters in `crates/bunwasm-runtime/src/split.rs` and
 Dispatcher/Transport to one registered RUN function. No VM value crosses that
 boundary. The core dependency graph excludes rquickjs. The side imports core
 libc for Rust and QuickJS allocations, plus the shared memory, table and stack.
+The same entry also carries word calls, which use one frame allocated at startup
+and no request or reply buffer; [Shared-group MessagePort lanes](original-adapter-group-lane.md#word-natives)
+records them.
 
 `crates/bunwasm-cli/entry-split.c` is an original command-entry shim, not copied
 CRT source. Waffle initializes core constructors before side memory,
