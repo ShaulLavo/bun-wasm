@@ -125,7 +125,10 @@ export async function withCliReceiptFixture<T>(action: (fixture: CliFixture) => 
     await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\nnative-tools/\n");
     await mkdir(join(root, "src"));
     await copyFile(new URL("../../src/engine-kind.ts", import.meta.url), join(root, "src/engine-kind.ts"));
-    fixtureGit(root, "add", "scripts", "src", ".gitignore");
+    // A shared-group side's recorded link reads both memory authorities.
+    await mkdir(join(root, "crates/bunwasm-cli"), { recursive: true });
+    for (const name of ["max-memory.txt", "group-address-space.txt"]) await copyFile(new URL(`../../crates/bunwasm-cli/${name}`, import.meta.url), join(root, "crates/bunwasm-cli", name));
+    fixtureGit(root, "add", "scripts", "src", "crates", ".gitignore");
     fixtureGit(root, "commit", "-m", "synthetic CLI probes, no compilation");
     const bin = join(options.sdk, "bin");
     const rustc = join(root, "private/toolchain/bin/rustc");

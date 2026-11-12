@@ -18,6 +18,8 @@ export interface Member {
   readonly lease: Lease;
   readonly owner: Owner;
   readonly host: NestedHost;
+  /** The group memory this member was launched with. */
+  readonly memory: WebAssembly.Memory;
   send(request: Request): Reply;
   raw(op: number, a?: number, b?: number, c?: number, d?: number): number[];
   /** The core's callback dispatcher. It answers status 0 and leaves the frame; a test may replace it. */
@@ -75,7 +77,7 @@ function bindMember(lease: Lease, owner: Owner): Member {
     try { return exchange(request); }
     finally { next = mark; }
   };
-  return Object.assign(core, { lease, owner, host, send, raw });
+  return Object.assign(core, { lease, owner, host, memory, send, raw });
 }
 
 /** One page's groups under a small policy. Each `join()` is a new group; `join(peer)` joins the peer's. */

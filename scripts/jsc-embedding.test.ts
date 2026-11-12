@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -106,4 +106,35 @@ test("JSC stack controls use their discovered fixture with a small real host sta
     path: "tests/fixtures/stack-getter-headroom",
     hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
   });
+});
+
+test("the JSC gate runs getter semantics at the smallest browser budget, past the old getter depth", () => {
+  expect(getterDispatchFixture()).toEqual({
+    path: "tests/fixtures/getter-dispatch",
+    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000", "--env", "GETTER_DISPATCH_WIDE_LOCALS=33000"],
+  });
+});
+
+test("in-loop getter calls are limited to the WASI C loop and to the two named bytecodes", () => {
+  const slowPaths = patch.split("diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp")[1]?.split("diff --git")[0] ?? "";
+  const assembly = ["LowLevelInterpreter.asm", "LowLevelInterpreter64.asm"]
+    .map(file => patch.split(`diff --git a/Source/JavaScriptCore/llint/${file}`)[1]?.split("diff --git")[0] ?? "").join("");
+  // The same predicate on both sides: C loop and WASI.
+  expect(slowPaths.match(/^\+#if ENABLE\(C_LOOP\) && OS\(WASI\)$/gm)).toHaveLength(6);
+  expect(assembly.match(/^\+ *if C_LOOP and WASI$/gm)).toHaveLength(3);
+  expect(patch).toContain("+#if OS(WASI)\n+#define OFFLINE_ASM_WASI 1\n+#else\n+#define OFFLINE_ASM_WASI 0\n+#endif\n");
+  // One caller of the shared lookup opts in, and only the two slow paths hand a getter back.
+  expect(slowPaths.match(/performLLIntGetByID<true>\(.*, &getter\);$/gm)).toHaveLength(1);
+  expect(slowPaths.match(/performLLIntGetByID<true>/g)).toHaveLength(1);
+  expect(slowPaths.match(/^\+ +RELEASE_AND_RETURN\(throwScope, callGetterInLoop\(/gm)).toHaveLength(2);
+  expect(assembly.match(/callGetByIdSlowPath\(_llint_slow_path_get_by_id(?:_with_this)?, /g)).toHaveLength(2);
+  // The exception signal is tested before either result word is used as a pointer.
+  const outcomes = assembly.split("macro (target, calleeStackPointer)")[1] ?? "";
+  expect(outcomes.trimStart().startsWith("+                bpeq calleeStackPointer, -1, _llint_throw_from_slow_path_trampoline\n")).toBe(true);
+  expect(outcomes.indexOf("move calleeStackPointer, sp")).toBeGreaterThan(outcomes.indexOf("btpnz calleeStackPointer, .callGetter"));
+  // Call setup's own error convention never leaves the helper, and the published pointer is put back first.
+  const helper = slowPaths.split("+static UGPRPair callGetterInLoop(CallFrame* callFrame")[1] ?? "";
+  expect(helper.indexOf("stack.setCurrentStackPointer(callerStackPointer);")).toBeGreaterThan(helper.indexOf("setUpCall(calleeFrame"));
+  expect(helper.indexOf("if (throwScope.exception()) [[unlikely]]")).toBeGreaterThan(helper.indexOf("stack.setCurrentStackPointer(callerStackPointer);"));
+  expect(helper.indexOf("ensureJSStackCapacityFor")).toBeLessThan(helper.indexOf("calleeFrame->setCallerFrame"));
 });

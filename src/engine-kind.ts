@@ -27,8 +27,14 @@ export function isPairedEngine(value: unknown): value is PairedEngine {
 
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 
-/** The Waffle group policy a Bun group core needs: a 1 GiB guest maximum and 8 MiB member stacks. */
-export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 16384, stackBytes: 8 << 20 } as const;
+/**
+ * The Waffle group policy a Bun group needs: the 2 GiB group address space every group core and
+ * side declares (crates/bunwasm-cli/group-address-space.txt), the 1 GiB guest memory maximum as
+ * the pages its members may hold together (crates/bunwasm-cli/max-memory.txt; regions are not
+ * counted), and 8 MiB member stacks. This file ships in the package and cannot read the
+ * repository, so tests/package/max-memory.test.ts pins both numbers to their authorities.
+ */
+export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } as const;
 
 /** Initialize a shared-group (PIE) core's data before constructors. */
 export const SHARED_GROUP_CORE_INITIALIZE_MEMORY = ["core_initialize_memory", "__wasm_apply_data_relocs"] as const;

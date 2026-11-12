@@ -187,6 +187,30 @@ test("host import observation distinguishes the two event-loop waits from arbitr
   expect(calls).toEqual([[true, false], [false, false], [false, true]]);
 });
 
+test("functions the linker bound from another module keep their direct calls, except the two waits", () => {
+  const calls: [boolean, boolean][] = [];
+  const linked = { env: { malloc: () => 0, bun_core_idle: () => 0, bun_core_poll: () => 0 } };
+  const imports = { env: { ...linked.env, host: () => 0 }, wasi_snapshot_preview1: { fd_write: () => 0 } };
+  const observed = observeMemoryImports(imports, (normal, force) => { calls.push([normal, force]); }, true, linked);
+  expect(observed.env?.malloc).toBe(linked.env.malloc);
+  for (const [namespace, name] of [["env", "malloc"], ["env", "bun_core_idle"], ["env", "bun_core_poll"], ["env", "host"], ["wasi_snapshot_preview1", "fd_write"]]) {
+    const call = observed[namespace!]?.[name!];
+    if (typeof call !== "function") throw new Error("missing observed import");
+    call();
+  }
+  expect(calls).toEqual([[true, false], [true, false], [false, false], [false, true]]);
+});
+
+test("a host function replacing a linked name is still observed", () => {
+  const calls: [boolean, boolean][] = [];
+  const linked = { env: { malloc: () => 0 } };
+  const observed = observeMemoryImports({ env: { malloc: () => 1 } }, (normal, force) => { calls.push([normal, force]); }, true, linked);
+  const call = observed.env?.malloc;
+  if (typeof call !== "function") throw new Error("missing observed import");
+  expect(call()).toBe(1);
+  expect(calls).toEqual([[false, false]]);
+});
+
 test("a late shared frame cannot resurrect a process ended while a phase sample awaits", async () => {
   const f = fixture("quickjs");
   const id = crypto.randomUUID();

@@ -18,6 +18,20 @@ before further admission, and charges leave only with their backing owner.
 Physical-stop failure retains the member's memory and ownership debt;
 only settlement of the same incarnation releases it.
 
+`GroupPolicy::member_pages` is an original cumulative member cap matching the
+reviewed Waffle contract (Waffle PR
+[478](https://github.com/ShaulLavo/waffle/pull/478) at
+`a4dfa854a3b180ba268160ff75225dab6da63fa8`, `packages/waffle/group/state.ts`; no code
+is copied). It counts every chunk granted through `group_grow` to any reserved,
+launched or retained member and never a region. An omitted cap is the configured
+group maximum, derived in `MemoryGroup::new`; an explicit one must be between one
+page and that maximum. The charge is added after placement and returned only by a
+member's release, so a refused or failed grow changes nothing and a retained
+member stays charged. `GroupSnapshot::member_pages` reports it separately from
+`committed_bytes`, which keeps the backing's high-water charge. A Bun group sets
+the cap to the guest memory maximum and its address space to
+`group-address-space.txt` ([Memory ceiling](../memory-ceiling.md)).
+
 ### Frozen guest ABI
 
 The `runtime_shm` imports use guest `u32` addresses and negative WASI errno values.
