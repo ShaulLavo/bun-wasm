@@ -19,6 +19,18 @@ cannot pass. The same button in the same document must receive a trusted click,
 and its counter must change from zero to one. Other browser transports keep their
 existing click implementation.
 
+The owner focuses each new preview iframe after its document loads. Native iOS
+input can otherwise end in a trusted `touchcancel` without reaching the counter,
+even when the accessibility target and coordinates are correct. A native control
+kept the unfocused counter at zero and incremented the focused counter with one
+trusted tap. Focus does not dispatch a click, retry input, or change a deadline.
+Chromium and WebKit controls verify that a new preview takes focus from the owner
+editor and still closes normally. Opening the preview waits for that load and
+focus callback, so a load-blocking resource cannot race the single native press.
+The child document's `hasFocus()` is not a readiness predicate: native iPhone
+Safari can report false with an enabled counter and the parent iframe active.
+Controls preserve that false value while proving load ordering and native arming.
+
 Native arming reports a missing or disabled SSR counter as pending until its
 hydration enables the button. The transport polls that state within the original
 click phase deadline before taking a native snapshot or pressing once. A ready

@@ -2171,8 +2171,8 @@ jobs:
           echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
-        if: needs.quality.outputs.shared-native == 'true'
         timeout-minutes: 5
+        if: needs.quality.outputs.shared-native == 'true'
         with:
           name: shared-spidermonkey-prebuild
           path: ${{ runner.temp }}/spidermonkey/shared
@@ -2211,6 +2211,12 @@ jobs:
           export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           export BUN_WASM_TRACE=1
           bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared SpiderMonkey Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4

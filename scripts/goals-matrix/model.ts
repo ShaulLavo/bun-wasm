@@ -1,5 +1,5 @@
 import { boxId, inventory, browsers, engines, frameworks, type Box } from "./catalog";
-import { validateDeadlines, type DeadlinePolicy, type RecordedDeadlinePolicy } from "./deadlines";
+import { cellDeadlines, validateDeadlines, type DeadlinePolicy, type RecordedDeadlinePolicy } from "./deadlines";
 import { object, text, observed } from "./evidence";
 export const phases = ["startup", "install", "dev", "render", "click", "hot-reload", "build", "preview", "cleanup"] as const;
 export type Phase = typeof phases[number];
@@ -48,21 +48,22 @@ function array(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new Error("Expected an array");
   return value;
 }
-function phaseResult(value: unknown, engine: string, framework: string, deadlines: RecordedDeadlinePolicy): PhaseResult {
+function phaseResult(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): PhaseResult {
   const data = object(value);
   const phase = phases.find(phase => phase === data.phase);
   if (!phase || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid phase or duration");
-  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? (deadlines.installTimeouts[framework] ?? deadlines.timeoutMs) : phase === "build" ? (deadlines.buildTimeouts?.[framework] ?? deadlines.timeoutMs) : deadlines.timeoutMs;
+  const limits = cellDeadlines(deadlines, box);
+  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? limits.installTimeoutMs : phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
   if (data.timeoutMs !== timeoutMs) throw new Error("Phase timeout differs from report deadline policy");
   const base = { phase, timeoutMs: data.timeoutMs, startedAt: text(data.startedAt), durationMs: data.durationMs };
   if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };
   if (data.status !== "pass") throw new Error("Unknown phase status");
-  observed(phase, data.evidence, engine);
+  observed(phase, data.evidence, box.engine);
   return { ...base, status: "pass", evidence: data.evidence };
 }
-function attempt(value: unknown, engine: string, framework: string, deadlines: RecordedDeadlinePolicy): Attempt {
+function attempt(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): Attempt {
   const data = object(value);
-  return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, engine, framework, deadlines)) };
+  return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, box, deadlines)) };
 }
 function validateCell(value: unknown, deadlines: DeadlinePolicy): Box {
   const data = object(value);
@@ -76,7 +77,7 @@ function validateCell(value: unknown, deadlines: DeadlinePolicy): Box {
 export function validateCellEvidence(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): asserts value is Cell<RecordedBox> {
   const data = object(value);
   if (data.framework !== box.framework || data.browser !== box.browser || data.engine !== box.engine) throw new Error("Box identity differs");
-  const attempts = array(data.attempts).map(value => attempt(value, box.engine, box.framework, deadlines));
+  const attempts = array(data.attempts).map(value => attempt(value, box, deadlines));
   if (data.status === "pending") { text(data.reason); if (attempts.length) throw new Error("Pending box has attempts"); return; }
   if (data.status === "not runnable yet") { text(data.reason); object(data.discovery); return; }
   if (data.status !== "pass" && data.status !== "fail") throw new Error("Unknown cell status");

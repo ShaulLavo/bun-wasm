@@ -40,7 +40,7 @@ export function installIphoneObserver(endpoint: string, nonce: string): void {
   void poll();
 }
 
-export function presentIphonePreview(url: string | null): void {
+export async function presentIphonePreview(url: string | null): Promise<void> {
   document.getElementById("__goalsIphonePreview")?.remove();
   if (!url) return;
   const frame = document.createElement("iframe");
@@ -48,7 +48,10 @@ export function presentIphonePreview(url: string | null): void {
   frame.title = "Goals framework preview";
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:white";
   frame.src = url;
-  document.body.appendChild(frame);
+  await new Promise<void>(resolve => {
+    frame.addEventListener("load", () => { frame.focus(); resolve(); }, { once: true });
+    document.body.appendChild(frame);
+  });
 }
 
 type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };
