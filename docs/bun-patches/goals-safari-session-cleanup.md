@@ -56,6 +56,11 @@ effects, and an expired admission is labelled even when its request later return
 Sink failures are deferred until session deletion has been attempted and aggregate
 with an original cleanup error. Capture adds no browser requests or context inventory.
 
+Interrupted fleet collection waits for queue and writer settlement before its final
+copy. Unproved shutdown may retain an early diagnostic snapshot but cannot authorize
+removal. A proved pre-workload cancellation requires no logs; otherwise final-copy
+failure retains the complete staged receipt and original failure.
+
 The small original fixture `fixtures/safari-ownership-smoke.ts` imports the same
 native lifecycle, scoped driver and receipt writer. Its standalone bundle needs no
 Playwright import. It serves one local HTML fixture, observes its own host and

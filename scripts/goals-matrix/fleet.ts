@@ -46,7 +46,7 @@ async function bundle(destination: string, source: Report["source"]): Promise<vo
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
   await writeFile(join(destination, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { playwright: "1.64.1" } }));
 }
-async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): Promise<void> {
+async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): Promise<boolean> {
   const acknowledgement = waitForQueueExit ? "while [ ! -s queue-exit ]; do sleep 0.1; done; " : "";
   const script = `set -eu; cd ${quote(remote)}; ${acknowledgement}code=$(cat queue-exit); case "$code" in ''|*[!0-9]*) exit 75;; esac; "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status`;
   const status: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
@@ -55,19 +55,23 @@ async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): P
   for (const ticket of tickets) {
     if (!ticket || typeof ticket !== "object" || !("task" in ticket) || typeof ticket.task !== "string" || ticket.task === `bun-wasm goals ${remote}`) throw new Error("Remote queue shutdown is unproved; retaining staging");
   }
-  await verifyNativeStopped(remote);
+  return verifyNativeStopped(remote);
 }
-async function verifyNativeStopped(remote: string): Promise<void> {
+async function verifyNativeStopped(remote: string): Promise<boolean> {
   const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; printf '{"workloadStarted":%s,"cleanup":%s}\n' "$started" "$cleanup"`;
   const proof: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
   if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
-  if (proof.cleanup === null && !proof.workloadStarted) return;
+  if (proof.cleanup === null && !proof.workloadStarted) return false;
   const cleanup = proof.cleanup;
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
     || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
+  return true;
 }
 export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
   if (started) await verifyRemoteStopped(remote, waitForQueueExit);
+  await removeSettledStaging(remote, config);
+}
+async function removeSettledStaging(remote: string, config: Options): Promise<void> {
   await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
@@ -120,9 +124,20 @@ async function collectFailedOwnership(remote: string, output: string): Promise<v
     await cp(join(scratch, "logs"), join(output, "logs"), { recursive: true });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
+async function cleanupWitnessStaging(remote: string, config: Options): Promise<void> {
+  let workloadStarted: boolean;
+  try { workloadStarted = await verifyRemoteStopped(remote, true); }
+  catch (settlementError) {
+    try { await collectFailedOwnership(remote, config.output); }
+    catch (collectionError) { throw new AggregateError([settlementError, collectionError], `${String(settlementError)}; snapshot: ${String(collectionError)}`); }
+    throw settlementError;
+  }
+  if (workloadStarted) await collectFailedOwnership(remote, config.output);
+  await removeSettledStaging(remote, config);
+}
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
   try {
-    if (started && failure !== undefined && config.safariOwnership) await collectFailedOwnership(remote, config.output);
+    if (started && failure !== undefined && config.safariOwnership) return await cleanupWitnessStaging(remote, config);
     await removeStaging(remote, started, config, failure !== undefined);
   }
   catch (error) {

@@ -308,8 +308,10 @@ For native WebDriver ownership evidence, add `--safari-ownership` to `run.ts` or
 `logs/<cell>.ownership-<capture-uuid>.jsonl`. Every row includes the controller
 source commit and dirty flag, run, cell, attempt, capture UUID, timestamp, event
 number, sequence, session ID and observed host handle. Retry and resumed captures
-use new filenames. Fleet collects these logs with ordinary reports, including
-failed runs before staging removal. Failed collection retains staging.
+use new filenames. Fleet collects these logs with ordinary reports. After an
+interruption it waits for the writer to settle, then copies final logs before
+removing staging. Failed final collection retains staging. Proved cancellation
+before the workload starts needs no logs.
 
 Only this run's existing requests supply identifiers. Frame presentation tokens
 are local intent until the presentation request is acknowledged. Element references

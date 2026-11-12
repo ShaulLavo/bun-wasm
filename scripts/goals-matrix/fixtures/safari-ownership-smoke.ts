@@ -18,6 +18,7 @@ export async function runOwnershipSmoke(output: string, commit: string): Promise
   const identity = { run: crypto.randomUUID(), source: { commit, dirty: false }, cell: "fixture/safari/browser", attempt: 1 };
   const sink = ownershipReceipt(output, identity);
   const events: SafariOwnershipEvent[] = [];
+  const retain = (event: SafariOwnershipEvent) => { events.push(event); return sink(event); };
   let fixturePort: number | undefined;
   await withNativeDriver(async (endpoint, signal) => {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><title>Ownership fixture</title><p>Own fixture</p>", { headers: { "content-type": "text/html" } }) });
@@ -26,7 +27,7 @@ export async function runOwnershipSmoke(output: string, commit: string): Promise
     const scope = Scope.open(15_000, signal);
     try {
       transport = await createSafariTransport({ endpoint, browser: "safari", timeoutMs: 10_000, cleanupTimeoutMs: 5000,
-        ownershipSink: event => { events.push(event); return sink(event); } });
+        ownershipSink: retain });
       const page = scoped(transport, scope);
       await page.navigate(server.url.href);
       await page.openPreview(new URL("preview", server.url).href);

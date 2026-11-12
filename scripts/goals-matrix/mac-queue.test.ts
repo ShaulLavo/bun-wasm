@@ -377,3 +377,43 @@ test("failure to collect ownership retains staging and preserves the original fa
   expect(await readFile(join(f.remote, "report/logs/ownership.jsonl"), "utf8")).toBe("own receipt\n");
   expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
 }), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("final ownership collection follows writer settlement before staging removal", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/own.jsonl"), "session created\n");
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, new Error("controller interrupted"));
+  expect(await readFile(join(f.home, "logs/own.jsonl"), "utf8")).toBe("session created\nsession deletion acknowledged\n");
+  expect(existsSync(f.remote)).toBe(false);
+}), "import {appendFileSync} from 'node:fs'; appendFileSync('report/logs/own.jsonl','session deletion acknowledged\\n'); console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("ownership cancellation before workload start removes settled staging without logs", () => fixture(f => localMesh(f, async () => {
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, new Error("cancelled while queued"));
+  expect(existsSync(f.remote)).toBe(false);
+  expect(existsSync(join(f.home, "logs"))).toBe(false);
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ consumersStopped: true, stagingRemoved: true });
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("failed final ownership copy retains settled staging and its complete receipt", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/own.jsonl"), "complete receipt\n");
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  const mesh = join(f.home, "bin/mesh");
+  const shim = await readFile(mesh, "utf8");
+  await writeFile(mesh, shim.replace('if [ "$1" = cp ]; then', 'if [ "$1" = cp ]; then exit 7;'));
+  const original = new Error("controller interrupted");
+  let failure: unknown;
+  try { await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, original); }
+  catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(AggregateError);
+  if (!(failure instanceof AggregateError)) throw failure;
+  expect(failure.errors[0]).toBe(original);
+  expect(await readFile(join(f.remote, "proof-seen"), "utf8")).toBe("yes");
+  expect(await readFile(join(f.remote, "report/logs/own.jsonl"), "utf8")).toBe("complete receipt\n");
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}), "await Bun.write('proof-seen','yes'); console.log(JSON.stringify({holder:null,waiting:[]}));"));
