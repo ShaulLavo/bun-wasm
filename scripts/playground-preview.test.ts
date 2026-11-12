@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { isSafari } from "../web/src/playground/preview-links";
 
@@ -10,7 +11,7 @@ const browsers: Browser[] = [];
 let origin: string;
 
 beforeAll(async () => {
-  const build = await Bun.build({ entrypoints: ["web/tests/playground-preview-main.ts"], target: "browser", minify: true });
+  const build = await Bun.build({ entrypoints: [fileURLToPath(new URL("../web/tests/playground-preview-main.ts", import.meta.url))], target: "browser", minify: true });
   if (!build.success) throw new AggregateError(build.logs, "Preview fixture bundle failed");
   const outputs = new Map(build.outputs.map(output => [new URL(output.path, "http://fixture/").pathname.split("/").pop(), output]));
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
