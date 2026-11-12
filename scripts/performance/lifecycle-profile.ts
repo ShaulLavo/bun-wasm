@@ -5,7 +5,7 @@ import { gzipSync } from "node:zlib";
 import { object, sha256 } from "./input";
 import { profileTransport, type ProfileBrowser } from "./lifecycle-profile-transport";
 import { computationControl } from "./lifecycle-profile-control";
-import { analyzeChrome, analyzeGecko, chromeControl, geckoControl } from "./lifecycle-profile-analysis";
+import { analyzeChrome, analyzeGecko, chromeControl, chromeContext, geckoControl, type ChromeWindowMarkers } from "./lifecycle-profile-analysis";
 import { launchProcess, processTree } from "./lifecycle-process";
 import { ready, command, terminal, until, start, openPreview, render, checkClick, stopServer } from "../goals-matrix/playground";
 import { frameworks } from "../goals-matrix/catalog";
@@ -39,6 +39,15 @@ async function capture(config: Config, base: string, signal: AbortSignal, hostId
   const interrupt = () => { void transport.close().catch(() => {}); };
   signal.addEventListener("abort", interrupt, { once: true });
   const window = { before: 0, after: 0 };
+  const markerId = crypto.randomUUID();
+  const traceMarkers: ChromeWindowMarkers | null = enabled && config.browser === "chrome" ? { begin: `lifecycle-profile-window:${markerId}:begin`, end: `lifecycle-profile-window:${markerId}:end` } : null;
+  const markerDispatch: { boundary: "begin" | "end"; beforeEpochMs: number; afterEpochMs: number }[] = [];
+  const mark = async (boundary: "begin" | "end") => {
+    if (!traceMarkers) return;
+    const name = traceMarkers[boundary], beforeEpochMs = Date.now();
+    await bounded(() => session.mark(name), 3000);
+    markerDispatch.push({ boundary, beforeEpochMs, afterEpochMs: Date.now() });
+  };
   let failure: string | null = null;
   let observerFailure: string | null = null;
   let stop: (() => Promise<void>) | undefined;
@@ -52,6 +61,7 @@ async function capture(config: Config, base: string, signal: AbortSignal, hostId
     if (config.phase !== "control") evidence.preparation = await install(config, transport, workload);
     else await transport.evaluate(`playground.fs.writeFile('/home/user/lifecycle-profile-control.ts', ${JSON.stringify(computationControl)})`);
     stop = await session.capture();
+    await mark("begin");
     window.before = Date.now();
     evidence.loadBefore = loadavg();
     evidence.outcome = await bounded(() => runJob(config, transport, framework), 300000, signal);
@@ -61,6 +71,8 @@ async function capture(config: Config, base: string, signal: AbortSignal, hostId
   } catch (error) { failure = String(error); }
   finally {
     if (!window.after) window.after = Date.now();
+    try { await (window.before ? mark("end") : Promise.resolve()); }
+    catch (error) { observerFailure = `Command boundary marker unavailable: ${String(error)}`; }
     await save(join(config.output, "window.json"), window);
     try { await stop?.(); }
     catch (error) { observerFailure = String(error); }
@@ -74,9 +86,11 @@ async function capture(config: Config, base: string, signal: AbortSignal, hostId
     await save(join(config.output, "cleanup.json"), { browserClosed, workersClosed: browserClosed ? true : null,
       reason: browserClosed ? "Browser close resolved" : "Browser close failed; the enclosing runner must reap descendants and verify cleanup" });
   }
-  const profile = observerFailure ? { available: false, reason: observerFailure } : await analysis(config, window, enabled).catch(error => ({ available: false, reason: String(error) }));
+  const profile = observerFailure ? { available: false, reason: observerFailure } : await analysis(config, window, enabled, traceMarkers).catch(error => ({ available: false, reason: String(error) }));
   await save(join(config.output, "run.json"), { schema: 1, configuration: { browser: config.browser, engine: config.engine, phase: config.phase, profile: "split" },
-    hostIdentity, browser: transport.capabilities, window, observedWallMs: window.before ? window.after - window.before : null, evidence, workloadFailure: failure, observerFailure,
+    hostIdentity, browser: transport.capabilities, window, chromeWindowMarkers: traceMarkers, observedWallMs: window.before ? window.after - window.before : null, evidence, workloadFailure: failure, observerFailure,
+    clockEvidence: { controller: "Date.now epoch milliseconds", sampleClock: config.browser === "chrome" ? "Chrome trace ts microseconds" : "Gecko process epoch origin plus relative milliseconds",
+      markerDispatch, controllerToTraceOffset: null, endpointUncertainty: "Trace markers enclose submission dispatch and completion polling; no narrower execution interval or fixed polling error bound is established", pollingUncertaintyMs: null },
     observation: { enabled, profile }, control: config.control, headlineEligible: false, timingDistribution: "separate diagnostic only",
     limits: ["Headless nonquiet shared PC", "Profile shares do not decompose wall time or prove causal speedup", "Observer-on/off variation is not wholly profiler inflation", "No multiplication of one worker share by whole-job CPU"] });
 }
@@ -107,18 +121,20 @@ async function runJob(config: Config, transport: SessionTransport, framework: (t
   const counter = await checkClick(transport, framework, 300000);
   return { counter };
 }
-async function analysis(config: Config, window: { before: number; after: number }, enabled: boolean) {
+async function analysis(config: Config, window: { before: number; after: number }, enabled: boolean, markers: ChromeWindowMarkers | null) {
   if (!enabled) return { available: null, reason: "Observer-off workload control" };
   const path = join(config.output, config.browser === "chrome" ? "chrome-trace.json" : "gecko.json");
   const bytes = await readFile(path);
   await writeFile(path + ".gz", gzipSync(bytes));
   await unlink(path);
   const input = JSON.parse(bytes.toString());
-  const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase) : analyzeGecko(input, window);
+  const targets = config.browser === "chrome" ? await json(join(config.output, "chrome-targets.json")) : null;
+  const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase, chromeContext(markers, window, targets)) : analyzeGecko(input, window);
   await save(join(config.output, "analysis.json"), rows);
   if (!rows.some(row => "analysis" in row ? row.analysis.samples > 0 : row.samples > 0)) throw new Error("No scoped samples retained");
-  if (config.phase !== "control") return { available: true, analysis: "analysis.json", raw: path + ".gz", sourceSha256: sha256(bytes) };
-  const control = config.browser === "chrome" ? chromeControl(input, await json(join(config.output, "chrome-targets.json")), config.engine, window) : geckoControl(input, window, config.engine);
+  if (config.phase !== "control") return { available: config.browser !== "chrome" || rows.some(row => "workloadWindow" in row && row.workloadWindow.available && row.worker !== null),
+    scope: config.browser === "chrome" ? "Trace-clock command markers and temporal worker joins; other profiles remain explicitly unmapped" : "Observed Gecko command/lifetime intersection, with retention gaps", analysis: "analysis.json", raw: path + ".gz", sourceSha256: sha256(bytes) };
+  const control = config.browser === "chrome" ? chromeControl(input, targets, config.engine, window, markers) : geckoControl(input, window, config.engine);
   return { ...control, sourceSha256: sha256(bytes), analysis: "analysis.json", raw: path + ".gz" };
 }
 async function campaign(config: Config, signal: AbortSignal) {
@@ -145,6 +161,11 @@ async function requireControl(config: Config, hostIdentity: string) {
   const profile = object(object(control.observation).profile);
   if (configuration.browser !== config.browser || configuration.engine !== config.engine || configuration.phase !== "control" ||
     control.hostIdentity !== hostIdentity || profile.available !== true || control.workloadFailure !== null) throw new Error("Exact-context profiler control unavailable; actual capture is gated");
+  if (config.browser === "chrome") {
+    if (!("chromeWindowMarkers" in control) || !("workloadWindow" in profile)) throw new Error("Chrome control lacks established trace-clock command boundaries");
+    const markers = object(control.chromeWindowMarkers), bounds = object(profile.workloadWindow), source = object(bounds.source);
+    if (bounds.available !== true || markers.begin !== source.begin || markers.end !== source.end) throw new Error("Chrome control command boundaries do not match its scoped analysis");
+  }
 }
 if (import.meta.main) {
   const config = options(process.argv.slice(2));

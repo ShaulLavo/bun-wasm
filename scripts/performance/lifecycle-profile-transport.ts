@@ -39,7 +39,9 @@ async function opened(browser: Browser, kind: ProfileBrowser, output: string, en
     async closePreview() { await preview?.close(); preview = undefined; page = host; },
     async close() { await bounded(() => browser.close(), 15000); },
   };
-  return { transport, workers, capture: async () => enabled && kind === "chrome" ? trace(browser, output) : async () => {} };
+  return { transport, workers,
+    mark: async (label: string) => { if (enabled && kind === "chrome") await host.evaluate(message => console.timeStamp(message), label); },
+    capture: async () => enabled && kind === "chrome" ? trace(browser, output) : async () => {} };
 }
 
 async function trace(browser: Browser, output: string) {
