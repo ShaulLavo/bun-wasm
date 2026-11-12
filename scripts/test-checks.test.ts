@@ -228,7 +228,7 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
   expect(() => selectCheckBatch("browser-guest", "missing")).toThrow("Unknown check batch");
   const shared = namedCheckBatches("browser-guest", undefined, "shared-group");
   expect(shared.flatMap(batch => batch.paths)).toEqual(selectChecks("browser-guest", undefined, "shared-group"));
-  const result = spawnSync("bun", ["scripts/test-checks.ts", "browser-guest", "--batches"], { cwd: root, encoding: "utf8" });
+  const result = spawnSync("bun", ["./test-checks.ts", "browser-guest", "--batches"], { cwd: import.meta.dir, encoding: "utf8" });
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual(batches.map(batch => batch.name));
   expect(checkArguments(["browser-guest", "--batch", "10-storage", "--list"])).toMatchObject({ batch: "10-storage", list: true });
