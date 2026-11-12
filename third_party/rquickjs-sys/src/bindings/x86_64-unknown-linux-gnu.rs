@@ -271,6 +271,29 @@ unsafe extern "C" {
     pub fn JS_SetMaxStackSize(rt: *mut JSRuntime, stack_size: size_t);
 }
 unsafe extern "C" {
+    pub fn JS_SetMaxFrameStackSize(rt: *mut JSRuntime, bytes: size_t) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn JS_GetFrameStackUsage(
+        rt: *mut JSRuntime,
+        plive: *mut size_t,
+        pcommitted: *mut size_t,
+        plimit: *mut size_t,
+    );
+}
+pub type JSMallocBoundFunc = ::core::option::Option<
+    unsafe extern "C" fn(opaque: *mut ::core::ffi::c_void, size: size_t) -> size_t,
+>;
+unsafe extern "C" {
+    pub fn JS_SetMallocBound(rt: *mut JSRuntime, bound: JSMallocBoundFunc) -> ::core::ffi::c_int;
+}
+unsafe extern "C" {
+    pub fn JS_GetDefaultMallocFunctions() -> *const JSMallocFunctions;
+}
+unsafe extern "C" {
+    pub fn JS_DefaultMallocBound(opaque: *mut ::core::ffi::c_void, size: size_t) -> size_t;
+}
+unsafe extern "C" {
     pub fn JS_UpdateStackTop(rt: *mut JSRuntime);
 }
 unsafe extern "C" {
