@@ -45,3 +45,18 @@ IndexedDB tests must establish transaction completion and conditional snapshot
 acknowledgement. Real sandbox tests belong to Browser guest and consume its shared
 producer artifact, extended once to include the sandbox. No Waffle matrix is
 duplicated here. Parent owns review, CI, and merge.
+
+## Adjacent finding
+
+The guest `node:fs` adapter implements `chmodSync(path)` as `void statSync(path)`
+at `crates/bunwasm-runtime/src/js/node_fs.js:697`; `lchmodSync` and `fchmodSync`
+are no-ops too. A real Vite-config guest call to chmodSync(.env, 0400) therefore
+left ordinary recreatable permissions and the storage test correctly evicted it.
+This is a guest permission-API gap, not a storage refusal failure. Reproducer:
+create a file, call chmodSync(path, 0400), inspect retained metadata through
+Waffle's public idle walk after closing the runtime. The code directly establishes
+that no mode mutation is issued. Fix in the owning filesystem compatibility work,
+with actual supported mode mutation and all-engine tests; do not silently report
+success for unavailable chmod. The storage integration fixture uses a real guest
+symlink for unsupported-data refusal instead. Pure preservation tests still reject
+nondefault modes. No chmod fix or additional guest build belongs to this branch.

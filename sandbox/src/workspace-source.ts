@@ -1,3 +1,5 @@
+import type { StoredWorkspaceEntry } from "waffle";
+
 export const SOURCE_LIMIT_BYTES = 8 * 1024 * 1024;
 export const SOURCE_LIMIT_ENTRIES = 10_000;
 const SOURCE_TIMEOUT_MS = 5_000;
@@ -5,15 +7,7 @@ export const APP = "/home/user/app";
 export const SEED_MARKER = `${APP}/.bunwasm-initialized`;
 export const RESTORE_MARKER = `${APP}/.bunwasm-restored`;
 
-export interface SourceMetadata {
-  readonly path: string;
-  readonly kind: "file" | "dir" | "symlink" | "socket";
-  readonly ino: number;
-  readonly nlink: number;
-  readonly mode: number;
-  readonly size: number;
-  readonly mtime: number;
-}
+export type SourceMetadata = StoredWorkspaceEntry;
 
 export interface SourceReader {
   walk(path: string, options: { signal: AbortSignal; ignoreRoots: readonly string[] }): {

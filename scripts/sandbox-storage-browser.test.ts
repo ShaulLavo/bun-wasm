@@ -9,6 +9,15 @@ const requested = (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spli
 const browsers = Array.from(new Set(requested.flatMap(name => name === "chromium" ? ["chromium", "firefox"] : [name])));
 
 async function siteCheck(name: string, run: (browser: Browser, url: string) => Promise<void>): Promise<void> {
+  const development = process.env.BUN_WASM_STORAGE_DEVELOPMENT_URL;
+  if (development) {
+    if (process.env.CI) throw new Error("CI must consume the verified browser-guest producer artifact");
+    const engine = { chromium, firefox, webkit }[name];
+    if (!engine) throw new Error(`Unsupported browser ${name}`);
+    const browser = await engine.launch({ headless: true });
+    try { await run(browser, development); } finally { await browser.close(); }
+    return;
+  }
   const provided = process.env.BUN_WASM_BROWSER_SITE;
   if (!provided) throw new Error("Provide the existing browser-guest site. This consumer never builds a guest or site.");
   const directory = resolve(provided);
@@ -44,9 +53,9 @@ test("chromium: a recorded single-install quota admits repeated framework switch
       const cdp = await context.newCDPSession(page);
       await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize });
       const rows = await accumulation(context, base, ["vanilla", "vite-react", "vite-vue", "vite-svelte"]);
+      if (process.env.BUN_WASM_STORAGE_REPORT) await Bun.write(process.env.BUN_WASM_STORAGE_REPORT, JSON.stringify({ quotaSize, browser: browser.version(), rows }, null, 2));
       expect(rows).toHaveLength(4);
       expect(rows.filter(row => row.error)).toEqual([]);
-      if (process.env.BUN_WASM_STORAGE_REPORT) await Bun.write(process.env.BUN_WASM_STORAGE_REPORT, JSON.stringify({ quotaSize, browser: browser.version(), rows }, null, 2));
     } finally { await context.close(); }
   });
 }, 420_000);

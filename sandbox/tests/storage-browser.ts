@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { Runtime } from "waffle";
 import type { Editor } from "../src/editor";
+import type { Terminal } from "@xterm/xterm";
 import { workspaceName } from "../src/workspace-policy";
 
-declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor };
+declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor; term?: Terminal };
 const APP = "/home/user/app";
 const STARTUP_MS = 180_000;
 
@@ -13,10 +14,20 @@ async function openTemplate(page: Page, base: string, template: string): Promise
   url.searchParams.set("template", template);
   url.searchParams.set("engine", "browser");
   await page.goto(url.href);
+  await ready(page, template);
+}
+
+async function ready(page: Page, template: string): Promise<void> {
   await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error" || /dev server ready/.test(document.querySelector("#status")?.textContent ?? ""), undefined, { timeout: STARTUP_MS });
   const status = await page.locator("#status").textContent();
   assert.equal(await page.locator("#status").getAttribute("data-kind"), "ok", `startup failed ${template}: ${status}`);
   await page.evaluate(() => sandbox.fs.flush());
+}
+
+async function restart(page: Page): Promise<void> {
+  await page.locator("#restart").click();
+  await page.waitForFunction(() => document.querySelector("#server-dot")?.getAttribute("data-state") === "starting");
+  await ready(page, "restarted workspace");
 }
 
 async function edit(page: Page, path: string, text: string): Promise<void> {
@@ -42,40 +53,67 @@ if (!existsSync("/home/user/app/.config/written")) {
   writeFileSync("/home/user/app/build/user.txt", "user build data");
   writeFileSync("/home/user/app/dist/user.txt", "user dist data");
   writeFileSync("/home/user/outside.bin", Buffer.from([0, 255, 128, 1]));
-  if (existsSync("/home/user/app/counter.ts")) unlinkSync("/home/user/app/counter.ts");
+  if (existsSync("/home/user/app/src/App.css")) unlinkSync("/home/user/app/src/App.css");
 }
-Bun.serve({ hostname: "127.0.0.1", port: 5173, fetch: () => new Response("<h1>Storage source one</h1>", { headers: { "content-type": "text/html" } }) });
+export default {};
 `;
 
 export async function preservationScenario(browser: Browser, base: string): Promise<void> {
   const context = await browser.newContext();
+  const errors: string[] = [];
+  context.on("page", page => {
+    page.on("pageerror", error => { errors.push(error.message); });
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  });
   try {
     const active = await context.newPage();
     const page = await context.newPage();
-    await openTemplate(active, base, "vanilla");
-    await active.frameLocator("#preview").locator("button.counter").click();
-    await openTemplate(page, base, "hono");
-    await edit(page, "server.ts", guestWriter);
+    await openTemplate(active, base, "hono");
+    await active.frameLocator("#preview").locator("#increment:not([disabled])").click();
+    await openTemplate(page, base, "vanilla");
+    const original = await page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts")));
+    const main = original.replace('import "./App.css";\n', "").replace("Hello from vanilla TypeScript", "Storage source one");
+    await edit(page, "src/main.ts", main);
+    await edit(page, "vite.config.ts", guestWriter);
+    await restart(page);
     await page.frameLocator("#preview").getByRole("heading", { name: "Storage source one", exact: true }).waitFor({ timeout: 30_000 });
     await page.evaluate(() => sandbox.fs.flush());
     await openTemplate(page, base, "vite-react");
     await openTemplate(page, base, "vite-vue");
-    assert.equal(await stored(page, "hono"), false, "oldest eligible install was not evicted");
+    assert.equal(await stored(page, "vanilla"), false, "oldest eligible install was not evicted");
     assert.equal(await stored(page, "vite-react"), true, "newest idle install was not retained");
-    assert.equal(await stored(page, "vanilla"), true, "active workspace was evicted");
-    await active.frameLocator("#preview").locator("button.counter", { hasText: "count is 1" }).waitFor();
-    await openTemplate(page, base, "hono");
+    assert.equal(await stored(page, "hono"), true, "active workspace was evicted");
+    assert.equal(await active.frameLocator("#preview").locator("#count").textContent(), "1");
+    await openTemplate(page, base, "vanilla");
     await retainedUserTree(page);
-    await edit(page, "server.ts", guestWriter.replace("Storage source one", "Storage source two"));
+    const preview = page.frameLocator("#preview");
+    await preview.locator("button.counter").click();
+    const documentId = await preview.locator("body").evaluate(() => performance.timeOrigin);
+    await edit(page, "src/main.ts", main.replace("Storage source one", "Storage source two"));
     await page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 });
+    assert.equal(await preview.locator("body").evaluate(() => performance.timeOrigin), documentId, "restored source HMR replaced the document");
+    await preview.locator("button.counter", { hasText: "count is 1" }).waitFor();
     await openTemplate(page, base, "vite-react");
     await openTemplate(page, base, "vite-vue");
-    assert.equal(await stored(page, "hono"), false, "edited restored source was not evicted again");
-    await openTemplate(page, base, "hono");
+    assert.equal(await stored(page, "vanilla"), false, "edited restored source was not evicted again");
+    await openTemplate(page, base, "vanilla");
     await page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 });
     await retainedUserTree(page);
-    await unsupportedMode(page, base);
+    await unsupportedData(page, base);
+  } catch (error) {
+    const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
+    console.error(JSON.stringify({ error: String(error), errors, pages }, null, 2));
+    throw error;
   } finally { await context.close(); }
+}
+
+async function diagnostic(page: Page): Promise<unknown> {
+  if (page.isClosed()) return "closed";
+  return page.evaluate(() => {
+    const buffer = sandbox.term?.buffer.active;
+    const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
+    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal };
+  }).catch(error => String(error));
 }
 
 async function retainedUserTree(page: Page): Promise<void> {
@@ -86,22 +124,21 @@ async function retainedUserTree(page: Page): Promise<void> {
       build: await text(`${app}/build/user.txt`), dist: await text(`${app}/dist/user.txt`),
       binary: Array.from(await sandbox.fs.readFile("/home/user/outside.bin") ?? []),
       empty: (await sandbox.fs.lookup(`${app}/empty`))?.kind,
-      deleted: await sandbox.fs.lookup(`${app}/counter.ts`) === undefined,
+      deleted: await sandbox.fs.lookup(`${app}/src/App.css`) === undefined,
     };
   }, APP);
   assert.deepEqual(result, { env: "USER_DOTFILE=kept", config: "guest data", build: "user build data", dist: "user dist data", binary: [0, 255, 128, 1], empty: "dir", deleted: true });
 }
 
-async function unsupportedMode(page: Page, base: string): Promise<void> {
-  const code = guestWriter.replace("Storage source one", "Unsupported permissions kept")
-    .replace("Bun.serve", 'import { chmodSync } from "node:fs";\nchmodSync("/home/user/app/.env", 0o400);\nBun.serve');
-  await edit(page, "server.ts", code);
-  await page.frameLocator("#preview").getByRole("heading", { name: "Unsupported permissions kept", exact: true }).waitFor({ timeout: 30_000 });
+async function unsupportedData(page: Page, base: string): Promise<void> {
+  const code = 'import { symlinkSync } from "node:fs";\n' + guestWriter.replace("export default", 'if (!existsSync("/home/user/app/user-link")) symlinkSync("/home/user/app/.env", "/home/user/app/user-link");\nexport default');
+  await edit(page, "vite.config.ts", code);
+  await restart(page);
   await page.evaluate(() => sandbox.fs.flush());
   await openTemplate(page, base, "vite-react");
   await openTemplate(page, base, "vite-vue");
-  assert.equal(await stored(page, "hono"), true, "unsupported user permissions were destroyed");
-  assert.match(await page.locator("#storage-status").textContent() ?? "", /permissions.*cannot be restored/i);
+  assert.equal(await stored(page, "vanilla"), true, "unsupported user symlink was destroyed");
+  assert.match(await page.locator("#storage-status").textContent() ?? "", /symlink.*cannot be restored/i);
 }
 
 export interface StorageRun {
