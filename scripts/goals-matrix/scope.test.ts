@@ -46,3 +46,13 @@ test("already elapsed plain admissions reject without an aborted signal", async 
     expect(scope.signal.aborted).toBe(false);
   } finally { scope.close(); }
 });
+
+test("settlement observes elapsed time even before the deadline timer can run", async () => {
+  const scope = Scope.open(1);
+  try {
+    const waiting = awaitWithin(Promise.resolve(1), scope);
+    while (Date.now() <= scope.deadline) { /* Hold this turn so the timer has not run. */ }
+    expect(scope.signal.aborted).toBe(false);
+    await expect(waiting).rejects.toBe(scope.expiryReason);
+  } finally { scope.close(); }
+});

@@ -4,7 +4,7 @@ import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic"
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import { scoped, type ScopedTransport, type Transport } from "./transport";
-import { Scope, type Admission } from "./scope";
+import { admit, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
@@ -44,13 +44,14 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
   let closing = false;
   let capabilities: Record<string, unknown> = {};
   let failureLog: FailureLog | undefined;
+  function retainTransport(owned: Transport): Transport | Promise<Transport> {
+    if (closing) return closeLateTransport(owned);
+    transport = owned;
+    return owned;
+  }
   try {
     await phase(results, "startup", options.timeoutMs, async admission => {
-      creation = options.createTransport().then(async owned => {
-        if (closing) { await owned.close(); throw new Error("Transport created after startup deadline and closed"); }
-        transport = owned;
-        return owned;
-      });
+      creation = options.createTransport().then(retainTransport);
       transport = await creation;
       capabilities = transport.capabilities;
       const page = scoped(transport, admission);
@@ -71,6 +72,10 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
     }).catch(() => {});
   }
   return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
+}
+async function closeLateTransport(owned: Transport): Promise<never> {
+  await owned.close();
+  throw new Error("Transport created after startup deadline and closed");
 }
 async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
   const { framework, timeoutMs, port = 5173 } = options;
@@ -102,18 +107,7 @@ async function captureFailure(transport: Transport, options: Execution, results:
   const scope = Scope.open(2000);
   const capture: FailureLog = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: "", saved: false };
   try {
-    await scope.run(async admission => {
-      const page = scoped(transport, admission);
-      const text = await terminal(page);
-      capture.terminal = { status: "observed", text };
-      capture.diagnostic = await browserTrapLog(page, options.box.engine);
-      if (options.framework.id !== "angular") return;
-      const path = namedAngularDiagnostic(text);
-      if (!path) return;
-      const browserDiagnostic = capture.diagnostic;
-      capture.diagnostic += `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
-      capture.diagnostic = browserDiagnostic + await angularDiagnostic(page, path, scope.deadline);
-    });
+    await scope.run(admission => observeFailure(transport, options, capture, admission));
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
     if (capture.terminal.status === "observed" && options.box.engine === "browser" && !capture.diagnostic) capture.diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
@@ -128,6 +122,22 @@ async function captureFailure(transport: Transport, options: Execution, results:
     capture.saved = true;
   } catch { /* Final logging retains the observed terminal when a local save fails. */ }
   return capture;
+}
+
+async function observeFailure(transport: Transport, options: Execution, capture: FailureLog, admission: Admission): Promise<void> {
+  const page = scoped(transport, admission);
+  const text = await terminal(page);
+  admit(admission);
+  capture.terminal = { status: "observed", text };
+  const diagnostic = await browserTrapLog(page, options.box.engine);
+  admit(admission);
+  capture.diagnostic = diagnostic;
+  if (options.framework.id !== "angular") return;
+  const path = namedAngularDiagnostic(text);
+  if (!path) return;
+  const browserDiagnostic = capture.diagnostic;
+  capture.diagnostic += `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
+  capture.diagnostic = browserDiagnostic + await angularDiagnostic(page, path, admission.deadline);
 }
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, admission: Admission): Promise<unknown> {
@@ -177,6 +187,7 @@ async function saveFinalLog(transport: Transport, options: Execution, results: r
     output = await scope.run(async guard => {
       const page = scoped(transport, guard);
       const text = await terminal(page);
+      admit(guard);
       observation.terminal = { status: "observed", text };
       return text + (failureLog?.diagnostic || await browserTrapLog(page, options.box.engine));
     });

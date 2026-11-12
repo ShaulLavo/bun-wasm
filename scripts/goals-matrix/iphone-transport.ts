@@ -35,22 +35,24 @@ type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number
  */
 function previewDeadline(timeoutMs: number, admission: Admission): PreviewWait {
   const deadline = Math.min(Date.now() + timeoutMs, admission.deadline);
-  return async (signal, stage, read, accept) => {
-    let last: Row | null = null;
-    const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
-    // A read cut off by the deadline is the same expiry, not a separate observer failure.
-    const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
-    while (true) {
-      signal.throwIfAborted();
-      admit(admission);
-      const left = deadline - Date.now();
-      if (left <= 0) throw expired();
-      last = await read(left).catch(fail);
-      if (accept(last)) return;
-      await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
-    }
-  };
+  return (signal, stage, read, accept) => waitPreview({ timeoutMs, deadline, admission, signal, stage, read, accept });
 }
+async function waitPreview(options: { timeoutMs: number; deadline: number; admission: Admission; signal: AbortSignal; stage: string; read: Parameters<PreviewWait>[2]; accept: Parameters<PreviewWait>[3] }): Promise<void> {
+  const { timeoutMs, deadline, admission, signal, stage, read, accept } = options;
+  let last: Row | null = null;
+  const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
+  const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
+  while (true) {
+    signal.throwIfAborted();
+    admit(admission);
+    const left = deadline - Date.now();
+    if (left <= 0) throw expired();
+    last = await read(left).catch(fail);
+    if (accept(last)) return;
+    await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+  }
+}
+
 export async function createIphoneTransport(config: Config): Promise<Transport> {
   validateIphoneControl(config.control, config.agent);
   let role: "host" | "preview" = "host";
@@ -150,7 +152,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     },
     async nativeClick(button, clicked, admission) {
       admit(admission);
-      return awaitWithin(nativeClick(button, clicked, admission), admission);
+      if (!focused) throw new Error("iPhone preview is not focused after load; refusing native input");
+      return awaitWithin(nativeClick({ button, clicked, admission, evaluate, device, saveNative: config.saveNative, signal: lifetime.signal }), admission);
     },
     close(_interruptPending = false, timeoutMs = 10_000) { return closing ??= close(timeoutMs); },
   };
@@ -181,33 +184,39 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       role = "preview";
       focused = true;
   }
-  async function nativeClick(button: string, clicked: string, admission: Admission): Promise<unknown> {
-      if (!focused) throw new Error("iPhone preview is not focused after load; refusing native input");
-      const remaining = () => admit(admission);
-      const trace = new IphoneClickTrace(config.saveNative, remaining(), lifetime.signal);
-      try {
-        const before = await until(async () => object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`, admission, remaining())), value => value.ready === true, remaining());
-        if (typeof before.label !== "string" || typeof before.before !== "string") throw new Error("Missing native click target");
-        const expected = before.before.replace(/\b0\b/, "1");
-        trace.armed(before, expected);
-        trace.stage("snapshot-pending");
-        const snapshot = await device(["snapshot", "-i"], remaining());
-        trace.stage("snapshot-returned");
-        const ref = nativeButtonRef(snapshot, before.label);
-        trace.stage("press-pending");
-        await device(["press", ref], remaining());
-        trace.stage("press-returned");
-        const expression = iphoneClickExpression(button, clicked);
-        const observe = async () => {
-          const left = remaining();
-          trace.observing();
-          const value = await evaluate<Record<string, unknown>>(expression, admission, left);
-          trace.observed(iphoneClickPredicates(before, value, expected));
-          return value;
-        };
-        const after = await until(observe, value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, remaining());
-        trace.finish("passed");
-        return { before: before.before, after: after.after, trusted: true, nativeRef: ref, inputMethod: "T3 device_open XCTest" };
-      } finally { trace.finish("failed"); }
-  }
+
+}
+
+async function nativeClick(options: {
+  button: string; clicked: string; admission: Admission; saveNative: Config["saveNative"]; signal: AbortSignal;
+  evaluate<T>(source: string, admission: Admission, timeoutMs?: number): Promise<T>;
+  device(args: string[], timeoutMs: number): Promise<string>;
+}): Promise<unknown> {
+  const { button, clicked, admission, evaluate, device, saveNative, signal } = options;
+  const remaining = () => admit(admission);
+  const trace = new IphoneClickTrace(saveNative, remaining(), signal);
+  try {
+    const before = await until(async () => object(await evaluate(`(${armIphoneClick.toString()})(${JSON.stringify(button)},${JSON.stringify(clicked)})`, admission, remaining())), value => value.ready === true, remaining());
+    if (typeof before.label !== "string" || typeof before.before !== "string") throw new Error("Missing native click target");
+    const expected = before.before.replace(/\b0\b/, "1");
+    trace.armed(before, expected);
+    trace.stage("snapshot-pending");
+    const snapshot = await device(["snapshot", "-i"], remaining());
+    trace.stage("snapshot-returned");
+    const ref = nativeButtonRef(snapshot, before.label);
+    trace.stage("press-pending");
+    await device(["press", ref], remaining());
+    trace.stage("press-returned");
+    const expression = iphoneClickExpression(button, clicked);
+    const observe = async () => {
+      const left = remaining();
+      trace.observing();
+      const value = await evaluate<Record<string, unknown>>(expression, admission, left);
+      trace.observed(iphoneClickPredicates(before, value, expected));
+      return value;
+    };
+    const after = await until(observe, value => value.trusted === true && value.sameTarget === true && value.url === before.url && value.timeOrigin === before.timeOrigin && value.nonce === before.nonce && value.after === expected, remaining());
+    trace.finish("passed");
+    return { before: before.before, after: after.after, trusted: true, nativeRef: ref, inputMethod: "T3 device_open XCTest" };
+  } finally { trace.finish("failed"); }
 }

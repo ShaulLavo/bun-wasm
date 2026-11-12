@@ -16,6 +16,11 @@ export function within(admission: Admission, timeoutMs: number, expiryReason: un
   return deadline < admission.deadline ? { signal: admission.signal, deadline, expiryReason } : admission;
 }
 
+function settleWithin(admission: Admission, finish: (operation: () => void) => void, operation: () => void, reject: (reason: unknown) => void): void {
+  try { admit(admission); finish(operation); }
+  catch (error) { finish(() => reject(error)); }
+}
+
 /** Stops awaiting without cancelling or forgetting the underlying work. */
 export function awaitWithin<T>(work: Promise<T>, admission: Admission): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -26,7 +31,8 @@ export function awaitWithin<T>(work: Promise<T>, admission: Admission): Promise<
       operation();
     };
     const abort = () => finish(() => reject(admission.signal.reason));
-    work.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
+    const settled = (operation: () => void) => settleWithin(admission, finish, operation, reject);
+    work.then(value => settled(() => resolve(value)), error => settled(() => reject(error)));
     try {
       const left = admit(admission);
       admission.signal.addEventListener("abort", abort, { once: true });

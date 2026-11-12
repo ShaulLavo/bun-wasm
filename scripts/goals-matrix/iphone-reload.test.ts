@@ -2,6 +2,7 @@ import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport } from "./iphone-transport";
+import { Scope } from "./scope";
 
 const url = "http://127.0.0.1:1234/preview";
 const origin = new URL(url).origin;
@@ -170,5 +171,58 @@ test("controller rejects malformed observation mode before creating a pending co
     const response = await bus.handle(new Request(endpoint + "/test/preview/execute", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "1", timeoutMs: 1000, deliverByMs: Date.now() + 1000, observation: "true" }) }), origin);
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: expect.stringContaining("Invalid iPhone observation mode") });
+  } finally { bus.close(); }
+});
+
+test("expired controller arrivals create no pending work or certified settlement", async () => {
+  const { bus, key } = attached();
+  try {
+    const response = await bus.handle(new Request(endpoint + "/test/preview/execute", { method: "POST", body: JSON.stringify({ source: "1", timeoutMs: 1000, observation: false, deliverByMs: Date.now() - 1 }) }), origin);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: expect.stringContaining("delivery deadline expired") });
+    expect(bus.poll("preview", key, origin)).toBeNull();
+    const pending = bus.execute("preview", "2", 1000, false, Date.now() + 1000);
+    bus.poll("preview", key, origin);
+    bus.reply("preview", { ...key, id: 1, ok: true, value: 2 }, origin);
+    expect(await pending).toBe(2);
+  } finally { bus.close(); }
+});
+
+test("reload after a delivered observation's cutoff settles it immediately", async () => {
+  const { bus, key } = attached();
+  const cutoff = Scope.open(10);
+  try {
+    const pending = bus.execute("preview", "document.title", 1000, true, cutoff.deadline);
+    void pending.catch(() => {});
+    expect(bus.poll("preview", key, origin)).toMatchObject({ deliverByMs: cutoff.deadline });
+    await expect(cutoff.run(() => new Promise<void>(() => {}))).rejects.toBe(cutoff.expiryReason);
+    bus.script(url, endpoint);
+    await expect(pending).rejects.toThrow("delivery deadline expired");
+    expect(bus.poll("preview", replacementKey(bus), origin)).toBeNull();
+  } finally { cutoff.close(); bus.close(); }
+});
+
+test("only accepted execute promises certify successful and failed settlement", async () => {
+  const { bus, key } = attached();
+  let accepted = Promise.withResolvers<void>();
+  const original = bus.execute.bind(bus);
+  bus.execute = (...args) => { const pending = original(...args); accepted.resolve(); return pending; };
+  const request = () => new Request(endpoint + "/test/preview/execute", { method: "POST", body: JSON.stringify({ source: "1", timeoutMs: 1000, observation: false, deliverByMs: Date.now() + 1000 }) });
+  try {
+    const success = bus.handle(request(), origin);
+    await accepted.promise;
+    const task = bus.poll("preview", key, origin);
+    expect(task).toMatchObject({ id: 1 });
+    const busy = await bus.handle(request(), origin);
+    expect(busy.status).toBe(400);
+    expect(await busy.json()).toEqual({ error: expect.stringContaining("already pending") });
+    bus.reply("preview", { ...key, id: 1, ok: true, value: 42 }, origin);
+    expect(await (await success).json()).toEqual({ settled: true, ok: true, value: 42 });
+    accepted = Promise.withResolvers<void>();
+    const failure = bus.handle(request(), origin);
+    await accepted.promise;
+    bus.poll("preview", key, origin);
+    bus.reply("preview", { ...key, id: 2, ok: false, error: "expression failed" }, origin);
+    expect(await (await failure).json()).toEqual({ settled: true, ok: false, error: "Error: expression failed" });
   } finally { bus.close(); }
 });

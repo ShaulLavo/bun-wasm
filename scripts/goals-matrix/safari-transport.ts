@@ -111,23 +111,30 @@ function transport(request: Request, sessionPath: string, host: string, capabili
       await select(preview, admission);
       await command(admission, "/window", undefined, "DELETE");
       preview = undefined;
-    } catch (error) { return cleanupAfterFailure(error, () => select(host)); }
+    } catch (error) {
+      if (admission && (admission.signal.aborted || Date.now() >= admission.deadline)) throw error;
+      return cleanupAfterFailure(error, () => select(host));
+    }
     await select(host, admission);
   }
 
   async function openPreview(url: string, admission: Admission): Promise<void> {
     try {
-      if (preview === undefined) {
-        const created = handle(object(await command(admission, "/window/new", { type: "tab" })).handle);
-        if (created === host) throw new Error("Safari returned the host handle for a new preview");
-        preview = created;
-      }
-      await select(preview, admission);
+      const selected = await ownedPreview(admission);
+      await select(selected, admission);
       await navigate(url, admission);
     } catch (error) {
       if (admission.signal.aborted || Date.now() >= admission.deadline) throw error;
       return cleanupAfterFailure(error, () => closePreview());
     }
+  }
+
+  async function ownedPreview(admission: Admission): Promise<string> {
+    if (preview !== undefined) return preview;
+    const created = handle(object(await command(admission, "/window/new", { type: "tab" })).handle);
+    if (created === host) throw new Error("Safari returned the host handle for a new preview");
+    preview = created;
+    return created;
   }
 
   async function evaluate<T>(expression: string, admission: Admission): Promise<T> {

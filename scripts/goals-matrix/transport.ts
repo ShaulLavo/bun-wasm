@@ -80,42 +80,42 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
 }
 
 export function createPageTransport(context: Pick<BrowserContext, "newPage">, host: Page, capabilities: Record<string, unknown>, timeoutMs: number, cleanupTimeoutMs: number, close: () => Promise<void>): Transport {
-    let preview: typeof host | undefined;
-    let page = host;
-    let evaluationTimeoutMs = timeoutMs;
-    page.setDefaultTimeout(timeoutMs);
-    return {
-      capabilities,
-      beginCleanup(admission) { admit(admission); evaluationTimeoutMs = cleanupTimeoutMs; },
-      async navigate(url, admission) {
-        admit(admission);
-        return awaitWithin((async () => { await host.goto(url, { timeout: timeoutMs }); admit(admission); page = host; })(), admission);
-      },
-      async evaluate(expression, admission, options) { admit(admission); return awaitWithin(evaluatePage(page, expression, evaluationTimeoutMs, admission, options), admission); },
-      async openPreview(url, admission) {
-        admit(admission);
-        return awaitWithin(openPreview(url, admission), admission);
-      },
-      async useHost(admission) { admit(admission); page = host; },
-      async usePreview(admission) { admit(admission); if (!preview) throw new Error("No owned preview"); page = preview; },
-      async closePreview(admission) {
-        admit(admission);
-        return awaitWithin(closePreview(admission), admission);
-      },
-      async close() { await close(); },
-    };
-    async function openPreview(url: string, admission: Admission): Promise<void> {
-      if (preview) await preview.close();
+  let preview: typeof host | undefined;
+  let page = host;
+  let evaluationTimeoutMs = timeoutMs;
+  page.setDefaultTimeout(timeoutMs);
+  return {
+    capabilities,
+    beginCleanup(admission) { admit(admission); evaluationTimeoutMs = cleanupTimeoutMs; },
+    async navigate(url, admission) {
       admit(admission);
-      preview = await context.newPage();
+      return awaitWithin((async () => { await host.goto(url, { timeout: timeoutMs }); admit(admission); page = host; })(), admission);
+    },
+    async evaluate(expression, admission, options) { admit(admission); return awaitWithin(evaluatePage(page, expression, evaluationTimeoutMs, admission, options), admission); },
+    async openPreview(url, admission) {
       admit(admission);
-      page = preview;
-      await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
-    }
-    async function closePreview(admission: Admission): Promise<void> {
-      if (preview) await preview.close();
-      preview = undefined;
+      return awaitWithin(openPreview(url, admission), admission);
+    },
+    async useHost(admission) { admit(admission); page = host; },
+    async usePreview(admission) { admit(admission); if (!preview) throw new Error("No owned preview"); page = preview; },
+    async closePreview(admission) {
       admit(admission);
-      page = host;
-    }
+      return awaitWithin(closePreview(admission), admission);
+    },
+    async close() { await close(); },
+  };
+  async function openPreview(url: string, admission: Admission): Promise<void> {
+    if (preview) await preview.close();
+    admit(admission);
+    preview = await context.newPage();
+    admit(admission);
+    page = preview;
+    await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+  }
+  async function closePreview(admission: Admission): Promise<void> {
+    if (preview) await preview.close();
+    preview = undefined;
+    admit(admission);
+    page = host;
+  }
 }

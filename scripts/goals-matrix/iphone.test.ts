@@ -159,7 +159,22 @@ test("a never-settling failure log write is bounded before native teardown", asy
   expect(closed).toBe(true);
 }, 8000);
 
-type NativeScenario = "normal" | "stalled-terminal" | "write-failure" | "failed-install" | "stalled-failure-log";
+test("empty successful failure capture stays observed when optional Browser facts expire", async () => {
+  const { result, closed, logs } = await nativeLifecycle("empty-capture");
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: "Error: bun install exited 17: " });
+  expect(closed).toBe(true);
+  expect(logs.length).toBeGreaterThan(0);
+  expect(logs.every(text => text === "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n")).toBe(true);
+}, 8000);
+
+test("empty final terminal stays observed when optional Browser facts expire", async () => {
+  const { result, closed, logs } = await nativeLifecycle("empty-final");
+  expect(result.status).toBe("pass");
+  expect(closed).toBe(true);
+  expect(logs).toEqual(["\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n"]);
+}, 8000);
+
+type NativeScenario = "normal" | "stalled-terminal" | "write-failure" | "failed-install" | "stalled-failure-log" | "empty-capture" | "empty-final";
 async function nativeLifecycle(scenario: NativeScenario) {
   const framework = frameworks[0]!;
   return withPlayground(framework, 0, async transport => {
@@ -177,11 +192,13 @@ async function nativeLifecycle(scenario: NativeScenario) {
 
 function lifecycleObservation(evaluate: Transport["evaluate"], scenario: NativeScenario): Transport["evaluate"] {
   let reads = 0;
-  const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log";
+  const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log" || scenario === "empty-capture";
   return <T>(source: string, admission: Admission, options?: Parameters<Transport["evaluate"]>[2]) => {
-    if (failedInstall && source.includes("function shellState")) return evaluate<T>(JSON.stringify({ done: true, code: 17, error: null }), admission, options);
+    if ((scenario === "empty-capture" || scenario === "empty-final") && source.includes("function browserTrapFacts")) return new Promise<T>(() => {});
+    if (failedInstall && source.includes("function shellState")) return evaluate<T>(`(${JSON.stringify({ done: true, code: 17, error: null })})`, admission, options);
     if (!source.includes("function transcript")) return evaluate<T>(source, admission, options);
     reads++;
+    if (scenario === "empty-capture" || scenario === "empty-final") return evaluate<T>('""', admission, options);
     if (scenario === "stalled-terminal" && reads === 3) return new Promise<T>(() => {});
     if (scenario === "failed-install" && reads === 2) return Promise.reject(new Error("final observation failed"));
     if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"), admission, options);
