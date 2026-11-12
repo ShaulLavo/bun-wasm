@@ -21,7 +21,7 @@ async function prepare(args: string[], signal: AbortSignal) {
   try {
     process.chdir(source); process.env.GIT_WORK_TREE = source;
     for (const mode of ["shared", "unshared"]) {
-      if (mode === "unshared") await ownedCommand(["git", "apply", patch], signal);
+      await applyMode(mode, patch, signal);
       const output = join(directory, mode);
       await mkdir(output);
       await ownedCommand(prepareCommand.concat([output, pair, receipt]), signal, 240000, true);
@@ -36,3 +36,7 @@ async function prepare(args: string[], signal: AbortSignal) {
     scope: "Same source; default split. Shared prepares on page and adopts in workers. Unshared additionally retains/clones source and prepares in each worker. Browser internal caches remain uncontrolled." }));
 }
 if (import.meta.main) await withSignals(signal => prepare(process.argv.slice(2), signal));
+
+async function applyMode(mode: string, patch: string, signal: AbortSignal) {
+  if (mode === "unshared") await ownedCommand(["git", "apply", patch], signal);
+}

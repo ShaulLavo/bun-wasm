@@ -4,6 +4,7 @@ type EvaluationOptions = { observation: true };
 interface CleanupEvidence { browserClosed: true; foregroundStopped: true; previewClosed: true }
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
+  readonly processRoot?: number;
   beginCleanup?(): void | Promise<void>;
   nativeClick?(button: string, clicked: string, timeoutMs: number): Promise<unknown>;
   cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
@@ -25,14 +26,17 @@ export async function evaluatePage<T>(page: Page, expression: string, timeoutMs:
   }
   finally { await handle.dispose(); }
 }
-export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs): Promise<Transport> {
+export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
   if (kind === "chrome" && executablePath) {
     const version = Bun.spawn([executablePath, "--version"], { stdout: "pipe", timeout: 5000 });
     const name = await new Response(version.stdout).text();
     if (await version.exited !== 0 || !name.startsWith("Google Chrome ")) throw new Error(`Expected genuine Google Chrome, received ${name}`);
   }
-  const browser = await (kind === "chrome" ? chromium.launch({ ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs }) : firefox.launch({ headless: true, timeout: timeoutMs }));
+  const browserType = kind === "chrome" ? chromium : firefox;
+  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs } : { headless: true, timeout: timeoutMs };
+  const server = scopedProcess ? await browserType.launchServer(launch) : null;
+  const browser = server ? await browserType.connect(server.wsEndpoint()).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
   try {
     const context = await browser.newContext({ serviceWorkers: "allow" });
     const host = await context.newPage();
@@ -41,6 +45,7 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     let evaluationTimeoutMs = timeoutMs;
     page.setDefaultTimeout(timeoutMs);
     return {
+      processRoot: server?.process().pid,
       capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() },
       beginCleanup() { evaluationTimeoutMs = cleanupTimeoutMs; },
       async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
@@ -53,7 +58,7 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
       async useHost() { page = host; },
       async usePreview() { if (!preview) throw new Error("No owned preview"); page = preview; },
       async closePreview() { if (preview) await preview.close(); preview = undefined; page = host; },
-      async close() { await browser.close(); },
+      async close() { try { await browser.close(); } finally { await server?.close(); } },
     };
-  } catch (error) { await browser.close(); throw error; }
+  } catch (error) { try { await browser.close(); } finally { await server?.close(); } throw error; }
 }

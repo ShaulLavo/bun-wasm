@@ -6,17 +6,17 @@ const changes = [
   { path: "src/assets.ts", replacements: [
     ["type SharedLinkPlan }", "type SharedLinkPlan, type LinkPlanSource }"],
     ["readonly linkPlan: SharedLinkPlan | undefined;", "readonly linkPlan: SharedLinkPlan | undefined;\n  readonly diagnosticLinkSource?: LinkPlanSource;"],
-    ["linkPlan: plan.shared, memoryLimitBytes:", "linkPlan: plan.shared, diagnosticLinkSource: source, memoryLimitBytes:"],
+    ["linkPlan: plan.shared, memoryLimitBytes:", "linkPlan: undefined, diagnosticLinkSource: source, memoryLimitBytes:"],
   ] },
   { path: "web/src/bun-executor.ts", replacements: [
-    ["import { adoptLinkPlan,", "import { prepareLinkPlan, type LinkPlanSource, adoptLinkPlan,"],
+    ["import { adoptLinkPlan,", "import { prepareLinkPlan, type LinkPlanSource,"],
     ["linkPlan?: SharedLinkPlan;", "linkPlan?: SharedLinkPlan;\n  diagnosticLinkSource?: LinkPlanSource;"],
+    ['if (!req.linkPlan) return {};\n  const request = { ...req, linkPlan: req.linkPlan };', 'if (!req.diagnosticLinkSource) return {};\n  const request = { ...req, diagnosticLinkSource: req.diagnosticLinkSource };'],
     ["const plan = adoptLinkPlan(request.linkPlan);", `if (req.memoryGroup) throw new Error("Diagnostic control only supports split profile");
-      if (!req.diagnosticLinkSource) throw new Error("Diagnostic link source missing");
       const beforeMs = performance.now();
-      const plan = await prepareLinkPlan(req.diagnosticLinkSource);
-      const bytes = req.diagnosticLinkSource.core.source.byteLength + req.diagnosticLinkSource.libraries.reduce((sum, library) => sum + library.source.byteLength, 0);
-      host.postMessage({ type: "stderr", data: new TextEncoder().encode("[bunwasm-perf] " + JSON.stringify({ event: "unshared-prepare", beforeMs, afterMs: performance.now(), sourceBytes: bytes }) + "\\n") });`],
+      const plan = await prepareLinkPlan(request.diagnosticLinkSource);
+      const bytes = request.diagnosticLinkSource.core.source.byteLength + request.diagnosticLinkSource.libraries.reduce((sum, library) => sum + library.source.byteLength, 0);
+      context.post("stderr", new TextEncoder().encode("[bunwasm-perf] " + JSON.stringify({ event: "unshared-prepare", beforeMs, afterMs: performance.now(), sourceBytes: bytes }) + "\\n"));`],
   ] },
 ];
 export async function controlFiles(root: string) {
