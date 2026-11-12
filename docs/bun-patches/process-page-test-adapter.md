@@ -54,6 +54,8 @@ also permits the shared host's existing single interrupted-finish cleanup docume
 never another execution of the case body.
 The consumer pins published Waffle 0.0.122, source
 `612d4e947e78f632061de4103ffa70630a622718`, through public tarballs.
+The derived driver names its control record `processObservations`, keeping it
+distinct from the released base driver's private document observations.
 The hosted controls require confirmed teardown for their session, launcher, server,
 storage and scratch. They declare neither an application fixture nor its callbacks,
 so those two cleanup owners must report `not-created`. No active owner may use that

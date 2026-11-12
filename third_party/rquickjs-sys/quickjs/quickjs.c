@@ -339,6 +339,23 @@ typedef struct JSValueLink {
     JSValueConst value;
 } JSValueLink;
 
+/* bun-wasm: how many bytes the frame stack of ordinary bytecode calls may
+   cost the allocator, and the largest value JS_SetMaxFrameStackSize accepts
+   (docs/stack-limits.md). A plain recursive call costs about 121 bytes on
+   wasm32, so the default holds about 34,000 of them: more than the 20,685
+   the largest native budget allowed before these frames left the C stack. */
+#define JS_FRAME_STACK_LIMIT_DEFAULT ((size_t)4 * 1024 * 1024)
+#define JS_FRAME_STACK_LIMIT_MAX ((size_t)4 * 1024 * 1024)
+/* bun-wasm: the frame stack takes its storage in segments, each one request
+   to the runtime's allocator. A request is a multiple of the quantum less
+   the slack, so that an allocator which acquires backing in 64 KiB steps
+   (wasm32 linear memory, the mapped default below) can serve it from one
+   step with room for its own header. The slack is a sizing choice only:
+   what a segment is charged comes from the allocator's declared bound. */
+#define JS_FRAME_SEGMENT_QUANTUM ((size_t)64 * 1024)
+#define JS_FRAME_SEGMENT_SLACK ((size_t)256)
+#define JS_FRAME_SEGMENT_REQUEST (JS_FRAME_SEGMENT_QUANTUM - JS_FRAME_SEGMENT_SLACK)
+
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
@@ -381,6 +398,22 @@ struct JSRuntime {
     uintptr_t stack_size; /* in bytes, 0 if no limit */
     uintptr_t stack_top;
     uintptr_t stack_limit; /* lower stack limit */
+
+    /* bun-wasm: ordinary bytecode frames live in this runtime-owned frame
+       stack, not on the C stack (docs/bun-patches/quickjs-frame-stack.md).
+       frame_committed is the sum, over the segments held, of the backing the
+       allocator declared it may have to acquire for each, the idle spare
+       included; frame_limit bounds it. malloc_bound is that declaration,
+       NULL when the allocator has made none. frame_busy is set while the
+       allocator is being asked for a bound or a segment, or is taking one
+       back. */
+    struct JSFrameChunk *frame_chunk; /* segment holding the newest frame */
+    struct JSFrameChunk *frame_spare; /* at most one emptied default segment */
+    size_t frame_live;      /* bytes of live frames */
+    size_t frame_committed; /* bytes charged for all segments */
+    size_t frame_limit;     /* refusal threshold for frame_committed */
+    JSMallocBoundFunc *malloc_bound;
+    bool frame_busy;
 
     JSValue current_exception;
     /* true if inside an out of memory error, to avoid recursing */
@@ -1455,6 +1488,7 @@ static JSProperty *add_property(JSContext *ctx,
 static void free_property(JSRuntime *rt, JSProperty *pr, int prop_flags);
 static int JS_ToBigInt64Free(JSContext *ctx, int64_t *pres, JSValue val);
 static JSValue JS_ThrowStackOverflow(JSContext *ctx);
+static void js_frame_free_all(JSRuntime *rt);
 static JSValue JS_ThrowTypeErrorRevokedProxy(JSContext *ctx);
 static JSValue js_proxy_getPrototypeOf(JSContext *ctx, JSValueConst obj);
 static int js_proxy_setPrototypeOf(JSContext *ctx, JSValueConst obj,
@@ -2113,6 +2147,47 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
     return NULL;
 }
 
+/* bun-wasm: one request of 'size' bytes, not zero, made directly to the
+   registered allocator: no pooled arena and no arena block header, so the
+   request the allocator sees is exactly the one its bound was declared for.
+   The memory limit, the counters and the failure record are those of
+   js_malloc_rt. '*pcounted' is what the block adds to malloc_size, and
+   js_free_block_rt takes it back. An allocator that reports no usable size
+   is counted the bytes requested, so the block still counts toward the
+   memory limit. */
+static void *js_malloc_block_rt(JSRuntime *rt, size_t size, size_t *pcounted)
+{
+    void *ptr;
+    size_t usable;
+    JSMallocState *s = &rt->malloc_state;
+
+    /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
+    if (unlikely(s->malloc_size + size > s->malloc_limit - 1))
+        goto fail;
+
+    ptr = rt->mf.js_malloc(s->opaque, size);
+    if (!ptr)
+        goto fail;
+
+    usable = rt->mf.js_malloc_usable_size(ptr);
+    *pcounted = (usable != 0 ? usable : size) + MALLOC_OVERHEAD;
+    s->malloc_count++;
+    s->malloc_size += *pcounted;
+    return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_MALLOC);
+    return NULL;
+}
+
+static void js_free_block_rt(JSRuntime *rt, void *ptr, size_t counted)
+{
+    JSMallocState *s = &rt->malloc_state;
+
+    s->malloc_count--;
+    s->malloc_size -= counted;
+    rt->mf.js_free(s->opaque, ptr);
+}
+
 void js_free_rt(JSRuntime *rt, void *ptr)
 {
     JSMallocState *s;
@@ -2492,6 +2567,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->js_class_id_alloc = JS_CLASS_INIT_COUNT;
 
     rt->stack_size = JS_DEFAULT_STACK_SIZE;
+    rt->frame_limit = JS_FRAME_STACK_LIMIT_DEFAULT;
 
     JS_UpdateStackTop(rt);
 
@@ -2526,6 +2602,185 @@ int JS_AddRuntimeFinalizer(JSRuntime *rt, JSRuntimeFinalizer *finalizer,
     return 0;
 }
 
+/* bun-wasm: the default callbacks and what they declare for the frame stack
+   (JSMallocBoundFunc in quickjs.h; docs/bun-patches/quickjs-frame-stack.md
+   has the derivations).
+
+   On wasm32 they are libc's, unchanged, and JS_DefaultMallocBound states
+   what wasi-libc's dlmalloc can acquire for a request.
+
+   No such statement can be made for the malloc of glibc or of Apple's libc:
+   top padding, arena heaps, fallback mappings, huge pages, size-ranged
+   regions, tunables and replacement allocators all change what a request
+   acquires. On those hosts the callbacks instead serve every request of at
+   least one frame segment from a private anonymous mapping of its own, so
+   that what such a block acquires is known exactly and goes back to the
+   system when it is freed. Smaller requests stay with libc and have no
+   bound. Every large block the default callbacks serve takes this path,
+   not only the frame stack's: malloc, calloc, realloc, free and the usable
+   size keep their meaning across it. Nothing is declared on any other
+   host. */
+#if !defined(__wasi__) && \
+    (defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__))
+#include <stddef.h>
+#include <sys/mman.h>
+#define JS_DEF_MAPPED_BLOCKS 1
+#else
+#define JS_DEF_MAPPED_BLOCKS 0
+#endif
+
+#if JS_DEF_MAPPED_BLOCKS
+/* A mapping starts with this header and the block follows it. malloc aligns
+   a block for max_align_t, and a mapped block is aligned the same way: the
+   header's size is a multiple of that alignment, or nothing is mapped. The
+   mappings are kept in a list, and an address is a mapped block only if the
+   list holds its header, never because of what memory before it contains. */
+typedef struct JSDefMapping {
+    _Alignas(64) struct JSDefMapping *next;
+    size_t length; /* of the whole mapping */
+} JSDefMapping;
+
+static pthread_mutex_t js_def_map_lock = PTHREAD_MUTEX_INITIALIZER;
+static JSDefMapping *js_def_map_list;
+
+/* The page size, or zero while it cannot be read or used. Once read it is
+   kept, so every block is told apart by the value it was mapped under. */
+static size_t js_def_page_size(void)
+{
+    static size_t known;
+    size_t page = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    long answer;
+
+    if (page != 0)
+        return page;
+    answer = sysconf(_SC_PAGESIZE);
+    if (answer < (long)sizeof(JSDefMapping) || (answer & (answer - 1)) != 0)
+        return 0;
+    __atomic_store_n(&known, (size_t)answer, __ATOMIC_RELAXED);
+    return (size_t)answer;
+}
+
+/* The length of the mapping a request of 'size' bytes gets, or zero when
+   the request stays with libc: a small request, an unreadable page size, or
+   a target whose malloc alignment the header does not preserve. */
+static size_t js_def_map_length(size_t size)
+{
+    size_t page = js_def_page_size();
+
+    if (size < JS_FRAME_SEGMENT_REQUEST)
+        return 0;
+    if (sizeof(JSDefMapping) % _Alignof(max_align_t) != 0)
+        return 0;
+    if (page == 0 || size > SIZE_MAX - sizeof(JSDefMapping) - page)
+        return 0;
+    return (size + sizeof(JSDefMapping) + page - 1) & ~(page - 1);
+}
+
+/* The mapping 'ptr' is the block of, or NULL for a libc block. Only an
+   address one header into a page can be a mapped block, which spares every
+   other address the list. */
+static JSDefMapping *js_def_mapping(const void *ptr)
+{
+    JSDefMapping *map = (JSDefMapping *)((uintptr_t)ptr - sizeof(JSDefMapping));
+    JSDefMapping *held;
+    size_t page = js_def_page_size();
+
+    if (page == 0 || ((uintptr_t)ptr & (page - 1)) != sizeof(JSDefMapping))
+        return NULL;
+    pthread_mutex_lock(&js_def_map_lock);
+    for (held = js_def_map_list; held && held != map; held = held->next)
+        ;
+    pthread_mutex_unlock(&js_def_map_lock);
+    return held;
+}
+
+static void *js_def_map(size_t length)
+{
+    JSDefMapping *map = mmap(NULL, length, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    if (map == MAP_FAILED)
+        return NULL;
+    map->length = length;
+    pthread_mutex_lock(&js_def_map_lock);
+    map->next = js_def_map_list;
+    js_def_map_list = map;
+    pthread_mutex_unlock(&js_def_map_lock);
+    return map + 1;
+}
+
+static void js_def_unmap(JSDefMapping *map)
+{
+    JSDefMapping **link;
+
+    pthread_mutex_lock(&js_def_map_lock);
+    for (link = &js_def_map_list; *link != map; link = &(*link)->next)
+        ;
+    *link = map->next;
+    pthread_mutex_unlock(&js_def_map_lock);
+    if (munmap(map, map->length) != 0) {
+        fputs("fatal: QuickJS allocator could not unmap backing\n", stderr);
+        _Exit(EXIT_FAILURE);
+    }
+}
+
+static size_t js_def_malloc_usable_size(const void *ptr)
+{
+    JSDefMapping *map = ptr ? js_def_mapping(ptr) : NULL;
+
+    if (map)
+        return map->length - sizeof(JSDefMapping);
+    return js__malloc_usable_size(ptr);
+}
+
+static void *js_def_malloc(void *opaque, size_t size)
+{
+    size_t length = js_def_map_length(size);
+
+    return length ? js_def_map(length) : malloc(size);
+}
+
+static void *js_def_calloc(void *opaque, size_t count, size_t size)
+{
+    size_t length = 0;
+
+    if (size != 0 && count <= SIZE_MAX / size)
+        length = js_def_map_length(count * size);
+    /* a fresh anonymous mapping is zero already */
+    return length ? js_def_map(length) : calloc(count, size);
+}
+
+static void js_def_free(void *opaque, void *ptr)
+{
+    JSDefMapping *map = ptr ? js_def_mapping(ptr) : NULL;
+
+    if (map)
+        js_def_unmap(map);
+    else
+        free(ptr);
+}
+
+static void *js_def_realloc(void *opaque, void *ptr, size_t size)
+{
+    size_t kept;
+    void *moved;
+
+    if (!ptr)
+        return js_def_malloc(opaque, size);
+    if (!js_def_mapping(ptr) && !js_def_map_length(size))
+        return realloc(ptr, size);
+    /* into a mapping, out of one, or between two: move the contents */
+    moved = js_def_malloc(opaque, size);
+    if (!moved)
+        return NULL;
+    kept = js_def_malloc_usable_size(ptr);
+    memcpy(moved, ptr, kept < size ? kept : size);
+    js_def_free(opaque, ptr);
+    return moved;
+}
+#else
+#define js_def_malloc_usable_size js__malloc_usable_size
+
 static void *js_def_calloc(void *opaque, size_t count, size_t size)
 {
     return calloc(count, size);
@@ -2545,18 +2800,78 @@ static void *js_def_realloc(void *opaque, void *ptr, size_t size)
 {
     return realloc(ptr, size);
 }
+#endif
 
 static const JSMallocFunctions def_malloc_funcs = {
     js_def_calloc,
     js_def_malloc,
     js_def_free,
     js_def_realloc,
-    js__malloc_usable_size
+    js_def_malloc_usable_size
 };
+
+const JSMallocFunctions *JS_GetDefaultMallocFunctions(void)
+{
+    return &def_malloc_funcs;
+}
+
+/* The most backing one js_def_malloc(size) can make the default allocator
+   newly acquire, or zero where it cannot be stated. */
+size_t JS_DefaultMallocBound(void *opaque, size_t size)
+{
+#if defined(__wasi__) && __SIZEOF_SIZE_T__ == 4
+    /* The core's wasi-libc dlmalloc, which this module imports: no mmap, no
+       trim, a 64 KiB granularity, bookkeeping kept inside its segments. One
+       malloc asks sbrk for at most granularity_align(nb + SYS_ALLOC_PADDING)
+       in total, nb being request2size(size), on every growth path:
+       - split profile, contiguous growth: the first request is that
+         amount; with a top chunk it is the same rounding of what the top
+         lacks; and when a supplement follows a non-adjacent extension the
+         two sum to exactly that amount. The linker's initial heap is
+         existing memory. sbrk grows this program's own memory by exactly
+         the pages asked for, and nothing else grows it.
+       - shared-group profile (BUN_WASM_SHARED_GROUP), noncontiguous
+         growth: one sbrk of that amount, passed to the group provider.
+         The bound holds there only for a provider that grants exactly the
+         pages asked for and keeps freed pages reusable
+         (docs/bun-patches/quickjs-frame-stack.md names the Waffle revision
+         this rests on).
+       The values are dlmalloc's for 4-byte sizes and 16-byte alignment. */
+    const size_t chunk_overhead = 4, alignment = 16, granularity = 65536;
+    const size_t top_foot_size = 8 + 32 + 16;
+    const size_t sys_alloc_padding = top_foot_size + alignment;
+    size_t nb;
+
+    if (size > SIZE_MAX - 2 * granularity)
+        return 0;
+    nb = (size + chunk_overhead + alignment - 1) & ~(alignment - 1);
+    return (nb + sys_alloc_padding + granularity - 1) & ~(granularity - 1);
+#elif JS_DEF_MAPPED_BLOCKS
+    return js_def_map_length(size);
+#else
+    return 0;
+#endif
+}
+
+/* The declaration may change only when no charge made under the current
+   one is outstanding, for a segment in use or spare, and the allocator is
+   neither being asked for one nor taking one back. Otherwise -1, and
+   nothing changes. */
+int JS_SetMallocBound(JSRuntime *rt, JSMallocBoundFunc *bound)
+{
+    if (rt->frame_committed != 0 || rt->frame_busy)
+        return -1;
+    rt->malloc_bound = bound;
+    return 0;
+}
 
 JSRuntime *JS_NewRuntime(void)
 {
-    return JS_NewRuntime2(&def_malloc_funcs, NULL);
+    JSRuntime *rt = JS_NewRuntime2(&def_malloc_funcs, NULL);
+
+    if (rt)
+        rt->malloc_bound = JS_DefaultMallocBound;
+    return rt;
 }
 
 void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
@@ -2831,6 +3146,7 @@ void JS_FreeRuntime(JSRuntime *rt)
             JS_FreeAtomRT(rt, cl->class_name);
         }
     }
+    js_frame_free_all(rt);
     js_free_rt(rt, rt->class_array);
 
 #ifdef ENABLE_DUMPS // JS_DUMP_ATOM_LEAKS
@@ -3257,6 +3573,378 @@ void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size)
 {
     rt->stack_size = stack_size;
     update_stack_limit(rt);
+}
+
+/* bun-wasm: the frame stack (docs/bun-patches/quickjs-frame-stack.md).
+
+   An ordinary bytecode call keeps its JSStackFrame, copied arguments,
+   locals, operand slots and closure-slot table in one record here instead
+   of on the C stack. That storage adds no native call frame, so it is
+   bounded by its own byte limit and not by the native stack budget.
+
+   Chunks never move while a frame in them is live: closures and the frame
+   list hold addresses into them. Frames are pushed and popped in strict
+   stack order. Coroutine frames keep their own heap allocation and never
+   come here.
+
+   What the limit bounds, for every chunk held: all the backing the
+   runtime's allocator may have had to newly acquire from its own source to
+   serve that chunk's one request. The allocator declares that bound before
+   the request (JSMallocBoundFunc), and the rules are:
+   - the charge is reserved before the allocator is asked, only when it
+     fits what the limit has left, and is taken back if the request fails;
+   - a chunk keeps the charge it was taken under until it is freed;
+   - a request the allocator serves from storage it already had is charged
+     in full all the same;
+   - a chunk's charge ends once the allocator has taken the block back,
+     and the storage is then the allocator's to release or to reuse;
+   - the declaration cannot change while any chunk is held. */
+#define JS_FRAME_ALIGN ((size_t)8)
+
+/* One segment: one block from the runtime's allocator. */
+typedef struct JSFrameChunk {
+    _Alignas(8) struct JSFrameChunk *prev; /* the chunk below this one */
+    size_t payload; /* bytes available after this header */
+    size_t top;     /* bytes of payload in use */
+    size_t charge;  /* the bound the allocator declared for this block */
+    size_t counted; /* what the block adds to the runtime's malloc_size */
+} JSFrameChunk;
+
+/* How a record entered its inline callee, kept so the return releases the
+   right operand slots. */
+#define JS_FRAME_CALL_METHOD 1 /* the receiver sits below the function */
+#define JS_FRAME_CALL_TAIL   2 /* the result is this record's own result */
+
+/* The record of one ordinary bytecode call. Only js_frame_push creates one;
+   native and coroutine JSStackFrame values are never cast to it. */
+typedef struct JSExecFrame {
+    JSStackFrame frame;
+    size_t allocation_size; /* bytes this record takes from its chunk */
+    /* The call this record executes; the function is frame.cur_func. These
+       are borrowed: the C caller, or the calling record's operand slots,
+       keep them alive until it returns. actual_argc and actual_argv are
+       what the caller passed, which frame.arg_count and frame.arg_buf are
+       not when formals were padded or copied. */
+    JSValueConst this_obj, new_target;
+    JSValueConst *actual_argv;
+    int actual_argc;
+    JSContext *caller_ctx; /* the realm that made the call */
+    /* The ordinary record whose dispatch loop entered this one, or NULL when
+       this record was entered from C and ends its interpreter activation. */
+    struct JSExecFrame *ordinary_caller;
+    /* Written by this record just before it enters an inline callee, and
+       read when that callee returns. Its pc is frame.cur_pc. Coroutine
+       frames are never inline callers, so their cur_sp is never used here. */
+    JSValue *saved_sp;
+    int call_argc;
+    uint8_t call_kind; /* JS_FRAME_CALL_* */
+} JSExecFrame;
+
+/* True for a callee the dispatch loop may enter without a C call: an
+   ordinary bytecode function. Generators and async functions have their
+   own classes; bound functions, proxies and native functions keep their
+   dispatcher. A class called without new still fails in its own bytecode. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
+static inline bool js_frame_inline_callee(JSValueConst func_obj)
+{
+    JSObject *p;
+
+    if (JS_VALUE_GET_TAG(func_obj) != JS_TAG_OBJECT)
+        return false;
+    p = JS_VALUE_GET_OBJ(func_obj);
+    return p->class_id == JS_CLASS_BYTECODE_FUNCTION &&
+        p->u.func.function_bytecode->func_kind == JS_FUNC_NORMAL;
+}
+
+#define JS_FRAME_HEADER_SIZE \
+    ((sizeof(JSExecFrame) + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1))
+
+/* Gives a chunk back to the allocator. Its charge ends only once the
+   allocator has the block again. */
+static void js_frame_free_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    size_t charge = chunk->charge;
+    bool busy = rt->frame_busy;
+
+    rt->frame_busy = true;
+    js_free_block_rt(rt, chunk, chunk->counted);
+    rt->frame_committed -= charge;
+    rt->frame_busy = busy;
+}
+
+/* The request for a segment whose payload holds 'size' bytes: the smallest
+   multiple of the quantum, less the slack, that does. Zero when no such
+   size exists. */
+static size_t js_frame_segment_request(size_t size)
+{
+    size_t fixed = sizeof(JSFrameChunk) + JS_FRAME_SEGMENT_SLACK;
+    size_t quanta;
+
+    if (size > SIZE_MAX - fixed - JS_FRAME_SEGMENT_QUANTUM)
+        return 0;
+    quanta = (size + fixed + JS_FRAME_SEGMENT_QUANTUM - 1) / JS_FRAME_SEGMENT_QUANTUM;
+    return quanta * JS_FRAME_SEGMENT_QUANTUM - JS_FRAME_SEGMENT_SLACK;
+}
+
+/* What the allocator declares a request of 'request' bytes may make it
+   acquire. Zero when it declares nothing for that request, or less than the
+   request itself, which no block can cost. */
+static size_t js_frame_declared(JSRuntime *rt, size_t request)
+{
+    size_t bound;
+
+    if (request == 0)
+        return 0;
+    bound = rt->malloc_bound(rt->malloc_state.opaque, request);
+    return bound < request ? 0 : bound;
+}
+
+/* How taking a chunk ended. */
+enum {
+    JS_FRAME_TAKEN,
+    JS_FRAME_OVER_LIMIT,   /* a declared bound exceeds what the limit has left */
+    JS_FRAME_NO_BOUND,     /* the allocator declares no bound for the block */
+    JS_FRAME_NO_MEMORY,    /* the allocator returned nothing */
+    JS_FRAME_BROKEN_BOUND, /* the allocator reported more than it declared */
+};
+
+/* Takes a chunk whose payload holds 'size' bytes from the allocator and
+   charges it, or changes nothing. A whole segment is asked for when its
+   bound fits what the limit has left, otherwise a block of exactly this
+   frame's size. The allocator is never asked for a block whose bound does
+   not fit. */
+static int js_frame_take_chunk(JSRuntime *rt, size_t size, JSFrameChunk **pchunk)
+{
+    size_t room = rt->frame_limit - rt->frame_committed;
+    size_t exact = sizeof(JSFrameChunk) + size;
+    size_t request = js_frame_segment_request(size);
+    size_t charge = js_frame_declared(rt, request);
+    size_t exact_charge, counted, usable;
+    JSFrameChunk *chunk;
+
+    if (charge == 0 || charge > room) {
+        exact_charge = js_frame_declared(rt, exact);
+        if (charge == 0 && exact_charge == 0)
+            return JS_FRAME_NO_BOUND;
+        if (exact_charge == 0 || exact_charge > room)
+            return JS_FRAME_OVER_LIMIT;
+        request = exact;
+        charge = exact_charge;
+    }
+    rt->frame_committed += charge;
+    chunk = js_malloc_block_rt(rt, request, &counted);
+    if (!chunk) {
+        rt->frame_committed -= charge;
+        return JS_FRAME_NO_MEMORY;
+    }
+    /* A diagnostic, not the enforcement: the limit rests on the declared
+       bound, and an allocator that reports more usable bytes for the block
+       than it declared has shown that bound to be wrong. */
+    usable = rt->mf.js_malloc_usable_size(chunk);
+    if (usable > charge) {
+        js_free_block_rt(rt, chunk, counted);
+        rt->frame_committed -= charge;
+        return JS_FRAME_BROKEN_BOUND;
+    }
+    chunk->payload = request - sizeof(JSFrameChunk);
+    chunk->charge = charge;
+    chunk->counted = counted;
+    *pchunk = chunk;
+    return JS_FRAME_TAKEN;
+}
+
+/* The newest chunk, with room for 'size' bytes: the idle spare when it is
+   large enough, else a new one. NULL with a pending error otherwise, and
+   then no frame, link or count has changed: an InternalError when the
+   allocator declares no bound or broke the one it declared (a mistake in
+   how the runtime was set up), the stack RangeError when a valid bound does
+   not fit what the limit has left, the allocator's error when it has no
+   memory. The one thing a failure can cost is the spare, released first
+   when it cannot serve the frame so that the limit never pays for both. */
+static JSFrameChunk *js_frame_new_chunk(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_spare;
+    int taken = JS_FRAME_OVER_LIMIT;
+
+    if (!rt->malloc_bound) {
+        JS_ThrowInternalError(ctx, "no allocator block bound for frame storage");
+        return NULL;
+    }
+    if (chunk && chunk->payload >= size) {
+        rt->frame_spare = NULL;
+        goto link;
+    }
+    if (chunk) {
+        rt->frame_spare = NULL;
+        js_frame_free_chunk(rt, chunk);
+    }
+    if (rt->frame_committed <= rt->frame_limit) {
+        rt->frame_busy = true;
+        taken = js_frame_take_chunk(rt, size, &chunk);
+        rt->frame_busy = false;
+    }
+    switch (taken) {
+    case JS_FRAME_TAKEN:
+        break;
+    case JS_FRAME_NO_BOUND:
+        JS_ThrowInternalError(ctx, "no allocator block bound for frame storage");
+        return NULL;
+    case JS_FRAME_BROKEN_BOUND:
+        JS_ThrowInternalError(ctx, "allocator exceeded its declared block bound");
+        return NULL;
+    case JS_FRAME_NO_MEMORY:
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    default:
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+ link:
+    chunk->top = 0;
+    chunk->prev = rt->frame_chunk;
+    rt->frame_chunk = chunk;
+    return chunk;
+}
+
+/* Every call pushes and pops a record, so the step that only moves the top
+   of the current chunk is inlined at any optimization level: the guest is
+   built for size, which would otherwise leave each step a call. What a
+   chunk boundary, a refusal or an emptied chunk needs stays out of line. */
+#if defined(__GNUC__) || defined(__clang__)
+#define js_frame_inline static inline __attribute__((always_inline))
+#else
+#define js_frame_inline static inline
+#endif
+
+/* Bytes of one ordinary record: header, 'slots' values, then the closure
+   slots, rounded so the next record is aligned. The counts are 16-bit
+   bytecode fields, so the sum cannot overflow; a zero return says it would. */
+js_frame_inline size_t js_frame_record_size(size_t slots, size_t var_refs)
+{
+    size_t size = JS_FRAME_HEADER_SIZE;
+
+    if (slots > (SIZE_MAX - size) / sizeof(JSValue))
+        return 0;
+    size += slots * sizeof(JSValue);
+    if (var_refs > (SIZE_MAX - size - JS_FRAME_ALIGN) / sizeof(JSVarRef *))
+        return 0;
+    size += var_refs * sizeof(JSVarRef *);
+    return (size + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1);
+}
+
+/* The record of 'size' bytes when the current chunk has no room for it, or
+   'size' is the zero js_frame_record_size returns for an impossible record. */
+static no_inline JSExecFrame *js_frame_push_chunk(JSContext *ctx, size_t size)
+{
+    JSFrameChunk *chunk;
+    JSExecFrame *frame;
+
+    if (size == 0) {
+        JS_ThrowStackOverflow(ctx);
+        return NULL;
+    }
+    chunk = js_frame_new_chunk(ctx, size);
+    if (!chunk)
+        return NULL;
+    frame = (JSExecFrame *)(chunk + 1);
+    chunk->top = size;
+    ctx->rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
+/* The record for one ordinary call, uninitialised and not yet linked into
+   the frame list. NULL with a pending exception on refusal. */
+js_frame_inline JSExecFrame *js_frame_push(JSContext *ctx, size_t slots, size_t var_refs)
+{
+    JSRuntime *rt = ctx->rt;
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = js_frame_record_size(slots, var_refs);
+    JSExecFrame *frame;
+
+    if (unlikely(size == 0 || !chunk || chunk->payload - chunk->top < size))
+        return js_frame_push_chunk(ctx, size);
+    frame = (JSExecFrame *)((uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top += size;
+    rt->frame_live += size;
+    frame->allocation_size = size;
+    return frame;
+}
+
+/* Unlinks the newest chunk once its last record has left. One emptied chunk
+   of at most a default segment is kept, still charged, so a call at a chunk
+   boundary does not allocate and free on every iteration. Any other goes
+   back to the allocator at once. */
+static no_inline void js_frame_pop_chunk(JSRuntime *rt, JSFrameChunk *chunk)
+{
+    rt->frame_chunk = chunk->prev;
+    if (!rt->frame_spare &&
+        chunk->payload <= JS_FRAME_SEGMENT_REQUEST - sizeof(JSFrameChunk))
+        rt->frame_spare = chunk;
+    else
+        js_frame_free_chunk(rt, chunk);
+}
+
+/* Releases the newest record. Its values are already freed and it is no
+   longer in the frame list. */
+js_frame_inline void js_frame_pop(JSRuntime *rt, JSExecFrame *frame)
+{
+    JSFrameChunk *chunk = rt->frame_chunk;
+    size_t size = frame->allocation_size;
+
+    assert((uint8_t *)frame + size == (uint8_t *)(chunk + 1) + chunk->top);
+    chunk->top -= size;
+    rt->frame_live -= size;
+    if (unlikely(chunk->top == 0))
+        js_frame_pop_chunk(rt, chunk);
+}
+
+static void js_frame_free_all(JSRuntime *rt)
+{
+    JSFrameChunk *chunk, *prev;
+
+    assert(rt->frame_live == 0);
+    for (chunk = rt->frame_chunk; chunk; chunk = prev) {
+        prev = chunk->prev;
+        js_frame_free_chunk(rt, chunk);
+    }
+    rt->frame_chunk = NULL;
+    if (rt->frame_spare)
+        js_frame_free_chunk(rt, rt->frame_spare);
+    rt->frame_spare = NULL;
+}
+
+/* Sets how many bytes the frame stack may cost the allocator. Zero is a
+   real limit: no ordinary call fits. Returns -1 and changes nothing when the
+   value is above the supported range or below what live frames already
+   hold, or while the allocator is being asked for a chunk; an idle spare is
+   released to make a lower value fit. */
+int JS_SetMaxFrameStackSize(JSRuntime *rt, size_t bytes)
+{
+    size_t spare;
+
+    if (bytes > JS_FRAME_STACK_LIMIT_MAX || rt->frame_busy)
+        return -1;
+    spare = rt->frame_spare ? rt->frame_spare->charge : 0;
+    if (bytes < rt->frame_committed - spare)
+        return -1;
+    if (bytes < rt->frame_committed) {
+        js_frame_free_chunk(rt, rt->frame_spare);
+        rt->frame_spare = NULL;
+    }
+    rt->frame_limit = bytes;
+    return 0;
+}
+
+void JS_GetFrameStackUsage(JSRuntime *rt, size_t *plive, size_t *pcommitted,
+                           size_t *plimit)
+{
+    *plive = rt->frame_live;
+    *pcommitted = rt->frame_committed;
+    *plimit = rt->frame_limit;
 }
 
 void JS_UpdateStackTop(JSRuntime *rt)
@@ -18295,12 +18983,17 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     JSContext *ctx;
     JSObject *p;
     JSFunctionBytecode *b;
-    JSStackFrame sf_s, *sf = &sf_s;
+    JSStackFrame *sf;
+    /* the frame-stack record of an ordinary call; NULL while resuming a
+       coroutine, whose frame belongs to its own heap allocation */
+    JSExecFrame *owned = NULL;
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
+    /* the call being made; shared by the call opcodes and inline_call */
+    int call_argc, call_kind;
+    JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
-    size_t alloca_size;
 
 #ifdef ENABLE_DUMPS // JS_DUMP_BYTECODE_STEP
 #define DUMP_BYTECODE_OR_DONT(pc) \
@@ -18362,11 +19055,35 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         arg_allocated_size = 0;
     }
 
-    alloca_size = sizeof(JSValue) * (arg_allocated_size + b->var_count +
-                                     b->stack_size) +
-        sizeof(JSVarRef *) * b->var_ref_count;
-    if (js_check_stack_overflow(rt, alloca_size))
+    /* bun-wasm: this activation's own C frame is checked against the native
+       budget, once for every call the loop below then runs without another
+       C call. The fixed reservation stands for the frame storage this
+       function no longer takes from the C stack, so the budget keeps
+       covering the host stack one C entry costs: without it the guard
+       allowed more native reentries than the host stack holds, first through
+       Reflect.construct (docs/stack-limits.md has the measurement). A call's
+       storage is checked by js_frame_push against the frame-stack limit
+       instead, and fails before anything is linked. */
+    js_reserve_wasm_frame(48);
+    if (js_check_stack_overflow(rt, 0))
         return JS_ThrowStackOverflow(caller_ctx);
+    owned = js_frame_push(caller_ctx,
+                          (size_t)arg_allocated_size + b->var_count + b->stack_size,
+                          b->var_ref_count);
+    if (unlikely(!owned))
+        return JS_EXCEPTION;
+    owned->ordinary_caller = NULL;
+
+    /* Entered from C above, and from inline_call below with the callee's
+       record pushed and func_obj, this_obj, new_target, argc, argv,
+       caller_ctx, flags, p, b and arg_allocated_size already the callee's. */
+ enter_frame:
+    sf = &owned->frame;
+    owned->this_obj = this_obj;
+    owned->new_target = new_target;
+    owned->actual_argc = argc;
+    owned->actual_argv = argv;
+    owned->caller_ctx = caller_ctx;
 
     sf->is_strict_mode = b->is_strict_mode;
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
@@ -18375,7 +19092,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_func = unsafe_unconst(func_obj);
     var_refs = p->u.func.var_refs;
 
-    local_buf = alloca(alloca_size);
+    local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
     if (unlikely(arg_allocated_size)) {
         int n = min_int(argc, b->arg_count);
         arg_buf = local_buf;
@@ -18414,9 +19131,6 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
 
  restart:
     for(;;) {
-        int call_argc;
-        JSValue *call_argv;
-
         SWITCH(pc) {
         CASE(OP_push_i32):
             *sp++ = js_int32(get_u32(pc));
@@ -18775,6 +19489,10 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
             has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -18812,6 +19530,11 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
+                if (owned && js_frame_inline_callee(call_argv[-1])) {
+                    call_kind = JS_FRAME_CALL_METHOD |
+                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
+                    goto inline_call;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -21184,7 +21907,85 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    /* bun-wasm: only an ordinary call owns a frame-stack record. It is
+       unlinked and its values are freed before its storage can be reused. */
+    if (!owned)
+        return ret_val;
+    {
+        JSExecFrame *caller = owned->ordinary_caller;
+        int below;
+
+        js_frame_pop(rt, owned);
+        if (!caller)
+            return ret_val;
+        /* The call was entered by inline_call: continue the calling record
+           where JS_CallInternal would have returned to it. */
+        owned = caller;
+        sf = &owned->frame;
+        func_obj = sf->cur_func;
+        this_obj = owned->this_obj;
+        new_target = owned->new_target;
+        argc = owned->actual_argc;
+        argv = owned->actual_argv;
+        caller_ctx = owned->caller_ctx;
+        p = JS_VALUE_GET_OBJ(func_obj);
+        b = p->u.func.function_bytecode;
+        ctx = b->realm;
+        var_refs = p->u.func.var_refs;
+        local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
+        arg_buf = sf->arg_buf;
+        var_buf = sf->var_buf;
+        stack_buf = var_buf + b->var_count;
+        pc = sf->cur_pc;
+        sp = owned->saved_sp;
+        if (unlikely(JS_IsException(ret_val)))
+            goto exception;
+        if (owned->call_kind & JS_FRAME_CALL_TAIL)
+            goto done;
+        below = owned->call_kind & JS_FRAME_CALL_METHOD ? 2 : 1;
+        for(i = -below; i < owned->call_argc; i++)
+            JS_FreeValue(ctx, sp[i - owned->call_argc]);
+        sp -= owned->call_argc + below;
+        *sp++ = ret_val;
+        goto restart;
+    }
+
+    /* bun-wasm: an ordinary record calls an ordinary bytecode function
+       without a C call. The callee's record is pushed first, so a refusal
+       or an interrupt is thrown in the calling record with nothing changed.
+       The operands stay in the calling record until the callee returns. */
+ inline_call:
+    {
+        JSObject *callee_p = JS_VALUE_GET_OBJ(call_argv[-1]);
+        JSFunctionBytecode *callee_b = callee_p->u.func.function_bytecode;
+        JSExecFrame *callee;
+
+        if (unlikely(js_poll_interrupts(ctx)))
+            goto exception;
+        arg_allocated_size =
+            call_argc < callee_b->arg_count ? callee_b->arg_count : 0;
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + callee_b->var_count +
+                               callee_b->stack_size,
+                               callee_b->var_ref_count);
+        if (unlikely(!callee))
+            goto exception;
+        owned->saved_sp = sp;
+        owned->call_argc = call_argc;
+        owned->call_kind = call_kind;
+        callee->ordinary_caller = owned;
+        owned = callee;
+        caller_ctx = ctx;
+        func_obj = call_argv[-1];
+        this_obj = call_kind & JS_FRAME_CALL_METHOD ? call_argv[-2] : JS_UNDEFINED;
+        new_target = JS_UNDEFINED;
+        argc = call_argc;
+        argv = vc(call_argv);
+        flags = 0;
+        p = callee_p;
+        b = callee_b;
+        goto enter_frame;
+    }
 }
 
 JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,

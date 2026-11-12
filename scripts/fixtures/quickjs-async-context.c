@@ -34,13 +34,17 @@ static int deny(Allocator *a)
     return 1;
 }
 
+/* Every request goes unchanged to the engine's default callbacks, so these
+   callbacks may declare the default bound for the frame stack. */
+#define backing() JS_GetDefaultMallocFunctions()
+
 static void *allocate(void *opaque, size_t size)
 {
     Allocator *a = opaque;
     void *p;
     if (deny(a))
         return NULL;
-    p = malloc(size);
+    p = backing()->js_malloc(NULL, size);
     if (p)
         a->live++;
     return p;
@@ -60,7 +64,7 @@ static void release(void *opaque, void *p)
     if (!p)
         return;
     a->live--;
-    free(p);
+    backing()->js_free(NULL, p);
 }
 
 static void *resize(void *opaque, void *p, size_t size)
@@ -73,12 +77,12 @@ static void *resize(void *opaque, void *p, size_t size)
     }
     if (deny(opaque))
         return NULL;
-    return realloc(p, size);
+    return backing()->js_realloc(NULL, p, size);
 }
 
 static size_t usable_size(const void *p)
 {
-    return malloc_usable_size((void *)p);
+    return backing()->js_malloc_usable_size(p);
 }
 
 static const JSMallocFunctions allocator = {
@@ -143,6 +147,15 @@ static JSValue print(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+/* A runtime on the counting callbacks, their bound declared before any
+   bytecode can run. */
+static JSRuntime *runtime(Allocator *a)
+{
+    JSRuntime *rt = JS_NewRuntime2(&allocator, a);
+    JS_SetMallocBound(rt, JS_DefaultMallocBound);
+    return rt;
+}
+
 static JSContext *context(JSRuntime *rt)
 {
     JSContext *ctx = JS_NewContext(rt);
@@ -177,7 +190,7 @@ static void eval_void(JSContext *ctx, const char *source)
 static int fault_case(int offset, int enqueue, int use_memory_limit)
 {
     Allocator a = { .fail_after = -1 };
-    JSRuntime *rt = JS_NewRuntime2(&allocator, &a);
+    JSRuntime *rt = runtime(&a);
     JSContext *ctx = context(rt), *job_ctx;
     JSValue global, promise, resolver, thenable, before, after, result;
     int allocation_start, allocation_count, job_result = 0;
@@ -244,7 +257,7 @@ static int fault_case(int offset, int enqueue, int use_memory_limit)
 static int contracts(const char *path)
 {
     Allocator a = { .fail_after = -1 };
-    JSRuntime *rt = JS_NewRuntime2(&allocator, &a);
+    JSRuntime *rt = runtime(&a);
     JSContext *ctx = context(rt);
     FILE *file = fopen(path, "rb");
     char *source;
