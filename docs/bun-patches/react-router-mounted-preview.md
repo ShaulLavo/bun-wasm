@@ -12,7 +12,10 @@ guest request at root is correct, but the browser router also needs the public
 mount. A client-only basename change renders the page while leaving server Link
 hrefs inconsistent with hydration.
 
-`app/preview-context.ts` validates the internal `x-bun-preview-base` mount header.
+`app/preview-context.ts` validates the internal `x-bun-preview-base` mount header,
+including canonical encoded hosting directories and Unicode pathnames. The URL
+normalization check rejects raw spaces and encoded dot-segment traversal while
+retaining the encoded mount in server links and the browser handoff.
 After React Router matches the root guest request and runs its loaders, the
 adapter derives a rendering context with the public basename and location. It
 serializes the same basename into the browser handoff. The original context and

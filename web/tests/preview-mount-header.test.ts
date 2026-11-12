@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { Previews } from '../src/preview';
 
 test('mounted preview metadata overwrites incoming headers without changing guest request paths', () => {
-  for (const baseURL of ['https://example.test/', 'https://example.test/nested/app/']) {
+  for (const baseURL of ['https://example.test/', 'https://example.test/nested/app/', 'https://example.test/my%20app/', 'https://example.test/אפליקציה/']) {
     const previews = new Previews({ baseURL, prefix: '__preview' });
     const headers: [string, string][] = [['X-Bun-Preview-Base', '/forged/'], ['accept', 'text/html']];
     const channel = new MessageChannel();

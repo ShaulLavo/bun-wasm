@@ -18,6 +18,11 @@ loader and route navigation, back navigation, SSR links and state-preserving HMR
 The test uses the actual preview worker and socket shim. Test fixtures add their
 own second route; the starter remains unchanged except for its server adapter.
 
+Independent review found that canonical encoded hosting directories were rejected.
+The correction accepts the adapter's encoded path while retaining URL normalization
+checks. The real server regression fails before with HTTP 500 for `/my%20app/`
+and passes after for encoded spaces and Unicode hosting directories.
+
 Evidence and rerunnable sandbox checks are under
 `/work/reports/goals/sandbox-fixes/react-router/`. No Waffle source, package pin,
 version, generated matrix or other framework template changed.

@@ -175,14 +175,16 @@ export default function Details() { return <p id="detail-value">{useLoaderData<t
 }
 
 async function checkBoundary(url: string): Promise<void> {
-  for (const mount of ['https://evil.test/', '//evil.test/', '/__preview/0/', '/__preview/65536/', '/__preview/5173/?x=1', '/__preview/5173/#x', '/../__preview/5173/', '/x//__preview/5173/', '/__preview/5173']) {
+  for (const mount of ['https://evil.test/', '//evil.test/', '/__preview/0/', '/__preview/65536/', '/__preview/5173/?x=1', '/__preview/5173/#x', '/../__preview/5173/', '/%2e%2e/__preview/5173/', '/my app/__preview/5173/', '/x//__preview/5173/', '/__preview/5173']) {
     const response = await fetch(url, { headers: { 'x-bun-preview-base': mount } });
     assert.equal(response.status, 500, mount);
     await response.body?.cancel();
   }
-  const nested = await fetch(url, { headers: { 'x-bun-preview-base': '/nested/app/__preview/1234/' } });
-  assert.equal(nested.status, 200);
-  assert.ok((await nested.text()).includes('href="/nested/app/__preview/1234/details"'));
+  for (const mount of ['/nested/app/__preview/1234/', '/my%20app/__preview/5173/', '/%D7%90%D7%A4%D7%9C%D7%99%D7%A7%D7%A6%D7%99%D7%94/__preview/5173/']) {
+    const nested = await fetch(url, { headers: { 'x-bun-preview-base': mount } });
+    assert.equal(nested.status, 200, `Canonical preview mount must render: ${mount}`);
+    assert.ok((await nested.text()).includes(`href="${mount}details"`));
+  }
 }
 
 async function checkHmr(page: Page, url: string, home: string, source: string, mounted: boolean): Promise<void> {

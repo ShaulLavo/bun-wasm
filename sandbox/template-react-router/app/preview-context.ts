@@ -3,7 +3,7 @@ import type { EntryContext } from 'react-router';
 export function previewContext(request: Request, context: EntryContext): EntryContext {
   const basename = request.headers.get('x-bun-preview-base');
   if (basename === null) return context;
-  const match = /^\/(?:[a-zA-Z0-9._~-]+\/)*__preview\/([1-9]\d{0,4})\/$/.exec(basename);
+  const match = /^\/(?:[^/?#\\]+\/)*__preview\/([1-9]\d{0,4})\/$/.exec(basename);
   if (!match || Number(match[1]) > 65535 || new URL(basename, request.url).pathname !== basename) {
     throw new Error('Invalid Bun preview mount');
   }
