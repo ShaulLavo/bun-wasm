@@ -1,6 +1,6 @@
-# SpiderMonkey shared native CI
+# SpiderMonkey shared CI
 
-Status: Approved. November 10, 2026. Integration into J11 PR 599.
+Status: Approved. November 11, 2026. Native integration in J11 PR 599 and Browser integration in PR 600.
 
 The existing `shared-sysroot` job owns the experimental SpiderMonkey library,
 side and native fixture. It keeps its 30-minute deadline. The existing JSC
@@ -30,6 +30,37 @@ The driver prints all stderr unchanged, including expected trap diagnostics.
 It reads only the exact engine and accounting records for qualification. No
 fixture or clock changes, extra producer invocation, Browser-host admission or
 timing-based tier inference is involved.
+
+PR 600 adds a Browser consumer after the existing SpiderMonkey producer and native
+consumer. It passes that same `program-spidermonkey/bun.wasm` to the existing
+discovered `browser-guest --profile shared-group` owner. Chromium installation
+and Web dependencies come from the earlier QuickJS Browser step. No extra core,
+library, side or site producer is added. The selected wrapper registers separate
+interpreter and portable-baseline tests, each with its original 330-second test
+deadline and the driver's original 300-second process deadline. The owner keeps
+its 420-second outer deadline. QuickJS and JSC retain one Browser execution each.
+
+Each SpiderMonkey Browser test runs the actual production worker host, requires
+the exact 8 MiB carve and stack Global identity, observes real tier counters,
+checks ordinary recursion and depth-16 callback reentry recovery, then runs the
+unchanged aggregate, parser-reserve ownership and failed-stop controls. Diagnostic
+entry and control overrides are refused by the CI wrapper. Its scheduling tests
+use synthetic metadata and subprocess recorders, never as runtime proof.
+
+Kimi's existing six Browser/tier aggregates and two native aggregates remain bound
+to their original source and retained artifacts. Integration adds focused source,
+discovery and type checks and selected parser-reserve conflict controls. It does
+not claim a new six-way qualification, current-head cold hosted production,
+framework, Safari device or phone acceptance. The parent owns independent Browser
+review and normal ready CI. PR 600 remains draft until that review passes.
+
+The parser-reserve source merge exposed a first-search measurement difference on
+portable baseline. Every parent measured assignment-compile capacity 334 on its
+first search and 336 on an immediate second search before creating any Worker.
+It stayed at 336 after the Worker. Capacity and ownership modes now run the whole
+measurement loop once at zero depth before recording requested-depth searches.
+Strict before/after and parent/child comparisons stay intact. The integrated
+Chromium interpreter and PBL ownership controls both pass on the retained pair.
 
 The Mozilla fetch initializes its exact-pin sparse tree as a Git promisor
 remote, so lazy source blobs work on fresh hosted runners. The recipe owns
