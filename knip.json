@@ -68,7 +68,6 @@
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
-        "scripts/run-with-timeout.mts",
         "scripts/shared-sysroot-proof.ts",
         "scripts/shared-nested-native.ts",
         "scripts/runtime-size.ts",

@@ -71,7 +71,7 @@ test("storage Retry joins the engine download still running after index failure"
   } finally { download.reject(new Error("test cleanup")); await page.cleanup(); }
 });
 
-test("Retry reloads only a failed filesystem before any editor document exists", async () => {
+async function failedStartupFixture() {
   const page = await models(undefined, sources);
   const error = new Error("QuotaExceededError: filesystem startup failed");
   page.fixture.fs.mkdirp = async () => { throw error; };
@@ -82,6 +82,13 @@ test("Retry reloads only a failed filesystem before any editor document exists",
     await turn();
     method<() => void>(sandbox, "terminalOpened")();
     await turn();
+    return { page, sandbox };
+  } catch (error) { await page.cleanup(); throw error; }
+}
+
+test("Retry reloads only a failed filesystem before any editor document exists", async () => {
+  const { page, sandbox } = await failedStartupFixture();
+  try {
     expect(sandbox.failure).toBe("storage");
     expect(sandbox.editor?.path).toBe("");
     expect(sandbox.status.text).toContain("Retry reloads this page");
@@ -94,16 +101,8 @@ test("Retry reloads only a failed filesystem before any editor document exists",
 });
 
 test("terminal startup Retry keeps any editor text in the current page", async () => {
-  const page = await models(undefined, sources);
-  const error = new Error("QuotaExceededError: filesystem startup failed");
-  page.fixture.fs.mkdirp = async () => { throw error; };
-  Object.assign(page.fixture.fs, { state: { status: "failed", error } });
-  const sandbox = new page.Sandbox("?mode=fast");
+  const { page, sandbox } = await failedStartupFixture();
   try {
-    sandbox.start();
-    await turn();
-    method<() => void>(sandbox, "terminalOpened")();
-    await turn();
     const editor = sandbox.editor!;
     editor.setText("keep this text even before the first document opens");
     sandbox.restart();
