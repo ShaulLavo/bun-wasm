@@ -2,7 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Runtime } from "waffle";
 import { command, ready, terminal, stopServer, start, openPreview, render, checkClick } from "../goals-matrix/playground";
-import { createPlaywrightTransport, type Transport } from "../goals-matrix/transport";
+import { createPlaywrightTransport, scoped, type ScopedTransport, type Transport } from "../goals-matrix/transport";
+import { Scope } from "../goals-matrix/scope";
 import { playgroundURL } from "../goals-matrix/run";
 import { frameworks } from "../goals-matrix/catalog";
 import { canonical, sha256 } from "./input";
@@ -10,6 +11,7 @@ import { verifyResolution } from "./lifecycle-lock";
 import { processTree } from "./lifecycle-process";
 import { bounded } from "../goals-matrix/bounded";
 import { mutableRoots, nextOutputs, type Bracket, type LifecycleCell, type LifecycleOutcome } from "./lifecycle-model";
+import { captureExecution, type RecordExecution } from "./lifecycle-evidence";
 
 declare const playground: { fs: Runtime["filesystem"] };
 function expression<A, R>(fn: (value: A) => R, value: A): string { return `(${fn.toString()})(${JSON.stringify(value)})`; }
@@ -38,16 +40,20 @@ async function outputs(paths: string[]) {
   }));
 }
 async function cleanupBrowser(transport: Transport, output: string): Promise<void> {
+  const scope = Scope.open(10000);
+  const page = scoped(transport, scope);
   try {
-    const transcript = await bounded(() => terminal(transport), 3000).catch(String);
+    await transport.beginCleanup?.(scope);
+    const transcript = await bounded(() => terminal(page), 3000).catch(String);
     await writeFile(join(output, "terminal.txt"), transcript);
-    await bounded(() => stopServer(transport, 5000), 6000).catch(() => {});
+    await bounded(() => stopServer(page, 5000), 6000).catch(() => {});
   } finally {
+    scope.close();
     await bounded(() => transport.close(), 10_000);
     await writeFile(join(output, "cleanup.json"), JSON.stringify({ resourcesStopped: true, method: "Playwright browser.close resolved; context and its workers closed" }));
   }
 }
-function observedTransport(transport: Transport, observed: { completion: Bracket | null; lastPendingMs: number }, submission: Bracket): Transport {
+function observedTransport(transport: ScopedTransport, observed: { completion: Bracket | null; lastPendingMs: number }, submission: Bracket): ScopedTransport {
   return { ...transport, async evaluate<T>(source: string, options?: { observation: true }): Promise<T> {
     const beforeMs = performance.now();
     const value = await transport.evaluate<T>(source, options);
@@ -64,47 +70,63 @@ function observedTransport(transport: Transport, observed: { completion: Bracket
   } };
 }
 export async function browserLifecycle(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal) {
+  return captureExecution(output, ["command", "env", "browser", "runtime", "inputs", "resolution", "reset", "completion"], record => measureBrowser(cell, base, prepared, output, timeoutMs, signal, record));
+}
+async function measureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, record: RecordExecution) {
   if (cell.arm.kind !== "goals-browser") throw new Error("Expected goals browser arm");
+  record("command", cell.workload === "next" ? ["NEXT_TELEMETRY_DISABLED=1", "bun", "run", "build"] : ["bun", "run", "dev"]);
+  record("env", { overrides: cell.workload === "next" ? { NEXT_TELEMETRY_DISABLED: "1" } : {}, inherited: "Guest runtime environment; see readiness observation" });
   const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000);
+  const preparation = Scope.open(timeoutMs, signal);
+  let measurement: Scope | undefined;
+  let page = scoped(transport, preparation);
   const interrupt = () => { void transport.close().catch(() => {}); };
   signal.addEventListener("abort", interrupt, { once: true });
   let timing: { submission: Bracket; completion: Bracket | null } | null = null;
   try {
+    record("browser", { ...transport.capabilities, headless: true, launchProcesses: await processTree(process.pid), display: null, renderer: null });
     const framework = frameworks.find(item => item.id === (cell.workload === "next" ? "next" : "vite-react"));
     if (!framework) throw new Error("Missing starter definition");
-    await transport.navigate(playgroundURL(base, framework, cell.arm.engine, cell.arm.profile));
-    const runtime = await ready(transport, cell.arm.engine, timeoutMs, cell.arm.profile);
+    await page.navigate(playgroundURL(base, framework, cell.arm.engine, cell.arm.profile));
+    const runtime = await ready(page, cell.arm.engine, timeoutMs, cell.arm.profile);
+    record("runtime", runtime);
     const browserProcesses = await processTree(process.pid);
     const lock = await readFile(join(prepared, cell.workload, "bun.lock"), "utf8");
-    await transport.evaluate(expression(async text => playground.fs.writeFile("/home/user/bun.lock", text), lock));
-    const install = await command(transport, "bun install", timeoutMs);
+    await page.evaluate(expression(async text => playground.fs.writeFile("/home/user/bun.lock", text), lock));
+    const install = await command(page, "bun install", timeoutMs);
     await writeFile(join(output, "install.json"), JSON.stringify(install));
-    const guestLock = await transport.evaluate<string>("(async () => new TextDecoder().decode(await playground.fs.readFile('/home/user/bun.lock')))()");
+    const guestLock = await page.evaluate<string>("(async () => new TextDecoder().decode(await playground.fs.readFile('/home/user/bun.lock')))()");
     await writeFile(join(output, "guest.bun.lock"), guestLock);
     await writeFile(join(output, "native.bun.lock"), lock);
     const resolution = verifyResolution(lock, guestLock);
-    await command(transport, "bun install --frozen-lockfile", timeoutMs);
-    const beforeInventory = await transport.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
+    record("resolution", resolution);
+    await command(page, "bun install --frozen-lockfile", timeoutMs);
+    const beforeInventory = await page.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
     await writeFile(join(output, "guest-inputs.json"), JSON.stringify(beforeInventory));
     const inputs = sha256(canonical(beforeInventory));
-    const resetEvidence = await transport.evaluate(expression(reset, mutableRoots[cell.workload]));
+    record("inputs", { before: inputs, after: null, valid: null, reason: "Post-run observation not reached" });
+    const resetEvidence = await page.evaluate(expression(reset, mutableRoots[cell.workload]));
+    record("reset", resetEvidence);
+    preparation.close();
+    measurement = Scope.open(timeoutMs, signal);
+    page = scoped(transport, measurement);
     const submission = { beforeMs: performance.now(), afterMs: 0 };
     timing = { submission, completion: null };
     const observed: { completion: Bracket | null; lastPendingMs: number } = { completion: null, lastPendingMs: submission.beforeMs };
-    const tracked = observedTransport(transport, observed, submission);
+    const tracked = observedTransport(page, observed, submission);
     const job = cell.workload === "next" ? command(tracked, "NEXT_TELEMETRY_DISABLED=1 bun run build", timeoutMs) : start(tracked, "bun run dev", timeoutMs);
     submission.afterMs = performance.now();
     const result = await bounded(() => job, timeoutMs, signal);
     let outcome: LifecycleOutcome;
-    if (cell.workload === "next") outcome = { kind: "next", exitCode: 0, outputs: await transport.evaluate(expression(outputs, nextOutputs)) };
+    if (cell.workload === "next") outcome = { kind: "next", exitCode: 0, outputs: await page.evaluate(expression(outputs, nextOutputs)) };
     else {
       const listening = { beforeMs: submission.beforeMs, afterMs: performance.now() };
       const renderBefore = performance.now();
-      await openPreview(transport, timeoutMs);
-      await render(transport, framework, framework.text, timeoutMs);
+      await openPreview(page, timeoutMs);
+      await render(page, framework, framework.text, timeoutMs);
       const rendered = { beforeMs: renderBefore, afterMs: performance.now() };
       const counterBefore = performance.now();
-      const click = await checkClick(transport, framework, timeoutMs);
+      const click = await checkClick(page, framework, timeoutMs);
       if (!click || typeof click !== "object" || !("before" in click) || !("after" in click) || typeof click.before !== "string" || typeof click.after !== "string") throw new Error("Missing counter evidence");
       outcome = { kind: "vite", listening, rendered, counter: { beforeMs: counterBefore, afterMs: performance.now() }, before: click.before, after: click.after };
       observed.completion = outcome.counter;
@@ -112,13 +134,17 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
     const completion = observed.completion;
     if (!completion) throw new Error("Missing successful-exit observation");
     timing.completion = completion;
-    if (cell.workload === "vite") await stopServer(transport, 5000);
-    await transport.useHost();
-    const afterInventory = await transport.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
+    record("completion", completion);
+    if (cell.workload === "vite") await stopServer(page, 5000);
+    await page.useHost();
+    const afterInventory = await page.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
     const afterInputs = sha256(canonical(afterInventory));
+    record("inputs", { before: inputs, after: afterInputs, valid: inputs === afterInputs });
     return { outcome, submission, completion, wallMs: completion.afterMs - submission.beforeMs, command: cell.workload === "next" ? ["NEXT_TELEMETRY_DISABLED=1", "bun", "run", "build"] : ["bun", "run", "dev"],
       runtime, browser: { ...transport.capabilities, headless: true, launchProcesses: browserProcesses, display: null, renderer: null, unavailableReason: "Headless experimental transport" }, inputs: { before: inputs, after: afterInputs, valid: inputs === afterInputs }, resolution, reset: resetEvidence, result };
   } finally {
+    preparation.close();
+    measurement?.close();
     try { await writeFile(join(output, "timing.json"), JSON.stringify({ ...timing, failureObservedMs: timing?.completion ? null : performance.now(), unit: "ms", clock: "controller performance.now", method: "command/DOM polling observation", wallMs: timing?.completion ? timing.completion.afterMs - timing.submission.beforeMs : null })); }
     finally { await cleanupBrowser(transport, output); signal.removeEventListener("abort", interrupt); }
   }

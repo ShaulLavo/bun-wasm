@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -177,14 +178,14 @@ async function withDriver(transport: Transport, action: (endpoint: string, timeo
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
     if (path.endsWith("/window/new")) return Response.json({ value: { handle: "preview" } });
-    if (path.endsWith("/url")) await transport.navigate(String(body.url));
+    if (path.endsWith("/url")) await withScoped(transport, page => page.navigate(String(body.url)));
     if (path.endsWith("/execute/async")) return evaluation(body);
     return Response.json({ value: null });
   }
   async function evaluation(body: Record<string, unknown>): Promise<Response> {
     const args = body.args;
     if (!Array.isArray(args) || typeof args[0] !== "string") throw new Error("Invalid fixture evaluation");
-    try { return Response.json({ value: { ok: true, json: JSON.stringify((await transport.evaluate(args[0])) ?? null) } }); }
+    try { return Response.json({ value: { ok: true, json: JSON.stringify((await withScoped(transport, page => page.evaluate(args[0]))) ?? null) } }); }
     catch (error) { return Response.json({ value: { ok: false, message: String(error) } }); }
   }
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: route });

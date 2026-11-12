@@ -1,4 +1,4 @@
-// A module that exports its function table and no global: the shape of an emnapi binding, which
+// A module that exports its function table and no global: the shape of the Oxc parser binding, which
 // calls its callbacks through `__indirect_function_table`. Standard WebAssembly behaviour that
 // native Bun also shows, so it runs unchanged on both hosts.
 import { strict as assert } from 'node:assert';

@@ -51,7 +51,10 @@ export async function processTree(root: number) {
   const queue = [root];
   for (let index = 0; index < queue.length; index++) {
     const children = await processChildren(queue[index]!);
-    for (const pid of children) { if (!found.has(pid)) { found.add(pid); queue.push(pid); } }
+    for (const pid of children) {
+      if (found.has(pid)) continue;
+      found.add(pid); queue.push(pid);
+    }
   }
   const processes = await Promise.all(queue.map(processIdentity));
   return { beforeMs, afterMs: performance.now(), processes, coverage: "Point-in-time /proc discovery; short-lived children and disappearing entries can be missed" };
