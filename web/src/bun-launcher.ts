@@ -1,4 +1,4 @@
-import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess, observeMemoryOutcome } from "./memory-telemetry.js";
 import { programMetadata } from "../../src/assets.js";
 import { isSharedGroupCore } from "../../src/engine-kind.ts";
 import { bunEnvironment } from "../../src/executable-paths.js";
@@ -66,7 +66,11 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let disposeLookup: (() => void) | undefined;
   let released = false;
   let sharedRoute: SharedObjectRoute | undefined;
-  const unregister = context.registerRevocation(() => { revoked = true; sharedRoute?.close(); });
+  const unregister = context.registerRevocation(() => {
+    revoked = true;
+    observeMemoryOutcome(memoryTelemetryId, () => readOutcome(context.outcome));
+    sharedRoute?.close();
+  });
   const active = () => !released && !revoked && !options.runtime.disposed && !readOutcome(context.outcome);
   const cleanup = () => {
     if (released) return;

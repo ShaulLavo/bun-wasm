@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots,
-  registerMemoryProcess, memoryRuntimeId, memoryCommandId, retainedMemoryProcesses, memoryObservationLimits, type MemorySnapshot } from "../web/src/memory-telemetry.ts";
+  registerMemoryProcess, observeMemoryOutcome, memoryRuntimeId, memoryCommandId, retainedMemoryProcesses, memoryObservationLimits, type MemorySnapshot } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import type { ProcessService } from "waffle";
@@ -478,7 +478,7 @@ test("late posted frames cannot reopen terminal rows, poison another identity or
 });
 test("outcome null, failed reads, signals and exited 134 remain distinct", () => {
   const reads = [() => null, () => { throw Error("collected incarnation"); },
-    () => ({ kind: "signaled", code: 9, status: 9 } as const), () => ({ kind: "exited", code: 134, status: 134 << 8 } as const)];
+    () => ({ kind: "signaled", code: 9, status: 137 } as const), () => ({ kind: "exited", code: 134, status: 134 } as const)];
   const outcomes = reads.map(read => {
     const f = observationFixture();
     f.publisher.finish();
@@ -486,12 +486,30 @@ test("outcome null, failed reads, signals and exited 134 remain distinct", () =>
     return processObservation(f.id).outcome;
   });
   expect(outcomes).toEqual([{ kind: "observed", value: null }, { kind: "unavailable", reason: "read-failed" },
-    { kind: "observed", value: { kind: "signaled", code: 9, status: 9 } }, { kind: "observed", value: { kind: "exited", code: 134, status: 134 << 8 } }]);
+    { kind: "observed", value: { kind: "signaled", code: 9, status: 137 } }, { kind: "observed", value: { kind: "exited", code: 134, status: 134 } }]);
+});
+test("revocation retains a protected typed outcome before collection without rereading it at cleanup", () => {
+  const f = observationFixture();
+  const exit = { kind: "exited", code: 70, status: 70 } as const;
+  observeMemoryOutcome(f.id, () => exit);
+  f.publisher.finish();
+  let lateReads = 0;
+  endMemorySnapshot(f.id, () => { lateReads++; throw Error("incarnation collected"); });
+  observeMemoryOutcome(f.id, () => { lateReads++; throw Error("late revocation"); });
+  expect(lateReads).toBe(0);
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "observed", value: exit }, outcomeBoundary: "revocation" });
+});
+test("an early null outcome is distinct from a later failed read and never becomes a selected exit", () => {
+  const f = observationFixture();
+  observeMemoryOutcome(f.id, () => null);
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "observed", value: null }, outcomeBoundary: "revocation" });
+  endMemorySnapshot(f.id, () => { throw Error("incarnation collected"); });
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "unavailable", reason: "read-failed" }, outcomeBoundary: "adapter-cleanup" });
 });
 test("concurrent runtime/PID joins preserve directory, trigger sequence and known subtotals", async () => {
   const first = observationFixture(12), second = observationFixture(12);
   first.publisher.finish(); second.publisher.finish();
-  await Promise.all([first, second].map(async f => { endMemorySnapshot(f.id, () => ({ kind: "signaled", code: 9, status: 9 })); }));
+  await Promise.all([first, second].map(async f => { endMemorySnapshot(f.id, () => ({ kind: "signaled", code: 9, status: 137 })); }));
   const result = retainedMemoryProcesses();
   const rows = result.censuses.filter(row => row.telemetryId === first.id || row.telemetryId === second.id);
   expect(rows).toHaveLength(2);
@@ -542,7 +560,7 @@ test("recent census retention and hard process bounds expose coherent eviction a
   const before = retainedMemoryProcesses().loss;
   const fixtures = Array.from({ length: memoryObservationLimits.active + 1 }, (_, i) => observationFixture(1000 + i));
   expect(retainedMemoryProcesses().loss.active).toBeGreaterThan(before.active);
-  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 << 8 })); }
+  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 })); }
   const result = retainedMemoryProcesses();
   expect(result.processes.filter(row => row.endedAt !== null).length).toBeLessThanOrEqual(memoryObservationLimits.terminal);
   expect(result.censuses).toHaveLength(memoryObservationLimits.censuses);
@@ -558,7 +576,7 @@ test("worker and serialized output bounds retain explicit loss, unknown bytes an
   const workers = Array.from({ length: memoryObservationLimits.workers + 1 }, (_, i) => ({ pid: i + 1, parentPid: 0, rootPid: 1,
     job: 1, directory: "d".repeat(128), bytes: i % 2 ? null : 65536 }));
   const fixtures = Array.from({ length: memoryObservationLimits.runtimes }, (_, i) => observationFixture(2000 + i, { disposed: false }, { workerMemory: () => workers }));
-  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 << 8 })); }
+  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 })); }
   const result = retainedMemoryProcesses();
   expect(new TextEncoder().encode(JSON.stringify(result)).byteLength).toBeLessThanOrEqual(memoryObservationLimits.outputBytes);
   expect(result.loss.outputCensuses + result.loss.outputWorkerRows).toBeGreaterThan(0);

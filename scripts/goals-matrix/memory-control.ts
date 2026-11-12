@@ -104,7 +104,7 @@ function assertChildObservation(observation: MemoryProcessEnvelope, parent: Memo
   assert.ok(row.sample && row.sample.time >= row.launchedAt && row.sample.wasmCapacityBytes !== null && row.sample.wasmCapacityBytes > 0);
   assert.ok(row.sample.memoryLimitBytes !== null && row.sample.memoryLimitBytes > 0);
   assert.ok(row.endedAt !== null && row.endSequence !== null && row.endSequence > row.launchSequence);
-  assert.deepEqual(row.outcome, { kind: "observed", value: { kind: "exited", code: child.status, status: child.status << 8 } });
+  assert.deepEqual(row.outcome, { kind: "observed", value: { kind: "exited", code: child.status, status: child.status } });
   if (child.mode === "ok") return;
   const failure = row.sample.frozenAllocatorFailure;
   assert.ok(failure && failure.category.startsWith("libc.") && failure.bytes !== null && failure.bytes >= memoryControlBytes, "real retained oversized libc request");

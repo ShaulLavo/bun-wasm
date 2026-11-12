@@ -40,7 +40,12 @@ supervisor inventory. No command or root is inferred from observation order.
 Outcomes preserve `exited`, `signaled`, and `start-failed`. An observed null
 outcome means the read succeeded without a selected outcome. An unavailable
 outcome means the read failed or no bound outcome reader was supplied. These
-states do not become exit codes. Channel errors become bounded `invalid` or
+states do not become exit codes. The existing launcher revocation callback
+captures a selected typed outcome before collection; cleanup preserves that
+immutable result instead of rereading a collected record. `outcomeBoundary`
+identifies revocation or adapter-cleanup. A successful early null read does not
+stand in for a selected exit. Waffle's `status` is preserved as returned, not
+converted to an encoded OS wait status. Channel errors become bounded `invalid` or
 `read-failed` states; cleanup still detaches the channel. Late frames cannot
 reopen completed rows or replace another command's identity.
 

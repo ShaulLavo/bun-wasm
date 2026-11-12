@@ -78,6 +78,7 @@ function processRow(value: unknown): value is MemoryProcessRow {
   if (binding !== null && (!record(binding) || !opaqueId(binding.runtimeId) || ![binding.pid, binding.parentPid, binding.job].every(counter))) return false;
   if (![value.launchedAt, value.launchSequence].every(counter) || ![value.endedAt, value.endSequence].every(nullableCounter)) return false;
   if (!outcome(value.outcome) || !["pending", "sampled", "missing", "invalid", "read-failed"].includes(String(value.status))) return false;
+  if (value.outcomeBoundary !== null && value.outcomeBoundary !== "revocation" && value.outcomeBoundary !== "adapter-cleanup") return false;
   return value.engineHeap === "unsupported" && (value.sample === null || sample(value.sample));
 }
 function worker(value: unknown): boolean {
@@ -106,7 +107,7 @@ function projectObservation(value: MemoryProcessEnvelope): MemoryProcessEnvelope
   const processes = value.processes.map(row => ({ id: row.id, engine: row.engine, binding: row.binding ? { runtimeId: row.binding.runtimeId,
     pid: row.binding.pid, parentPid: row.binding.parentPid, job: row.binding.job } : null,
     launchedAt: row.launchedAt, launchSequence: row.launchSequence, endedAt: row.endedAt, endSequence: row.endSequence,
-    outcome: projectOutcome(row.outcome), status: row.status, sample: projectSample(row.sample), engineHeap: row.engineHeap }));
+    outcome: projectOutcome(row.outcome), outcomeBoundary: row.outcomeBoundary, status: row.status, sample: projectSample(row.sample), engineHeap: row.engineHeap }));
   return { schema: 1, time: value.time, sequence: value.sequence, sharedBuffers: value.sharedBuffers, incomplete: value.incomplete, processes,
     runtimes: value.runtimes.map(projectCensus), censuses: value.censuses.map(row => ({ ...projectCensus(row), boundary: row.boundary, telemetryId: row.telemetryId })),
     loss: { active: value.loss.active, terminal: value.loss.terminal, runtimes: value.loss.runtimes,

@@ -177,6 +177,9 @@ including null counters and the unchanged guest memory limit.
 The launcher registers runtime/PID identity before asynchronous setup. Original
 host code retains typed outcomes, bounded terminal samples, and recent
 adapter-cleanup worker censuses through weak runtime/service references. The
+existing revocation callback captures selected outcomes before their process
+records can be collected. Cleanup preserves that typed value and records its
+observation boundary; unavailable reads are never synthesized as exit codes. The
 read-only getter makes no guest calls. Both libc record reads must succeed
 before an absent failure can be reported as measured. Missing records, channel
 errors, unbound roots, stale samples, disposal and retention loss remain explicit.

@@ -272,6 +272,7 @@ interface ProcessObservation {
   endedAt: number | null;
   endSequence: number | null;
   outcome: MemoryOutcome;
+  outcomeBoundary: "revocation" | "adapter-cleanup" | null;
   status: SampleStatus;
   sample: MemorySnapshot | null;
 }
@@ -315,7 +316,7 @@ function beginProcessObservation(id: string, engine: Engine): void {
   processes.set(id, { id, engine, binding: previous?.endedAt === null ? previous.binding : null,
     launchedAt: previous?.endedAt === null ? previous.launchedAt : Date.now(),
     launchSequence: previous?.endedAt === null ? previous.launchSequence : ++observationSequence,
-    endedAt: null, endSequence: null, outcome: { kind: "pending" }, status: "pending", sample: null });
+    endedAt: null, endSequence: null, outcome: { kind: "pending" }, outcomeBoundary: null, status: "pending", sample: null });
 }
 
 /** Launcher entry only. No runtime activation; references held by diagnostics are weak. */
@@ -342,6 +343,18 @@ function trimRuntimeServices(): void {
 function observationError(id: string, status: "invalid" | "read-failed"): void {
   const row = processes.get(id);
   if (row && row.endedAt === null) row.status = status;
+}
+export function observeMemoryOutcome(id: string, readOutcome: () => ProcessExit | null): void {
+  try {
+    const row = processes.get(id);
+    if (row && row.endedAt === null) readProcessOutcome(row, readOutcome, "revocation");
+  } catch { /* A diagnostic read cannot interfere with revocation. */ }
+}
+function readProcessOutcome(row: ProcessObservation, readOutcome: () => ProcessExit | null, boundary: "revocation" | "adapter-cleanup"): void {
+  if (row.outcome.kind === "observed" && row.outcome.value !== null) return;
+  try { row.outcome = { kind: "observed", value: readOutcome() }; }
+  catch { row.outcome = { kind: "unavailable", reason: "read-failed" }; }
+  row.outcomeBoundary = boundary;
 }
 
 function acceptProcessSnapshot(value: unknown, expectedId?: string): void {
@@ -373,8 +386,8 @@ function finishProcessObservation(id: string, readOutcome?: () => ProcessExit | 
     if (value !== null) acceptProcessSnapshot(value, id);
   } catch { observationError(id, "read-failed"); }
   if (row.status === "pending") row.status = "missing";
-  try { row.outcome = readOutcome ? { kind: "observed", value: readOutcome() } : { kind: "unavailable", reason: "unbound" }; }
-  catch { row.outcome = { kind: "unavailable", reason: "read-failed" }; }
+  if (readOutcome) readProcessOutcome(row, readOutcome, "adapter-cleanup");
+  else if (row.outcome.kind !== "observed" || row.outcome.value === null) row.outcome = { kind: "unavailable", reason: "unbound" };
   row.endedAt = Date.now();
   row.endSequence = ++observationSequence;
   const snapshot = retained.get(id);
@@ -484,7 +497,8 @@ export function retainedMemoryProcesses(): MemoryProcessEnvelope {
       result.processes.shift();
       result.loss.outputProcesses++;
     }
-    result.incomplete = services.size === 0 || Object.values(result.loss).some(Boolean) || result.processes.some(row => !row.binding || row.status !== "sampled")
+    result.incomplete = services.size === 0 || Object.values(result.loss).some(Boolean)
+      || result.processes.some(row => !row.binding || row.status !== "sampled" || row.endedAt !== null && (row.outcome.kind === "unavailable" || !row.sample?.terminal))
       || result.runtimes.concat(result.censuses).some(census => census.state !== "observed" || census.truncated > 0 || census.unknownBytes > 0);
   } catch { /* A partially available observation still attributes nothing outside its rows. */ }
   return result;

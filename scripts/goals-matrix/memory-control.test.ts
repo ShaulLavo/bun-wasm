@@ -15,14 +15,14 @@ const boundary = { nonce, sequence: 5 };
 function syntheticProcess(pid: number, parentPid: number): MemoryProcessRow {
   return { id: `synthetic-${pid}`, engine: "spidermonkey", binding: { runtimeId: "synthetic-runtime", pid, parentPid, job: 1 },
     launchedAt: 10, launchSequence: 10 + pid, endedAt: 20, endSequence: 30 + pid, outcome: { kind: "observed", value: { kind: "exited", code: 0, status: 0 } },
-    status: "sampled", engineHeap: "unsupported", sample: { time: 19, terminal: true, wasmCapacityBytes: 16777216, memoryLimitBytes: 1073741824,
+    status: "sampled", outcomeBoundary: "revocation", engineHeap: "unsupported", sample: { time: 19, terminal: true, wasmCapacityBytes: 16777216, memoryLimitBytes: 1073741824,
       allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, allocatorFailure: null, frozenAllocatorFailure: null, libcTelemetry: { allocator: "read", failure: "read" } } };
 }
 function syntheticControl(): { output: string; observation: MemoryProcessEnvelope } {
   const parent = syntheticProcess(1, 0), ok = syntheticProcess(2, 1), fail = syntheticProcess(3, 1);
   parent.endedAt = 50;
   parent.endSequence = 50;
-  fail.outcome = { kind: "observed", value: { kind: "exited", code: 70, status: 70 << 8 } };
+  fail.outcome = { kind: "observed", value: { kind: "exited", code: 70, status: 70 } };
   if (!fail.sample) throw Error("synthetic fixture requires a sample");
   fail.sample.frozenAllocatorFailure = { bytes: memoryControlBytes, category: "libc.calloc", previousUsableBytes: null,
     allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 16777216, reason: "unknown" };
