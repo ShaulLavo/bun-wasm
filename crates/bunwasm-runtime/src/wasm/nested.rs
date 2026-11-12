@@ -193,8 +193,16 @@ pub(super) fn attach_module(token: u32) -> NativeResult {
     MODULES.with(|modules| modules.borrow_mut().insert(id, description));
     Ok(record)
 }
+/// The host's answer, one of the three `wire` counts. Anything thrown here means no answer
+/// arrived, and the caller asks again.
 pub(super) fn withdraw(token: u32) -> NativeResult {
-    count(Request::Withdraw { token })
+    let answer = request(Request::Withdraw { token })?;
+    let Reply::Count(answer @ (wire::WITHDRAWN | wire::WITHDRAW_ABSENT | wire::WITHDRAW_REFUSED)) =
+        answer
+    else {
+        return Err(error("invalid nested withdrawal reply"));
+    };
+    Ok(Val::Num(f64::from(answer)))
 }
 pub(super) fn create_memory(initial: u32, maximum: u32) -> NativeResult {
     Ok(Val::Num(f64::from(handle(Request::Reserve {
