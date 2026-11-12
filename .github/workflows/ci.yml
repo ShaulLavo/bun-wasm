@@ -93,6 +93,10 @@ jobs:
         with:
           path: .ci-bun-cache
           key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
+      - name: Prepare preinstalled native control compilers
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun scripts/ci-native-control-compilers.ts
       - name: Blocking quality gates
         env:
           JSCPD_BASE_REF: ${{ steps.refs.outputs.base }}

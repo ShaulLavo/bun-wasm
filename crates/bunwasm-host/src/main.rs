@@ -6,6 +6,8 @@ mod tool_args;
 
 mod compile_observation;
 mod fs_watch;
+#[path = "../../bunwasm-cli/group_address_space.rs"]
+mod group_address_space;
 mod guest;
 mod linked;
 #[path = "../../bunwasm-cli/max_memory.rs"]

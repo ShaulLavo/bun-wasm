@@ -229,7 +229,9 @@ and browser budget remain unchanged.
 
 ## JSC
 
-JSC's plain JavaScript calls stay in the C-loop and already throw. Getters, Proxy
+JSC's plain JavaScript calls stay in the C-loop and already throw. So do `object.name`
+and `super.name` getters written in JavaScript, since November 11, 2026
+([Getters called in the loop](#getters-called-in-the-loop)). Computed-key getters, Proxy
 traps and other C++ reentry start a new `CLoop::execute` activation for each level.
 It costs about 2.1 KB of host stack and 5.8 KB of shadow stack. The WASI
 `StackBounds` port in `jsc/webkit-wasi.patch` limits native recursion to 320 KiB of
@@ -304,6 +306,90 @@ recurse in bytecode generation too, but generated code can really be that long, 
 fixed reserve would cost working depth and needs its own design. Blocks and
 conditional expressions throw. The extra accounting can reduce native-path nesting
 capacities on other hosts. No new Darwin or iOS measurement is claimed.
+
+### Getters called in the loop
+
+Until November 11, 2026 every getter was C++ reentry, and the "getter" numbers above and
+in the tables below measure that reentry. The real Ajv 8.17.1 code generator, which reads
+`node.names` and `super.names` once per nested `if`, stopped after 16 levels at 192 KiB
+and 17 at 208 KiB. Angular's schema registry nests about 64, and Safari's worker stack
+has room for about 45 activations at any budget.
+
+`object.name` and `super.name` now call a JavaScript getter from the running loop
+([record](bun-patches/jsc-getter-dispatch.md)). Such a getter costs what a plain call
+costs, and its depth is bounded by the C-loop frame stack's own check, which throws the
+same `RangeError`. Budgets, reserves and every other path are unchanged. The `getter`
+probe therefore no longer measures reentry on JSC. `computedgetter` reads the same getter
+through a key the compiler cannot see, which JSC still calls from C++, and takes over
+that role. `ajvnames` is the Ajv walk reduced to its getters, and `ajv` runs the real
+package.
+
+Measured on November 11, 2026 on the native launcher: the split JSC pair from main's CI
+(source tree of `19dba71e`), and the same core with a side built from this change. A
+number is the deepest nesting that completed; one level more threw `RangeError`.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `getter` | 34 | 39,930 | 36 | 39,930 | 142 | 39,930 |
+| `ajvnames`, 4,096 tried | 16 | completes | 18 | completes | 72 | completes |
+| `ajv`, the real package, 4,096 tried | 16 | completes | 17 | completes | not run | not run |
+| `computedgetter` | 35 | 35 | 38 | 38 | 147 | 147 |
+| `proxy` | 29 | 29 | 32 | 32 | 124 | 125 |
+| `tostring` | 31 | 31 | 34 | 34 | 133 | 133 |
+
+The other 44 paths of the sweep, the 20 parser chains among them, gave identical results at
+all three budgets. The Proxy read gains one level at 800 KiB because the edited
+`get_by_id` slow path's frames came out 48 guarded bytes smaller per level (6,512, was
+6,560). The same cycle has fewer wasm locals (419, was 429), and with the guard out of the
+way wasmtime ran out 15% deeper on it, so it spends less host stack per level than before.
+
+With the host stack cut to 512 KiB, at 192 and at 240 KiB, both pairs gave the same result
+on every one of 15 reentry paths but `getter` and `ajvnames`, and every attempt completed or
+threw its catchable error, with one exception that both pairs share: `JSON.parse` with a
+reviver traps between about 3,615 and 4,500 nested arrays, where the recursive
+`JSONRanges::Entry` container is torn down with no stack check. That is older than this
+change and is not fixed here.
+
+These are launcher measurements of the guest's own guards. They are not Safari or Firefox
+runs and do not show that Angular starts there.
+
+### The interpreter frame floor
+
+The guard counts shadow bytes, and `CLoop::execute` supplies 4,896 of the roughly 5.8 KB
+one reentry level spends: an 80-byte block for spilled pointers and a 4,816-byte frame
+that is mostly one 8-byte result slot per slow-path call site, with one live at a time.
+Those bytes are what stops computed getters at 35 levels and Proxy traps at 29 at
+192 KiB, below what Safari's worker stack holds. A compiler upgrade or flag change that
+merged the slots would let every reentry path go several times deeper with no source
+change of ours.
+
+`scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>` reads that function from a linked
+side and fails unless it holds at least 4,896 bytes at every call it makes, which is
+where every slow path and every reentry starts. It decodes every instruction and follows
+every path through the function's blocks, loops and branches, tracking how far the
+exported stack pointer is below its value at entry. It knows two writes: an allocation
+of a constant size whose result is kept in a local, and a release through a local that
+still holds an allocation's value. Where paths meet it keeps the smaller depth, and a
+loop's body is walked again until its entry state holds for every pass. Anything else is
+a failure, not a smaller reading: another kind of write to the stack pointer, a release
+through a local that was overwritten on some path, a tail call, an unknown instruction,
+a missing stack pointer export, or more than one such function.
+
+The two builds differ, which is why the check follows paths and does not match a fixed
+prologue. The split side allocates once at entry and releases once at its end: 683 calls,
+all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
+own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
+function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
+each of them on the host stack. The split side has 293 and the bound is that plus 12%.
+The shared-group side has 52.
+
+`scripts/build-engine-jsc.sh` runs the check on every side it produces or reuses, split
+and shared-group, before the side gets its receipt. `scripts/jsc-cloop-frame.test.ts`
+(`checks/quality-jsc-cloop-frame.json`) holds the accepted shapes, the paths that reach a
+call with too little held, the rejected writes and a threshold that fails. If a pin or
+toolchain change trips the floor, measure every reentry path again before changing the
+number. An escaping function-scope reservation in `CLoop::execute` is the way to restore
+the bytes.
 
 ## JSC parser reserve
 
@@ -602,7 +688,21 @@ BUDGET_KIB=192 bun web/tests/browser-solid-stack.ts             # reproduces the
 ```
 
 `--wasm <path>` measures another build, such as the parent commit's. `--stack-kib`
-sets the host stack independently of the linked shadow stack.
+sets the host stack independently of the linked shadow stack. Each path's row lists every
+attempt it made, with the depth, outcome, exit status, whether it timed out, and the end
+of its stderr. Any attempt that traps, times out or prints an invalid transcript fails the
+run, whatever the search ends on.
+
+The getter paths and the interpreter frame have their own commands. `ajv` needs an
+installed Ajv 8 and is not part of a default sweep:
+
+```sh
+python3 scripts/measure-stack.py --engine jsc --budget-kib 192 getter computedgetter ajvnames proxy tostring
+python3 scripts/measure-stack.py --engine jsc --budget-kib 192 \
+  --ajv-codegen <project>/node_modules/ajv/dist/compile/codegen ajv
+bun scripts/jsc-cloop-frame.ts check dist/jsc-engine.wasm
+scripts/test.sh --no-build --engine jsc getter-dispatch
+```
 
 The parser reserve has its own commands. `--parser-reserve` and `JSC_PARSER_RESERVE` pass a
 value unchanged, and `STACK_KIB` sets the budget of a browser sweep. Every probe run prints the

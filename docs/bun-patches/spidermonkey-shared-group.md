@@ -52,7 +52,9 @@ split patch, recipe files and admitted split archive are not changed.
   member, the region constructor, and exactly the five core symbols above as new requirements.
 - `scripts/build-engine-spidermonkey-shared.sh`, `scripts/spidermonkey-side-core-receipt.ts`: the
   group side link and its initializer conversion. A group side imports the shared memory and does
-  not export it.
+  not export it. It links with `--max-memory` at the group address space
+  (`crates/bunwasm-cli/group-address-space.txt`), and the conversion requires that exact declared
+  maximum on the decoded import.
 - `.github/workflows/ci.yml`: original CI environment adapter. The shared library producer runs
   from a fresh pip-free Python virtual environment. Mozilla's pinned `python/mach/mach/site.py`
   still uses `MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=system` and runs its real package checks
