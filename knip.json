@@ -14,6 +14,8 @@
         "scripts/goals-matrix/prepare.ts",
         "scripts/performance/lifecycle.ts",
         "scripts/performance/prepare-lifecycle.ts",
+        "scripts/performance/prepare-sharing.ts",
+        "scripts/performance/fixtures/sharing-startup.ts",
         "scripts/performance/lifecycle-selection.ts",
         "scripts/performance/lifecycle-profile.ts",
         "scripts/performance/fixtures/lifecycle-process.ts",

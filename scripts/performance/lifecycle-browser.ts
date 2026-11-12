@@ -1,3 +1,5 @@
+import { beginExecutionInterval, captureExecution, type RecordExecution } from "./lifecycle-evidence";
+import { startupControls, startObservation, finishObservation } from "./sharing-controls";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Runtime } from "waffle";
@@ -11,7 +13,6 @@ import { verifyResolution } from "./lifecycle-lock";
 import { processTree } from "./lifecycle-process";
 import { bounded } from "../goals-matrix/bounded";
 import { mutableRoots, nextOutputs, type Bracket, type LifecycleCell, type LifecycleOutcome } from "./lifecycle-model";
-import { beginExecutionInterval, captureExecution, type RecordExecution } from "./lifecycle-evidence";
 
 declare const playground: { fs: Runtime["filesystem"] };
 function expression<A, R>(fn: (value: A) => R, value: A): string { return `(${fn.toString()})(${JSON.stringify(value)})`; }
@@ -70,23 +71,33 @@ function observedTransport(transport: ScopedTransport, observed: { completion: B
   } };
 }
 export async function browserLifecycle(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal) {
-  return captureExecution(output, ["command", "env", "browser", "runtime", "browserStartup", "runtimeStartup", "inputs", "resolution", "reset", "completion"], record => measureBrowser(cell, base, prepared, output, timeoutMs, signal, record));
+  const result = await captureBrowser(cell, base, prepared, output, timeoutMs, signal, { mode: "timing", sharing: "shared" });
+  if (result.outcome === null) throw new Error("Timing wrapper received a control-only result");
+  return result;
 }
-async function measureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, record: RecordExecution) {
+export async function diagnosticBrowserLifecycle(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, options: { mode: "controls" | "observation" | "observer-off"; sharing: "shared" | "unshared" }) {
+  return captureBrowser(cell, base, prepared, output, timeoutMs, signal, options);
+}
+async function captureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, options: { mode: "timing" | "controls" | "observation" | "observer-off"; sharing: "shared" | "unshared" }) {
+  return captureExecution(output, ["command", "env", "browser", "runtime", "browserStartup", "runtimeStartup", "inputs", "resolution", "reset", "completion"], record => measureBrowser(cell, base, prepared, output, timeoutMs, signal, options, record));
+}
+async function measureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, { mode, sharing }: { mode: "timing" | "controls" | "observation" | "observer-off"; sharing: "shared" | "unshared" }, record: RecordExecution) {
   if (cell.arm.kind !== "goals-browser") throw new Error("Expected goals browser arm");
-  record("command", cell.workload === "next" ? ["NEXT_TELEMETRY_DISABLED=1", "bun", "run", "build"] : ["bun", "run", "dev"]);
-  record("env", { overrides: cell.workload === "next" ? { NEXT_TELEMETRY_DISABLED: "1" } : {}, inherited: "Guest runtime environment; see readiness observation" });
+  record("command", mode === "controls" ? ["bun", ".perf-startup.ts", "leaf/root/starts"] : cell.workload === "next" ? ["NEXT_TELEMETRY_DISABLED=1", "bun", "run", "build"] : ["bun", "run", "dev"]);
+  record("env", { overrides: mode !== "controls" && cell.workload === "next" ? { NEXT_TELEMETRY_DISABLED: "1" } : {}, inherited: "Guest runtime environment; see readiness observation" });
   const launched = beginExecutionInterval(record, "browserStartup", "Browser process, context and page launch, outside the framework window");
-  const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000);
+  const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true);
   launched();
   const preparation = Scope.open(timeoutMs, signal);
   let measurement: Scope | undefined;
   let page = scoped(transport, preparation);
   const interrupt = () => { void transport.close().catch(() => {}); };
   signal.addEventListener("abort", interrupt, { once: true });
+  let observationAllowed = false;
+  let observer: Awaited<ReturnType<typeof startObservation>> | null = null;
   let timing: { submission: Bracket; completion: Bracket | null } | null = null;
   try {
-    record("browser", { ...transport.capabilities, headless: true, launchProcesses: await processTree(process.pid), display: null, renderer: null });
+    record("browser", { ...transport.capabilities, headless: true, launchProcesses: transport.processRoot === undefined ? null : await processTree(transport.processRoot), display: null, renderer: null });
     const framework = frameworks.find(item => item.id === (cell.workload === "next" ? "next" : "vite-react"));
     if (!framework) throw new Error("Missing starter definition");
     const runtimeReady = beginExecutionInterval(record, "runtimeStartup", "Navigation to selected runtime readiness, including any transfer, preparation, compilation and shell startup here; not pure compilation");
@@ -94,7 +105,13 @@ async function measureBrowser(cell: LifecycleCell, base: string, prepared: strin
     const runtime = await ready(page, cell.arm.engine, timeoutMs, cell.arm.profile);
     runtimeReady();
     record("runtime", runtime);
-    const browserProcesses = await processTree(process.pid);
+    const browserProcesses = transport.processRoot === undefined ? { available: false, reason: "Browser subprocess root unavailable" } : await processTree(transport.processRoot);
+    if (mode === "controls") {
+      const controls = await startupControls(page, output, timeoutMs, cell.arm.engine !== "browser" && sharing === "unshared");
+      await writeFile(join(output, "startup-control.json"), JSON.stringify({ runtime, controls }));
+      if (controls.some(control => control.status !== "pass")) throw new Error("Startup control failed; see startup-control.json");
+      return { outcome: null, wallMs: null, inputs: { valid: true }, runtime, controls, controlOnly: true };
+    }
     const lock = await readFile(join(prepared, cell.workload, "bun.lock"), "utf8");
     await page.evaluate(expression(async text => playground.fs.writeFile("/home/user/bun.lock", text), lock));
     const install = await command(page, "bun install", timeoutMs);
@@ -105,12 +122,18 @@ async function measureBrowser(cell: LifecycleCell, base: string, prepared: strin
     const resolution = verifyResolution(lock, guestLock);
     record("resolution", resolution);
     await command(page, "bun install --frozen-lockfile", timeoutMs);
+    if (mode === "observation" || mode === "observer-off") {
+      const controls = await startupControls(page, output, timeoutMs, cell.arm.engine !== "browser" && sharing === "unshared").catch(error => [{ mode: "setup", status: "fail", reason: String(error), observerCoverage: { cpu: "unavailable" } }]);
+      await writeFile(join(output, "startup-control.json"), JSON.stringify({ runtime, controls }));
+      observationAllowed = controls.every(control => control.status === "pass" && control.observerCoverage.cpu === "positive");
+    }
     const beforeInventory = await page.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
     await writeFile(join(output, "guest-inputs.json"), JSON.stringify(beforeInventory));
     const inputs = sha256(canonical(beforeInventory));
     record("inputs", { before: inputs, after: null, valid: null, reason: "Post-run observation not reached" });
     const resetEvidence = await page.evaluate(expression(reset, mutableRoots[cell.workload]));
     record("reset", resetEvidence);
+    if (mode === "observation") observer = observationAllowed ? await startObservation(transport.processRoot, "Browser subprocess tree; samples wholly inside framework command observation window; harness and asset server excluded") : { observer: null, unavailable: "Exact-context root/child observer control did not pass; see startup-control.json" };
     preparation.close();
     measurement = Scope.open(timeoutMs, signal);
     page = scoped(transport, measurement);
@@ -139,6 +162,7 @@ async function measureBrowser(cell: LifecycleCell, base: string, prepared: strin
     if (!completion) throw new Error("Missing successful-exit observation");
     timing.completion = completion;
     record("completion", completion);
+    if (observer) { await finishObservation(observer, join(output, "observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); observer = null; }
     if (cell.workload === "vite") await stopServer(page, 5000);
     await page.useHost();
     const afterInventory = await page.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
@@ -149,6 +173,7 @@ async function measureBrowser(cell: LifecycleCell, base: string, prepared: strin
   } finally {
     preparation.close();
     measurement?.close();
+    if (observer) await finishObservation(observer, join(output, "observation.json"));
     try { await writeFile(join(output, "timing.json"), JSON.stringify({ ...timing, failureObservedMs: timing?.completion ? null : performance.now(), unit: "ms", clock: "controller performance.now", method: "command/DOM polling observation", wallMs: timing?.completion ? timing.completion.afterMs - timing.submission.beforeMs : null })); }
     finally { await cleanupBrowser(transport, output); signal.removeEventListener("abort", interrupt); }
   }

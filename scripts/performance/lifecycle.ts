@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile, stat, rename, rmdir } from "node:fs/promise
 import { join, resolve } from "node:path";
 import { cpus, hostname, loadavg, release } from "node:os";
 import { baseMatrix, validateLifecycle, type LifecycleCell } from "./lifecycle-model";
-import { nativeLifecycle } from "./lifecycle-native";
-import { browserLifecycle } from "./lifecycle-browser";
+import { nativeLifecycle, diagnosticNativeLifecycle } from "./lifecycle-native";
+import { browserLifecycle, diagnosticBrowserLifecycle } from "./lifecycle-browser";
 import { launchProcess, processIdentity, cpuTopology } from "./lifecycle-process";
 import { withSignals } from "../goals-matrix/lifetime";
 import { until } from "../goals-matrix/playground";
@@ -13,7 +13,7 @@ import { preflight } from "../goals-matrix/preparation";
 import { canonical, object, sha256, treeInventory } from "./input";
 import { executionIdentity, finalizeHostVerification, lifecycleDriverInputs, recordInvocationEnvironment, verifyResume } from "./lifecycle-campaign";
 
-function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" } {
+function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" | "controls" | "observation" | "observer-off" } {
   const values = new Map<string, string>();
   for (const arg of args) {
     const match = /^--(output|scratch|host|prepared|cells|timeout-ms|mode)=(.+)$/.exec(arg);
@@ -26,7 +26,8 @@ function options(args: string[]): { output: string; scratch: string; host: strin
   const cells = values.get("cells")?.split(",") ?? baseMatrix().map(cell => cell.id);
   if (cells.some(id => !baseMatrix().some(cell => cell.id === id))) throw new Error("Unknown matrix cell");
   const mode = values.get("mode") ?? "timing";
-  if (mode !== "timing" && mode !== "selection") throw new Error("Use timing or selection");
+  if (mode !== "timing" && mode !== "selection" && mode !== "controls" && mode !== "observation" && mode !== "observer-off") throw new Error("Use timing, selection, controls, observation or observer-off");
+  if (mode === "controls" && cells.some(id => baseMatrix().find(cell => cell.id === id)?.arm.kind !== "goals-browser")) throw new Error("Startup controls mode supports browser cells only");
   if (mode === "selection" && cells.some(id => baseMatrix().find(cell => cell.id === id)?.arm.kind !== "native")) throw new Error("Selection probes currently support native cells only");
   return { output: required("output"), scratch: required("scratch"), host: required("host"), prepared: required("prepared"), cells, timeoutMs, mode };
 }
@@ -38,13 +39,11 @@ async function runCell(cell: LifecycleCell, config: Config, base: string, signal
   if (await stat(output).then(() => true).catch(() => false)) await rename(output, output + `.interrupted-${Date.now()}`);
   await mkdir(output);
   const before = { at: new Date().toISOString(), load: loadavg(), controller: await processIdentity(process.pid) };
-  let result: Awaited<ReturnType<typeof nativeLifecycle>> | Awaited<ReturnType<typeof browserLifecycle>> | undefined;
+  let result: Awaited<ReturnType<typeof executeCell>> | undefined;
   let failure: string | null = null;
   try {
-    result = cell.arm.kind === "native"
-      ? await nativeLifecycle(cell, config.prepared, config.scratch, output, config.timeoutMs, signal, config.mode)
-      : await browserLifecycle(cell, base, config.prepared, output, config.timeoutMs, signal);
-    validateLifecycle(result.outcome);
+    result = await executeCell(cell, config, base, output, signal);
+    if (result.outcome) validateLifecycle(result.outcome);
   } catch (error) { failure = String(error); }
   const cleanup = await readFile(join(output, "cleanup.json"), "utf8").then(text => JSON.parse(text)).catch(() => ({ resourcesStopped: null, reason: "No separate cleanup record; see terminal and controller failure" }));
   const execution = await readFile(join(output, "execution.json"), "utf8").then(text => JSON.parse(text)).catch(() => ({ status: "unavailable", reason: "Adapter execution evidence could not be read" }));
@@ -52,13 +51,25 @@ async function runCell(cell: LifecycleCell, config: Config, base: string, signal
     workloadOutcome: failure ? { status: "fail", reason: failure } : { status: "pass" }, result: result ?? null, cleanup, execution, invocation,
     timing: { valid: null, eligible: failure === null && result?.inputs.valid === true && config.mode === "timing", hostVerification: join(invocation, "host-verification.json"), verificationReason: "Host verification pending", unit: "ms", scope: cell.arm.kind === "native" && cell.workload === "vite" ? "Native server plus matching preview browser lifecycle" : "Framework lifecycle command", sourceRun: cell.id,
       method: cell.arm.kind === "native" && cell.workload === "next" ? "Monotonic command submission to process-close event observation" : "Monotonic command submission to successful polling observation", value: result?.wallMs ?? null },
-    observation: { kind: config.mode, cpu: null, counters: null, profile: null, reason: "Base matrix uses no CPU/profile attribution observer", compilerSelection: config.mode === "selection" ? "See selection.jsonl, scoped preloaded contexts only" : "Unavailable in uninstrumented timing; collect a separate selection run" },
+    observation: { kind: config.mode, cpu: null, counters: null, profile: null, reason: config.mode === "observation" || config.mode === "controls" ? "See separate observation/control files; incomplete polling, excluded from timing distributions" : "No external CPU/profile observer in the measured job", compilerSelection: config.mode === "selection" ? "See selection.jsonl, scoped preloaded contexts only" : "Unavailable in uninstrumented timing; collect a separate selection run" },
     contention: { quiet: false, overlappingJobs: "See runner job receipt" }, headlineEligible: false,
     ineligibleReasons: ["Nonquiet shared PC experiment", ...(cell.arm.kind === "goals-browser" || cell.arm.browser ? ["Headless browser; display and hardware renderer unverified"] : [])] });
   console.log(cell.id, failure ? `fail; see ${output}/run.json` : "pass");
   await summarizeLifecycle(config.output);
   return join(output, "run.json");
 }
+async function executeCell(cell: LifecycleCell, config: Config, base: string, output: string, signal: AbortSignal) {
+  if (cell.arm.kind === "native") {
+    if (config.mode === "observation" || config.mode === "observer-off") return diagnosticNativeLifecycle(cell, config.prepared, config.scratch, output, config.timeoutMs, signal, config.mode);
+    return nativeLifecycle(cell, config.prepared, config.scratch, output, config.timeoutMs, signal, config.mode === "selection" ? "selection" : "timing");
+  }
+  if (config.mode === "controls" || config.mode === "observation" || config.mode === "observer-off") {
+    const metadata = object(JSON.parse(await readFile(join(config.host, "lifecycle-host.json"), "utf8")));
+    return diagnosticBrowserLifecycle(cell, base, config.prepared, output, config.timeoutMs, signal, { mode: config.mode, sharing: metadata.sharing === "unshared" ? "unshared" : "shared" });
+  }
+  return browserLifecycle(cell, base, config.prepared, output, config.timeoutMs, signal);
+}
+
 async function campaign(config: Config, signal: AbortSignal) {
   await mkdir(config.output, { recursive: true });
   const lock = join(config.output, ".lifecycle-lock");

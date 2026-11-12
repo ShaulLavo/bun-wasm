@@ -10,6 +10,7 @@ interface CleanupEvidence { browserClosed: true; foregroundStopped: true; previe
  */
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
+  readonly processRoot?: number;
   beginCleanup?(admission: Admission): void | Promise<void>;
   nativeClick?(button: string, clicked: string, admission: Admission): Promise<unknown>;
   cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
@@ -23,6 +24,7 @@ export interface Transport {
 }
 export type ScopedTransport = {
   readonly capabilities: Record<string, unknown>;
+  readonly processRoot?: number;
   evaluate<T>(expression: string, options?: EvaluationOptions): Promise<T>;
   navigate(url: string): Promise<void>;
   openPreview(url: string): Promise<void>;
@@ -40,6 +42,7 @@ export function scoped(transport: Transport, admission: Admission): ScopedTransp
   const nativeClick = transport.nativeClick?.bind(transport);
   return {
     capabilities: transport.capabilities,
+    processRoot: transport.processRoot,
     evaluate: <T>(expression: string, options?: EvaluationOptions) => call(() => transport.evaluate<T>(expression, admission, options)),
     navigate: url => call(() => transport.navigate(url, admission)),
     openPreview: url => call(() => transport.openPreview(url, admission)),
