@@ -1,6 +1,7 @@
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
 import { programCoreMemoryLimits, type CoreMemoryLimits } from "../../src/program-memory.ts";
 import { isPairedEngine, type Engine } from "../../src/engine-kind.js";
+import { copyLaunchFailure, type LaunchFailureFact } from "./launch-failure.js";
 export type TelemetryEngine = Engine;
 export interface FailedAllocation { bytes: number | null; category: string }
 export interface FrozenAllocatorFailure extends FailedAllocation {
@@ -32,6 +33,8 @@ export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   frozenAllocatorFailure: FrozenAllocatorFailure | null;
   engineFailure: FailedAllocation | null;
   engineCounters: Record<string, number | null>;
+  /** Immediate page-side launch failures, preserved across worker samples and end. */
+  launchFailures?: readonly LaunchFailureFact[];
 }
 export const emptyCounters: MemoryCounters = {
   wasmCapacityBytes: null, memoryLimitBytes: null, allocatorLiveBytes: null, allocatorPeakBytes: null,
@@ -149,6 +152,27 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 }
 
 const retained = new Map<string, MemorySnapshot>();
+function retainSnapshot(snapshot: MemorySnapshot): void {
+  const previous = retained.get(snapshot.id);
+  if (previous && (previous.engine !== snapshot.engine || previous.commandId !== snapshot.commandId
+    || previous.commandStartedAt !== snapshot.commandStartedAt || previous.commandSequence !== snapshot.commandSequence)) return;
+  const latest = previous && previous.time > snapshot.time ? previous : snapshot;
+  const earlier = latest === snapshot ? previous : snapshot;
+  const traps = Object.fromEntries(Object.entries(earlier?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
+  retained.set(snapshot.id, { ...latest, terminal: snapshot.terminal || previous?.terminal || false,
+    engineCounters: { ...traps, ...latest.engineCounters }, launchFailures: previous?.launchFailures,
+    allocatorFailure: latest.allocatorFailure ?? earlier?.allocatorFailure ?? null,
+    frozenAllocatorFailure: latest.frozenAllocatorFailure ?? earlier?.frozenAllocatorFailure ?? null,
+    engineFailure: latest.engineFailure ?? earlier?.engineFailure ?? null,
+    failedAllocation: latest.failedAllocation ?? earlier?.failedAllocation ?? null });
+}
+export function recordLaunchFailure(id: string, failure: LaunchFailureFact): void {
+  const fact = copyLaunchFailure(failure);
+  const snapshot = retained.get(id);
+  if (!fact || !snapshot) return;
+  const launchFailures = (snapshot.launchFailures ?? []).filter(value => value.attempt !== fact.attempt).concat([fact]).slice(-2);
+  retained.set(id, { ...snapshot, launchFailures });
+}
 const channels = new Map<string, SharedArrayBuffer>();
 const runtimes = new WeakMap<object, string>();
 const commandTimes = new Map<string, number>();
@@ -193,10 +217,10 @@ export function publishBrowserCallTrap(instance: WebAssembly.Instance, index: nu
 export function endMemorySnapshot(id: string): void {
   const channel = channels.get(id);
   const cached: unknown = channel ? readMemoryChannel(channel) : null;
-  if (cached && typeof cached === "object" && isMemorySnapshot(cached)) retained.set(id, cached);
+  if (cached && typeof cached === "object" && isMemorySnapshot(cached)) retainSnapshot(cached);
   channels.delete(id);
   const snapshot = retained.get(id);
-  if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: Date.now() });
+  if (snapshot) retained.set(id, { ...snapshot, terminal: true });
   trimTerminalSnapshots();
 }
 
@@ -207,7 +231,7 @@ export function recordMemorySnapshot(message: unknown): boolean {
   if (!("id" in snapshot) || typeof snapshot.id !== "string") throw new TypeError("Invalid memory identity");
   if (!isMemorySnapshot(snapshot)) throw new TypeError("Invalid memory snapshot fields");
   const value = snapshot;
-  retained.set(value.id, value);
+  retainSnapshot(value);
   trimTerminalSnapshots();
   return true;
 }
@@ -278,14 +302,15 @@ async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean)
     if (value.id !== entry.id || value.engine !== engine) throw new TypeError("Memory channel identity mismatch");
     const current = memoryChannelReady(entry.channel, entry.generation, false);
     if (!current) {
-      retained.set(entry.id, { ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
+      retainSnapshot({ ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
         notes: "Host snapshot was not acknowledged for this phase. " + value.notes });
       continue;
     }
     const normal = memoryChannelReady(entry.channel, entry.generation, refresh);
-    retained.set(entry.id, normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
+    retainSnapshot(normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
       notes: "Normal phase refresh not acknowledged. Engine counters are unavailable for this phase. " + value.notes });
   }
   return retainedMemorySnapshots();
 }
 Reflect.set(globalThis, "__bunMemorySnapshots", requestMemorySnapshots);
+Reflect.set(globalThis, "__bunRetainedMemorySnapshots", retainedMemorySnapshots);
