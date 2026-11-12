@@ -77,7 +77,7 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
     if (!framework) throw new Error("Missing starter definition");
     await transport.navigate(playgroundURL(base, framework, cell.arm.engine, cell.arm.profile));
     const runtime = await ready(transport, cell.arm.engine, timeoutMs, cell.arm.profile);
-    const browserProcesses = await processTree(process.pid);
+    const browserProcesses = transport.processRoot === undefined ? { available: false, reason: "Browser subprocess root unavailable" } : await processTree(transport.processRoot);
     if (mode === "controls") {
       const controls = await startupControls(transport, output, timeoutMs, cell.arm.engine !== "browser" && sharing === "unshared");
       await writeFile(join(output, "startup-control.json"), JSON.stringify({ runtime, controls }));

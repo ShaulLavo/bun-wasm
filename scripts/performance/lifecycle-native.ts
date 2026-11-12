@@ -74,7 +74,7 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
     await rm(join(root, ".perf-activity"), { force: true });
     const inputs = immutableIdentity(root, cell.workload);
     preview = cell.arm.browser ? await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true) : null;
-    const previewProcesses = preview ? await processTree(process.pid) : null;
+    const previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
     const port = preview ? await previewPort() : null;
     const previewControlPassed = mode === "observation" && preview ? await previewObserverControl(preview, output) : false;
     if (mode === "observation" && preview) previewObserver = previewControlPassed ? await startObservation(preview.processRoot, "Native preview browser subprocess tree only; server and controller excluded") : { observer: null, unavailable: "Preview CPU control failed" };
