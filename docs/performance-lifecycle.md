@@ -82,6 +82,9 @@ reasons. Polling endpoints carry observation brackets, not a fixed error bound.
 The native endpoint observes process closure; it is not a kernel exit timestamp.
 Browser requests use separate preparation and measurement deadline scopes. Cleanup
 has an independent deadline and still runs after measurement cancellation.
+Execution evidence separately brackets browser launch and navigation to runtime
+readiness. Readiness includes any transfer, preparation, compilation and shell
+startup in that envelope; it does not isolate compilation alone.
 `execution.json` preserves each acquired observation even if the adapter throws;
 unreached observations remain unavailable with a reason. Each invocation has its
 own environment and host-verification record under `invocations/`. The original

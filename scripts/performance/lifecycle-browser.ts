@@ -1,4 +1,4 @@
-import { captureExecution, type RecordExecution } from "./lifecycle-evidence";
+import { beginExecutionInterval, captureExecution, type RecordExecution } from "./lifecycle-evidence";
 import { startupControls, startObservation, finishObservation } from "./sharing-controls";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -79,13 +79,15 @@ export async function diagnosticBrowserLifecycle(cell: LifecycleCell, base: stri
   return captureBrowser(cell, base, prepared, output, timeoutMs, signal, options);
 }
 async function captureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, options: { mode: "timing" | "controls" | "observation" | "observer-off"; sharing: "shared" | "unshared" }) {
-  return captureExecution(output, ["command", "env", "browser", "runtime", "inputs", "resolution", "reset", "completion"], record => measureBrowser(cell, base, prepared, output, timeoutMs, signal, options, record));
+  return captureExecution(output, ["command", "env", "browser", "runtime", "browserStartup", "runtimeStartup", "inputs", "resolution", "reset", "completion"], record => measureBrowser(cell, base, prepared, output, timeoutMs, signal, options, record));
 }
 async function measureBrowser(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, { mode, sharing }: { mode: "timing" | "controls" | "observation" | "observer-off"; sharing: "shared" | "unshared" }, record: RecordExecution) {
   if (cell.arm.kind !== "goals-browser") throw new Error("Expected goals browser arm");
   record("command", mode === "controls" ? ["bun", ".perf-startup.ts", "leaf/root/starts"] : cell.workload === "next" ? ["NEXT_TELEMETRY_DISABLED=1", "bun", "run", "build"] : ["bun", "run", "dev"]);
   record("env", { overrides: mode !== "controls" && cell.workload === "next" ? { NEXT_TELEMETRY_DISABLED: "1" } : {}, inherited: "Guest runtime environment; see readiness observation" });
+  const launched = beginExecutionInterval(record, "browserStartup", "Browser process, context and page launch, outside the framework window");
   const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true);
+  launched();
   const preparation = Scope.open(timeoutMs, signal);
   let measurement: Scope | undefined;
   let page = scoped(transport, preparation);
@@ -98,8 +100,10 @@ async function measureBrowser(cell: LifecycleCell, base: string, prepared: strin
     record("browser", { ...transport.capabilities, headless: true, launchProcesses: transport.processRoot === undefined ? null : await processTree(transport.processRoot), display: null, renderer: null });
     const framework = frameworks.find(item => item.id === (cell.workload === "next" ? "next" : "vite-react"));
     if (!framework) throw new Error("Missing starter definition");
+    const runtimeReady = beginExecutionInterval(record, "runtimeStartup", "Navigation to selected runtime readiness, including any transfer, preparation, compilation and shell startup here; not pure compilation");
     await page.navigate(playgroundURL(base, framework, cell.arm.engine, cell.arm.profile));
     const runtime = await ready(page, cell.arm.engine, timeoutMs, cell.arm.profile);
+    runtimeReady();
     record("runtime", runtime);
     const browserProcesses = transport.processRoot === undefined ? { available: false, reason: "Browser subprocess root unavailable" } : await processTree(transport.processRoot);
     if (mode === "controls") {
