@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { evaluatePage, type Transport } from "../goals-matrix/transport";
 import { bounded } from "../goals-matrix/bounded";
+import { chromeTraceConfig, type BufferUsage, type TracingComplete } from "./lifecycle-profile-retention";
 
 export type ProfileBrowser = "chrome" | "firefox";
 export async function profileTransport(kind: ProfileBrowser, output: string, enabled: boolean, timeoutMs: number) {
@@ -40,7 +41,7 @@ async function opened(browser: Browser, kind: ProfileBrowser, output: string, en
     async close() { await bounded(() => browser.close(), 15000); },
   };
   return { transport, workers,
-    mark: async (label: string) => { if (enabled && kind === "chrome") await host.evaluate(message => console.timeStamp(message), label); },
+    mark: async (label: string) => { if (enabled && kind === "chrome") await host.evaluate(message => { performance.mark(message); }, label); },
     capture: async () => enabled && kind === "chrome" ? trace(browser, output) : async () => {} };
 }
 
@@ -57,33 +58,49 @@ async function trace(browser: Browser, output: string) {
   async function annotate(targetId: string) {
     const attached = await session.send("Target.attachToTarget", { targetId, flatten: false });
     await session.send("Target.sendMessageToTarget", { sessionId: attached.sessionId, message: JSON.stringify({ id: ++requestId, method: "Runtime.evaluate",
-      params: { expression: `console.timeStamp(${JSON.stringify("lifecycle-profile-target:" + targetId)})` } }) });
+      params: { expression: `performance.mark(${JSON.stringify("lifecycle-profile-target:" + targetId)})` } }) });
   }
   session.on("Target.targetDestroyed", ({ targetId }) => targets.push({ event: "exited", id: targetId, at: Date.now() }));
   await session.send("Target.setDiscoverTargets", { discover: true });
-  const completed = new Promise<string>((resolve, reject) => session.once("Tracing.tracingComplete", event => {
-    if (event.stream) resolve(event.stream); else reject(new Error("Trace stream unavailable"));
+  const bufferUsage: { at: number; event: BufferUsage }[] = [];
+  const telemetry: { requested: typeof chromeTraceConfig; startAccepted: boolean; bufferUsage: typeof bufferUsage;
+    tracingComplete: TracingComplete | null; streamReadComplete: boolean } = {
+    requested: chromeTraceConfig, startAccepted: false, bufferUsage, tracingComplete: null, streamReadComplete: false,
+  };
+  session.on("Tracing.bufferUsage", event => bufferUsage.push({ at: Date.now(), event }));
+  const completed = new Promise<TracingComplete>(resolve => session.once("Tracing.tracingComplete", event => {
+    telemetry.tracingComplete = event;
+    resolve(event);
   }));
   void completed.catch(() => {});
-  await session.send("Tracing.start", { categories: "disabled-by-default-v8.cpu_profiler,devtools.timeline", transferMode: "ReturnAsStream" });
+  await session.send("Tracing.start", chromeTraceConfig);
+  telemetry.startAccepted = true;
   return async () => {
-    await session.send("Tracing.end");
-    const handle = await bounded(() => completed, 60000);
+    let handle: string | undefined;
     try {
-      await writeFile(join(output, "chrome-trace.json"), await readTrace(session, handle));
+      await session.send("Tracing.end");
+      handle = (await bounded(() => completed, 60000)).stream;
+      if (!handle) throw new Error("Trace stream unavailable");
+      await readTrace(session, handle, join(output, "chrome-trace.json"));
+      telemetry.streamReadComplete = true;
+    } finally {
+      await writeFile(join(output, "chrome-retention.json"), JSON.stringify(telemetry, null, 2));
       await writeFile(join(output, "chrome-targets.json"), JSON.stringify(targets));
       await writeFile(join(output, "chrome-annotation-errors.json"), JSON.stringify(annotationErrors));
-    } finally { await session.send("IO.close", { handle }); await session.detach(); }
+      if (handle) await session.send("IO.close", { handle });
+      await session.detach();
+    }
   };
 }
 
-async function readTrace(session: CDPSession, handle: string) {
-  const parts: string[] = [];
+async function readTrace(session: CDPSession, handle: string, path: string) {
+  const file = Bun.file(path).writer();
   let eof = false;
-  while (!eof) {
-    const part = await bounded(() => session.send("IO.read", { handle }), 15000);
-    if (part.base64Encoded) throw new Error("Unexpected encoded trace stream");
-    parts.push(part.data); eof = part.eof ?? false;
-  }
-  return parts.join("");
+  try {
+    while (!eof) {
+      const part = await bounded(() => session.send("IO.read", { handle, size: 1 << 20 }), 15000);
+      if (part.base64Encoded) throw new Error("Unexpected encoded trace stream");
+      await file.write(part.data); await file.flush(); eof = part.eof ?? false;
+    }
+  } finally { await file.end(); }
 }

@@ -1,0 +1,5 @@
+{
+  "provenance": "Loss counters from next-chrome-browser-window-v1; source-only event from next-chrome-jsc-window-v1, raw SHA-256 549f5e4ec9ed0bcee2019624233b1a0f1f66744ba791d3cb0ea248c829130edc",
+  "metadata": { "trace_processor_stats": { "traced_buf": [{ "buffer_size": 209715200, "bytes_written": 209715200, "chunks_discarded": 9322, "bytes_overwritten": 0 }] } },
+  "sourceOnly": { "args": { "data": { "source": "Internal" } }, "cat": "disabled-by-default-v8.cpu_profiler", "id": "0x18", "name": "ProfileChunk", "ph": "P", "pid": 2706458, "tid": 2707058, "ts": 50403150318, "tts": 57466 }
+}

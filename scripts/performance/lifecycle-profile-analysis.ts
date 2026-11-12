@@ -3,20 +3,22 @@ import { splitProfile } from "./profile";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { chromeRetention } from "./lifecycle-profile-retention";
 
 type JsonObject = Record<string, unknown>;
 interface TraceGroup { pid: number; tid: number; id: string; start: number; end: number | null; nodes: JsonObject[]; samples: number[]; deltas: number[] }
 export interface ChromeWindowMarkers { begin: string; end: string }
 type EpochWindow = { before: number; after: number };
-export type ChromeContext = { kind: "capture"; reason: string } | { kind: "command"; markers: ChromeWindowMarkers; window: EpochWindow; targets: unknown };
+export type ChromeContext = { kind: "capture"; reason: string } | { kind: "command"; markers: ChromeWindowMarkers; window: EpochWindow; targets: unknown; telemetry: unknown };
 const widerCapture: ChromeContext = { kind: "capture", reason: "No recorded trace-clock command boundaries; controller epoch timestamps cannot be joined by guessing an offset" };
-export function chromeContext(markers: unknown, window: EpochWindow, targets: unknown): ChromeContext {
+export function chromeContext(markers: unknown, window: EpochWindow, targets: unknown, telemetry?: unknown): ChromeContext {
   if (markers === null || markers === undefined) return widerCapture;
   const value = object(markers);
-  return { kind: "command", markers: { begin: string(value.begin), end: string(value.end) }, window, targets };
+  return { kind: "command", markers: { begin: string(value.begin), end: string(value.end) }, window, targets, telemetry };
 }
-function traceWindow(events: JsonObject[], context: ChromeContext) {
+function traceWindow(events: JsonObject[], context: ChromeContext, retention: ReturnType<typeof chromeRetention>) {
   if (context.kind === "capture") return { available: false as const, reason: context.reason };
+  if (!retention.available) return { available: false as const, reason: retention.reasons.join("; ") };
   const begin = timestampEvents(events, context.markers.begin), end = timestampEvents(events, context.markers.end);
   if (begin.length !== 1 || end.length !== 1 || number(begin[0]!.ts) >= number(end[0]!.ts)) {
     return { available: false as const, reason: "Missing, ambiguous or reversed trace-clock command markers" };
@@ -25,13 +27,18 @@ function traceWindow(events: JsonObject[], context: ChromeContext) {
     clock: "Chrome trace event ts, microseconds", source: context.markers, epochOffset: null };
 }
 function timestampEvents(events: JsonObject[], message: string) {
-  return events.filter(event => event.name === "TimeStamp" && object(object(event.args).data).message === message);
+  return events.filter(event => markerName(event) === message);
+}
+function markerName(event: JsonObject) {
+  if (typeof event.cat === "string" && event.cat.split(",").includes("blink.user_timing") && (event.ph === "I" || event.ph === "R")) return event.name;
+  if (event.name === "TimeStamp") return object(object(event.args).data).message;
+  return null;
 }
 function workerMarkers(events: JsonObject[]) {
-  return events.filter(event => event.name === "TimeStamp").flatMap(event => {
-    const data = object(object(event.args).data);
-    return typeof data.message === "string" && data.message.startsWith("lifecycle-profile-target:")
-      ? [{ workerId: data.message.slice("lifecycle-profile-target:".length), workerThreadId: number(event.tid), pid: number(event.pid), markerUs: number(event.ts) }] : [];
+  return events.flatMap(event => {
+    const name = markerName(event);
+    return typeof name === "string" && name.startsWith("lifecycle-profile-target:")
+      ? [{ workerId: name.slice("lifecycle-profile-target:".length), workerThreadId: number(event.tid), pid: number(event.pid), markerUs: number(event.ts) }] : [];
   });
 }
 function matchWorker(group: TraceGroup, end: number, markers: ReturnType<typeof workerMarkers>, context: ChromeContext, aligned: boolean) {
@@ -52,8 +59,11 @@ export function chromeProfiles(input: unknown, context: ChromeContext = widerCap
   const events = array(object(input).traceEvents).map(object);
   const groups = new Map<string, TraceGroup>();
   for (const event of events.filter(row => row.name === "Profile" || row.name === "ProfileChunk")) addChunk(groups, event);
-  const markers = workerMarkers(events), workloadWindow = traceWindow(events, context);
-  return Array.from(groups.values()).filter(group => group.samples.length > 0).map(group => scopedChrome(group, markers, context, workloadWindow));
+  const retention = chromeRetention(input, context.kind === "command" ? context.telemetry : undefined);
+  const markers = workerMarkers(events), workloadWindow = traceWindow(events, context, retention);
+  const sampled = Array.from(groups.values()).filter(group => group.samples.length > 0);
+  if (!sampled.length) throw new Error("Missing/empty sampled trace is not zero-cost evidence");
+  return sampled.map(group => ({ ...scopedChrome(group, markers, context, workloadWindow), retention }));
 }
 function scopedChrome(group: TraceGroup, markers: ReturnType<typeof workerMarkers>, context: ChromeContext, workloadWindow: ReturnType<typeof traceWindow>) {
   const children = new Map<number, number[]>();
@@ -84,9 +94,19 @@ function addChunk(groups: Map<string, TraceGroup>, event: JsonObject) {
   const pid = number(event.pid), tid = number(event.tid), id = String(event.id);
   const key = `${pid}:${id}`;
   const data = object(object(event.args).data);
-  const group = groups.get(key) ?? { pid, tid, id, start: number(data.startTime), end: null, nodes: [], samples: [], deltas: [] };
-  groups.set(key, group);
-  if (event.name === "Profile") return;
+  if (event.name === "Profile") {
+    if (groups.has(key)) throw new Error("Duplicate profile start");
+    groups.set(key, { pid, tid, id, start: number(data.startTime), end: null, nodes: [], samples: [], deltas: [] });
+    return;
+  }
+  if (data.cpuProfile === undefined && data.endTime === undefined && data.source === "Internal") {
+    if (Object.keys(data).length !== 1 || event.ph !== "P" || typeof event.id !== "string" || !event.id ||
+      typeof event.cat !== "string" || !event.cat.split(",").includes("disabled-by-default-v8.cpu_profiler")) throw new Error("Malformed source-only ProfileChunk");
+    number(event.ts); number(event.tts);
+    return;
+  }
+  const group = groups.get(key);
+  if (!group) throw new Error("Missing profile start");
   if (data.endTime !== undefined) { group.end = number(data.endTime); return; }
   const profile = object(data.cpuProfile);
   group.nodes.push(...array(profile.nodes ?? []).map(object));
@@ -104,10 +124,11 @@ export function analyzeChrome(input: unknown, configuration: string, phase: stri
     analysis: splitProfile(row.profile, { configuration, scope: `${row.workloadWindow.available ? "trace-clock command marker window" : "wider capture; exact workload attribution unavailable"}; requested phase ${phase}; pid ${row.pid}, tid ${row.tid}, profile ${row.id}` }) }));
 }
 
-export function chromeControl(input: unknown, targetsInput: unknown, engine: string, window: EpochWindow, markers: ChromeWindowMarkers | null = null) {
+export function chromeControl(input: unknown, targetsInput: unknown, engine: string, window: EpochWindow, markers: ChromeWindowMarkers | null = null, telemetry?: unknown) {
   const targets = array(targetsInput).map(object);
-  const context = chromeContext(markers, window, targetsInput);
-  const aligned = traceWindow(array(object(input).traceEvents).map(object), context);
+  const context = chromeContext(markers, window, targetsInput, telemetry);
+  const retention = chromeRetention(input, telemetry);
+  const aligned = traceWindow(array(object(input).traceEvents).map(object), context, retention);
   const rows = analyzeChrome(input, engine, "root/child control", context).filter(row => row.worker !== null);
   const evidence = rows.map(row => {
     const id = row.worker?.workerId;
@@ -120,7 +141,7 @@ export function chromeControl(input: unknown, targetsInput: unknown, engine: str
       childComputation: row.analysis.self.some(frame => /lifecycleProfileChild/.test(frame.frame)), samples: row.analysis.samples };
   });
   const classified = evidence.filter(row => row.inWindow && row.compute);
-  return { available: aligned.available && new Set(classified.map(row => row.worker?.workerId)).size >= 2 && (engine !== "browser" || classified.some(row => row.childComputation)), workloadWindow: aligned, evidence,
+  return { available: aligned.available && new Set(classified.map(row => row.worker?.workerId)).size >= 2 && (engine !== "browser" || classified.some(row => row.childComputation)), workloadWindow: aligned, retention, evidence,
     rule: "At least two distinct worker profiles with engine computation samples and workerId-matched birth and exit inside capture; browser-engine names or named interpreter frames required" };
 }
 
@@ -216,9 +237,10 @@ if (import.meta.main) {
   const bytes = await readFile(path).catch(async () => gunzipSync(await readFile(path + ".gz")));
   const input = JSON.parse(bytes.toString());
   const targets = browser === "chrome" ? JSON.parse(await readFile(join(directory, "chrome-targets.json"), "utf8")) : null;
-  const context = chromeContext(run.chromeWindowMarkers, window, targets);
+  const telemetry = browser === "chrome" ? await readFile(join(directory, "chrome-retention.json"), "utf8").then(JSON.parse).catch(() => null) : null;
+  const context = chromeContext(run.chromeWindowMarkers, window, targets, telemetry);
   const rows = browser === "chrome" ? analyzeChrome(input, engine, phase, context) : analyzeGecko(input, window);
-  const control = phase === "control" ? (browser === "chrome" ? chromeControl(input, targets, engine, window, context.kind === "command" ? context.markers : null) : geckoControl(input, window, engine)) : null;
+  const control = phase === "control" ? (browser === "chrome" ? chromeControl(input, targets, engine, window, context.kind === "command" ? context.markers : null, telemetry) : geckoControl(input, window, engine)) : null;
   const available = browser !== "chrome" || rows.some(row => "workloadWindow" in row && row.workloadWindow.available && row.worker !== null);
   await writeFile(join(directory, "reanalysis.json"), JSON.stringify({ ...run, reanalysisOf: "run.json", observation: { enabled: true, profile: control ?? {
     available, captureAvailable: rows.length > 0, scope: available ? "Established command/lifetime sample subset" : "Wider capture only; workload clock/lifetime join unavailable" } }, rows }, null, 2) + "\n", { flag: "wx" });

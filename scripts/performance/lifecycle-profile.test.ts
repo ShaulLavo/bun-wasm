@@ -7,20 +7,64 @@ import { spawnSync } from "node:child_process";
 import { analyzeChrome, chromeContext, chromeControl, chromeProfiles, geckoControl, analyzeGecko } from "./lifecycle-profile-analysis";
 import { array, object } from "./input";
 import { splitProfile } from "./profile";
+import { chromeRetention } from "./lifecycle-profile-retention";
 
 const window = { before: 100, after: 110 };
-function saved(name: string) { return object(JSON.parse(readFileSync(new URL(`../../tests/performance/fixtures/${name}.json`, import.meta.url), "utf8"))); }
+const telemetry = { tracingComplete: { dataLossOccurred: false }, streamReadComplete: true, bufferUsage: [{ at: 1, event: { percentFull: 0.2 } }] };
+function saved(name: string) {
+  const value = object(JSON.parse(readFileSync(new URL(`../../tests/performance/fixtures/${name}.json`, import.meta.url), "utf8")));
+  if (name === "lifecycle-chrome-window") value.metadata = { trace_processor_stats: { traced_buf: [{ chunks_discarded: 0, bytes_overwritten: 0 }] } };
+  return value;
+}
+test("Chrome saved exhausted buffers fail closed even when marker calls and completion succeed", () => {
+  const input = saved("lifecycle-chrome-window");
+  input.metadata = saved("lifecycle-chrome-retention").metadata;
+  expect(chromeRetention(input, telemetry).available).toBe(false);
+  expect(chromeRetention(input, telemetry).loss[0]?.value).toBe(9322);
+  expect(chromeControl(input, input.targets, "browser", window, { begin: "command-begin", end: "command-end" }, telemetry).available).toBe(false);
+  expect(chromeRetention(saved("lifecycle-chrome-window"), undefined).available).toBe(false);
+  expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, tracingComplete: { dataLossOccurred: true } }).available).toBe(false);
+  expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, bufferUsage: [] }).available).toBe(false);
+  expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, streamReadComplete: false }).available).toBe(false);
+});
+test("Chrome performance marks bind command and worker identities without timeline events", () => {
+  const input = saved("lifecycle-chrome-window");
+  input.traceEvents = array(input.traceEvents).map(object).map(event => event.name !== "TimeStamp" ? event : {
+    ...event, cat: "blink.user_timing", ph: "I", name: object(object(event.args).data).message, args: { data: { startTime: 12 } },
+  });
+  expect(chromeControl(input, input.targets, "browser", window, { begin: "command-begin", end: "command-end" }, telemetry).available).toBe(true);
+  expect(chromeProfiles(input, chromeContext(input.markers, window, input.targets, telemetry))[1]?.sampleTimesUs).toEqual([1000, 1001, 1039, 1040]);
+  const events = array(input.traceEvents).map(object);
+  input.traceEvents = events.filter(event => event.name !== "command-end");
+  expect(chromeControl(input, input.targets, "browser", window, { begin: "command-begin", end: "command-end" }, telemetry).available).toBe(false);
+});
+test("Chrome source-only Internal chunk is metadata with zero samples, malformed and incomplete profiles still fail", () => {
+  const input = saved("lifecycle-chrome-window"), events = array(input.traceEvents);
+  const metadata = saved("lifecycle-chrome-retention").sourceOnly;
+  input.traceEvents = events.concat([metadata]);
+  expect(chromeProfiles(input).map(row => row.selection.captureSamples)).toEqual([2, 6, 2]);
+  input.traceEvents = [metadata];
+  expect(() => chromeProfiles(input)).toThrow("empty");
+  const bad = structuredClone(object(metadata));
+  object(bad.args).data = { source: "Internal", timeDeltas: [1] };
+  input.traceEvents = events.concat([bad]);
+  expect(() => chromeProfiles(input)).toThrow("source-only");
+  object(bad.args).data = { source: 12 };
+  expect(() => chromeProfiles(input)).toThrow();
+  input.traceEvents = events.filter(event => object(event).name !== "Profile");
+  expect(() => chromeProfiles(input)).toThrow();
+});
 test("Chrome signed sample timestamps clip exact trace boundaries and bind reused tids to distinct temporal workers", () => {
   const input = saved("lifecycle-chrome-window"), markers = { begin: "command-begin", end: "command-end" };
-  const context = chromeContext(markers, window, input.targets);
+  const context = chromeContext(markers, window, input.targets, telemetry);
   const rows = chromeProfiles(input, context);
   expect(rows.map(row => row.tid)).toEqual([11, 11, 12]);
   expect(rows[1]?.sampleTimesUs).toEqual([1000, 1001, 1039, 1040]);
   expect(rows[1]?.worker?.workerId).toBe("new");
   expect(rows[1]?.selection.excludedSamples).toBe(2);
   expect(analyzeChrome(input, "browser", "control", context).map(row => row.analysis.samples)).toEqual([4, 2]);
-  expect(chromeControl(input, input.targets, "browser", window, markers).available).toBe(true);
-  expect(chromeControl(input, input.targets, "quickjs", window, markers).available).toBe(false);
+  expect(chromeControl(input, input.targets, "browser", window, markers, telemetry).available).toBe(true);
+  expect(chromeControl(input, input.targets, "quickjs", window, markers, telemetry).available).toBe(false);
   expect(chromeProfiles(input)[1]?.sampleTimesUs).toEqual([999, 1000, 1001, 1039, 1040, 1041]);
 });
 test("Chrome old captures retain wider scope and cannot certify exact workload controls without a clock join", () => {
@@ -39,12 +83,12 @@ test("Chrome mismatched lifetimes and ambiguous temporal markers remain unmapped
   const targets = array(input.targets).map(object);
   const exit = targets.find(row => row.id === "new" && row.event === "exited")!;
   exit.at = 101;
-  expect(chromeProfiles(input, chromeContext(markers, window, targets))[1]?.worker).toBeNull();
-  expect(chromeControl(input, targets, "browser", window, markers).available).toBe(false);
+  expect(chromeProfiles(input, chromeContext(markers, window, targets, telemetry))[1]?.worker).toBeNull();
+  expect(chromeControl(input, targets, "browser", window, markers, telemetry).available).toBe(false);
   const events = array(input.traceEvents).map(object);
   events.push({ name: "TimeStamp", pid: 1, tid: 11, ts: 1020, args: { data: { message: "lifecycle-profile-target:another" } } });
   input.traceEvents = events;
-  expect(chromeProfiles(input, chromeContext(markers, window, input.targets))[1]?.worker).toBeNull();
+  expect(chromeProfiles(input, chromeContext(markers, window, input.targets, telemetry))[1]?.worker).toBeNull();
   events.push({ name: "ProfileChunk", pid: 1, tid: 999, id: "new", args: { data: { cpuProfile: { samples: [2] }, timeDeltas: [] } } });
   expect(() => chromeProfiles(input)).toThrow("coverage");
 });
@@ -66,6 +110,7 @@ test("offline CLI uses recorded trace bounds and reads compressed-only saved inp
     const input = saved("lifecycle-chrome-window");
     writeFileSync(join(directory, "chrome-trace.json.gz"), gzipSync(JSON.stringify(input)));
     writeFileSync(join(directory, "chrome-targets.json"), JSON.stringify(input.targets));
+    writeFileSync(join(directory, "chrome-retention.json"), JSON.stringify(telemetry));
     writeFileSync(join(directory, "run.json"), JSON.stringify({ configuration: { browser: "chrome", engine: "browser", phase: "control" }, window, chromeWindowMarkers: input.markers }));
     const child = spawnSync(process.execPath, [new URL("./lifecycle-profile-analysis.ts", import.meta.url).pathname, directory], { encoding: "utf8" });
     expect(child.status).toBe(0);

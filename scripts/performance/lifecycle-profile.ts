@@ -17,6 +17,7 @@ import { mutableRoots, nextOutputs } from "./lifecycle-model";
 import { assetIdentity } from "../goals-matrix/assets";
 import { preflight } from "../goals-matrix/preparation";
 import { verifyResolution } from "./lifecycle-lock";
+import { chromeRetention } from "./lifecycle-profile-retention";
 
 async function json(path: string) { return JSON.parse(await readFile(path, "utf8")); }
 async function save(path: string, value: unknown) { await writeFile(path, JSON.stringify(value, null, 2) + "\n", { flag: "wx" }); }
@@ -129,12 +130,14 @@ async function analysis(config: Config, window: { before: number; after: number 
   await unlink(path);
   const input = JSON.parse(bytes.toString());
   const targets = config.browser === "chrome" ? await json(join(config.output, "chrome-targets.json")) : null;
-  const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase, chromeContext(markers, window, targets)) : analyzeGecko(input, window);
+  const telemetry = config.browser === "chrome" ? await json(join(config.output, "chrome-retention.json")) : null;
+  const retention = config.browser === "chrome" ? chromeRetention(input, telemetry) : null;
+  const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase, chromeContext(markers, window, targets, telemetry)) : analyzeGecko(input, window);
   await save(join(config.output, "analysis.json"), rows);
   if (!rows.some(row => "analysis" in row ? row.analysis.samples > 0 : row.samples > 0)) throw new Error("No scoped samples retained");
   if (config.phase !== "control") return { available: config.browser !== "chrome" || rows.some(row => "workloadWindow" in row && row.workloadWindow.available && row.worker !== null),
-    scope: config.browser === "chrome" ? "Trace-clock command markers and temporal worker joins; other profiles remain explicitly unmapped" : "Observed Gecko command/lifetime intersection, with retention gaps", analysis: "analysis.json", raw: path + ".gz", sourceSha256: sha256(bytes) };
-  const control = config.browser === "chrome" ? chromeControl(input, targets, config.engine, window, markers) : geckoControl(input, window, config.engine);
+    retention, scope: config.browser === "chrome" ? "Trace-clock command markers and temporal worker joins; other profiles remain explicitly unmapped" : "Observed Gecko command/lifetime intersection, with retention gaps", analysis: "analysis.json", raw: path + ".gz", sourceSha256: sha256(bytes) };
+  const control = config.browser === "chrome" ? chromeControl(input, targets, config.engine, window, markers, telemetry) : geckoControl(input, window, config.engine);
   return { ...control, sourceSha256: sha256(bytes), analysis: "analysis.json", raw: path + ".gz" };
 }
 async function campaign(config: Config, signal: AbortSignal) {
@@ -162,6 +165,7 @@ async function requireControl(config: Config, hostIdentity: string) {
   if (configuration.browser !== config.browser || configuration.engine !== config.engine || configuration.phase !== "control" ||
     control.hostIdentity !== hostIdentity || profile.available !== true || control.workloadFailure !== null) throw new Error("Exact-context profiler control unavailable; actual capture is gated");
   if (config.browser === "chrome") {
+    if (object(profile.retention).available !== true) throw new Error("Chrome control has incomplete or unverified trace retention");
     if (!("chromeWindowMarkers" in control) || !("workloadWindow" in profile)) throw new Error("Chrome control lacks established trace-clock command boundaries");
     const markers = object(control.chromeWindowMarkers), bounds = object(profile.workloadWindow), source = object(bounds.source);
     if (bounds.available !== true || markers.begin !== source.begin || markers.end !== source.end) throw new Error("Chrome control command boundaries do not match its scoped analysis");
