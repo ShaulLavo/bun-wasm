@@ -104,6 +104,7 @@ export function splitProfile(input: unknown, context?: { configuration: string; 
   self.sort((left, right) => right.samples - left.samples);
   return { configuration: context?.configuration ?? "sm-chrome-wasm32-interp", scope: context?.scope ?? "one saved sampled worker; not complete Chrome CPU or lifecycle time",
     sampleDefinition: "each entry in profile.samples has equal weight; node.hitCount and elapsed thread CPU are not denominators",
+    sampleResidency: "samples may retain JavaScript frames around blocking waits; host/wrapper shares are scoped sampled residency, not measured active CPU or causal cost",
     boundaryDefinition: "structural Wasm to JavaScript subtree with a Wasm reentry; inclusive includes useful callee work; overhead is self samples before first reentry",
     overlap: "nested crossing rows overlap; totals use node unions; host work can lie inside useful detour work",
     samples: profile.samples, seconds: profile.seconds,
@@ -122,7 +123,7 @@ function selfKind(node: Node): string {
   if (/\/fs-worker\.js(?:[?#]|$)/.test(node.url)) return "waffle-filesystem";
   if (/\/(?:shell|notification)-worker\.js(?:[?#]|$)/.test(node.url)) return "waffle-process-host";
   if (node.name === "(garbage collector)" || /(?:^|::)(?:GCRuntime::|gc_collect|JS_RunGC|collectGarbage)/.test(node.name)) return "gc";
-  if (wasm(node) && /(?:js::Interpret|JS_CallInternal|JS_Execute|JSC::LLInt|llint_entry|llint_slow_path)/.test(node.name)) return "engine-interpreter";
+  if (wasm(node) && /(?:js::Interpret|JS_CallBytecode|JS_CallInternal|JS_Execute|JSC::LLInt|llint_entry|llint_slow_path)/.test(node.name)) return "engine-interpreter";
   if (wasm(node) && /(?:bunwasm|bun_core_|Bun__)/.test(node.name)) return "bun-runtime";
   return "unknown";
 }

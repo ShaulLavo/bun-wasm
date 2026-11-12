@@ -113,7 +113,7 @@ export function analyzeGecko(input: unknown, window: { before: number; after: nu
       scriptLabels: tables.strings.filter(frame => frame.startsWith("WorkerThreadPrimaryRunnable::Run")),
       rootComputation: stacks.filter(stack => stack.some(frame => /lifecycleProfileRoot/.test(frame))).length,
       childComputation: stacks.filter(stack => stack.some(frame => /lifecycleProfileChild/.test(frame))).length,
-      interpreterSamples: stacks.filter(stack => stack.some(frame => /js::Interpret|JS_CallInternal|JS_Execute|JSC::LLInt|llint_entry/.test(frame))).length,
+      interpreterSamples: stacks.filter(stack => stack.some(frame => /js::Interpret|JS_CallBytecode|JS_CallInternal|JS_Execute|JSC::LLInt|llint_entry/.test(frame))).length,
       gcNamedSamples: stacks.filter(stack => stack.some(frame => /js::gc::|GCRuntime::|GC::collect|collectGarbage/.test(frame))).length,
       unknownLeafSamples: stacks.filter(stack => !stack.length || /^(?:0x|\(unknown\))/.test(stack.at(-1)!)).length,
       strippedWasmSamples: stacks.filter(stack => stack.some(frame => /wasm-function\[\d+\]/.test(frame))).length,
