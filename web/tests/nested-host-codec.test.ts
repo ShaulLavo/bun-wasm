@@ -59,8 +59,9 @@ describe("global declarations", () => {
 
   test("reads imported and defined globals while skipping every admitted initializer form", () => {
     const globals = readModuleInfo(bytes(imports, section(6, [declarations.length].concat(declarations.flat())), exports)).globals;
+    const values = ["i32", "i32", "i64", "i32", "i64", "f32", "f64", "i32", "funcref", "externref", "funcref", "v128", "i32"] as const;
     expect(Array.from(globals)).toEqual(exportNames.map((text, index) => [text, {
-      value: ["i32", "i32", "i64", "i32", "i64", "f32", "f64", "i32", "funcref", "externref", "funcref", "v128", "i32"][index],
+      value: values[index]!,
       mutable: [4, 6, 11].includes(index),
     }]));
   });

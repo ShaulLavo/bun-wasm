@@ -42,6 +42,13 @@ function call(target: Member, instance: number, name: string, args: WasmNumber[]
   const fn = (target.send({ Function: { instance, name } }) as ReplyOf<"Function">).Function;
   return target.send({ Call: { function: fn.id, arguments: args, invocation: 2 } });
 }
+function result(target: Member, pointer: number, value: number): number {
+  const view = new DataView(target.memory.buffer);
+  view.setUint32(pointer + 8, 0, true);
+  view.setUint32(pointer + 12, 0, true);
+  view.setBigInt64(pointer + 16, BigInt(value), true);
+  return 0;
+}
 
 function published(target: Member, bytes: Uint8Array): number {
   const description = new TextEncoder().encode('{"memory":{},"imports":[],"exports":[]}');
@@ -53,8 +60,17 @@ function published(target: Member, bytes: Uint8Array): number {
   return token;
 }
 function moduleBytes(...sections: number[][]) { return Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...sections)); }
+function withStart(globals: number[], exportIndex: number): Uint8Array {
+  return moduleBytes(
+    section(1, [1, 0x60, 0, 0]),
+    section(2, [1].concat(utf8Name("env"), utf8Name("effect"), [0, 0])), section(3, [1, 0]),
+    section(6, globals), section(7, [1].concat(utf8Name("value"), [3, exportIndex])),
+    section(8, [1]), section(10, [1, 4, 0, 0x10, 0, 0x0b]),
+  );
+}
 /** Valid extended constants are outside the regionizer's admitted set. The later export stays undecoded. */
-const undecoded = moduleBytes(section(6, [2, 0x7f, 0, 0x41, 1, 0x41, 2, 0x6a, 0x0b, 0x7f, 0, 0x41, 3, 0x0b]), section(7, [1].concat(utf8Name("late"), [3, 1])));
+const undecoded = withStart([2, 0x7f, 0, 0x41, 1, 0x41, 2, 0x6a, 0x0b, 0x7f, 0, 0x41, 3, 0x0b], 1);
+const reference = withStart([1, 0x70, 0, 0xd0, 0x70, 0x0b], 0);
 
 describe("global admission", () => {
   test("admits maintained numeric exports and resolves their actual declaration indices", () => {
@@ -68,9 +84,10 @@ describe("global admission", () => {
       ["importedBase2", { value: "i32", mutable: false }],
     ]);
     expect(handle(compile(target, fixture))).toBeGreaterThanOrEqual(BACKEND);
+    expect(errorText(compile(target, maintained("global-reference")))).toBe("unsupported nested global export");
   });
 
-  for (const [name, bytes] of [["reference", maintained("global-reference")], ["undecoded", undecoded]] as const) {
+  for (const [name, bytes] of [["reference", reference], ["undecoded", undecoded]] as const) {
     test(`Compile and AttachModule refuse ${name} exports before any instance or side effect`, () => {
       const target = member();
       let effects = 0;
@@ -87,15 +104,27 @@ describe("global admission", () => {
       expect(handle(compile(target, fixture))).toBeGreaterThanOrEqual(BACKEND);
     });
   }
+
+  test("attached numeric globals use the same live metadata and storage", () => {
+    const sender = sharedJoin(); members.push(sender);
+    const target = member(sender);
+    const token = published(sender, fixture);
+    const attached = target.send({ AttachModule: { token } }) as ReplyOf<"AttachedModule">;
+    const memory = handle(target.send({ Reserve: { initial: 1, maximum: 1 } }));
+    const instance = handle(instantiate(target, attached.AttachedModule.id, memory));
+    expect(get(target, instance, "fromSeed")).toEqual({ Values: [{ I32: 31 }] });
+    expect(set(target, instance, "counter", { I32: 19 })).toEqual({ Count: 0 });
+    expect(get(target, instance, "counterAlias")).toEqual({ Values: [{ I32: 19 }] });
+  });
 });
 
 describe("live numeric globals", () => {
   test("reads each declared type, imported aliases and the post-start value", () => {
     const target = member();
-    target.dispatch = (_invocation, _callback, pointer) => { new DataView(target.memory.buffer).setBigUint64(pointer + 16, 3n, true); return 0; };
+    target.dispatch = (_invocation, _callback, pointer) => result(target, pointer, 3);
     const { instance } = start(target);
-    const expected = { seed: { I32: 31 }, answer: { I32: 42 }, counter: { I32: 7 }, counterAlias: { I32: 7 }, wide: { I64: 9 }, single: { F32: 1069547520 }, double: { F64: 4609434218613702656 }, fromSeed: { I32: 31 }, afterVector: { I32: 11 }, started: { I32: 3 } };
-    for (const [name, value] of Object.entries(expected)) expect(get(target, instance, name)).toEqual({ Values: [value] });
+    const expected = { seed: '"I32":31', answer: '"I32":42', counter: '"I32":7', counterAlias: '"I32":7', wide: '"I64":9', single: '"F32":1069547520', double: '"F64":4609434218613702656', fromSeed: '"I32":31', afterVector: '"I32":11', started: '"I32":3' };
+    for (const [name, value] of Object.entries(expected)) expect(target.sendText(JSON.stringify({ GlobalGet: { instance, name } }))).toBe(`{"Values":[{${value}}]}`);
   });
 
   test("writes through aliases and Wasm in both directions, independently per instance and member", () => {
@@ -133,8 +162,10 @@ describe("live numeric globals", () => {
     const single = (get(target, instance, "single") as ReplyOf<"Values">).Values[0] as { F32: number };
     expect(Number.isNaN(new Float32Array(new Uint32Array([single.F32]).buffer)[0])).toBe(true);
     set(target, instance, "double", { F64: "9221120237041090561" });
-    const double = (get(target, instance, "double") as ReplyOf<"Values">).Values[0] as { F64: number };
-    expect(Number.isNaN(new Float64Array(new BigUint64Array([BigInt(double.F64)]).buffer)[0])).toBe(true);
+    const double = target.sendText(JSON.stringify({ GlobalGet: { instance, name: "double" } }));
+    const bits = /"F64":(\d+)/.exec(double)?.[1];
+    expect(bits).toBeDefined();
+    expect(Number.isNaN(new Float64Array(new BigUint64Array([BigInt(bits!)]).buffer)[0])).toBe(true);
   });
 
   test("refuses immutable, SIMD, wrong tags, non-global names and invalid instances", () => {
@@ -177,8 +208,7 @@ describe("global boundaries", () => {
     target.dispatch = (_invocation, _callback, pointer) => {
       if (mode === "pending") return PENDING_EXCEPTION;
       if (mode === "bad-frame") return BAD_FRAME;
-      new DataView(target.memory.buffer).setBigInt64(pointer + 16, -1n, true);
-      return 0;
+      return result(target, pointer, -1);
     };
     const before = target.host.snapshot();
     const reply = instantiate(target, module, memory);
@@ -186,7 +216,7 @@ describe("global boundaries", () => {
     else expect(reply).toMatchObject({ Error: { category: "RuntimeError" } });
     expect(target.host.snapshot()).toMatchObject({ instances: before.instances, failedInstantiations: before.failedInstantiations + 1, activeInvocations: 0, coreFailed: false });
     expect(errorText(get(target, instance + 1, "started"))).toBe("invalid instance");
-    target.dispatch = () => 0;
+    target.dispatch = (_invocation, _callback, pointer) => result(target, pointer, 0);
     const recovered = handle(instantiate(target, module, memory));
     expect(recovered).toBe(instance + 1);
     expect(get(target, recovered, "counter")).toEqual({ Values: [{ I32: 7 }] });
@@ -194,12 +224,12 @@ describe("global boundaries", () => {
 
   test("global requests reenter without adding an invocation", () => {
     const { target, instance } = start();
-    target.dispatch = () => {
+    target.dispatch = (_invocation, _callback, pointer) => {
       expect(target.host.snapshot().activeInvocations).toBe(1);
       expect(set(target, instance, "counter", { I32: 67 })).toEqual({ Count: 0 });
       expect(get(target, instance, "counterAlias")).toEqual({ Values: [{ I32: 67 }] });
       expect(target.host.snapshot().activeInvocations).toBe(1);
-      return 0;
+      return result(target, pointer, 0);
     };
     expect(call(target, instance, "observeThenCounter")).toEqual({ Values: [{ I32: 67 }] });
     expect(target.host.snapshot().activeInvocations).toBe(0);
