@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { checkIrregexpClosure, type ArchiveMember } from "./native-source-closure.ts";
 import { checkUnicodeCommands, commands, nativeSymbols, record, requireEmbedProfile, verifyOriginalProfile, verifyOverlay, verifyOverlayFiles } from "./native-profile.ts";
 
+import { verifyDiagnosticProfile } from "./diagnostic-profile.ts";
+
 const pin = "a5df22d986d4b626f771b4f8885241941601c35c";
 const recipe = dirname(fileURLToPath(import.meta.url));
 const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
@@ -204,6 +206,10 @@ export function headerIdentity(root: string, mode: "write" | "verify" = "write")
   if (mode === "verify") assert.equal(readFileSync(saved, "utf8"), manifest.bytes, "saved header manifest changed");
   else writeFileSync(saved, manifest.bytes);
   return { count: manifest.count, sha256: manifest.sha256 };
+}
+
+export function nativeObjectListIdentity(archiveInputs: readonly string[], closureInputs: readonly string[]) {
+  return Array.from(new Set(archiveInputs.concat(closureInputs)), path => ({ path, sha256: fileHash(path) }));
 }
 
 const originalBuildHead = "1a53e2123e4876be671a9a03eb025ae569795001";
@@ -405,6 +411,7 @@ function main(): void {
   assert(!/^#define ENABLE_PORTABLE_BASELINE_INTERP_FORCE /m.test(header), "PBL must remain selectable");
   assert(!/^#define (?:JS_HAS_INTL_API|JS_HAS_SHARED_MEMORY|JS_JIT) /m.test(header), "forbidden native profile");
   const profile = verifyOverlay(root);
+  const diagnostics = verifyDiagnosticProfile(root, sdk, sysroot);
   const irregexpUnits = checkUnicodeCommands(commands(rawCommands), root);
   const packed = process.argv.includes("--verify") ? retainedPack(root) : pack(root, sdk);
   const archive = readFileSync(packed.library);
@@ -414,7 +421,7 @@ function main(): void {
   const relocationCounts = checkRelocations(relocations);
   const receipt = {
     gate: "N1", scope: "fresh native library only; not N2, VM execution, G3 or complete ES RegExp", revision,
-    source: sourceIdentity(root), ...profile, irregexpUnits, irregexpClosure,
+    source: sourceIdentity(root), ...profile, diagnostics, irregexpUnits, irregexpClosure,
     irregexpBackendSha256: fileHash(join(obj, "js/src/irregexp/backend.mk")),
     toolchain: [join(sdk, "bin/clang++"), join(sdk, "bin/clang++.cfg"), join(sdk, "bin/llvm-ar"), join(sdk, "bin/llvm-nm"), join(sysroot, "bun-wasm-sysroot.json")].map((path) => ({ path, sha256: fileHash(path) })),
     commandInputs: { sdk, sysroot, cargoHome: process.env.CARGO_HOME },
@@ -428,7 +435,7 @@ function main(): void {
     recipeInputs: ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in"].map((path) => ({ path, sha256: fileHash(join(recipe, path)) })),
     patchSha256: fileHash(join(recipe, "spidermonkey-wasi.patch")), mozconfigSha256: fileHash(join(root, "mozconfig")),
     cargoManifestSha256: fileHash(join(root, "firefox/Cargo.toml")),
-    objectLists: packed.inputs.concat(irregexpClosure.inputs).map((path) => ({ path, sha256: fileHash(path) })),
+    objectLists: nativeObjectListIdentity(packed.inputs, irregexpClosure.inputs),
     archiveObjectsSha256: hash(packed.objects.join("\n") + "\n"), relocationCounts,
     exceptionTagSections: 0, exceptionTagImports: 0, nonPicCodeRelocations: 0, absoluteLibcStateRelocations: 0,
     rustStaticlibIncluded: false,

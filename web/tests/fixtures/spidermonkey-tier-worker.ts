@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { parseProgramFiles, programKind } from "../../../src/engine-kind.ts";
-import { prepareProgram, programLinkPlan } from "../../../src/assets.ts";
+import { prepareProgram, programMetadata } from "../../../src/assets.ts";
 import { linkNodeProgram } from "../../scripts/node-linked.ts";
 
 const data: unknown = workerData;
@@ -16,7 +16,7 @@ const files = parseProgramFiles(data.files, bytes => {
 });
 if (files.kind !== "spidermonkey" || programKind(data.module) !== files.kind) throw new TypeError("Wrong selected fixture engine");
 const prepared = await prepareProgram(files);
-const source = programLinkPlan(prepared);
+const source = programMetadata(prepared).linkPlan;
 if (!source) throw new Error("Fixture link plan missing");
 const linked = await linkNodeProgram(source, { runtime_proc: { signal: () => 0 } });
 try {

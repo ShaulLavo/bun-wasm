@@ -444,3 +444,13 @@ for (const path of [
     expect(output).toEndWith("shared_native=true");
   });
 }
+
+test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
+});
+
+test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
+});

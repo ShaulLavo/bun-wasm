@@ -1,7 +1,7 @@
 import { programMemory } from "../../src/program-memory.ts";
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { isSharedGroupCore, pairedEngines } from "../../src/engine-kind.ts";
-import { programLinkPlan } from "../../src/assets.js";
+import { programMetadata } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
@@ -143,7 +143,9 @@ async function adoptRootProgram(subprocess: SubprocessBroker, transport: Paramet
   const group = isSharedGroupCore(module);
   const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
   if (!controlGrant) return undefined;
-  const member = group ? await subprocess.admitRootGroup() : undefined;
+  const linkPlan = programMetadata(module).linkPlan;
+  if (group && !linkPlan) throw new TypeError("Memory group root requires a prepared link plan");
+  const member = group && linkPlan ? await subprocess.admitRootGroup({ module, linkPlan }) : undefined;
   return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
 }
 
@@ -193,7 +195,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       adapter: options.adapter,
       runtimeProcess: options.runtimeProcess,
       module: options.module,
-      linkPlan: programLinkPlan(options.module),
+      ...programMetadata(options.module),
       ...rootCommand(options),
       filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
       trace: options.trace ?? false,
@@ -448,7 +450,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     transport.data = { ...(transport.data as object | undefined), filesystem };
     if (options.adapter !== "preview1" && isToolCommand(options.args)) {
       request.module = await loadTools();
-      request.linkPlan = programLinkPlan(request.module);
+      Object.assign(request, programMetadata(request.module));
     }
     if (preparationStopped()) return;
     if (!subprocess) return;

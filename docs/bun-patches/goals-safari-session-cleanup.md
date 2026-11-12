@@ -26,3 +26,10 @@ command that loses admission is withdrawn. Every subsequent WebDriver send after
 an internal await checks admission again. A newly created preview handle remains
 owned for session teardown even if cancellation prevents selecting or navigating
 it. Failure cleanup and session deletion remain unguarded resource release.
+
+The campaign executor also preserves failure-time terminal output alongside its
+later cleanup observation in the same log. Generic cleanup observes after the
+server stop; owned cleanup observes before transport cleanup. A missing
+failure-time observation is labelled as unavailable. Successful logs retain
+their existing format. The Angular diagnostic and iPhone executor fixtures
+cover both cleanup paths and unavailable observations.

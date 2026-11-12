@@ -30,6 +30,20 @@ The original executable fixture in `tests/package/engine-initialization-fixture.
 
 `scripts/stage-program-profiles.ts` is an original delivery adapter. It validates each original core and side receipt's input digest, scope, shared profile and artifact bytes before publishing assets or fingerprints. The core receipt covers the untagged core; staging also verifies that the supplied core is exactly that core with its selected engine tag. Staging also requires both decoded shared memory imports to declare the current authoritative group address space; old-stage pairs are refused before publication. Original component source labels and receipt text are preserved independently of the host revision. SpiderMonkey staging consumes the original experimental shared pair receipt, checks the exact tagged core and side bytes against it, and binds the original core receipt, source label and included library receipt. It does not rebuild or re-capture native library inputs. The selected profile controls both optional SpiderMonkey manifest entries before choice or bootstrap. Its staging regressions reuse the original executable initialization fixture, including its untagged core, and copy no upstream source.
 
+The original page and worker adapters in `src/assets.ts`, `src/bun-adapter.ts`,
+`web/src/bun-executor.ts`, `web/src/bun-launcher.ts`, `web/src/runner.ts`,
+`web/src/subprocess-broker.ts` and `web/scripts/node-linked.ts` share Waffle's prepared
+compiled image across workers. The page retains one loading promise per adapter
+installation and supplies the matching image and memory limit together. Workers adopt
+the compiled image without source bytes or compilation. Adopted roots present the
+original page-issued module/image pair to group admission. Instances, memory regions,
+initialization and cleanup remain owned by each process. These are original host
+adapters; no upstream implementation is copied or changed by this transport.
+
+The original `web/scripts/node-signals.ts` adapter creates standalone outcome buffers
+through Waffle's factory. Terminal state and startup diagnostic storage then retain one
+shared identity when Node sends their backing buffer to another worker.
+
 ### J11 real-build prerequisite repairs
 
 The first current shared-group build reproduced the unresolved TLS `errno` side
