@@ -74,6 +74,26 @@ describe("whole stored user tree", () => {
     await expect(readSource(fixture.source, "vanilla", [], AbortSignal.abort("cancelled"))).rejects.toBe("cancelled");
     expect(fixture.closed()).toBe(true);
   });
+
+  test("a missing completed-seed marker refuses eviction", async () => {
+    const source: SourceReader = { walk: () => ({ next: async () => ({ entries: [metadata("/", "dir")], done: true }), close: async () => {} }), readFile: async () => undefined };
+    await expect(readSource(source, "vanilla", [])).rejects.toThrow("template initialization is incomplete");
+  });
+
+  test("the five-second read deadline cancels the cursor and retains the workspace", async () => {
+    let closed = false;
+    const source: SourceReader = {
+      walk: (_, options) => ({
+        next: () => new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true })),
+        close: async () => { closed = true; },
+      }),
+      readFile: async () => undefined,
+    };
+    const started = performance.now();
+    await expect(readSource(source, "vanilla", [])).rejects.toHaveProperty("name", "TimeoutError");
+    expect(performance.now() - started).toBeGreaterThanOrEqual(4900);
+    expect(closed).toBe(true);
+  }, 8000);
 });
 
 test("LRU only intersects actual stored names with the catalog", () => {

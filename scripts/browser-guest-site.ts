@@ -1,4 +1,4 @@
-// The playground site the browser-guest checks serve, built once from this checkout's browser
+// The playground and sandbox sites the browser-guest checks serve, built once from this checkout's browser
 // guest and verified wherever it is used.
 //
 //   bun scripts/browser-guest-site.ts build <out>    from dist/bun-browser.wasm and its receipt
@@ -61,8 +61,10 @@ export function buildSite(out: string): SiteIdentity {
   const guest = readFileSync(guestPath);
   const receipt = verifiedReceipt(guest, JSON.parse(readFileSync(`${guestPath}.build.json`, "utf8")), source);
   execFileSync(process.execPath, [join(root, "web/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+  execFileSync(process.execPath, [join(root, "sandbox/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
   mkdirSync(out, { recursive: true });
   cpSync(join(root, "web/dist"), join(out, "site"), { recursive: true });
+  cpSync(join(root, "sandbox/dist"), join(out, "site/sandbox"), { recursive: true });
   const identity: SiteIdentity = {
     source,
     receipt,
@@ -90,6 +92,9 @@ export function verifySite(out: string): SiteIdentity {
   const guestSha256 = sha256(guest);
   if (guestSha256 !== identity.guest.sha256 || guest.byteLength !== identity.guest.bytes || sha256(gzip) !== identity.guest.gzipSha256) throw new Error("Site guest differs from site.json");
   if (builds["bun-browser.wasm"] !== guestSha256) throw new Error(`engine-builds.json names ${builds["bun-browser.wasm"]}, the site's guest is ${guestSha256}`);
+  const sandboxGzip = readFileSync(join(site, "sandbox/bun-browser.wasm.gz"));
+  const sandboxBuilds = JSON.parse(readFileSync(join(site, "sandbox/engine-builds.json"), "utf8")) as Record<string, string>;
+  if (sha256(gunzipSync(sandboxGzip)) !== guestSha256 || sandboxBuilds["bun-browser.wasm"] !== guestSha256) throw new Error("Sandbox guest differs from producer receipt");
   return { ...identity, receipt };
 }
 

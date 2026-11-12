@@ -27,7 +27,7 @@ async function nativeTransactions(engine: typeof chromium, origin: string): Prom
     const page = await context.newPage();
     await page.goto(origin);
     await page.waitForFunction(() => !!globalThis.sandboxIndexChecks);
-    expect(await page.evaluate(() => sandboxIndexChecks.indexTransactions())).toHaveLength(5);
+    expect(await page.evaluate(() => sandboxIndexChecks.indexTransactions())).toHaveLength(6);
     if (engine !== chromium) return;
     await quotaControl(browser, origin);
   } finally { await browser.close(); }

@@ -1,6 +1,6 @@
 export const SOURCE_LIMIT_BYTES = 8 * 1024 * 1024;
 export const SOURCE_LIMIT_ENTRIES = 10_000;
-export const SOURCE_TIMEOUT_MS = 5_000;
+const SOURCE_TIMEOUT_MS = 5_000;
 export const APP = "/home/user/app";
 export const SEED_MARKER = `${APP}/.bunwasm-initialized`;
 export const RESTORE_MARKER = `${APP}/.bunwasm-restored`;
@@ -23,7 +23,7 @@ export interface SourceReader {
   readFile(path: string, options: { maxBytes: number; signal: AbortSignal }): Promise<Uint8Array | undefined>;
 }
 
-export type SourceEntry = {
+type SourceEntry = {
   readonly path: string;
   readonly mode: number;
   readonly mtime: number;
@@ -41,7 +41,7 @@ export class PreservationRefused extends Error {
   constructor(message: string) { super(`Workspace kept: ${message}`); }
 }
 
-export function canonicalPath(path: string): boolean {
+function canonicalPath(path: string): boolean {
   return path === "/" || path.startsWith("/") && !path.includes("\0") && !path.includes("\\")
     && path.slice(1).split("/").every(part => part !== "" && part !== "." && part !== "..");
 }
@@ -99,7 +99,7 @@ async function readEntries(reader: SourceReader, template: string, metadata: rea
     if (paths.has(entry.path)) throw new PreservationRefused(`duplicate path ${entry.path}`);
     paths.add(entry.path);
     if (entry.kind === "file") bytes += entry.size;
-    if (bytes > SOURCE_LIMIT_BYTES) throw new PreservationRefused(`source exceeds ${SOURCE_LIMIT_BYTES} bytes`);
+    if (bytes > SOURCE_LIMIT_BYTES) throw new PreservationRefused(`source payload exceeds ${SOURCE_LIMIT_BYTES} bytes`);
   }
   const entries: SourceEntry[] = [];
   for (const entry of metadata) {

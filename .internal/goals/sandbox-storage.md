@@ -2,6 +2,21 @@
 
 Status: Approved. Implementation in progress.
 
+## Current checkpoint
+
+Bounded preservation, immutable strict-transaction index, conditional restore,
+editor pending-save retention, installer retry detection, and awaited checkpoints
+are implemented. Pure, native browser index, async UI, and selector checks pass.
+The shared producer packages the sandbox once and the guest regression harness is
+prepared. A 240 MiB live old-code control passed Vanilla's checkpoint and failed
+React's checkpoint despite its ready indicator.
+
+Production maintenance creation and pre-runtime reclamation remain blocked on the
+published Waffle maintenance API tuple. Current pins do not export that API. No
+compatibility fallback or private Waffle database access is used. The draft must
+not merge before wiring that tuple, executing the actual guest cases, and running
+the bounded eight-template storage measurement and warm Next reinstall.
+
 Keep active workspaces and one eligible idle install. Before removing an idle
 workspace, preserve its complete user tree in a strict IndexedDB transaction.
 Restore by immutable snapshot identity before seeding a template. Unsupported or

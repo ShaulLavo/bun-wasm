@@ -1315,7 +1315,9 @@ jobs:
       # The playground site the browser-guest checks serve, bundled once from the verified guest
       # (and the bash-web shell) linked above; each Processes browser leg verifies and serves it.
       - name: Build the browser-guest site once
-        run: bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
+        run: |
+          bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts
+          bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 5
         with:

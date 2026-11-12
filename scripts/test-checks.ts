@@ -25,7 +25,7 @@ function parseOwner(value: unknown): Owner {
 }
 
 function inputFiles(inputs: unknown, file: string): string[] {
-  if (!Array.isArray(inputs) || inputs.length === 0 || !inputs.every(input => typeof input === "string" && /^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(input) && !input.split("/").includes(".."))) throw new Error(`Invalid check input files: ${file}`);
+  if (!Array.isArray(inputs) || inputs.length === 0 || !inputs.every(input => typeof input === "string" && /^[a-zA-Z0-9_.+-]+(?:\/[a-zA-Z0-9_.+-]+)*$/.test(input) && !input.split("/").includes(".."))) throw new Error(`Invalid check input files: ${file}`);
   if (new Set(inputs).size !== inputs.length) throw new Error(`Duplicate check inputs: ${file}`);
   return inputs;
 }

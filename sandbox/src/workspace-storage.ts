@@ -5,6 +5,7 @@ import { IDLE_INSTALLS_KEPT, regenerableOutputs, StorageRecovery } from "./works
 import { restoreSource } from "./workspace-restore";
 import { templateFiles } from "./template";
 import { templates } from "./template-catalog";
+import { measureStartup } from "../../web/src/startup";
 
 export type StoredWorkspaces = Pick<EvictionDependencies, "stored" | "openIdle">;
 type Filesystem = Runtime["filesystem"];
@@ -26,9 +27,10 @@ export class WorkspaceStorage {
 
   prepare(): Promise<void> { return this.reclaim(IDLE_INSTALLS_KEPT, false); }
 
-  restore(fs: Filesystem): Promise<void> {
+  initialize(fs: Filesystem, seed: () => Promise<void>): Promise<void> {
     return this.operation(async () => {
       await restoreSource(fs, this.index, this.template);
+      await seed();
       await this.index.opened(this.template, Date.now());
     });
   }
@@ -46,11 +48,13 @@ export class WorkspaceStorage {
 
   private reclaim(kept: number, recovering: boolean): Promise<void> {
     return this.operation(async () => {
+      const started = performance.now();
       let cleared: Promise<boolean> | undefined;
       const clearDownloadCache = () => cleared ??= caches.delete(DOWNLOAD_CACHE);
       const report = await evictIdle({ index: this.index, ...this.workspaces, policy: preservationPolicy, clearDownloadCache }, templates.map(template => template.id), this.template, kept);
       if (recovering && report.evicted.length === 0) await clearDownloadCache();
       this.report(report);
+      measureStartup("storage-reclaim", started, { kept, evicted: report.evicted, protected: report.kept.length, busy: report.busy.length });
     });
   }
 }

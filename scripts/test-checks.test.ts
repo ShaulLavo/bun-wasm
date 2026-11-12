@@ -159,6 +159,10 @@ test("each discovery group retains one command owner and browser deadlines stay 
   expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(2);
   expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
   expect(workflow).not.toContain("web/build.ts");
+  expect(workflow).toContain("bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts");
+  const storage = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
+  expect(storage?.owner).toBe("browser-guest");
+  expect(storage?.inputs).toContain("sandbox/template-sveltekit/src/routes/+page.svelte");
   const runtime = readFileSync(join(root, "scripts/check-runtime.sh"), "utf8");
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" local-runtime');

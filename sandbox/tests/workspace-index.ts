@@ -1,5 +1,6 @@
 import { WorkspaceIndex } from "../src/workspace-index";
-import type { SourceSnapshot } from "../src/workspace-source";
+import { parseSnapshot, type SourceSnapshot } from "../src/workspace-source";
+import { WorkspaceStorage } from "../src/workspace-storage";
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -48,7 +49,29 @@ export async function indexTransactions(): Promise<string[]> {
   } finally { index.close(); await deleted(name); }
   await upgradeAbort();
   results.push("native-upgrade-abort-rejected");
+  await serializedReset();
+  results.push("origin-operation-lock-serializes-independent-resetters");
   return results;
+}
+
+async function serializedReset(): Promise<void> {
+  const workspaces = { stored: async () => [], openIdle: async (): Promise<"missing"> => "missing" };
+  const first = await WorkspaceStorage.open(workspaces, "vanilla", () => {});
+  const second = await WorkspaceStorage.open(workspaces, "vanilla", () => {});
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const start = new Promise<void>(resolve => { entered = resolve; });
+  const events: string[] = [];
+  const a = first.reset(async () => { events.push("first"); entered(); await gate; events.push("first-complete"); });
+  const b = second.reset(async () => { events.push("second"); });
+  try {
+    await start;
+    assert(events.join(",") === "first", "second reset escaped the origin lock");
+    release();
+    await Promise.all([a, b]);
+    assert(events.join(",") === "first,first-complete,second", "resets overlapped");
+  } finally { release(); await Promise.allSettled([a, b]); first.close(); second.close(); await deleted("bun-wasm-sandbox-index"); }
 }
 
 async function completeBeforeResolve(index: WorkspaceIndex, source: SourceSnapshot): Promise<void> {
@@ -105,7 +128,7 @@ export async function refusedQuotaTransaction(): Promise<string[]> {
   assert(state && typeof state === "object" && "index" in state && state.index instanceof WorkspaceIndex && "name" in state && typeof state.name === "string" && "source" in state, "quota test not prepared");
   const { index, name } = state;
   const source = snapshot("refused");
-  const random = new Uint8Array(8 * 1024 * 1024);
+  const random = new Uint8Array(8 * 1024 * 1024 - 1024);
   for (let offset = 0; offset < random.length; offset += 65536) crypto.getRandomValues(random.subarray(offset, offset + 65536));
   const large = { ...source, bytes: random.length, entries: [{ kind: "file" as const, path: "/random", mode: 0o600, mtime: 1, data: random }] };
   let failure: unknown;
@@ -117,7 +140,7 @@ export async function refusedQuotaTransaction(): Promise<string[]> {
   try {
     assert(failure instanceof DOMException && failure.name === "QuotaExceededError", `control native write did not fail with quota: ${String(failure)}`);
     assert(await index.source(failedTemplate) === undefined, "quota-failed preserve changed source");
-    assert((await index.source("vanilla"))?.id !== large.id, "quota pressure changed previous source");
+    assert((await index.source("vanilla"))?.id === parseSnapshot(state.source).id, "quota pressure changed previous source");
     return ["native-quota-transaction-refused-and-source-retained"];
   } finally { index.close(); await deleted(name); Reflect.deleteProperty(globalThis, "storageQuotaTest"); }
 }

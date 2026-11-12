@@ -12,7 +12,7 @@ Only exact catalog-owned generated roots are omitted. Dotfiles, unknown build an
 dist paths, files outside the app, binary bytes, deleted template files, and empty
 directories are retained. Fresh files use mode 0600 and directories use 0700.
 Restored mtimes are deliberately fresh. Links, sockets, hard links, nondefault
-modes, incomplete template seeds, trees over 8 MiB or 10,000 retained entries,
+modes, incomplete template seeds, file payloads over 8 MiB or 10,000 retained entries,
 and reads exceeding five seconds refuse eviction and keep the original workspace.
 
 Waffle owns stored-tree inspection, runtime ownership, and native deletion. The
