@@ -145,11 +145,31 @@ function chainCapacities(maximum = n) {
   for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt, maximum);
   return capacities;
 }
+// What stops each chain one level past its capacity, and whether a shallow chain of the same shape
+// still parses afterwards: a capacity alone does not say which error stopped the chain. A chain that
+// completes at the deepest depth tried has no refusal.
+function chainRefusal(attempt, capacity, maximum) {
+  if (capacity >= maximum) return null;
+  try { attempt(capacity + 1); return 'completed'; }
+  catch (error) { return error?.name ?? typeof error; }
+}
+function chainBoundaries(capacities, maximum = n) {
+  const boundaries = {};
+  for (const [name, attempt] of Object.entries(chainModes)) {
+    const refusal = chainRefusal(attempt, capacities[name], maximum);
+    let recovered = true;
+    try { attempt(1); } catch { recovered = false; }
+    boundaries[name] = { refusal, recovered };
+  }
+  return boundaries;
+}
 // Leave the loader's synchronous calls before comparing capacities across contexts.
 actions.chainCapacity = async () => {
   await Promise.resolve();
   chainCapacities(0);
-  console.log('capacities', JSON.stringify(chainCapacities()));
+  const capacities = chainCapacities();
+  console.log('capacities', JSON.stringify(capacities));
+  console.log('boundaries', JSON.stringify(chainBoundaries(capacities)));
 };
 // A parent and a Worker of this file in one run: the parent's capacities before the child starts
 // and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
