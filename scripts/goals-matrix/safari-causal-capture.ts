@@ -97,6 +97,8 @@ class CaptureController {
   private session: string | null = null;
   private host: string | null = null;
   private loss: Loss | undefined;
+  private lastConfirmed: Clock | undefined;
+  private readFailed = false;
   private firstInvalid: SafariProtocolFact | undefined;
   private facts = 0;
   private late = 0;
@@ -165,6 +167,7 @@ class CaptureController {
     const { target, scores } = association;
     if (this.native.read(target.pid)?.birth !== target.birth) throw this.block("target identity changed at attachment");
     this.state = { kind: "armed", target, at: clock(), wall: new Date(), scores };
+    this.lastConfirmed = this.state.at;
     this.append("native", { kind: "armed", target, scores, session: this.session, host: this.host, at: this.state.at });
     if (this.degraded.length) throw this.block("capture writer failed at arming");
     this.poller = setInterval(() => this.poll(target), this.options.pollMs ?? 250);
@@ -172,11 +175,16 @@ class CaptureController {
 
   // After arming only the pinned identity is read. A change ends attribution; nothing is rebound.
   private poll(target: Target): void {
-    if (this.loss) return;
-    const reading = this.native.read(target.pid);
-    if (reading?.birth === target.birth) return;
-    this.loss = { at: clock(), reason: reading ? "birth-changed" : "exited" };
-    this.append("native", { kind: "identity-lost", target, ...this.loss });
+    if (this.loss || this.readFailed) return;
+    try {
+      const reading = this.native.read(target.pid);
+      if (reading?.birth === target.birth) { this.lastConfirmed = clock(); return; }
+      this.loss = { at: clock(), reason: reading ? "birth-changed" : "exited" };
+      this.append("native", { kind: "identity-lost", target, ...this.loss });
+    } catch (error) {
+      this.readFailed = true;
+      this.degraded.push({ file: "native-reader", at: clock(), error: error instanceof Error ? error.name : "unknown" });
+    }
     this.stopPoll();
   }
 
@@ -188,10 +196,16 @@ class CaptureController {
   private async nativeEvents(): Promise<{ query: "not-run" | "ok" | "failed"; events: readonly NativeEvent[]; ignored: number }> {
     if (this.state.kind !== "armed") return { query: "not-run", events: [], ignored: 0 };
     const { target, wall } = this.state;
+    const end = this.lastConfirmed;
+    if (!end) return { query: "not-run", events: [], ignored: 0 };
     try {
-      const result = await this.native.query(target.pid, "webcontent", new Date(wall.getTime() - 2000), new Date(Date.now() + 2000));
-      for (const event of result.events) this.append("native", { kind: "event", event });
-      return { query: "ok", ...result };
+      const result = await this.native.query(target.pid, "webcontent", wall, new Date(end.utc));
+      const events = result.events.filter(event => {
+        const time = event.eventUtc === null ? NaN : Date.parse(event.eventUtc);
+        return Number.isFinite(time) && time > wall.getTime() && time < Date.parse(end.utc);
+      });
+      for (const event of events) this.append("native", { kind: "event", event });
+      return { query: "ok", events, ignored: result.ignored + result.events.length - events.length };
     } catch (error) {
       this.append("native", { kind: "query-failed", error: error instanceof Error ? error.name : "unknown", at: clock() });
       return { query: "failed", events: [], ignored: 0 };
@@ -218,7 +232,7 @@ class CaptureController {
     this.nativeSummary = { query: native.query, events: native.events.length, ignored: native.ignored, initiating: initiating ?? "unknown",
       uncontrolled: native.events.filter(event => !controlled.has(event.kind)).length };
     this.closed = true;
-    this.writeSettlement(this.control && (!this.control.jobRemoved || !this.control.fileRemoved) ? "unproved" : "settled");
+    this.writeSettlement(this.control?.jobRemoved && this.control.fileRemoved ? "settled" : "unproved");
   }
 
   private writeSettlement(state: "open" | "settled" | "unproved"): void {
@@ -228,7 +242,7 @@ class CaptureController {
       opened: this.opened, settledAt: final ? clock() : null, anchor: { utc: this.opened.utc, monotonicMs: this.opened.monotonicMs },
       files: { protocol: basename(`${this.prefix}.protocol.jsonl`), native: basename(`${this.prefix}.native.jsonl`) },
       control: this.control ?? null, arm: this.state.kind === "armed" ? { kind: "armed", target, at: this.state.at, scores: this.state.scores } : this.state,
-      session: this.session, host: this.host, identityLost: this.loss ?? null, firstInvalid: this.firstInvalid ?? null,
+      session: this.session, host: this.host, lastIdentityConfirmed: this.lastConfirmed ?? null, identityLost: this.loss ?? null, firstInvalid: this.firstInvalid ?? null,
       protocolFacts: this.facts, lateFacts: this.late, native: this.nativeSummary, degraded: this.degraded };
     writeFileSync(join(this.options.logs, settlementFile), JSON.stringify(receipt, null, 2) + "\n", { mode: 0o600 });
   }

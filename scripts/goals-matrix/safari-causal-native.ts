@@ -235,19 +235,26 @@ async function launchdControl(directory: string): Promise<ControlReceipt> {
     await ownedCommand(["/bin/launchctl", "bootstrap", `gui/${uid}`, plist], undefined, 10_000);
     await exerciseControl(receipt, target);
   } catch (error) { receipt.failure = String(error); }
-  finally { await removeControl(receipt, target, plist); }
+  finally {
+    try { await removeControl(receipt, target, plist); }
+    catch (error) { receipt.failure = `${receipt.failure ?? "control cleanup failed"}; ${String(error)}`; }
+  }
   if (receipt.failure) return finishControl(receipt);
   if (!receipt.jobRemoved || !receipt.fileRemoved) return finishControl(receipt, "control job or file was not removed");
   const pid = receipt.pid ?? 0;
   const accept = (service: string) => service === target ? "control" as const : undefined;
+  try { await observeControl(receipt, pid, started, accept); }
+  catch (error) { return finishControl(receipt, `control query failed: ${String(error)}`); }
+  return finishControl(receipt, receipt.event ? undefined : "no launchd record named the control PID, launchctl caller and signal 9");
+}
+
+async function observeControl(receipt: ControlReceipt, pid: number, started: Date, accept: (service: string) => NativeService | undefined): Promise<void> {
   for (let attempt = 0; attempt < 4 && !receipt.event; attempt++) {
-    // The unified log persists asynchronously; poll briefly for the control's own record.
     if (attempt) await Bun.sleep(1000);
     const query = await queryLaunchd(pid, started, new Date(Date.now() + 2000), accept);
     receipt.event = provingEvent(query, receipt) ?? null;
     receipt.classes = Array.from(new Set(query.events.filter(event => provingEvent({ events: [event], ignored: 0 }, receipt)).map(event => event.kind)));
   }
-  return finishControl(receipt, receipt.event ? undefined : "no launchd record named the control PID, launchctl caller and signal 9");
 }
 
 function finishControl(receipt: ControlReceipt, failure?: string): ControlReceipt {

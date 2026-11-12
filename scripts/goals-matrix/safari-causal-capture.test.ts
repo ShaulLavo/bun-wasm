@@ -96,6 +96,27 @@ test("cleanup commands and session deletion are observed, and a throwing sink ch
   expect(facts.slice(-2).map(fact => [fact.lane, fact.command, fact.result.kind])).toEqual([["cleanup-command", "timeouts", "valid"], ["session", "session-delete", "valid"]]);
 });
 
+test("embedded evaluation JSON is decoded before its correlated fact is emitted", async () => {
+  const { facts, errors } = await observed(() => Response.json({ value: { ok: true, json: "not JSON" } }), 1, invalidSession);
+  expect(errors[0]).toContain("SyntaxError");
+  expect(facts.find(fact => fact.command === "execute-async")?.result).toEqual({ kind: "contract-failure" });
+});
+
+test("malformed startup contracts are correlated and a created session is still deleted", async () => {
+  for (const malformed of ["session", "capabilities", "host"]) {
+    const facts: SafariProtocolFact[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/session") return Response.json({ value: malformed === "session" ? null : { sessionId: "owned", capabilities: malformed === "capabilities" ? null : { browserName: "Safari", platformName: "macOS" } } });
+      return Response.json({ value: null });
+    } });
+    servers.push(server);
+    await expect(createSafariTransport({ endpoint: server.url.href, browser: "safari", timeoutMs: 1000, protocolSink: fact => { facts.push(fact); } })).rejects.toThrow();
+    expect(facts.find(fact => fact.command === (malformed === "host" ? "window-handle" : "session-create"))?.result.kind).toBe("contract-failure");
+    expect(facts.some(fact => fact.command === "session-delete")).toBe(malformed !== "session");
+  }
+});
+
 type FakeNative = NativePort & { births: Map<number, string>; cpu: Map<number, number>; reads: number[] };
 function fakeNative(control: Partial<ControlReceipt>, query: () => Promise<NativeQuery> = async () => ({ events: [], ignored: 0 })): FakeNative {
   const births = new Map([[101, "7"], [202, "9"]]);
@@ -145,6 +166,59 @@ test("a failed native control blocks install, keeps normal cleanup and settles t
   expect(phases.map(phase => [phase.phase, phase.status])).toEqual([["startup", "fail"], ["cleanup", "pass"]]);
   expect(result).toMatchObject({ status: "fail", error: expect.stringContaining("not armed: native control failed: no launchd record") });
   expect(await settlement(directory)).toMatchObject({ state: "settled", childrenJoined: true, writersClosed: true, arm: { kind: "blocked" } });
+});
+
+test("a throwing control has unknown cleanup, while failed qualification with cleanup proof can settle", async () => {
+  const native = fakeNative({});
+  native.control = async () => { throw new Error("cleanup threw after creating the job"); };
+  const directory = await logs();
+  await capturedRun(native, directory);
+  expect(await settlement(directory)).toMatchObject({ state: "unproved", childrenJoined: false, control: null });
+  const proved = await logs();
+  await capturedRun(fakeNative({ passed: false, failure: "query failed after cleanup", jobRemoved: true, fileRemoved: true }), proved);
+  expect(await settlement(proved)).toMatchObject({ state: "settled", childrenJoined: true });
+});
+
+test("native events outside the confirmed identity interval cannot supply attribution", async () => {
+  const native = fakeNative({});
+  native.query = async (pid, service, start, end) => {
+    const times = [new Date(start.getTime() - 1).toISOString(), end.toISOString(), new Date(end.getTime() + 1).toISOString(), "bad timestamp"];
+    return { ignored: 0, events: times.map(eventUtc => ({ kind: "signal-service", eventTime: eventUtc, eventUtc, reporter: "launchd", reporterPid: 1,
+      target: pid, service, parentPid: 99, signal: 9, exitCode: null, caller: { name: "Safari", pid: 99 }, received: { utc: end.toISOString(), monotonicMs: 0 } })) };
+  };
+  const directory = await logs();
+  await capturedRun(native, directory, capture => {
+    acknowledged(capture);
+    const arm = capture.arm;
+    Object.assign(capture, { arm: async (...args: Parameters<typeof arm>) => { await arm(...args); native.births.set(101, "8"); } });
+  });
+  expect(await settlement(directory)).toMatchObject({ identityLost: { reason: "birth-changed" }, native: { initiating: "unknown", events: 0, ignored: 4 } });
+});
+
+test.skipIf(process.env.SAFARI_CAUSAL_READER_CHILD !== "1")("causal reader child control", async () => {
+  const native = fakeNative({});
+  const original = native.read.bind(native);
+  const directory = await logs();
+  const result = await capturedRun(native, directory, capture => {
+    acknowledged(capture);
+    const arm = capture.arm;
+    Object.assign(capture, { arm: async (...args: Parameters<typeof arm>) => {
+      await arm(...args);
+      native.read = () => { throw new Error("diagnostic read failed"); };
+      await Bun.sleep(15);
+    } });
+  });
+  native.read = original;
+  expect(result.status).toBe("pass");
+  expect(await settlement(directory)).toMatchObject({ state: "settled", identityLost: null, degraded: [expect.objectContaining({ file: "native-reader" })] });
+});
+
+test("post-arm reader exceptions never become uncaught timer errors", async () => {
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", "^causal reader child control$"], {
+    env: { ...process.env, SAFARI_CAUSAL_READER_CHILD: "1" }, stdout: "pipe", stderr: "pipe",
+  });
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, output, error }).toMatchObject({ code: 0 });
 });
 
 test("an unacknowledged session blocks arming before any page challenge", async () => {

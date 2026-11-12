@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { options } from "./run";
 import { cleanupStaging, nativeRunnerArgs, removeStaging } from "./fleet";
 import { admission, queuedNativeCommand, nativeQueueScript, quote } from "./mac-queue";
+import { deadlinePolicy } from "./deadlines";
+import { initialCells, type Report } from "./model";
 
 const installedQueue = join(homedir(), ".agents/skills/machine-fleet/scripts/mac-queue.ts");
 const installedTest = test.skipIf(!existsSync(installedQueue));
@@ -345,6 +347,12 @@ test("ownership capture forwards through ordinary run and fleet CLI options", ()
   expect(() => options(["--asset-source=test", "--safari-ownership=false"])).toThrow("accepts only true");
 });
 
+async function writeSalvageReport(f: Fixture): Promise<void> {
+  const report: Report = { schema: 2, run: "fixture", createdAt: "fixture", command: "fixture", deadlines: deadlinePolicy(90_000),
+    source: { commit: "fixture", dirty: false, assets: {} }, cells: initialCells() };
+  await writeFile(join(f.remote, "report/TABLE.json"), JSON.stringify(report));
+}
+
 test.each([false, true])("failed native run collects ownership before staging disposition, native stopped = %j", nativeStopped => fixture(f => localMesh(f, async () => {
   await mkdir(join(f.remote, "report/logs"), { recursive: true });
   const name = "vite-react-safari-spidermonkey.ownership-capture.jsonl";
@@ -353,6 +361,7 @@ test.each([false, true])("failed native run collects ownership before staging di
   await writeFile(join(f.remote, "queue-exit"), "1\n");
   await writeFile(join(f.remote, "queue-workload-started"), "started\n");
   await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: nativeStopped, safariExited: nativeStopped, admissionOwner: "installed-mac-queue" }));
+  await writeSalvageReport(f);
   const request = { ...config(), output: f.home, safariOwnership: true };
   const original = new Error("original cell cleanup failed");
   if (nativeStopped) await cleanupStaging(f.remote, true, request, original);
@@ -384,6 +393,7 @@ test("final ownership collection follows writer settlement before staging remova
   await writeFile(join(f.remote, "queue-exit"), "130\n");
   await writeFile(join(f.remote, "queue-workload-started"), "started\n");
   await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  await writeSalvageReport(f);
   await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, new Error("controller interrupted"));
   expect(await readFile(join(f.home, "logs/own.jsonl"), "utf8")).toBe("session created\nsession deletion acknowledged\n");
   expect(existsSync(f.remote)).toBe(false);

@@ -135,6 +135,27 @@ async function collectFailedOwnership(remote: string, output: string): Promise<v
     await cp(join(scratch, "logs"), join(output, "logs"), { recursive: true });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
+async function collectFailedReport(remote: string, output: string): Promise<void> {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-report-salvage-"));
+  try {
+    const collected = join(scratch, "report");
+    await ownedCommand(["mesh", "cp", "-r", `mac:${remote}/report`, collected], undefined, 30_000);
+    const native = await collectNativeReport(collected, output);
+    const local = await existingReport(output);
+    await saveReport(output, local ? combine(local, native) : native);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+async function existingReport(output: string): Promise<Report | undefined> {
+  let text: string;
+  try { text = await readFile(join(output, "TABLE.json"), "utf8"); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+  const report: unknown = JSON.parse(text);
+  validateReport(report);
+  return report;
+}
 async function cleanupWitnessStaging(remote: string, config: Options): Promise<void> {
   let workloadStarted: boolean;
   try { workloadStarted = await verifyRemoteStopped(remote, true, config.safariCausalCapture); }
@@ -143,7 +164,7 @@ async function cleanupWitnessStaging(remote: string, config: Options): Promise<v
     catch (collectionError) { throw new AggregateError([settlementError, collectionError], `${String(settlementError)}; snapshot: ${String(collectionError)}`); }
     throw settlementError;
   }
-  if (workloadStarted) await collectFailedOwnership(remote, config.output);
+  if (workloadStarted) await collectFailedReport(remote, config.output);
   await removeSettledStaging(remote, config);
 }
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {

@@ -356,3 +356,14 @@ names the first invalid response, any identity loss and the first initiating
 event, or `unknown`. Capture failures after arming are recorded there and never
 change the cell or cleanup result. Fleet keeps the staging directory unless that
 receipt is settled.
+
+Attribution accepts only timestamped events strictly inside the interval between
+attachment and the last confirmed read of that same PID and kernel start time.
+An event in the uncertain interval before disappearance or PID reuse stays
+unattributed. A reader exception stops observation and records a degraded capture.
+After interrupted collection, fleet validates and saves the complete report,
+history, logs and native cleanup receipt before removing settled staging.
+
+Native qualification is pending. The first controlled run stopped before
+installation because its own control process was unreadable. Source checks
+do not establish that the current native reader or event control works on Safari.
