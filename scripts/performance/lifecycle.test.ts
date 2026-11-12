@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { launchProcess } from "./lifecycle-process";
@@ -8,7 +8,10 @@ import { verifyResolution } from "./lifecycle-lock";
 import { bounded } from "../goals-matrix/bounded";
 import { until } from "../goals-matrix/playground";
 import { withSignals } from "../goals-matrix/lifetime";
-import { resetNativeCache } from "./lifecycle-native";
+import { nativeLifecycle, resetNativeCache } from "./lifecycle-native";
+import { summarizeLifecycle } from "./lifecycle-summary";
+import { sha256 } from "./input";
+import { executableIdentity, finalizeHostVerification, lifecycleDriverInputs, recordInvocationEnvironment, verifyResume } from "./lifecycle-campaign";
 
 const fixture = resolve(import.meta.dir, "fixtures/lifecycle-process.ts");
 test("shared matrix contains 10 Next and 12 Vite cells with matched native preview browsers", () => {
@@ -102,5 +105,105 @@ test("signal cancellation reaches teardown and stops the owned descendant", asyn
     if (descendant === undefined) throw new Error("Descendant was not observed");
     const pid = descendant;
     expect(await until(() => live(pid), value => !value, 1000)).toBe(false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("failed native adapter retains acquired execution evidence after timeout and cleanup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-lifecycle-evidence-"));
+  const prepared = join(root, "prepared");
+  const output = join(root, "output");
+  const script = "setInterval(() => {}, 1000);";
+  try {
+    await mkdir(output);
+    await mkdir(prepared);
+    await cp("sandbox/template-next", join(prepared, "next"), { recursive: true });
+    await mkdir(join(prepared, "next/node_modules/next/dist/bin"), { recursive: true });
+    await writeFile(join(prepared, "next/node_modules/next/dist/bin/next"), script);
+    await writeFile(join(prepared, "next-inventory.json"), JSON.stringify({ files: [{ path: "next/dist/bin/next", sha256: sha256(script) }] }));
+    const cell = baseMatrix().find(cell => cell.id === "next-native-bun");
+    if (!cell) throw new Error("Missing native test cell");
+    await expect(nativeLifecycle(cell, prepared, root, output, 40, new AbortController().signal)).rejects.toThrow();
+    const evidence = JSON.parse(await readFile(join(output, "execution.json"), "utf8"));
+    expect(evidence.status).toBe("failed");
+    expect(evidence.observations.command.kind).toBe("observed");
+    expect(evidence.observations.actualProcess.value.available).toBe(true);
+    expect(evidence.observations.reset.value.absent).toBe(true);
+    expect(evidence.observations.inputs.value.before).toBeString();
+    expect(evidence.observations.completion.kind).toBe("unavailable");
+    expect(JSON.parse(await readFile(join(output, "cleanup.json"), "utf8")).resourcesStopped).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("summary respects explicit timing invalidity and applicable host verification", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-lifecycle-summary-"));
+  const source = join(root, "source");
+  const output = join(root, "summary");
+  const id = "next-native-node";
+  const record = join(source, id, "run.json");
+  const sources = new Map([[id, record]]);
+  const run = { workloadOutcome: { status: "pass" }, result: { inputs: { valid: true }, wallMs: 1 }, observation: { kind: "timing" }, timing: { valid: true } };
+  const row = async () => JSON.parse(await readFile(join(output, "summary.json"), "utf8")).rows.find((entry: { id: string }) => entry.id === id);
+  try {
+    await mkdir(join(source, id), { recursive: true });
+    await mkdir(output);
+    await writeFile(record, JSON.stringify(run));
+    await writeFile(join(source, "host-verification.json"), JSON.stringify({ valid: false }));
+    await summarizeLifecycle(output, sources);
+    expect((await row()).timingValid).toBe(false);
+    await writeFile(join(source, "host-verification.json"), JSON.stringify({ valid: true }));
+    await summarizeLifecycle(output, sources);
+    expect((await row()).timingValid).toBe(true);
+    await writeFile(record, JSON.stringify({ ...run, timing: { valid: false } }));
+    await summarizeLifecycle(output, sources);
+    expect((await row()).timingValid).toBe(false);
+    await rm(join(source, "host-verification.json"));
+    await writeFile(record, JSON.stringify(run));
+    await summarizeLifecycle(output, sources);
+    expect((await row()).timingValid).toBe(false);
+    const verification = join(source, "specific-verification.json");
+    await writeFile(verification, JSON.stringify({ valid: true }));
+    await writeFile(record, JSON.stringify({ ...run, timing: { valid: true, hostVerification: verification } }));
+    await summarizeLifecycle(output, sources);
+    expect((await row()).timingValid).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("resume rejects changed shared drivers and execution identities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-lifecycle-resume-"));
+  try {
+    await mkdir(join(root, "scripts/goals-matrix"), { recursive: true });
+    await mkdir(join(root, "web"));
+    await writeFile(join(root, "scripts/goals-matrix/transport.ts"), "first driver");
+    await writeFile(join(root, "web/serve.ts"), "server");
+    await writeFile(join(root, "env.sh"), "environment");
+    await writeFile(join(root, "runtime"), "first executable");
+    const previous = { drivers: lifecycleDriverInputs(root), execution: await executableIdentity(join(root, "runtime")) };
+    expect(() => verifyResume(previous, previous)).not.toThrow();
+    await writeFile(join(root, "scripts/goals-matrix/transport.ts"), "changed driver");
+    expect(() => verifyResume(previous, { ...previous, drivers: lifecycleDriverInputs(root) })).toThrow("Resume");
+    await writeFile(join(root, "runtime"), "changed executable");
+    const execution = await executableIdentity(join(root, "runtime"));
+    expect(() => verifyResume(previous, { ...previous, execution })).toThrow("Resume");
+    expect(() => verifyResume({ affinity: "0-15" }, { affinity: "0-27" })).toThrow("Resume");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("invocations preserve earlier environments and finalize affected timing validity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-lifecycle-verification-"));
+  const record = join(root, "run.json");
+  const run = { workloadOutcome: { status: "pass" }, timing: { eligible: true, valid: null } };
+  try {
+    const first = await recordInvocationEnvironment(root, { label: "first" });
+    const second = await recordInvocationEnvironment(root, { label: "second" });
+    expect(JSON.parse(await readFile(join(root, "environment.json"), "utf8"))).toEqual({ label: "first" });
+    expect(JSON.parse(await readFile(join(first, "environment.json"), "utf8"))).toEqual({ label: "first" });
+    expect(JSON.parse(await readFile(join(second, "environment.json"), "utf8"))).toEqual({ label: "second" });
+    expect(JSON.parse(await readFile(join(second, "host-verification.json"), "utf8")).valid).toBeNull();
+    await writeFile(record, JSON.stringify(run));
+    await finalizeHostVerification(root, [record], join(second, "host-verification.json"), false, "Host changed");
+    const invalid = JSON.parse(await readFile(record, "utf8"));
+    expect(invalid.workloadOutcome.status).toBe("pass");
+    expect(invalid.timing.valid).toBe(false);
+    expect(invalid.timing.hostVerification).toBe(join(second, "host-verification.json"));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

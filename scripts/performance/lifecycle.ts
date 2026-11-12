@@ -11,6 +11,7 @@ import { summarizeLifecycle } from "./lifecycle-summary";
 import { assetIdentity } from "../goals-matrix/assets";
 import { preflight } from "../goals-matrix/preparation";
 import { canonical, object, sha256, treeInventory } from "./input";
+import { executionIdentity, finalizeHostVerification, lifecycleDriverInputs, recordInvocationEnvironment, verifyResume } from "./lifecycle-campaign";
 
 function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" } {
   const values = new Map<string, string>();
@@ -31,9 +32,9 @@ function options(args: string[]): { output: string; scratch: string; host: strin
 }
 type Config = ReturnType<typeof options>;
 async function save(path: string, value: unknown) { await writeFile(path, JSON.stringify(value, null, 2) + "\n"); }
-async function runCell(cell: LifecycleCell, config: Config, base: string, signal: AbortSignal) {
+async function runCell(cell: LifecycleCell, config: Config, base: string, signal: AbortSignal, invocation: string) {
   const output = join(config.output, cell.id);
-  if (await stat(join(output, "run.json")).then(() => true).catch(() => false)) return;
+  if (await stat(join(output, "run.json")).then(() => true).catch(() => false)) return null;
   if (await stat(output).then(() => true).catch(() => false)) await rename(output, output + `.interrupted-${Date.now()}`);
   await mkdir(output);
   const before = { at: new Date().toISOString(), load: loadavg(), controller: await processIdentity(process.pid) };
@@ -46,15 +47,17 @@ async function runCell(cell: LifecycleCell, config: Config, base: string, signal
     validateLifecycle(result.outcome);
   } catch (error) { failure = String(error); }
   const cleanup = await readFile(join(output, "cleanup.json"), "utf8").then(text => JSON.parse(text)).catch(() => ({ resourcesStopped: null, reason: "No separate cleanup record; see terminal and controller failure" }));
+  const execution = await readFile(join(output, "execution.json"), "utf8").then(text => JSON.parse(text)).catch(() => ({ status: "unavailable", reason: "Adapter execution evidence could not be read" }));
   await save(join(output, "run.json"), { schema: 1, id: cell.id, cell, before, after: { at: new Date().toISOString(), load: loadavg() },
-    workloadOutcome: failure ? { status: "fail", reason: failure } : { status: "pass" }, result: result ?? null, cleanup,
-    timing: { valid: failure === null && result?.inputs.valid === true, unit: "ms", scope: cell.arm.kind === "native" && cell.workload === "vite" ? "Native server plus matching preview browser lifecycle" : "Framework lifecycle command", sourceRun: cell.id,
+    workloadOutcome: failure ? { status: "fail", reason: failure } : { status: "pass" }, result: result ?? null, cleanup, execution, invocation,
+    timing: { valid: null, eligible: failure === null && result?.inputs.valid === true && config.mode === "timing", hostVerification: join(invocation, "host-verification.json"), verificationReason: "Host verification pending", unit: "ms", scope: cell.arm.kind === "native" && cell.workload === "vite" ? "Native server plus matching preview browser lifecycle" : "Framework lifecycle command", sourceRun: cell.id,
       method: cell.arm.kind === "native" && cell.workload === "next" ? "Monotonic command submission to process-close event observation" : "Monotonic command submission to successful polling observation", value: result?.wallMs ?? null },
     observation: { kind: config.mode, cpu: null, counters: null, profile: null, reason: "Base matrix uses no CPU/profile attribution observer", compilerSelection: config.mode === "selection" ? "See selection.jsonl, scoped preloaded contexts only" : "Unavailable in uninstrumented timing; collect a separate selection run" },
     contention: { quiet: false, overlappingJobs: "See runner job receipt" }, headlineEligible: false,
     ineligibleReasons: ["Nonquiet shared PC experiment", ...(cell.arm.kind === "goals-browser" || cell.arm.browser ? ["Headless browser; display and hardware renderer unverified"] : [])] });
   console.log(cell.id, failure ? `fail; see ${output}/run.json` : "pass");
   await summarizeLifecycle(config.output);
+  return join(output, "run.json");
 }
 async function campaign(config: Config, signal: AbortSignal) {
   await mkdir(config.output, { recursive: true });
@@ -68,14 +71,14 @@ async function campaignLocked(config: Config, signal: AbortSignal) {
   if (host.waffle !== "0.0.122") throw new Error("Prepared host must assert Waffle 0.0.122");
   await preflight(config.host, ["browser", "quickjs", "jsc", "spidermonkey"]);
   const inputs = { mode: config.mode, timeoutMs: config.timeoutMs, host: await assetIdentity(config.host),
-    harness: treeInventory("scripts/performance"), templates: { next: treeInventory("sandbox/template-next"), vite: treeInventory("sandbox/template") },
+    drivers: lifecycleDriverInputs(process.cwd()), execution: await executionIdentity(), templates: { next: treeInventory("sandbox/template-next"), vite: treeInventory("sandbox/template") },
     installedInventories: await Promise.all(["next", "vite"].map(async name => ({ workload: name, inventory: sha256(await readFile(join(config.prepared, `${name}-inventory.json`))), lock: sha256(await readFile(join(config.prepared, name, "bun.lock"))) }))) };
   const inputPath = join(config.output, "inputs.json");
   const previous = await readFile(inputPath, "utf8").catch(() => null);
-  if (previous !== null && canonical(JSON.parse(previous)) !== canonical(inputs)) throw new Error("Resume requires unchanged host, harness, fixtures, locks, installed inventories, mode and deadlines; use a new output directory");
+  if (previous !== null) verifyResume(JSON.parse(previous), inputs);
   if (previous === null) await save(inputPath, inputs);
   await save(join(config.output, "run-list.json"), baseMatrix());
-  await save(join(config.output, "environment.json"), { hostname: hostname(), kernel: release(), cpus: cpus(),
+  const invocation = await recordInvocationEnvironment(config.output, { hostname: hostname(), kernel: release(), cpus: cpus(),
     topology: await cpuTopology(), browserEnvironment: Object.fromEntries(["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "PLAYWRIGHT_BROWSERS_PATH", "GOALS_CHROME_EXECUTABLE"].map(key => [key, process.env[key] ?? null])),
     controller: await processIdentity(process.pid), host: JSON.parse(await readFile(join(config.host, "lifecycle-host.json"), "utf8")),
     cache: { install: "outside timing, frozen resolution", application: "reset immediately before submission", OSPageCache: "uncontrolled", wasmCompilation: "page ready before timing", nodeCompileCache: "disabled" } });
@@ -83,19 +86,28 @@ async function campaignLocked(config: Config, signal: AbortSignal) {
   const serverOutput = join(config.output, `asset-server-${Date.now()}`);
   if (needsServer) await mkdir(serverOutput);
   const server = needsServer ? launchProcess([process.execPath, "web/serve.ts"], process.cwd(), { ...process.env, ROOT: config.host, HOST: "127.0.0.1", PORT: "0", PREVIEW_ORIGINS: "1" }, serverOutput) : null;
-  let hostVerified = false;
+  const records: string[] = [];
   try {
     const base = server ? await until(async () => /at (http:\/\/\S+)/.exec(await readFile(join(serverOutput, "stdout.txt"), "utf8").catch(() => ""))?.[1] ?? "", Boolean, 10000) : "";
     for (const id of config.cells) {
       signal.throwIfAborted();
       const cell = baseMatrix().find(cell => cell.id === id);
-      if (cell) await runCell(cell, config, base, signal);
+      const record = cell ? await runCell(cell, config, base, signal, invocation) : null;
+      if (record) records.push(record);
     }
   } finally {
-    await server?.close();
-    hostVerified = canonical(await assetIdentity(config.host)) === canonical(inputs.host);
-    await save(join(config.output, "host-verification.json"), { valid: hostVerified, method: "complete staged-asset hashes before and after campaign" });
+    try { await server?.close(); }
+    finally { await verifyHost(config, inputs.host, invocation, records); }
   }
-  if (!hostVerified) throw new Error("Prepared host changed during campaign");
+}
+async function verifyHost(config: Config, expected: unknown, invocation: string, records: string[]): Promise<void> {
+  let valid = false;
+  let reason = "Prepared host changed during invocation";
+  try { valid = canonical(await assetIdentity(config.host)) === canonical(expected); }
+  catch (error) { reason = `Host verification unavailable: ${String(error)}`; }
+  if (valid) reason = "Prepared host unchanged during invocation";
+  await finalizeHostVerification(config.output, records, join(invocation, "host-verification.json"), valid, reason);
+  await summarizeLifecycle(config.output);
+  if (!valid) throw new Error(reason);
 }
 if (import.meta.main) await withSignals(signal => campaign(options(process.argv.slice(2)), signal));
