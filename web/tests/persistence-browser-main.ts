@@ -7,17 +7,22 @@ let worker: Worker | undefined;
 let next = 0;
 const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void }>();
 const state = { commitStarted: false, boundary: undefined as string | undefined, partialWrite: false, progress: "idle", ownershipLost: false, ownershipMessage: "" };
+function workerMessage({ data }: MessageEvent): void {
+  if (data.idleQuota === "cap" || data.idleQuota === "reset") {
+    worker!.postMessage({ kind: "idle-quota-result", active: false });
+    return;
+  }
+  if (data.event === "persist-started") { state.commitStarted = true; state.boundary = data.boundary; state.partialWrite = data.partialWrite === true; return; }
+  if (data.event === "progress") { state.progress = data.value; return; }
+  const request = pending.get(data.id);
+  if (!request) return;
+  pending.delete(data.id);
+  if (data.error) request.reject(new Error(data.error)); else request.resolve(data.value);
+}
 function direct(command: string, args?: unknown): Promise<any> {
   if (!worker) {
     worker = new Worker("./persistence-browser-worker.js", { type: "module" });
-    worker.onmessage = ({ data }) => {
-      if (data.event === "persist-started") { state.commitStarted = true; state.boundary = data.boundary; state.partialWrite = data.partialWrite === true; return; }
-      if (data.event === "progress") { state.progress = data.value; return; }
-      const request = pending.get(data.id);
-      if (!request) return;
-      pending.delete(data.id);
-      if (data.error) request.reject(new Error(data.error)); else request.resolve(data.value);
-    };
+    worker.onmessage = workerMessage;
     worker.onerror = event => {
       for (const request of pending.values()) request.reject(new Error(event.message));
       pending.clear();

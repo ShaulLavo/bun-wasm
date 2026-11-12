@@ -446,6 +446,7 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
   },
 };
 self.onmessage = async ({ data }) => {
+  if (data.kind === "idle-quota-result") return;
   try {
     const operation = commands[data.command];
     if (!operation) throw new Error(`Unknown persistence test command ${data.command}`);
