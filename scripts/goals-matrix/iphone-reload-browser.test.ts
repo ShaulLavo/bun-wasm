@@ -42,7 +42,7 @@ async function reviewControl(engine: BrowserType, scenario: Scenario): Promise<v
     await ready(bus, "host");
     const preview = owner.url.origin + "/preview";
     bus.configure("preview", preview);
-    await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000);
+    await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000, false, Date.now() + 3000);
     await ready(bus, "preview");
     if (scenario === "rapid") await rapidReload(bus, page, held.promise);
     else if (scenario === "identity") await identityControls(page);
@@ -54,7 +54,7 @@ async function reviewControl(engine: BrowserType, scenario: Scenario): Promise<v
 
 async function rapidReload(bus: IphoneBus, page: Page, held: Promise<void>): Promise<void> {
   const read = "new Promise(resolve => { if (document.querySelector('h1').textContent === 'revision 3') resolve('current'); })";
-  const pending = bus.execute("preview", read, 3000, true).catch((error: unknown) => error);
+  const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000).catch((error: unknown) => error);
   await page.evaluate(() => document.querySelector("iframe")!.contentWindow!.location.reload());
   await held;
   await page.evaluate(() => document.querySelector("iframe")!.contentWindow!.location.reload());
@@ -97,7 +97,7 @@ async function htmlFetch(bus: IphoneBus, page: Page, varyClock = false): Promise
     if (varyClock) await iframe.evaluate(() => Object.defineProperty(performance, "timeOrigin", { value: performance.timeOrigin + 1 }));
     expect(await matchesPreviewIdentity(identity)).toBe(true);
     expect(bus.state("preview")?.nonce).toBe(before?.nonce);
-    expect(await bus.execute("preview", "document.querySelector('h1').textContent", 1000, true)).toBe("revision 1");
+    expect(await bus.execute("preview", "document.querySelector('h1').textContent", 1000, true, Date.now() + 1000)).toBe("revision 1");
   } finally {
     await identity.dispose();
   }

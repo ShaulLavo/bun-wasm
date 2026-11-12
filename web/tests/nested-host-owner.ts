@@ -21,6 +21,7 @@ export interface Member {
   /** The group memory this member was launched with. */
   readonly memory: WebAssembly.Memory;
   send(request: Request): Reply;
+  sendText(request: string): string;
   raw(op: number, a?: number, b?: number, c?: number, d?: number): number[];
   /** The core's callback dispatcher. It answers status 0 and leaves the frame; a test may replace it. */
   dispatch: Dispatch;
@@ -61,23 +62,24 @@ function bindMember(lease: Lease, owner: Owner): Member {
   const core: Pick<Member, "dispatch"> = { dispatch: () => 0 };
   const exports = { bun_core_alloc: alloc, bun_core_free: () => {}, bun_nested_dispatch: (...frame: Parameters<Dispatch>) => core.dispatch(...frame) };
   host.bindCore({ exports } as unknown as WebAssembly.Instance, memory);
-  const exchange = (request: Request): Reply => {
-    const bytes = encoder.encode(JSON.stringify(request));
+  const exchange = (request: string): string => {
+    const bytes = encoder.encode(request);
     const pointer = alloc(bytes.length, 8);
     new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
     const out = alloc(8, 8);
     host.imports.request(pointer, bytes.length, out);
     const target = view().getUint32(out, true);
     const length = view().getUint32(out + 4, true);
-    return JSON.parse(decoder.decode(new Uint8Array(memory.buffer, target, length).slice())) as Reply;
+    return decoder.decode(new Uint8Array(memory.buffer, target, length).slice());
   };
   /** Nothing a request allocates outlives its reply, so thousands of requests fit the one heap region. */
-  const send = (request: Request): Reply => {
+  const sendText = (request: string): string => {
     const mark = next;
     try { return exchange(request); }
     finally { next = mark; }
   };
-  return Object.assign(core, { lease, owner, host, memory, send, raw });
+  const send = (request: Request): Reply => JSON.parse(sendText(JSON.stringify(request))) as Reply;
+  return Object.assign(core, { lease, owner, host, memory, send, sendText, raw });
 }
 
 /** One page's groups under a small policy. Each `join()` is a new group; `join(peer)` joins the peer's. */

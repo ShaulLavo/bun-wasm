@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { templateFiles as exportTemplateFiles } from "../../sandbox/template-files";
 import { defaultTemplate, selectTemplate, templates } from "../../sandbox/src/template-catalog";
 import { templateFiles } from "../../sandbox/src/template";
+import { projectTemplates } from "../src/playground/project-templates";
 
-const viteTemplates = templates.filter(template => template.id === "react" || template.id === "vanilla");
+const viteTemplates = templates.filter(template => template.id === "vite-react" || template.id === "vanilla");
 
 const packageJson = JSON.stringify({ scripts: { dev: "framework dev", build: "framework build" } });
 
@@ -14,8 +15,18 @@ test("template selection uses the same catalog as the dropdown and build", () =>
   expect(selectTemplate(null)).toBe(defaultTemplate);
   expect(selectTemplate("unknown")).toBe(defaultTemplate);
   for (const template of templates) expect(selectTemplate(template.id)).toBe(template);
-  expect(templates.map(template => template.id)).toEqual(["react", "next", "next-app", "vanilla", "nuxt", "sveltekit", "astro", "react-router", "solidstart", "tanstack-start", "angular", "qwik", "vite-vue", "vite-svelte", "hono"]);
-  expect(templates.map(template => template.label)).not.toContain("Vite");
+  const ids = templates.map(template => template.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  for (const template of projectTemplates) expect(ids).toContain(template.id);
+  expect(selectTemplate("vite-react").label).toBe("Vite + React");
+});
+
+test("every picker entry exports a project and its initial editor file", async () => {
+  for (const template of templates) {
+    const files = await exportTemplateFiles(join(import.meta.dir, "../../sandbox", template.directory));
+    expect(templateFiles(JSON.stringify({ files }))).toEqual(files);
+    expect(files[template.editorFile]).toBeDefined();
+  }
 });
 
 test("project files support real framework layouts without a synthetic index.html", () => {

@@ -1,7 +1,7 @@
 import { projectTemplates } from "../../web/src/playground/project-templates";
 
 export type Template = Record<keyof typeof projectTemplates[number], string>;
-export const defaultTemplate = { id: "react", label: "React", directory: "template", file: "template.json", editorFile: "src/App.tsx" };
+export const defaultTemplate = { ...projectTemplates[0], file: "template.json" };
 
 const sandboxTemplates: Template[] = [
   defaultTemplate,
@@ -10,8 +10,8 @@ const sandboxTemplates: Template[] = [
   { id: "vanilla", label: "Vanilla TS", directory: "template-vanilla", file: "template-vanilla.json", editorFile: "src/main.ts" },
 ];
 
-export const templates = sandboxTemplates.concat(projectTemplates.filter(template =>
-  template.id !== "vite-react" && template.id !== "next" && template.id !== "next-app"));
+const sandboxIds = new Set(sandboxTemplates.map(template => template.id));
+export const templates = sandboxTemplates.concat(projectTemplates.filter(template => !sandboxIds.has(template.id)));
 
 export function selectTemplate(value: string | null): Template {
   return templates.find(template => template.id === value) ?? defaultTemplate;

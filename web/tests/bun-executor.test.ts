@@ -16,6 +16,7 @@ import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
 import { installLookupServer } from "../src/net/lookup";
 import { createMemoryChannel, memoryChannelReady, requestMemoryChannel } from "../src/memory-channel";
+import { beginMemorySnapshot, endMemorySnapshot } from "../src/memory-telemetry.ts";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
@@ -59,7 +60,7 @@ const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
 afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
-async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
+async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net" | "memoryTelemetry">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
@@ -73,7 +74,7 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   const request: RunRequest = { controlGrant: control.grant,
     engine: options.engine ?? "browser", adapter: options.adapter, module: guest(options.ready ?? 1),
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
-    trace: false, net: options.net ?? null, slots: options.slots,
+    trace: false, net: options.net ?? null, slots: options.slots, memoryTelemetry: options.memoryTelemetry,
   };
   try {
     await bootstrapBun(request, host);
@@ -154,6 +155,25 @@ for (const [label, options] of [
   const { messages } = await run(options);
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
+}));
+
+test("the Browser executor connects its trap observer to the existing snapshot transport", controlled(async () => {
+  const id = crypto.randomUUID();
+  const memoryTelemetry = beginMemorySnapshot("browser", id);
+  if (!memoryTelemetry) throw Error("Missing diagnostic transport");
+  startEngineHost.mockImplementationOnce(async options => {
+    const observer = options.onWasmCallTrap;
+    if (typeof observer !== "function") throw Error("Missing native-call observer");
+    observer(new WebAssembly.RuntimeError("executor wiring control"), 7);
+    return 0;
+  });
+  try {
+    const { messages } = await run({ memoryTelemetry });
+    expect(messages.find(message => message.type === "bun-memory")).toMatchObject({ type: "bun-memory", snapshot: {
+      id, engine: "browser", wasmCapacityBytes: 65536, memoryLimitBytes: null,
+      engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536, browserCoreDeclaredMaximumBytes: null, browserCoreFactoryMaximumBytes: null },
+    } });
+  } finally { endMemorySnapshot(id); }
 }));
 
 test("the engine host gets the page's networking surface only when slots are on", controlled(async () => {
@@ -479,18 +499,41 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   }));
 }
 
+for (const maximumPages of [4, 8]) test(`cloned linked program forwards its ${maximumPages}-page limit into terminal telemetry`, controlled(async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
+  const module = await prepareProgram({ kind: "quickjs", ...quickjsPair("quickjs", maximumPages) });
+  const metadata = programMetadata(module);
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module: structuredClone(module),
+    linkPlan: structuredClone(metadata.linkPlan), memoryLimitBytes: metadata.memoryLimitBytes,
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
+  const executor = createBunExecutor(request, host);
+  try {
+    await bootstrap(request, { ...executor, setup: context => setupLocalFilesystem(context, executor), run: () => 0 }, host);
+    const result = messages.find(message => message.type === "bun-memory");
+    if (result?.type !== "bun-memory") throw new Error("missing terminal memory telemetry");
+    expect(result.snapshot.terminal).toBe(true);
+    expect(result.snapshot.memoryLimitBytes).toBe(maximumPages * 65536);
+  } finally { executor.beforeFinish?.(); connection.client.port.close(); connection.server.port.close(); }
+}));
+
 // The side's two event-loop waits answer telemetry requests. Every other core export it imports,
 // here core_checkpoint, must stay the core's own function: a call between WebAssembly modules.
 const linkedSideImports = [["bun_core_idle", true], ["bun_core_poll", true], ["core_checkpoint", false]] as const;
 for (const [boundary, wait] of linkedSideImports) test(wait ? `linked ${boundary} keeps the refresh observer after initialization` : `linked ${boundary} stays a direct call into the core`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const pair = quickjsPair("quickjs");
   const module = await prepareProgram({ kind: "quickjs", ...pair });
   const channel = createMemoryChannel();
-  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel };
+  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel,
+    coreMemoryLimits: { declaredMaximumBytes: null, factoryMaximumBytes: null } };
   const connection = createFilesystemConnection();
-  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off", memoryTelemetry };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
@@ -536,18 +579,18 @@ for (const [boundary, wait] of linkedSideImports) test(wait ? `linked ${boundary
 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind, module: structuredClone(module), linkPlan: programMetadata(module).linkPlan,
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
-  const { prepareLinkPlan } = await import("waffle/link");
+  const { adoptLinkPlan } = await import("waffle/link");
   if (!request.linkPlan) throw new Error("fixture link plan missing");
-  const local = await prepareLinkPlan(request.linkPlan);
+  const local = adoptLinkPlan(request.linkPlan);
   const executor = createBunExecutor(request, host);
   let instance: WebAssembly.Instance | undefined;
   const NativeInstance = WebAssembly.Instance;
@@ -671,12 +714,12 @@ const keepFixtureReference = () => {};
 
 async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup", kind: "quickjs" | "jsc") {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const { core, side } = quickjsPair(kind);
   const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection(), lookup = new MessageChannel();
   const broker = createSharedObjectBroker(), route = kind === "quickjs" ? broker.register() : undefined;
-  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+  const request: RunRequest = { controlGrant: control.grant, engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programMetadata(module).linkPlan,
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null,
     slots: "off", sharedObjects: route ? { owner: route.id } : undefined, lookupPort: lookup.port2 };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
@@ -729,7 +772,7 @@ for (const kind of ["quickjs", "jsc"] as const) {
 
 for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { prepareProgram, programMetadata } = await import("../../src/assets");
   const pair = quickjsPair(engine);
   const module = await prepareProgram({ kind: engine, ...pair });
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -740,7 +783,7 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
   linkedDisposals = 0; linkedSideReads = 0;
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+  const request: RunRequest = { controlGrant: control.grant, engine, module, linkPlan: programMetadata(module).linkPlan, args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, fetch: globalThis.fetch };

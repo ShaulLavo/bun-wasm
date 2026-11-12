@@ -76,17 +76,21 @@ static int deny(Allocator *a, size_t size)
     return 1;
 }
 
+/* Every request goes unchanged to the engine's default callbacks, so these
+   callbacks may declare the default bound for the frame stack. */
+#define backing() JS_GetDefaultMallocFunctions()
+
 static void *allocate(void *opaque, size_t size)
 {
     Allocator *a = opaque;
     void *p;
     if (deny(a, size))
         return NULL;
-    p = malloc(size);
+    p = backing()->js_malloc(NULL, size);
     if (!p)
         return NULL;
     a->live++;
-    a->live_bytes += (long)malloc_usable_size(p);
+    a->live_bytes += (long)backing()->js_malloc_usable_size(p);
     return p;
 }
 
@@ -104,8 +108,8 @@ static void release(void *opaque, void *p)
     if (!p)
         return;
     a->live--;
-    a->live_bytes -= (long)malloc_usable_size(p);
-    free(p);
+    a->live_bytes -= (long)backing()->js_malloc_usable_size(p);
+    backing()->js_free(NULL, p);
 }
 
 static void *resize(void *opaque, void *p, size_t size)
@@ -120,15 +124,15 @@ static void *resize(void *opaque, void *p, size_t size)
     }
     if (deny(a, size))
         return NULL;
-    a->live_bytes -= (long)malloc_usable_size(p);
-    q = realloc(p, size);
-    a->live_bytes += (long)malloc_usable_size(q ? q : p);
+    a->live_bytes -= (long)backing()->js_malloc_usable_size(p);
+    q = backing()->js_realloc(NULL, p, size);
+    a->live_bytes += (long)backing()->js_malloc_usable_size(q ? q : p);
     return q;
 }
 
 static size_t usable_size(const void *p)
 {
-    return malloc_usable_size((void *)p);
+    return backing()->js_malloc_usable_size(p);
 }
 
 static const JSMallocFunctions allocator = {
@@ -191,8 +195,11 @@ static JSModuleDef *stub_loader(JSContext *ctx, const char *name, void *opaque)
 static JSContext *new_context(JSRuntime **prt, size_t stack)
 {
     JSRuntime *rt = JS_NewRuntime2(&allocator, &memory);
-    JSContext *ctx = JS_NewContext(rt);
-    JSValue global = JS_GetGlobalObject(ctx);
+    JSContext *ctx;
+    JSValue global;
+    JS_SetMallocBound(rt, JS_DefaultMallocBound);
+    ctx = JS_NewContext(rt);
+    global = JS_GetGlobalObject(ctx);
     JS_UpdateStackTop(rt);
     JS_SetMaxStackSize(rt, stack);
     JS_SetModuleLoaderFunc(rt, NULL, stub_loader, NULL);

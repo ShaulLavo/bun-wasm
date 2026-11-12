@@ -11,6 +11,8 @@ permissions:
   contents: read
 
 env:
+  # TLS producer/consumer receipts bind the exact Node executable, not only its major.
+  CI_NODE_VERSION: '26.13.1'
   GITHUB_TOKEN: ${{ github.token }}
   BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
 
@@ -44,7 +46,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - name: Resolve immutable comparison refs
         id: refs
         env:
@@ -93,6 +95,10 @@ jobs:
         with:
           path: .ci-bun-cache
           key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
+      - name: Prepare preinstalled native control compilers
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bun scripts/ci-native-control-compilers.ts
       - name: Blocking quality gates
         env:
           JSCPD_BASE_REF: ${{ steps.refs.outputs.base }}
@@ -334,7 +340,7 @@ jobs:
           source env.sh
           bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
           mkdir "$bundle"
-          tar --posix -C "$(dirname "$JSC_BUILD_DIR")" -cf - "$(basename "$JSC_BUILD_DIR")" | zstd -T0 -q -o "$bundle/prebuild.tar.zst"
+          bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" split "$bundle/prebuild.tar.zst"
           tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
           cp "$RUNNER_TEMP/jsc-prebuild.log" "$bundle/jsc-prebuild.log"
           {
@@ -402,7 +408,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
       - uses: actions/cache/restore@v4
@@ -855,7 +861,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
       - uses: actions/cache/restore@v4
@@ -1260,18 +1266,6 @@ jobs:
       - name: Blocking JSC embedding and allocation checks
         if: needs.quality.outputs.jsc == 'true'
         run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: always() && needs.quality.outputs.jsc == 'true'
-        with:
-          name: jsc-embedding-receipts
-          path: |
-            dist/bun-jsc.wasm.build.json
-            dist/bun-jsc.wasm.embedding.json
-            dist/jsc-engine.wasm.engine.json
-            ${{ runner.temp }}/jsc/engine/engine-link.map
-          if-no-files-found: error
-
       - name: Blocking native fixture checks
         env:
           INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
@@ -1343,8 +1337,10 @@ jobs:
           path: |
             dist/*.wasm.build.json
             dist/*.wasm.engine.json
+            dist/*.wasm.embedding.json
             dist/web-guests-*.log
             ${{ runner.temp }}/jsc-prebuild.log
+            ${{ runner.temp }}/jsc/engine/engine-link.map
           if-no-files-found: error
           retention-days: 1
       - uses: ./.github/actions/save-rust-build-cache
@@ -1368,7 +1364,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1411,7 +1407,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1533,7 +1529,7 @@ jobs:
           members=(sysroot.tar.zst)
           tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
           if [[ "$SHARED_NATIVE" == true ]]; then
-            tar --posix -C "$(dirname "$JSC_BUILD_DIR")" -cf - "$(basename "$JSC_BUILD_DIR")" | zstd -T0 -q -o "$bundle/prebuild.tar.zst"
+            bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" shared-group "$bundle/prebuild.tar.zst"
             members+=(prebuild.tar.zst)
           fi
           {
@@ -1580,7 +1576,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1822,7 +1818,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -2161,7 +2157,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache

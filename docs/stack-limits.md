@@ -104,10 +104,16 @@ instance, children included, on a thread with a 24 MiB native stack, and passes
 the top-level one too, in a Worker whose thread Node creates with a 32 MB stack
 (`resourceLimits.stackSizeMb`; `--stack-mb` overrides it), and passes 6144 KiB. The
 host stays one process, so killing it ends the guest, and `ulimit -s` does not matter.
-The launcher still catches every path with a budget one and a half times as large
-(6144 KiB). On the Node host the stack was shrunk instead: with the 6144 KiB default
-and a 21 MB Worker stack (32/1.5), all 25 paths still threw or completed on QuickJS
-and JSC.
+On 2026-10-16 the launcher still caught every path with a budget one and a half
+times as large (6144 KiB). That margin no longer holds for QuickJS: measured on
+2026-11-11, a 6144 KiB budget with the launcher's default host stack traps on
+getters, constructors, `call`, `apply` and array callbacks, on the build
+before the frame stack as well as after it. Plain calls trap only before the
+frame stack. The launcher's own 4096 KiB default
+still catches every measured path ([ordinary call frames](#ordinary-call-frames)).
+On the Node host the stack was shrunk instead: with the 6144 KiB default and a
+21 MB Worker stack (32/1.5), all 25 paths still threw or completed on QuickJS and
+JSC in October; that has not been measured again.
 Browsers cannot raise their stacks; that is the platform limit behind their smaller
 depths.
 
@@ -203,9 +209,89 @@ with a `RangeError` on TypeScript's own library, which Next loads to read
 check on entering a function: the library is one wrapper function with 5,278
 local variables, and its frame alone is 63,316 bytes, more than the whole
 budget, with under 3 KiB in use. Angular's `ng serve` fails at 36 KiB for a
-third reason, plain call depth: Ajv compiling schemas in JavaScript uses the
-whole budget. Neither is a parser limit. These are launcher measurements of
-the guest's own guard at the unchanged budget, not Safari runs.
+third reason, call depth: Ajv compiling schemas in JavaScript uses the whole
+budget. Neither is a parser limit, and
+[ordinary call frames](#ordinary-call-frames) takes both up. These are
+launcher measurements of the guest's own guard at the unchanged budget, not
+Safari runs.
+
+### Ordinary call frames
+
+QuickJS no longer keeps a bytecode call's arguments, locals and operand stack
+in the interpreter's C frame, and an ordinary function calling an ordinary
+function no longer makes a C call
+([frame stack](bun-patches/quickjs-frame-stack.md)). Two limits replace the
+one:
+
+- **The frame limit** bounds the allocator-declared backing held by ordinary
+  frame segments, with a 4 MiB default and maximum. The qualified split
+  allocator charges 64 KiB per default segment, including allocator overhead.
+  A plain recursive call costs about 121 bytes, so 34,746 of them fit, at a
+  32 KiB budget as at 4096 KiB. One more throws the same catchable `RangeError`.
+  The shared-group profile is not qualified by these split measurements.
+- **The native budget** still bounds every call that re-enters the interpreter
+  from C: constructors, `call` and `apply`, accessors, proxies, native
+  callbacks such as `Array.prototype.map`, and generator and async functions.
+  Those cost host stack at every level, as before.
+
+A function's size is no longer depth. A function with 5,300 captured locals
+runs at 32 KiB (`tests/fixtures/stack-frame-storage`); before, its frame alone
+exceeded the budget.
+
+Measured on November 11, 2026 on the native launcher, comparing the QuickJS
+side with the statement parser change against the corrected split frame
+allocator. Both sides use the same core and launcher. The first two budgets
+ran with the host Wasm stack cut to 512 KiB, the third with the launcher's
+defaults. Each number is the deepest nesting that completed; one level more
+threw `RangeError` and the program continued. The first seven rows are
+`scripts/measure-stack.py` inputs; the rest come from a one-off probe of the
+same shape for routes that script does not cover.
+
+| Path | 32 KiB before | after | 36 KiB before | after | 4096 KiB before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Plain calls | 100 | 34,746 | 113 | 34,746 | 13,789 | 34,746 |
+| Promise callback | 108 | 34,752 | 121 | 34,752 | 13,797 | 34,752 |
+| Nested `require` | 27 | 57 | 31 | 67 | over 512 | over 512 |
+| Getter | 76 | 77 | 86 | 88 | 10,480 | 10,481 |
+| Proxy trap | 45 | 46 | 51 | 52 | 6,238 | 6,239 |
+| `toString` reentry | 44 | 46 | 50 | 52 | 6,093 | 6,239 |
+| Async recursion | 59 | 65 | 67 | 73 | 8,187 | 8,734 |
+| `Reflect.construct` | 77 | 83 | 87 | 94 | 10,481 | 10,920 |
+| `new` | 101 | 105 | 115 | 118 | 13,791 | 13,794 |
+| `Function.prototype.call` | 69 | 74 | 78 | 84 | 9,358 | 9,708 |
+| `Function.prototype.apply` | 64 | 72 | 73 | 81 | 8,734 | 9,361 |
+| `Array.prototype.map` callback | 62 | 67 | 71 | 76 | 8,453 | 8,737 |
+| `Array.prototype.reduce` callback | 37 | 65 | 42 | 73 | 5,039 | 8,455 |
+| Setter | 62 | 66 | 70 | 75 | 8,452 | 8,736 |
+| Derived constructor | 47 | 52 | 53 | 59 | 6,390 | 6,897 |
+
+The other 19 `measure-stack.py` inputs also completed or threw and continued at
+all three budgets, none shallower than before. `reduce` and `require` gain most
+among the native routes because the callback or the module wrapper now calls
+its function inline, which leaves one native entry per level where there were
+two.
+
+Moving frame storage off the shadow stack removed bytes the guard had been
+counting for each native entry, while the entry's host frames shrank less: about
+128 host bytes against 60 to 100 guarded bytes. The interpreter's C entry
+therefore reserves 48 bytes. With only 16, the guard allowed 11,913
+`Reflect.construct` levels at 4096 KiB where the launcher's 16 MiB host stack
+holds 11,520, and that recursion trapped; `tests/fixtures/stack-overflow` caught
+it. With 48 the guard stops it at 10,920 levels, about 15 MiB of host stack,
+where the build before used 15.8 MiB at 10,481. On every route in the table the
+host stack in use when the guard refuses at 4096 KiB is lower than before. That
+is a wasmtime measurement of one launcher build. It is not a browser result:
+JavaScriptCore's wasm tiers have their own frame sizes, and Safari is measured
+separately.
+
+`next dev` now starts at 36 KiB in a native run and its first render returns
+HTTP 200: TypeScript's library frame no longer counts against the budget, and
+acorn's 152 nested calls while parsing Next's client entry run inline.
+Angular's `ng serve` still fails at 36 KiB. Its depth is native: each level of
+Ajv's code generation reads an accessor that folds its children with
+`Array.prototype.reduce`, one accessor and one native callback per level, and
+those keep their C calls. These are launcher runs of the guest's own guard, not
+Safari runs.
 
 ### Native callable frames
 

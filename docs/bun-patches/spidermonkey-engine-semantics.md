@@ -94,9 +94,32 @@ Each control checks that child scratch is empty after success, failure, or a run
 that filters out every test.
 Both test files remain owned by the blocking quality gate.
 
-`crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` is a deferred native
-regression driver. Its syntax is checked against retained headers, but it has not
-been linked or run. It does not add a native build recipe or CI build demand.
+The original control builders now live in
+`scripts/spidermonkey-native-controls.ts`. This is an original test adapter
+extraction, with unchanged generated C++ and Rust bytes, assertions and argument
+vectors. Each call reads the current shim and Rust adapter, including deliberately
+mutated copies. `scripts/ci-native-control-compilers.ts` identifies the preinstalled
+C++ and stable Rust compilers, concurrently compiles this exact pair and runs both
+outputs before the quality gates. It reports total and phase cost, CPU milliseconds
+and filesystem input-operation counts. Unavailable counters are null. Explicit
+stable selection and disabled automatic installation keep identity queries from
+selecting the repository's nightly pin. Executable concurrency and partial-start
+controls use the system `mkfifo`, declared alongside other system binaries in the
+unused-dependency check. No compiler installation or heavier build
+is added, and all existing control clocks remain unchanged.
+
+With `BUN_WASM_SM_COMPILER_TRACE` set, semantics setup appends compiler PID,
+exit code/signal and stderr EOF length to a separate `.progress` file. Setup
+controls also record an allowlisted post-child-return, pre-group-kill snapshot of
+owned process-group members, relative scratch names and nullable host pressure.
+These callback and scan observations can race with termination and do not identify
+the cause or exact expiry state of historical timeouts. Preparation owns child
+groups through cleanup and retains scratch with an error if writers cannot be
+proved stopped. Forced job termination remains the runner's responsibility.
+
+`crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` was initially a deferred
+native regression driver, checked only for syntax against retained headers.
+It does not add a native library build recipe or CI build demand.
 
 The November 8 development runs reused the retained Unicode native archive and
 rebuilt the side, core, and launcher. Both tiers passed twelve focused runtime
@@ -108,9 +131,18 @@ the experimental source at `62b9f8f848e2b4fc45ffbc7ddea9773d436ab0d7`, not a
 claim that later source or a release producer has passed. The historical stack
 review requested changes; its three fixes and subsequent runtime evidence do not
 replace that review with a second approval. Full G3 and the direct C++ regression
-executable remain unrun.
+executable remained unrun at that checkpoint.
 
 Value construction extracts array, object and property-write operations into
 small helpers. Their order, temporary value ownership and rejected-property
 error release remain unchanged. This keeps the conversion code within the
 three-level nesting limit without changing its error behavior.
+
+The full native driver's pinned-transfer refusal expects `RangeError`, matching
+Mozilla's `JSMSG_ARRAYBUFFER_LENGTH_PINNED` classification. This fixture correction
+keeps optional-method handling, byte sharing, ordinary-buffer behavior and explicit
+detach assertions unchanged. It changes no production pin or transfer behavior.
+The corrected complete driver passes with the admitted old and new C+D libraries
+on interp and PBL, using each library's matching headers and configuration.
+Those four controls relink only the small driver and do not rebuild or relabel
+native generations or establish framework acceptance.

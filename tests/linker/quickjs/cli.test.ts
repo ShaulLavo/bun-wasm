@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MessagePort, Worker } from "node:worker_threads";
 import { FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
-import { prepareQuickjsProgram, programLinkPlan } from "../../../src/assets.ts";
+import { prepareQuickjsProgram, programMetadata } from "../../../src/assets.ts";
 import { createWorkerProcessTransport } from "waffle/proc";
 
 async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array | string>>) {
@@ -14,7 +14,7 @@ async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array 
   const core = new Uint8Array(await readFile(join(directory, "bun.wasm")));
   const engine = new Uint8Array(await readFile(join(directory, "quickjs.wasm")));
   const module = await prepareQuickjsProgram(core, engine);
-  const linkPlan = programLinkPlan(module);
+  const linkPlan = programMetadata(module).linkPlan;
   assert(linkPlan);
   const backend = new MemoryBackend();
   for (const [name, source] of Object.entries(files)) backend.fs.writeFile(name, source);
