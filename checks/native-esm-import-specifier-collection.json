@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/esm-import-specifier-collection",
+  "profile": "shared-group"
+}

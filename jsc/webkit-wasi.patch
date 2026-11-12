@@ -250,7 +250,7 @@ index 4125087c..acbeafcd 100644
  
      // An import slot addressed like a variable of this environment, past the symbol table's own.
 diff --git i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
-index bda17b3b..5b39e656 100644
+index bda17b3b..b4b1afe9 100644
 --- i/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
 +++ w/Source/JavaScriptCore/runtime/JSModuleLoader.cpp
 @@ -26,6 +26,7 @@
@@ -261,6 +261,20 @@ index bda17b3b..5b39e656 100644
  #include "ProgramExecutable.h"
  
  #include "BuiltinNames.h"
+@@ -609,6 +610,13 @@ Identifier JSModuleLoader::resolve(JSGlobalObject* globalObject, const Identifie
+     JSValue nameValue = name.isSymbol() || name.isNull() ? jsUndefined() : jsString(vm, name.string());
+     RETURN_IF_EXCEPTION(scope, { });
+ 
++#if OS(WASI)
++    // The collector finds stack values in linear memory, and wasm-opt --spill-pointers copies only
++    // pointer-sized locals there. A JSValue is a 64-bit local, so allocating the referrer string
++    // could collect the name string without this root.
++    Strong<Unknown> nameRoot(vm, nameValue);
++#endif
++
+     JSValue referrerValue = referrer.isSymbol() || referrer.isNull() ? jsUndefined() : jsString(vm, referrer.string());
+     RETURN_IF_EXCEPTION(scope, { });
+ 
 diff --git i/Source/JavaScriptCore/runtime/Options.cpp w/Source/JavaScriptCore/runtime/Options.cpp
 index a5b84dde..ec0277b9 100644
 --- i/Source/JavaScriptCore/runtime/Options.cpp
