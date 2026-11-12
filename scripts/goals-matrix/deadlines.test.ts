@@ -168,21 +168,41 @@ test("continuation accepts the same policy, retains failed history, and rejects 
 type CleanupDelays = { session?: number; preview?: number; transcript?: number };
 async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>, delays: CleanupDelays = {}): Promise<void> {
   const timeouts: unknown[] = [];
+  let previewToken: string | undefined;
   async function route(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     const body = request.method === "POST" ? object(await request.json()) : {};
     if (request.method === "DELETE" && path === "/session/deadline-unit") await Bun.sleep(delays.session ?? 0);
-    if (timeouts.length > 1 && request.method === "DELETE" && path.endsWith("/window")) await Bun.sleep(delays.preview ?? 0);
     const expression = Array.isArray(body.args) ? body.args[0] : undefined;
     if (timeouts.length > 1 && path.endsWith("/execute/async") && typeof expression === "string" && expression.includes("function transcript")) await Bun.sleep(delays.transcript ?? 0);
     if (path === "/session") return Response.json({ value: { sessionId: "deadline-unit", capabilities: { browserName: "Safari", platformName: "macOS", transport: "unit-fixture" } } });
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
-    if (path.endsWith("/window/new")) return Response.json({ value: { handle: "preview" } });
+    if (path.endsWith("/frame") && body.id !== null && (previewToken === undefined || object(body.id)["element-6066-11e4-a52e-4f735466cecf"] !== "fixture-preview")) throw new Error("Invalid fixture frame selection");
     if (path.endsWith("/element")) return Response.json({ value: { "element-6066-11e4-a52e-4f735466cecf": "fixture-counter" } });
     if (path.endsWith("/element/fixture-counter/click")) await withScoped(transport, page => page.evaluate("globalThis.__goalsFixtureNativeClick()"));
     if (path.endsWith("/url")) await withScoped(transport, page => page.navigate(String(body.url)));
     if (path.endsWith("/execute/async")) return evaluation(body);
+    if (path.endsWith("/execute/sync")) return frame(body);
+    return Response.json({ value: null });
+  }
+  async function frame(body: Record<string, unknown>): Promise<Response> {
+    const args = body.args;
+    if (!Array.isArray(args)) throw new Error("Invalid fixture frame arguments");
+    const input = args[0];
+    if (typeof input !== "string") return createFrame(input);
+    if (input !== previewToken) throw new Error("Invalid fixture frame ownership");
+    if (args[1] !== true) return Response.json({ value: { "element-6066-11e4-a52e-4f735466cecf": "fixture-preview" } });
+    if (timeouts.length > 1) await Bun.sleep(delays.preview ?? 0);
+    await withScoped(transport, page => page.closePreview());
+    previewToken = undefined;
+    return Response.json({ value: null });
+  }
+  async function createFrame(input: unknown): Promise<Response> {
+    const { url, token } = object(input);
+    if (typeof url !== "string" || typeof token !== "string" || previewToken !== undefined) throw new Error("Invalid fixture frame creation");
+    previewToken = token;
+    await withScoped(transport, page => page.openPreview(url));
     return Response.json({ value: null });
   }
   async function evaluation(body: Record<string, unknown>): Promise<Response> {
