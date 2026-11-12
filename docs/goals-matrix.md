@@ -302,3 +302,24 @@ and records installed React and Vite versions, startup phases, cache-hit marks,
 response statuses, browser version, and browser cleanup. `--limit-ms` enforces a
 cold median limit for the current revision, never the average of both revisions.
 Warm renders also must stay below that limit.
+
+For native WebDriver ownership evidence, add `--safari-ownership` to `run.ts` or
+`fleet.ts`. Each cell attempt appends synchronous JSONL observations under
+`logs/<cell>.ownership-<capture-uuid>.jsonl`. Every row includes the controller
+source commit and dirty flag, run, cell, attempt, capture UUID, timestamp, event
+number, sequence, session ID and observed host handle. Retry and resumed captures
+use new filenames. Fleet collects these logs with ordinary reports. After an
+interruption it waits for the writer to settle, then copies final logs before
+removing staging. Failed final collection retains staging. Proved cancellation
+before the workload starts needs no logs.
+
+Only this run's existing requests supply identifiers. Frame presentation tokens
+are local intent until the presentation request is acknowledged. Element references
+come from the existing identity-checked lookup. A frame removal acknowledgement
+is not a native window close. A tab-close or session-delete acknowledgement is a
+WebDriver response, not independent proof of OS-window absence. Missing responses,
+invalid sessions and lost connections leave effects unknown. Opaque handles are
+not OS window IDs or WebContent PIDs. No such PID witness is available here.
+The receipt excludes URLs, page contents, scripts, cookies and request bodies.
+Capture is off by default. A synchronous sink failure does not interrupt mandatory
+cleanup; it makes session cleanup fail after deletion has been attempted.

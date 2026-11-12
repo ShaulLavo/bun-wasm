@@ -1,6 +1,6 @@
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
-import { mkdtemp, mkdir, access, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, access, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { options, run, playgroundURL } from "./run";
@@ -82,6 +82,9 @@ test.each(loopControls)("two selected cells preserve evidence and resource teard
     if (control.stop) expect(stored.cells.filter(cell => cell !== first)).toEqual(untouched);
     if (!control.stop) expect(stored.cells.find(cell => cell.browser === control.browser && cell.engine === "browser" && cell.framework === "astro")).toMatchObject({ status: "fail", attempts: expect.any(Array) });
     expect(await Bun.file(join(scratch, "report/logs/nuxt-" + control.browser + "-browser.log")).text()).toContain("Fixture observation unavailable");
+    const ownershipFiles = (await readdir(join(scratch, "report/logs"))).filter(name => name.includes(".ownership-"));
+    expect(ownershipFiles).toHaveLength(control.browser === "chrome" ? 0 : control.stop ? 1 : 2);
+    if (ownershipFiles[0]) expect(JSON.parse((await Bun.file(join(scratch, "report/logs", ownershipFiles[0])).text()).trim())).toMatchObject({ schema: 1, run: stored.run, source: { commit: stored.source.commit, dirty: stored.source.dirty }, attempt: 1, operation: { kind: "session-create" }, outcome: { state: "intent" } });
     expect(stored.resources).toHaveLength(1);
     for (const resource of stored.resources ?? []) {
       expect(resource.stopped).toBe(true);
@@ -112,10 +115,10 @@ const createTransport = async (): Promise<Transport> => ({
 });
 mock.module(source + "/discovery.ts", () => ({ prerequisites: () => undefined }));
 mock.module(source + "/transport.ts", () => ({ ...scoped, createPlaywrightTransport: createTransport }));
-mock.module(source + "/safari-transport.ts", () => ({ createSafariTransport: createTransport }));
+mock.module(source + "/safari-transport.ts", () => ({ createSafariTransport: async options => { options.ownershipSink?.({ sequence: 1, event: 1, at: new Date().toISOString(), sessionId: null, hostHandle: null, admission: "unscoped", operation: { kind: "session-create" }, outcome: { state: "intent" } }); return createTransport(); } }));
 const { run, options } = await import(source + "/run.ts");
 let failure = "";
-try { await run(options(["--root=" + root + "/site", "--output=" + root + "/report", "--asset-source=local-control-no-assets", "--browsers=" + control.browser, "--engines=browser", "--frameworks=nuxt,astro", "--safari-endpoint=http://127.0.0.1:1", "--iphone-endpoint=http://127.0.0.1:1"])); }
+try { await run(options(["--root=" + root + "/site", "--output=" + root + "/report", "--asset-source=local-control-no-assets", "--safari-ownership", "--browsers=" + control.browser, "--engines=browser", "--frameworks=nuxt,astro", "--safari-endpoint=http://127.0.0.1:1", "--iphone-endpoint=http://127.0.0.1:1"])); }
 catch (error) { failure = String(error); }
 await Bun.write(root + "/outcome", failure);
 `;

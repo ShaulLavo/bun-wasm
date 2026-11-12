@@ -60,7 +60,7 @@ function mainWorkflow(run: ReturnType<typeof runIdentity>, workflow: number): bo
 
 function markedQuality(value: unknown, head: string): boolean {
   const job = record(value);
-  if (job.name !== "Code quality" || job.head_sha !== head || job.status !== "completed" || job.conclusion !== "success") return false;
+  if (job.name !== "Source quality" || job.head_sha !== head || job.status !== "completed" || job.conclusion !== "success") return false;
   if (!Array.isArray(job.steps)) throw new Error("Missing Actions job steps");
   return job.steps.some(value => {
     const step = record(value);
