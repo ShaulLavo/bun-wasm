@@ -22,9 +22,14 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::State;
-use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val, WordFn};
+use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::modules;
 use crate::resolve::{self, Kind, Resolved};
+
+thread_local! {
+    /// The token and result of this thread's last `procWriteOnce`.
+    static WRITE_ONCE: std::cell::Cell<(u32, i64)> = const { std::cell::Cell::new((0, 0)) };
+}
 
 /// Natives by name, plus constant properties of the `native` object.
 #[derive(Default)]
@@ -32,7 +37,7 @@ pub struct Table {
     pub functions: Vec<(&'static str, DataFn)>,
     pub constants: Vec<(&'static str, Val)>,
     /// Natives called through the scalar bridge, which cannot fail.
-    pub(crate) words: Vec<(&'static str, WordFn)>,
+    pub(crate) words: Vec<(&'static str, crate::data::WordFn)>,
 }
 
 impl Table {
@@ -44,14 +49,9 @@ impl Table {
         self.functions.push((name, Rc::new(f)));
     }
 
-    pub(crate) fn add_word(&mut self, name: &'static str, f: WordFn) {
+    pub(crate) fn add_word(&mut self, name: &'static str, f: crate::data::WordFn) {
         self.words.push((name, f));
     }
-}
-
-thread_local! {
-    /// The token and result of this thread's last `procWriteOnce`.
-    static WRITE_ONCE: std::cell::Cell<(u32, i64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// Node's (code, negative Linux errno, description) for an I/O error.
