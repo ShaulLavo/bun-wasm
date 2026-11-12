@@ -52,5 +52,5 @@ async function nativeControl(executable: string, root: string, env: NodeJS.Proce
 
 async function checkObservation(observation: Awaited<ReturnType<typeof startObservation>>, path: string) {
   const result = await finishObservation(observation, path);
-  return "summary" in result && result.summary.observedCpuSeconds > 0 ? null : "CPU observer positive control unavailable";
+  return "summary" in result && (result.summary.observedCpuSeconds ?? 0) > 0 ? null : "CPU observer positive control unavailable";
 }

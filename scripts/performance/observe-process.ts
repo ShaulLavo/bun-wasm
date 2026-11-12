@@ -45,7 +45,8 @@ function summarizeSamples(samples: Sample[], ticksPerSecond: number) {
     const metric = (name: string) => values.some(value => value === null) ? null : values.reduce<number>((sum, value) => sum + Number(new RegExp(`^${name}:\\s+(\\d+)`, "m").exec(value ?? "")?.[1] ?? NaN), 0);
     return { beforeMs: row.beforeMs, afterMs: row.afterMs, rssKiB: metric("Rss"), pssKiB: metric("Pss") };
   });
-  return { threads, observedCpuSeconds: threads.reduce((sum, row) => sum + row.observedCpuSeconds, 0), memory,
+  const intervals = threads.filter(row => row.observedCpuSeconds !== null);
+  return { threads, observedCpuSeconds: intervals.length ? intervals.reduce((sum, row) => sum + (row.observedCpuSeconds ?? 0), 0) : null, memory,
     coverage: "Observed deltas only, between readable samples wholly inside the requested window when supplied. Window edges are uncovered. Newly observed is not newly created. Entire lifetimes, disappearing final reads and tails may be missing. No roles, blocked-parent claim, CPU/wall partition or additive profile decomposition. RSS may double count shared pages. Memory values are concurrent samples, not continuous peaks." };
 }
 type TaskRow = Sample["processes"][number]["threads"][number];
@@ -61,8 +62,8 @@ function summarizeTask(identity: string, row: { first: TaskRow; last: TaskRow; o
   const firstQueue = queue(row.first), lastQueue = queue(row.last);
   const schedstatWorking = queueAvailable && firstQueue?.length === 3 && lastQueue?.length === 3 && lastQueue[0]! > firstQueue[0]!;
   return { identity, observations: row.observations, firstObservedMs: row.first.beforeMs, lastObservedMs: row.last.afterMs,
-    observedMinorFaults: row.last.stat.minorFaults - row.first.stat.minorFaults, observedMajorFaults: row.last.stat.majorFaults - row.first.stat.majorFaults,
-    observedCpuSeconds: (row.last.stat.userTicks + row.last.stat.systemTicks - row.first.stat.userTicks - row.first.stat.systemTicks) / ticksPerSecond,
+    observedMinorFaults: row.observations > 1 ? row.last.stat.minorFaults - row.first.stat.minorFaults : null, observedMajorFaults: row.observations > 1 ? row.last.stat.majorFaults - row.first.stat.majorFaults : null,
+    observedCpuSeconds: row.observations > 1 ? (row.last.stat.userTicks + row.last.stat.systemTicks - row.first.stat.userTicks - row.first.stat.systemTicks) / ticksPerSecond : null,
     observedQueueSeconds: schedstatWorking ? (lastQueue[1]! - firstQueue[1]!) / 1e9 : null,
     queueReason: schedstatWorking ? null : "kernel.sched_schedstats disabled/unavailable, schedstat missing, or running counter did not advance; zero queue is not established",
     endpoints: "First/last readable observations only; final lifetime endpoint is not guaranteed", name: row.first.stat.name };

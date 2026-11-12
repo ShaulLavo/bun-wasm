@@ -45,3 +45,11 @@ test("scheduler runtime alone does not establish enabled queue accounting", () =
   expect(queueEnabled([{ value: "1\n", error: null }, { value: null, error: "missing" }])).toBe(false);
   expect(queueEnabled([{ value: "1\n", error: null }, { value: "1\n", error: null }])).toBe(true);
 });
+
+test("a window without two readable endpoints has unavailable CPU, not zero", async () => {
+  const observer = await observeProcess(process.pid, "empty window control", 50);
+  const beforeMs = performance.now() + 10000;
+  const result = await observer.stop({ beforeMs, afterMs: beforeMs + 1 });
+  expect(result.includedSamples).toBe(0);
+  expect(result.summary.observedCpuSeconds).toBeNull();
+});

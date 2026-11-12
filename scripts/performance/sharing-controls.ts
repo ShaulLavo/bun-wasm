@@ -51,7 +51,7 @@ function validControlOutput(result: unknown, mode: string): boolean {
 
 function observerCoverage(observation: Awaited<ReturnType<typeof finishObservation>>, reason: string | null) {
   if (reason || !("summary" in observation)) return { cpu: "unavailable", queue: "unavailable", reason: reason ?? "Observer failed" };
-  return { cpu: observation.summary.observedCpuSeconds > 0 ? "positive" : "unavailable", queue: observation.summary.threads.some(thread => thread.observedQueueSeconds !== null) ? "running counter advanced" : "unavailable",
+  return { cpu: (observation.summary.observedCpuSeconds ?? 0) > 0 ? "positive" : "unavailable", queue: observation.summary.threads.some(thread => thread.observedQueueSeconds !== null) ? "running counter advanced" : "unavailable",
     reason: "Coverage is this browser tree during the actual root/child fixture. Individual guest thread roles are not established; memory/faults are sampled, not complete lifetime totals." };
 }
 
