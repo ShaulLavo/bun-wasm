@@ -463,7 +463,21 @@ test("a reused telemetry ID and command still reject frames from the earlier inc
   endMemorySnapshot(f.id, cleanExit);
   beginMemorySnapshot("spidermonkey", f.id, f.transport.commandId);
   recordMemorySnapshot({ type: "bun-memory", snapshot: old }, f.id);
-  expect(processObservation(f.id)).toMatchObject({ status: "invalid", sample: null });
+  expect(processObservation(f.id)).toMatchObject({ status: "pending", sample: null });
+  endMemorySnapshot(f.id);
+});
+test("a valid posted frame cannot poison another incarnation's accepted sample", () => {
+  const f = observationFixture();
+  const old = f.reader.finish();
+  endMemorySnapshot(f.id, cleanExit);
+  const transport = beginMemorySnapshot("spidermonkey", f.id, f.transport.commandId);
+  if (!transport) throw Error("missing transport");
+  const current = createMemoryReader("spidermonkey", f.core, undefined, LIMIT_BYTES, transport).sample();
+  recordMemorySnapshot({ type: "bun-memory", snapshot: current }, f.id);
+  const before = processObservation(f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: old }, f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: { ...old, frozenAllocatorFailure: {} } }, f.id);
+  expect(processObservation(f.id)).toEqual(before);
   endMemorySnapshot(f.id);
 });
 test("late posted frames cannot reopen terminal rows, poison another identity or populate unregistered rows", () => {

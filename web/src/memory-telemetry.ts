@@ -357,7 +357,8 @@ function readProcessOutcome(row: ProcessObservation, readOutcome: () => ProcessE
   row.outcomeBoundary = boundary;
 }
 
-function acceptProcessSnapshot(value: unknown, expectedId?: string): void {
+function acceptProcessSnapshot(value: unknown, expectedId?: string, channelIdentity = false): void {
+  if (!channelIdentity && supersededSnapshot(value, expectedId)) return;
   if (!value || typeof value !== "object" || !isMemorySnapshot(value)) {
     if (expectedId) observationError(expectedId, "invalid");
     return;
@@ -368,13 +369,21 @@ function acceptProcessSnapshot(value: unknown, expectedId?: string): void {
   if (!previous || !row || row.endedAt !== null) return;
   if (value.id !== id || value.engine !== previous.engine || value.commandId !== previous.commandId
     || value.commandSequence !== previous.commandSequence || value.commandStartedAt !== previous.commandStartedAt || value.incarnation !== previous.incarnation) {
-    observationError(id, "invalid");
+    if (channelIdentity) observationError(id, "invalid");
     return;
   }
   if (row.sample?.terminal || row.sample && value.time < row.sample.time) return;
   retained.set(id, value);
   row.sample = value;
   row.status = "sampled";
+}
+function supersededSnapshot(value: unknown, expectedId?: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  const id: unknown = expectedId ?? Reflect.get(value, "id");
+  const incarnation: unknown = Reflect.get(value, "incarnation");
+  if (typeof id !== "string" || typeof incarnation !== "number") return false;
+  const current = retained.get(id);
+  return current !== undefined && incarnation !== current.incarnation;
 }
 
 function finishProcessObservation(id: string, readOutcome?: () => ProcessExit | null): void {
@@ -383,7 +392,7 @@ function finishProcessObservation(id: string, readOutcome?: () => ProcessExit | 
   const channel = channels.get(id);
   try {
     const value = channel ? readMemoryChannel(channel) : null;
-    if (value !== null) acceptProcessSnapshot(value, id);
+    if (value !== null) acceptProcessSnapshot(value, id, true);
   } catch { observationError(id, "read-failed"); }
   if (row.status === "pending") row.status = "missing";
   if (readOutcome) readProcessOutcome(row, readOutcome, "adapter-cleanup");
@@ -535,7 +544,7 @@ async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean)
       continue;
     }
     if (value.id !== entry.id || value.engine !== engine) throw new TypeError("Memory channel identity mismatch");
-    acceptProcessSnapshot(value, entry.id);
+    acceptProcessSnapshot(value, entry.id, true);
     const current = memoryChannelReady(entry.channel, entry.generation, false);
     if (!current) {
       retained.set(entry.id, { ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
