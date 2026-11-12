@@ -91,7 +91,8 @@ Checked against the edited source before the first build:
 ## Measurements
 
 Launcher, November 12, 2026: a development side from this source paired with the ordinary split
-core of `01e55ae3`. Full parse of a chained assignment, in targets:
+core of main after Waffle 0.0.122 (core `13b54255…`), against that pair's own side. Full parse of
+a chained assignment, in targets:
 
 | Budget | Before | After |
 | ---: | ---: | ---: |
@@ -102,25 +103,42 @@ core of `01e55ae3`. Full parse of a chained assignment, in targets:
 
 The syntax-check pass loads every depth the probe tries (4,096). The nine forms in all positions
 and widths stop between 220 and 233 targets at 192 KiB. Babel's `uppercase.js` loads alone at 176
-and 192 KiB; before, both refused. The nine emitters lower the stack pointer by 1,040 to 1,088
-bytes in their prologue, before the call that recurses. The interpreter frame gate is unchanged:
+and 192 KiB; before, both refused. The nine emitters lower the stack pointer by 1,040 to 1,152
+bytes in their prologue (counting a small frame allocated first), before the call that recurses. The interpreter frame gate is unchanged:
 4,896 bytes held, 293 of 328 slots.
 
 ### Cost on other routes
 
-The two steps are inlined: the side has no separate function for either, in all four parser
-instantiations. The driver is still larger than upstream's function: 12,295 wasm instructions
-against 9,451, 72 locals against 66, and 32 more bytes of shadow frame (ASTBuilder, 8-bit). Every
-route through it pays that once per level:
+The two steps are inlined in all four parser instantiations, and the three functions each reserve
+once in their entry block, outside any loop, and restore on every exit; no call is a tail call.
+The entry is called by the same functions as upstream's plus the chain level, and the driver is
+called only by the entry. Wasm code, 8-bit sources (16-bit is the same):
 
-- Guarded capacity of nested calls, conditional chains and nested functions falls by one to five
-  levels at 192, 208 and 800 KiB. Blocks are unchanged.
-- With the guest guard out of the way, those routes exhaust a cut host stack earlier. Wasmtime at
-  512 KiB: nested calls 480 to 374, conditional chains 976 to 619, nested functions 165 to 147.
-  V8 (a Node worker) at 1 MiB: 780 to 720, 1,680 to 1,348, 364 to 354. Blocks are unchanged.
+| Function | ASTBuilder | SyntaxChecker |
+| --- | --- | --- |
+| Upstream `parseAssignmentExpression` | 9,451 instructions, 66 locals, frame 112 + 288 | 4,391, 30 locals, 96 + 128 |
+| Entry | 9,493, 66 locals, 112 + 288 | 4,449, 31 locals, 96 + 128 |
+| Chain level | 8,926, 4 parameters, 62 locals, 112 + 304 | 4,369, 4 parameters, 29 locals, 96 + 144 |
+| Chain driver | 188, 4 locals, 32 | 188, 4 locals, 32 |
 
-At the shipped budgets the guard still stops every route first: no trap in any sweep, and on V8 at
-800 KiB with a 1 MiB stack every route is refused with `RangeError`.
+With the guest guard out of the way (4,096 KiB), on Wasmtime with 256 and 512 KiB host stacks and
+V8 (a Node worker) with 1 MiB:
+
+- Routes without an assignment operator trap no earlier than before: nested calls, conditional
+  chains, nested functions and blocks, in the syntax check, the full parse and program code. The
+  full-parse routes go deeper (conditional chains 975 to 1,072 at 512 KiB). On V8 the 8-bit
+  conditional chain moves between runs (about 1,450 to 1,730 levels on either side).
+- A chain level per level costs more than upstream's second entry frame where the syntax check
+  limits the route: `o.a = f(o.a = f(…))` 480 to 466 and `o.a = x ? 0 : o.a = …` 766 to 731 levels
+  at 512 KiB (235 to 228 and 376 to 359 at 256 KiB), and nested function expressions assigned to a
+  target 183 to 181 in every pass. On V8 those two syntax-check routes are refused by the guard at
+  4,096 KiB, three levels earlier. In the full parse the same routes go deeper.
+- Routes with two operators per level (driver held) go deeper everywhere.
+
+At the shipped budgets the guard stops every route first: no trap in any sweep or probe on
+Wasmtime with a 512 KiB stack or V8 with 1 MiB, at 192 to 800 KiB. Guarded capacities of the routes
+without an assignment equal the old ones at 192, 208 and 800 KiB and are at most one level lower at
+208 KiB with reserve 960.
 
 ## Tests
 
@@ -132,7 +150,10 @@ At the shipped budgets the guard still stops every route first: no trap in any s
   ASI, condition and unused-result positions, both second-pass syntax errors, literal, operator,
   call and `new.target` targets, strict `eval` and `arguments` after 1, 9 and 200 levels, missing
   right sides inside arrow defaults and subscripts, module code with a top-level `await` right
-  side, script code, a parse after a caught failure, and on JSC the line and column of a write or
+  side, script code, a parse after a caught failure, a second operator after an arrow or a bare
+  `yield` at a level inside a chain, arrow-default and destructuring-default chains parsed
+  speculatively under a running chain (succeeding and failing, both widths, more records than the
+  inline capacity together), and on JSC the line and column of a write or
   read error JSC raises at levels 1, 9 and 200 of a 200-target chain.
 - `tests/fixtures/assignment-chain-depth`: 10,000-target chains through each of the nine forms
   (with resolved names both local and global), in value, ignored-result and condition position,
