@@ -96,18 +96,40 @@ buffers detach, so that write follows the same rule (`worker_channel.ts`, `nativ
 
 - A frame is queued as text and encoded when its first write is tried. A failed encode leaves it
   queued.
-- `procWriteOnce` writes like `procWrite` and keeps its result under a token the caller chose.
-  If the call throws on its way back, the word native `procWriteResult` returns that result, or
-  says no write ran under that token. A frame is therefore written once, whole and in order.
+- `procWriteOnce` writes like `procWrite` and keeps its result under its attempt: the
+  descriptor and a token. If the call throws on its way back, the word native
+  `procWriteResult` returns that result for the same attempt, or says it never ran. A frame
+  is therefore written once, whole and in order.
+- The core keeps one last attempt for the whole guest, so a token names one attempt of the
+  guest, not of a channel. The channel module counts them across every channel it opens and
+  never reuses one (53 bits, passed to the word native as two words).
 - A flush never throws for a call the bridge could not carry. The frame stays queued and the
   pipe's writable subscription brings the next attempt.
 
 The host engine (`engine_host.rs`) has one bridge, so it registers word natives as ordinary
 natives. The runtime JavaScript calls them the same way on every engine.
 
-What this does not cover: an engine-level exception inside the runtime's own JavaScript between
-detachment and return, such as a stack overflow. That is the same exposure as any builtin
-written in JavaScript and is not specific to the lane.
+### Engine exceptions between detachment and return
+
+Word natives remove the native bridge's own failures. The JavaScript around them can still be
+interrupted by an exception the engine raises itself. Two kinds are catchable:
+
+- Stack exhaustion. Measured on a shared-group QuickJS guest on the native launcher: a
+  `postMessage` that transfers an ArrayBuffer, with and without a carried port, called from
+  every stack depth around the limit, with the sender on the group's first guest and in a
+  worker, at 4096 KiB and 36 KiB budgets. In 59,520 attempts every call either threw with the
+  buffer attached, the port still local and nothing received, or returned with the whole
+  message received. The reason is the order of work: the deepest point of the call is reached
+  while the message is prepared and staged, before anything detaches, and what follows
+  detachment is a loop over the carried ports, not a recursion. A control that overflows on
+  purpose after a finished post is reported by the same probe. This has not been measured on
+  JSC or SpiderMonkey guests.
+- Heap exhaustion that QuickJS reports as a catchable error. After detachment the runtime still
+  creates a few small objects and one control frame. An allocation failure exactly there, after
+  the larger allocations of preparing and staging succeeded and were freed, has not been
+  produced or ruled out.
+
+Ending a guest is not catchable and follows the death rules.
 
 ## Rules
 
@@ -131,7 +153,13 @@ written in JavaScript and is not specific to the lane.
   which is not inside a receive: an otherwise idle root takes no later step.
 - Receiving is atomic loads, stores and copies on group memory. It validates every cursor, length,
   slot and address before use and closes the direction on corruption, never writing through an
-  address that failed validation.
+  address that failed validation. The failure is reported once: later reads of a direction
+  whose reader has stopped say the lane is over, and the port closes.
+- A failed drain in an event-loop step does not stop the step or the loop. The other ports,
+  the mailbox, the control channels and the housekeeping are still served, then the first
+  failure is thrown as the thread's uncaught error. The loop drops a waiter whose step threw,
+  so the worker waiter puts itself back: it is the only thing that pumps the thread's lanes
+  and channels.
 - A slot that names a pin is handed to the group only after the ledger names the pin. Cleaning
   keeps the slot exclusive until unpin settles; a later member recovers a dead cleaner's slot and
   accepts only "bad pin" as already absent.
