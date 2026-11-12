@@ -33,3 +33,7 @@ Lifetime and collection regressions retain their existing quality owners under
 `checks/quality-goals-matrix-native.json` and `quality-goals-matrix-fleet.json`.
 Actual native session creation and teardown are checked separately from injected
 regressions; full framework acceptance remains a post-review campaign.
+
+The native lifecycle imports `bounded.ts` directly rather than through the matrix
+executor. It uses the same helper and timeouts, while standalone native adapters
+avoid importing the executor's unused Playwright browser factory.
