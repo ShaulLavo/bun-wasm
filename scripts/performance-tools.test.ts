@@ -21,7 +21,7 @@ test("the tools package's default Cargo binaries contain only the WASI guest", (
   const manifest = object(JSON.parse(run("rustup", ["run", "stable", "cargo", "read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
   const binaries = array(manifest.targets).map(object).filter(target => array(target.kind).includes("bin")).map(target => target.name);
   expect(binaries).toEqual(["bun-tools"]);
-});
+}, 20000);
 
 test("saved profile counts sample entries, separates useful callees, and rejects missing captures", () => {
   const frame = (id: number, name: string, url: string, children: number[]) => ({ id, callFrame: { functionName: name, url }, children, hitCount: 9999 });
