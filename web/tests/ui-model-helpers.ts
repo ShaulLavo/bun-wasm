@@ -12,6 +12,8 @@ import { profileAsset } from "../src/program-profile";
 import { appendCustomSection } from "../../src/engine-kind";
 import type { Playground } from "../src/playground/playground";
 import type { Sandbox } from "../../sandbox/src/sandbox";
+import type { RunHooks } from "../src/runner";
+import { StorageRecovery } from "../../sandbox/src/workspace-policy";
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -96,29 +98,41 @@ class TerminalFixture {
 }
 
 let identity = 0;
-export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }) {
+function fixtureWasm(url = "") {
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  return { module: new WebAssembly.Module(url.startsWith("profiles/shared-group/") ? appendCustomSection(bytes, "dylink.0", new Uint8Array()) : bytes), size: 8, build: null };
+}
+
+export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }, engine?: () => Promise<ReturnType<typeof fixtureWasm>>) {
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
-  const runs: { args: string[]; env: Record<string, string>; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
+  const runs: { args: string[]; env: Record<string, string>; hooks: RunHooks; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
   const promptCreates: PromptOptions[] = [];
   const sessionCreates: SessionOptions[] = [];
+  const storageEvents: string[] = [];
   let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
   const boundary = {
     ...stateModule, ...viewModule, EditorView: View, EditorState,
     ...engineLoader, declareModuleMemory, pages,
     FitAddon: class { fit() {} }, Terminal: TerminalFixture,
-    createRuntime: () => (runtime = { ...runtime }),
+    createRuntime: () => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
+    storedWorkspaces: async () => [], openIdleWorkspace: async () => "missing",
+    openStorage: async () => {}, prepareStorage: async () => {},
+    WorkspaceStorage: class {
+      readonly recovery = new StorageRecovery(async () => { storageEvents.push("recover"); });
+      static async open() { storageEvents.push("open"); await boundary.openStorage(); return new this(); }
+      prepare() { storageEvents.push("prepare"); return boundary.prepareStorage(); }
+      async initialize(_fs: unknown, seed: () => Promise<void>) { storageEvents.push("initialize"); await seed(); }
+      reset(replace: () => Promise<void>) { storageEvents.push("reset"); return replace(); }
+      close() { storageEvents.push("close"); }
+    },
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => {
-      loads.push(url);
-      const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-      return { module: new WebAssembly.Module(url.startsWith("profiles/shared-group/") ? appendCustomSection(bytes, "dylink.0", new Uint8Array()) : bytes), size: 8, build: null };
-    },
+    loadWasm: async (url: string) => { loads.push(url); return engine ? engine() : fixtureWasm(url); },
     loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], _progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile)),
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
-    linkLocalUrls() {}, openTerminal() {},
+    linkLocalUrls() {}, installPreviewLinks() { return () => {}; }, openTerminal() {},
     createPrompt: (options: PromptOptions) => {
       promptCreates.push(options);
       return { variables: [], prepare() {}, render: async (context: { readonly ps1: string }) => context.ps1 };
@@ -130,7 +144,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
         return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} };
       }
     },
-    startRun: (options: { args: string[]; env: Record<string, string> }) => { const run = { args: options.args, env: options.env, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
+    startRun: (options: { args: string[]; env: Record<string, string> }, hooks: RunHooks) => { const run = { args: options.args, env: options.env, hooks, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
     location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign(_url: string | URL) {} },
     requestIdleCallback: () => 0,
@@ -144,10 +158,12 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const replacements: Record<string, string[]> = {
     "@codemirror/state": Object.keys(stateModule), "@codemirror/view": Object.keys(viewModule),
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
-    waffle: ["createRuntime", "declareModuleMemory", "pages"], "browser-programs": ["BrowserPrograms"],
+    waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace"], "browser-programs": ["BrowserPrograms"],
+    "workspace-storage": ["WorkspaceStorage"],
     "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
+    "preview-links": ["installPreviewLinks"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],
   };
   const result = await Bun.build({
@@ -162,7 +178,14 @@ import { App as SandboxApp } from ${JSON.stringify(`${root}sandbox/src/app.tsx`)
 export const renderPlayground = playground => renderToString(PlaygroundApp({ props: { playground }, signal: new AbortController().signal, update: async () => {} })());
 export const renderSandbox = sandbox => renderToString(SandboxApp({ props: { sandbox }, signal: new AbortController().signal, update: async () => {} })());
 export { Playground } from ${JSON.stringify(`${root}web/src/playground/playground.ts`)};
-export { Sandbox } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
+import { Sandbox as SandboxModel } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
+export class Sandbox extends SandboxModel {
+  constructor(search) {
+    const params = new URLSearchParams(search);
+    if (!params.has("mode")) params.set("mode", "memory");
+    super(params.toString());
+  }
+}
 export { Editor as PlaygroundEditor } from ${JSON.stringify(`${root}web/src/playground/editor.ts`)};
 export { Editor as SandboxEditor } from ${JSON.stringify(`${root}sandbox/src/editor.ts`)};
 export { loadTemplate } from ${JSON.stringify(`${root}sandbox/src/template.ts`)};
@@ -189,7 +212,14 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     loadTemplate: typeof import("../../sandbox/src/template").loadTemplate;
     runtimeSharedObjectRoute(runtime: Pick<Runtime, "filesystem" | "disposed">): ReturnType<typeof import("../src/shared-objects/runtime").runtimeSharedObjectRoute>;
   };
-  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, boundary, async cleanup() { for (const listener of listeners) listener({ persisted: false }); Reflect.deleteProperty(globalThis, key); for (const run of runs) run.done.resolve({ code: 0 }); await rm(scratch, { recursive: true }); } };
+  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, storageEvents, boundary, async cleanup() {
+    try { for (const listener of listeners) listener({ persisted: false }); }
+    finally {
+      Reflect.deleteProperty(globalThis, key);
+      for (const run of runs) run.done.resolve({ code: 0 });
+      await rm(scratch, { recursive: true });
+    }
+  } };
 }
 
 export function method<T extends (...args: never[]) => unknown>(target: object, name: string): T {

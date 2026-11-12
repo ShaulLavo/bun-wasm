@@ -34,6 +34,20 @@ Lifetime and collection regressions retain their existing quality owners under
 Actual native session creation and teardown are checked separately from injected
 regressions; full framework acceptance remains a post-review campaign.
 
+`run.ts` stops after failed cleanup for both native Safari selections, before
+entering another cell. It saves the first phase error and separate cleanup error
+before stopping, then reaps the asset server and saves the partial report again.
+Unvisited cells retain their original status and empty attempt history. Independent
+framework failures with successful cleanup still allow later cells to run.
+The existing run quality owner checks this with two selected cells and local
+transport controls, without starting a browser or contacting a Mac.
+
 The native lifecycle imports `bounded.ts` directly rather than through the matrix
 executor. It uses the same helper and timeouts, while standalone native adapters
 avoid importing the executor's unused Playwright browser factory.
+
+Commands with inherited output also forward captured stderr when its pipe closes,
+including the fleet workload's allowed exit code 1. A failure before any report
+now exposes its original diagnostic before collection or cleanup errors. The
+same captured text still reaches `CommandExitError` for disallowed exit codes.
+Signal handling, child reaping and native cleanup proof requirements are unchanged.

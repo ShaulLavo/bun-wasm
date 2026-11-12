@@ -46,3 +46,24 @@ server stop; owned cleanup observes before transport cleanup. A missing
 failure-time observation is labelled as unavailable. Successful logs retain
 their existing format. The Angular diagnostic and iPhone executor fixtures
 cover both cleanup paths and unavailable observations.
+
+Opt-in ownership capture uses the original local adapter in
+`safari-ownership.ts`. It observes only the existing session creation, host handle,
+preview creation, frame reference/selection and teardown requests. Records separate
+intent, dispatch, acknowledgement and request failure. An acknowledgement carries
+only the identifiers returned for that operation. Failed requests have unknown
+effects, and an expired admission is labelled even when its request later returns.
+Sink failures are deferred until session deletion has been attempted and aggregate
+with an original cleanup error. Capture adds no browser requests or context inventory.
+
+Interrupted fleet collection waits for queue and writer settlement before its final
+copy. Unproved shutdown may retain an early diagnostic snapshot but cannot authorize
+removal. A proved pre-workload cancellation requires no logs; otherwise final-copy
+failure retains the complete staged receipt and original failure.
+
+The small original fixture `fixtures/safari-ownership-smoke.ts` imports the same
+native lifecycle, scoped driver and receipt writer. Its standalone bundle needs no
+Playwright import. It serves one local HTML fixture, observes its own host and
+frame, verifies the receipt is readable before teardown, and records frame-removal
+and session-deletion acknowledgements separately. It makes no framework, process
+ownership or physical-window-absence acceptance claim.

@@ -26,8 +26,29 @@ const desktop = { browserName: "Safari", browserVersion: "26.4", platformName: "
 const iphone = { browserName: "Safari", browserVersion: "26.5", platformName: "iOS", "safari:useSimulator": true,
   "safari:deviceType": "iPhone", "safari:deviceUDID": "owned-iphone" };
 
+class FixtureFrame {
+  id = "";
+  src = "";
+  title = "";
+  style = { cssText: "" };
+  dataset: Record<string, string> = {};
+  readonly reference = crypto.randomUUID();
+  context: Context = createContext();
+  constructor(readonly elements: Map<string, FixtureFrame>) {}
+  addEventListener(): void {}
+  focus(): void {}
+  remove(): void { if (this.elements.get(this.id) === this) this.elements.delete(this.id); }
+}
+
 function document(url = "about:blank"): Context {
-  return createContext({ setTimeout, clearTimeout, location: { href: url } });
+  const elements = new Map<string, FixtureFrame>();
+  return createContext({ setTimeout, clearTimeout, crypto, location: { href: url }, HTMLIFrameElement: FixtureFrame,
+    document: {
+      getElementById: (id: string) => elements.get(id) ?? null,
+      createElement: () => new FixtureFrame(elements),
+      body: { appendChild(frame: FixtureFrame) { frame.context = document(frame.src); elements.set(frame.id, frame); } },
+    },
+  });
 }
 
 async function execute(context: Context, call: Call, timeoutMs: number): Promise<Response> {
@@ -45,14 +66,36 @@ async function execute(context: Context, call: Call, timeoutMs: number): Promise
   } finally { clearTimeout(timer); }
 }
 
+function executeSync(context: Context, call: Call, elements: Map<string, FixtureFrame>): Response {
+  try {
+    const script = runInContext(`(function () { ${text(call.body.script)} })`, context);
+    assert.ok(Array.isArray(call.body.args));
+    const result: unknown = script.apply(undefined, call.body.args);
+    if (!(result instanceof FixtureFrame)) return reply(result);
+    elements.set(result.reference, result);
+    return reply({ "element-6066-11e4-a52e-4f735466cecf": result.reference });
+  } catch (error) { return failure(String(error)); }
+}
+
 function fixture(options: FixtureOptions = {}) {
   const calls: Call[] = [];
   const pending = new Set<Promise<Response>>();
   const windows = new Map<string, Context>([["host", document()]]);
+  const elements = new Map<string, FixtureFrame>();
+  let frame: FixtureFrame | undefined;
   let selected = "host", created = 0, deleted = false, scriptTimeout = 1000;
 
+  function context(): Context {
+    const current = frame?.context ?? windows.get(selected);
+    assert.ok(current);
+    return current;
+  }
+
   async function route(call: Call): Promise<Response> {
-    if (call.path === "/session" && call.method === "POST") return reply({ sessionId: "owned", capabilities: options.capabilities ?? desktop });
+    if (call.path === "/session" && call.method === "POST") {
+      const requested = record(record(call.body.capabilities).alwaysMatch);
+      return reply({ sessionId: "owned", capabilities: options.capabilities ?? (requested.platformName === "iOS" ? iphone : desktop) });
+    }
     if (call.path === "/session/owned" && call.method === "DELETE") { deleted = true; windows.clear(); return reply(null); }
     if (call.path === "/session/owned/timeouts") { scriptTimeout = Number(call.body.script); return reply(null); }
     if (call.path === "/session/owned/window/new") {
@@ -63,15 +106,20 @@ function fixture(options: FixtureOptions = {}) {
     if (call.path === "/session/owned/window" && call.method === "GET") return reply(selected);
     if (call.path === "/session/owned/window" && call.method === "POST") {
       selected = text(call.body.handle);
+      frame = undefined;
       assert.ok(windows.has(selected));
       return reply(null);
     }
     if (call.path === "/session/owned/window" && call.method === "DELETE") { windows.delete(selected); return reply(Array.from(windows.keys())); }
     if (call.path === "/session/owned/url") { windows.set(selected, document(text(call.body.url))); return reply(null); }
+    if (call.path === "/session/owned/frame") {
+      frame = call.body.id === null ? undefined : elements.get(text(record(call.body.id)["element-6066-11e4-a52e-4f735466cecf"]));
+      assert.ok(call.body.id === null || frame);
+      return reply(null);
+    }
+    if (call.path === "/session/owned/execute/sync") return executeSync(context(), call, elements);
     if (call.path === "/session/owned/execute/async") {
-      const context = windows.get(selected);
-      assert.ok(context);
-      return execute(context, call, scriptTimeout);
+      return execute(context(), call, scriptTimeout);
     }
     return failure(`Unexpected request ${call.method} ${call.path}`);
   }
@@ -88,7 +136,7 @@ function fixture(options: FixtureOptions = {}) {
     void response.then(() => pending.delete(response), () => pending.delete(response));
     return response;
   } });
-  const driver = { calls, windows, get selected() { return selected; }, get deleted() { return deleted; },
+  const driver = { calls, windows, context, get selected() { return selected; }, get deleted() { return deleted; },
     async connect(overrides: Partial<SafariTransportOptions> = {}): Promise<SafariTransport> {
       return createSafariTransport({ endpoint: server.url.href, browser: "safari", timeoutMs: 1000, ...overrides });
     },
@@ -182,9 +230,48 @@ test("propagates synchronous, rejected-promise, syntax, and JSON serialization e
   } finally { await transport.close(); }
 });
 
-test("host and retained preview survive serialized alternation, and usePreview never navigates or creates", async () => {
+test("desktop preview uses a native frame context, survives host edits and reload, and reopens for production", async () => {
   const driver = fixture();
   const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
+    await withScoped(transport, page => page.evaluate('globalThis.editor = "alive"'));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/dev"));
+    expect(driver.windows.size).toBe(1);
+    expect(await withScoped(transport, page => page.evaluate("location.href"))).toBe("http://fixture.test/dev");
+    await withScoped(transport, page => page.evaluate("globalThis.documentIdentity = 123"));
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate("editor"))).toBe("alive");
+    await withScoped(transport, page => page.evaluate('globalThis.editor = "edited"'));
+    const before = driver.calls.length;
+    await withScoped(transport, page => page.usePreview());
+    expect(await withScoped(transport, page => page.evaluate("documentIdentity"))).toBe(123);
+    expect(driver.calls.slice(before).some(call => call.path.endsWith("/url"))).toBe(false);
+    await withScoped(transport, page => page.useHost());
+    const frame: unknown = runInContext('document.getElementById("__goalsIphonePreview")', driver.context());
+    assert.ok(frame instanceof FixtureFrame);
+    const token = frame.dataset.goalsPresentation;
+    frame.context = document("http://fixture.test/dev");
+    await withScoped(transport, page => page.usePreview());
+    expect(await withScoped(transport, page => page.evaluate("globalThis.documentIdentity"))).toBeNull();
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate("editor"))).toBe("edited");
+    expect(frame.elements.size).toBe(0);
+    await withScoped(transport, page => page.closePreview());
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("no preview");
+    await withScoped(transport, page => page.openPreview("http://fixture.test/production"));
+    expect(await withScoped(transport, page => page.evaluate("location.href"))).toBe("http://fixture.test/production");
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).not.toBe(token);
+    await withScoped(transport, page => page.closePreview());
+    expect(driver.calls.some(call => call.path.endsWith("/window/new") || call.path.endsWith("/window") && call.method === "DELETE")).toBe(false);
+    expect(driver.calls.some(call => call.path.endsWith("/frame") && call.body.id !== null)).toBe(true);
+  } finally { await transport.close(); }
+});
+
+test("iPhone WebDriver host and retained preview survive serialized alternation, and usePreview never navigates or creates", async () => {
+  const driver = fixture();
+  const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
   try {
     await withScoped(transport, page => page.navigate("http://fixture.test/editor"));
     await withScoped(transport, page => page.evaluate('globalThis.editor = "alive"'));
@@ -215,9 +302,109 @@ test("host and retained preview survive serialized alternation, and usePreview n
   } finally { await transport.close(); }
 });
 
+test("desktop frame identity checks preserve a replaced or pre-existing presentation", async () => {
+  const driver = fixture();
+  const capture = ownershipCapture();
+  const transport = await driver.connect(capture);
+  try {
+    await withScoped(transport, page => page.openPreview("http://fixture.test/dev"));
+    await withScoped(transport, page => page.useHost());
+    await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation = "someone-else"'));
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("identity changed");
+    await expect(withScoped(transport, page => page.closePreview())).rejects.toThrow("identity changed");
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/production"))).rejects.toThrow("identity changed");
+    expect(await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).toBe("someone-else");
+    expect(driver.windows.has("host")).toBe(true);
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "frame-remove", token: expect.any(String) }, outcome: expect.objectContaining({ state: "request-failed", effect: "unknown" }) }));
+  } finally { await transport.close(); }
+
+  const occupied = fixture();
+  const second = await occupied.connect();
+  try {
+    await withScoped(second, page => page.evaluate('(() => { const frame = document.createElement("iframe"); frame.id = "__goalsIphonePreview"; frame.dataset.goalsPresentation = "existing"; document.body.appendChild(frame); })()'));
+    await expect(withScoped(second, page => page.openPreview("http://fixture.test/dev"))).rejects.toThrow("already occupied");
+    expect(await withScoped(second, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).toBe("existing");
+  } finally { await second.close(); }
+});
+
+test("failed native frame selection removes only its owned frame and restores the host", async () => {
+  const driver = fixture({ intercept: call => call.path.endsWith("/frame") && call.body.id !== null ? failure("frame selection failed") : undefined });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.evaluate('globalThis.editor = "alive"'));
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/broken"))).rejects.toThrow("frame selection failed");
+    expect(await withScoped(transport, page => page.evaluate('({ editor, frame: !!document.getElementById("__goalsIphonePreview") })'))).toEqual({ editor: "alive", frame: false });
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("no preview");
+    expect(driver.calls.some(call => call.method === "DELETE" && call.path.endsWith("/window"))).toBe(false);
+  } finally { await transport.close(); }
+});
+
+test("desktop reopening replaces its own frame even at the same URL and preserves unrelated frames", async () => {
+  const driver = fixture();
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.evaluate('(() => { const frame = document.createElement("iframe"); frame.id = "unrelated"; document.body.appendChild(frame); })()'));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+    await withScoped(transport, page => page.evaluate("globalThis.oldDocument = true"));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+    expect(await withScoped(transport, page => page.evaluate("globalThis.oldDocument"))).toBeNull();
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("unrelated")'))).toBe(true);
+    await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").remove()'));
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("unrelated")'))).toBe(true);
+  } finally { await transport.close(); }
+});
+
+test("a failed frame removal preserves its error and can be cleaned within the cleanup allowance", async () => {
+  let failRemoval = true;
+  const driver = fixture({ intercept: call => {
+    const args = call.body.args;
+    if (failRemoval && call.path.endsWith("/execute/sync") && Array.isArray(args) && args[1] === true) return failure("frame removal failed");
+  } });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.openPreview("http://fixture.test/dev"));
+    await expect(withScoped(transport, page => page.closePreview())).rejects.toThrow("frame removal failed");
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(true);
+    failRemoval = false;
+    await withAdmission(async admission => transport.beginCleanup?.(admission));
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(false);
+  } finally { await transport.close(); }
+});
+
+test("late desktop frame creation remains owned for cleanup and dispatches no expired selection", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const driver = fixture({ intercept: async call => {
+    const args = call.body.args;
+    if (!call.path.endsWith("/execute/sync") || !Array.isArray(args) || typeof args[0] !== "object") return;
+    const script = runInContext(`(function () { ${text(call.body.script)} })`, driver.context());
+    script.apply(undefined, args);
+    entered.resolve(); await release.promise;
+    return reply(null);
+  } });
+  const capture = ownershipCapture();
+  const transport = await driver.connect(capture);
+  const scope = Scope.open(1000);
+  try {
+    const opening = transport.openPreview("http://fixture.test/late", scope);
+    await entered.promise;
+    scope.close(new Error("frame phase ended"));
+    await expect(opening).rejects.toThrow("frame phase ended");
+    release.resolve();
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(false);
+    expect(driver.calls.filter(call => call.path.endsWith("/frame") && call.body.id !== null)).toEqual([]);
+    expect(driver.windows.size).toBe(1);
+    expect(capture.events).toContainEqual(expect.objectContaining({ admission: "expired", operation: { kind: "frame-present", token: expect.any(String) }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } }));
+    expect(capture.events.some(event => event.operation.kind === "frame-select")).toBe(false);
+  } finally { release.resolve(); scope.close(); await transport.close(true); }
+});
+
 test("failed preview navigation closes only the owned preview and restores host", async () => {
   const driver = fixture({ intercept: call => call.path.endsWith("/url") ? failure("navigation failed") : undefined });
-  const transport = await driver.connect();
+  const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
   try {
     await expect(withScoped(transport, page => page.openPreview("http://fixture.test/broken"))).rejects.toThrow("navigation failed");
     expect(driver.windows.has("host")).toBe(true);
@@ -234,7 +421,7 @@ test("preview failure preserves its first error and cleanup failures in order", 
     if (call.path.endsWith("/url")) return failure("navigation failed");
     if (call.path.endsWith("/window") && call.method === "DELETE") return failure("preview delete failed");
   } });
-  const transport = await driver.connect();
+  const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
   try {
     const error = await capturedFailure(withScoped(transport, page => page.openPreview("http://fixture.test/broken")));
     assert.ok(error instanceof AggregateError);
@@ -250,7 +437,7 @@ test("closePreview reports close and host-switch failures while session deletion
     if (call.method === "DELETE") return failure("window close failed");
     if (call.body.handle === "host") return failure("host switch failed");
   } });
-  const transport = await driver.connect();
+  const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
   await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
   failCleanup = true;
   const error = await capturedFailure(withScoped(transport, page => page.closePreview()));
@@ -293,7 +480,7 @@ test("malformed created capabilities and missing host handles clean up the creat
 
 test("a malformed new-window handle cannot cause host deletion", async () => {
   const driver = fixture({ intercept: call => call.path.endsWith("/window/new") ? reply({ handle: "host" }) : undefined });
-  const transport = await driver.connect();
+  const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
   try {
     await expect(withScoped(transport, page => page.openPreview("http://fixture.test/app"))).rejects.toThrow("host handle");
     expect(driver.calls.some(call => call.path.endsWith("/window") && call.method === "DELETE")).toBe(false);
@@ -446,7 +633,8 @@ test("a late Safari preview window is retained for teardown without selection or
     entered.resolve(); await release.promise;
     return reply({ handle: "late-preview" });
   } });
-  const transport = await driver.connect();
+  const capture = ownershipCapture();
+  const transport = await driver.connect({ ...capture, browser: "iphone-safari", deviceUDID: "owned-iphone" });
   const scope = Scope.open(1000);
   try {
     const opening = transport.openPreview("http://fixture.test/late", scope);
@@ -459,6 +647,8 @@ test("a late Safari preview window is retained for teardown without selection or
     expect(driver.calls.filter(call => call.path.endsWith("/url"))).toEqual([]);
     expect(driver.calls.filter(call => call.path.endsWith("/window") && call.method === "POST")).toEqual([]);
     expect(driver.deleted).toBe(true);
+    expect(capture.events).toContainEqual(expect.objectContaining({ admission: "expired", operation: { kind: "preview-tab-create" }, outcome: { state: "acknowledged", observation: { kind: "tab", handle: "late-preview" } } }));
+    expect(capture.events.at(-1)).toMatchObject({ operation: { kind: "session-delete" }, outcome: { state: "acknowledged" } });
   } finally { release.resolve(); scope.close(); await transport.close(true); }
 });
 
@@ -490,14 +680,12 @@ function counterDriver(options: { trusted?: boolean; before?: string; intercept?
     if (intercepted) return intercepted;
     if (call.path.endsWith("/element")) return reply({ "element-6066-11e4-a52e-4f735466cecf": "counter/id" });
     if (!call.path.endsWith("/element/counter%2Fid/click")) return;
-    const context = driver.windows.get(driver.selected);
-    assert.ok(context);
+    const context = driver.context();
     runInContext(`counter.textContent = '1'; listener({ isTrusted: ${options.trusted ?? true}, currentTarget: target });`, context);
     return reply(null);
   } });
   function install(): void {
-    const context = driver.windows.get(driver.selected);
-    assert.ok(context);
+    const context = driver.context();
     runInContext(`
       globalThis.performance = { timeOrigin: 123 };
       globalThis.listener = undefined;
@@ -524,7 +712,7 @@ test("desktop click sends one WebDriver element click and requires observed trus
       { method: "POST", path: "/session/owned/element", body: { using: "css selector", value: "button" } },
       { method: "POST", path: "/session/owned/element/counter%2Fid/click", body: {} },
     ]);
-    expect(driver.selected).toBe("preview-1");
+    expect(driver.selected).toBe("host");
   } finally { await transport.close(); }
   expect(driver.deleted).toBe(true);
 });
@@ -657,4 +845,196 @@ test("a malformed element reference refuses input and a missing counter expires 
     await transport.close();
     expect(driver.calls.filter(call => call.path.endsWith("/click"))).toEqual([]);
   } finally { await transport.close(true); }
+});
+
+function ownershipCapture() {
+  const events: import("./safari-ownership").SafariOwnershipEvent[] = [];
+  const ownershipSink: import("./safari-ownership").SafariOwnershipSink = event => { events.push(event); return undefined; };
+  return { events, ownershipSink };
+}
+
+test("ownership receipt observes exact session, host, token and returned frame references before teardown", async () => {
+  const capture = ownershipCapture();
+  const driver = fixture();
+  const transport = await driver.connect(capture);
+  try {
+    expect(capture.events.at(-1)).toMatchObject({ sessionId: "owned", hostHandle: "host", operation: { kind: "host-handle" }, outcome: { state: "acknowledged", observation: { kind: "host", handle: "host" } } });
+    await withScoped(transport, page => page.openPreview("http://fixture.test/private-content"));
+    const present = capture.events.find(event => event.operation.kind === "frame-present");
+    assert.ok(present?.operation.kind === "frame-present");
+    const token = present.operation.token;
+    const selected = driver.calls.find(call => call.path.endsWith("/frame") && call.body.id !== null);
+    assert.ok(selected);
+    const element = text(record(selected.body.id)["element-6066-11e4-a52e-4f735466cecf"]);
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "frame-reference", token }, outcome: { state: "acknowledged", observation: { kind: "element", element } } }));
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "frame-select", token, element }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } }));
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).toBe(token);
+    expect(driver.deleted).toBe(false);
+    expect(capture.events.some(event => event.operation.kind === "session-delete")).toBe(false);
+    await withScoped(transport, page => page.openPreview("http://fixture.test/replacement"));
+    const tokens = capture.events.filter(event => event.operation.kind === "frame-present" && event.outcome.state === "acknowledged").map(event => event.operation);
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).not.toEqual(tokens[1]);
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "frame-remove", token }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } }));
+  } finally { await transport.close(); }
+  expect(capture.events.at(-1)).toMatchObject({ operation: { kind: "session-delete" }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } });
+  expect(capture.events.map(event => event.sequence)).toEqual(Array.from({ length: capture.events.length }, (_, index) => index + 1));
+  for (const event of capture.events) expect(Number.isNaN(Date.parse(event.at))).toBe(false);
+  expect(JSON.stringify(capture.events)).not.toMatch(/private-content|replacement|script|cookie|browserClosed|windowId|[Pp]id/);
+});
+
+test("capture changes no protocol operations and retains only the explicitly created iPhone tab", async () => {
+  const traces: string[][] = [];
+  for (const enabled of [false, true]) {
+    const capture = ownershipCapture(), driver = fixture();
+    const transport = await driver.connect({ browser: "iphone-safari", deviceUDID: "owned-iphone", ...(enabled ? capture : {}) });
+    try {
+      await withScoped(transport, page => page.openPreview("http://fixture.test/preview"));
+      await withScoped(transport, page => page.usePreview());
+      await withScoped(transport, page => page.closePreview());
+      await withScoped(transport, page => page.openPreview("http://fixture.test/second"));
+    } finally { await transport.close(); }
+    traces.push(driver.calls.map(call => JSON.stringify(call)));
+    if (!enabled) { expect(capture.events).toEqual([]); continue; }
+    expect(capture.events.filter(event => event.operation.kind === "preview-tab-create" && event.outcome.state === "acknowledged").map(event => event.outcome)).toEqual([
+      { state: "acknowledged", observation: { kind: "tab", handle: "preview-1" } }, { state: "acknowledged", observation: { kind: "tab", handle: "preview-2" } },
+    ]);
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "preview-tab-close", handle: "preview-1" }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } }));
+    expect(capture.events.some(event => "handle" in event.operation && event.operation.handle === "host")).toBe(false);
+  }
+  expect(traces[0]).toEqual(traces[1]);
+});
+
+for (const stage of ["session-create", "missing-session", "capabilities", "host"] as const) {
+  test(`partial creation receipt remains incomplete at ${stage}`, async () => {
+    const capture = ownershipCapture();
+    const driver = fixture({ intercept: call => {
+      if (call.path === "/session" && stage === "session-create") return failure("creation failed");
+      if (call.path === "/session" && stage === "missing-session") return reply({ capabilities: desktop });
+      if (call.path === "/session" && stage === "capabilities") return reply({ sessionId: "owned", capabilities: null });
+      if (call.path === "/session/owned/window" && stage === "host") return failure("host lookup failed");
+    } });
+    await expect(driver.connect(capture)).rejects.toThrow();
+    expect(capture.events.every(event => event.hostHandle === null)).toBe(true);
+    const hasSession = stage === "capabilities" || stage === "host";
+    expect(driver.deleted).toBe(hasSession);
+    expect(capture.events.some(event => event.operation.kind === "session-delete" && event.outcome.state === "acknowledged")).toBe(hasSession);
+    if (stage === "session-create") expect(capture.events.at(-1)).toMatchObject({ sessionId: null, outcome: { state: "request-failed", effect: "unknown" } });
+    if (stage === "missing-session") expect(capture.events.at(-1)).toMatchObject({ sessionId: null, outcome: { state: "acknowledged", observation: { kind: "unknown" } } });
+  });
+}
+
+test("lost session leaves teardown effects unknown and preserves the exact earlier observations", async () => {
+  const capture = ownershipCapture();
+  let lost = false;
+  const driver = fixture({ intercept: call => lost && call.path.startsWith("/session/owned") ? reply({ error: "invalid session id", message: "session disappeared" }, 404) : undefined });
+  const transport = await driver.connect(capture);
+  await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+  const before = JSON.stringify(capture.events);
+  lost = true;
+  await expect(withScoped(transport, page => page.closePreview())).rejects.toThrow("session disappeared");
+  const first = await capturedFailure(transport.close());
+  expect(await capturedFailure(transport.close(true))).toBe(first);
+  expect(JSON.stringify(capture.events.slice(0, JSON.parse(before).length))).toBe(before);
+  expect(capture.events.at(-1)).toMatchObject({ sessionId: "owned", hostHandle: "host", operation: { kind: "session-delete" }, outcome: { state: "request-failed", effect: "unknown" } });
+  expect(capture.events.some(event => event.operation.kind === "session-delete" && event.outcome.state === "acknowledged")).toBe(false);
+  expect(driver.calls.filter(call => call.path === "/session/owned" && call.method === "DELETE")).toHaveLength(1);
+});
+
+test("witness sink errors cannot skip deletion or replace the original cleanup failure", async () => {
+  const capture = ownershipCapture();
+  const sinkFailure = new Error("fixture sink failed");
+  const driver = fixture({ intercept: call => call.path === "/session/owned" && call.method === "DELETE" ? failure("original deletion failed") : undefined });
+  const transport = await driver.connect({ ownershipSink: event => { capture.ownershipSink(event); throw sinkFailure; } });
+  await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+  const error = await capturedFailure(transport.close());
+  assert.ok(error instanceof AggregateError);
+  expect(error.errors).toHaveLength(2);
+  expect(String(error.errors[0])).toContain("original deletion failed");
+  expect(error.errors[1].cause).toBe(sinkFailure);
+  expect(await capturedFailure(transport.close())).toBe(error);
+  expect(capture.events.at(-1)).toMatchObject({ operation: { kind: "session-delete" }, outcome: { state: "request-failed", effect: "unknown" } });
+  expect(driver.calls.filter(call => call.path === "/session/owned" && call.method === "DELETE")).toHaveLength(1);
+});
+
+test("a sink failure during partial startup is reported only after the created session is deleted", async () => {
+  const sinkFailure = new Error("startup sink failed");
+  const driver = fixture({ intercept: call => call.path === "/session/owned/window" ? failure("original host failure") : undefined });
+  const error = await capturedFailure(driver.connect({ ownershipSink: () => { throw sinkFailure; } }));
+  assert.ok(error instanceof AggregateError);
+  expect(String(error.errors[0])).toContain("original host failure");
+  expect(error.errors[1].cause).toBe(sinkFailure);
+  expect(driver.deleted).toBe(true);
+});
+
+test("an acknowledged malformed frame reference never becomes an observed element", async () => {
+  const capture = ownershipCapture();
+  const driver = fixture({ intercept: call => call.path.endsWith("/execute/sync") && Array.isArray(call.body.args) && call.body.args[1] === false ? reply({ unrelated: "not an element" }) : undefined });
+  const transport = await driver.connect(capture);
+  try {
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/preview"))).rejects.toThrow("handle");
+    expect(capture.events).toContainEqual(expect.objectContaining({ operation: { kind: "frame-reference", token: expect.any(String) }, outcome: { state: "acknowledged", observation: { kind: "unknown" } } }));
+    expect(capture.events.some(event => event.operation.kind === "frame-select")).toBe(false);
+  } finally { await transport.close(); }
+});
+
+test("a cancellation during receipt intent cannot dispatch an expired browser operation", async () => {
+  const capture = ownershipCapture();
+  const scope = Scope.open(1000);
+  const driver = fixture();
+  const transport = await driver.connect({ ownershipSink: event => {
+    capture.ownershipSink(event);
+    if (event.operation.kind === "frame-present" && event.outcome.state === "intent") scope.close(new Error("cancelled during intent"));
+    return undefined;
+  } });
+  try {
+    await expect(transport.openPreview("http://fixture.test/expired", scope)).rejects.toThrow("cancelled during intent");
+    await transport.close(true);
+    expect(driver.calls.some(call => call.path.endsWith("/execute/sync"))).toBe(false);
+    expect(capture.events.some(event => event.operation.kind === "frame-present" && event.outcome.state === "dispatched")).toBe(false);
+  } finally { scope.close(); await transport.close(true); }
+});
+
+test("late initial session creation retains observed identifiers and records only its own deletion acknowledgement", async () => {
+  const { execute: executeCell } = await import("./execute");
+  const { frameworks } = await import("./catalog");
+  const framework = frameworks.find(item => item.id === "vite-react");
+  assert.ok(framework);
+  const capture = ownershipCapture();
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const driver = fixture({ intercept: async call => {
+    if (call.path !== "/session") return;
+    entered.resolve(); await release.promise;
+  } });
+  const running = executeCell({ box: { framework: "vite-react", browser: "safari", engine: "browser" }, framework, url: "http://fixture.test/never-navigate", timeoutMs: 1000,
+    signal: controller.signal, createTransport: () => driver.connect(capture), saveLog: async () => {} });
+  try {
+    await entered.promise;
+    controller.abort(new Error("startup cancelled"));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(capture.events.every(event => event.sessionId === null)).toBe(true);
+    release.resolve();
+    const result = await running;
+    expect(result.attempts[0]?.phases[0]).toMatchObject({ status: "fail", error: "Error: startup cancelled" });
+    expect(driver.deleted).toBe(true);
+    expect(driver.calls.some(call => call.path.endsWith("/url"))).toBe(false);
+    expect(capture.events.at(-1)).toMatchObject({ sessionId: "owned", hostHandle: "host", operation: { kind: "session-delete" }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } });
+  } finally { release.resolve(); controller.abort(); await running; }
+});
+
+test("an unavailable receipt file makes cleanup fail only after successful session deletion", async () => {
+  const { ownershipReceipt } = await import("./safari-ownership");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-ownership-sink-"));
+  try {
+    const driver = fixture();
+    const ownershipSink = ownershipReceipt(root, { run: "test", source: { commit: "source", dirty: false }, cell: "fixture/safari/browser", attempt: 1 });
+    const transport = await driver.connect({ ownershipSink });
+    await expect(transport.close()).rejects.toThrow("ownership witness sink failed");
+    expect(driver.deleted).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

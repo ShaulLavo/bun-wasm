@@ -56,7 +56,7 @@ function wrapper(node: Node) { return /^(wasm-to-js|js-to-wasm)/.test(node.name)
 function synthetic(node: Node) { return /^\((root|program|idle|garbage collector)\)$/.test(node.name); }
 function key(node: Node) { return `${node.url} ${node.name || "(anonymous)"}`; }
 
-export function splitProfile(input: unknown) {
+export function splitProfile(input: unknown, context?: { configuration: string; scope: string }) {
   const profile = parseProfile(input);
   const totals = new Map<number, number>();
   const hasWasm = new Set<number>();
@@ -100,15 +100,32 @@ export function splitProfile(input: unknown) {
   }
   const unionHits = (ids: ReadonlySet<number>) => Array.from(ids).reduce((sum, id) => sum + profile.byId.get(id)!.hits, 0);
   const percent = (hits: number) => 100 * hits / profile.samples;
-  return { configuration: "sm-chrome-wasm32-interp", scope: "one saved sampled worker; not complete Chrome CPU or lifecycle time",
+  const self = profile.ordered.filter(node => node.hits > 0).map(node => ({ frame: key(node), samples: node.hits, kind: selfKind(node) }));
+  self.sort((left, right) => right.samples - left.samples);
+  return { configuration: context?.configuration ?? "sm-chrome-wasm32-interp", scope: context?.scope ?? "one saved sampled worker; not complete Chrome CPU or lifecycle time",
     sampleDefinition: "each entry in profile.samples has equal weight; node.hitCount and elapsed thread CPU are not denominators",
+    sampleResidency: "samples may retain JavaScript frames around blocking waits; host/wrapper shares are scoped sampled residency, not measured active CPU or causal cost",
     boundaryDefinition: "structural Wasm to JavaScript subtree with a Wasm reentry; inclusive includes useful callee work; overhead is self samples before first reentry",
     overlap: "nested crossing rows overlap; totals use node unions; host work can lie inside useful detour work",
     samples: profile.samples, seconds: profile.seconds,
+    sampleKinds: { included: "all supplied sample entries, including idle, program, GC and unresolved leaves", excluded: "unsampled native/helper CPU, lost workers and work outside the supplied capture", weighting: "equal sample entries, not timeDeltas" },
+    self, unknownSelfSamples: self.filter(row => row.kind === "unknown").reduce((sum, row) => sum + row.samples, 0),
+    strippedWasmSelfSamples: profile.ordered.filter(node => wasm(node) && (!node.name || /^(?:wasm-function\[\d+\]|\d+)$/.test(node.name))).reduce((sum, node) => sum + node.hits, 0),
     wasmSelfSamples: profile.ordered.filter(wasm).reduce((sum, node) => sum + node.hits, 0),
     wrapperSelfSamples: profile.ordered.filter(wrapper).reduce((sum, node) => sum + node.hits, 0),
     detourInclusivePercent: percent(unionHits(detourNodes)), detourOverheadPercent: percent(unionHits(overheadNodes)),
     hostInclusivePercent: percent(unionHits(hostNodes)), detours, hostCalls };
+}
+
+function selfKind(node: Node): string {
+  if (wrapper(node)) return "boundary-wrapper";
+  if (/^\((root|program|idle)\)$/.test(node.name)) return "synthetic";
+  if (/\/fs-worker\.js(?:[?#]|$)/.test(node.url)) return "waffle-filesystem";
+  if (/\/(?:shell|notification)-worker\.js(?:[?#]|$)/.test(node.url)) return "waffle-process-host";
+  if (node.name === "(garbage collector)" || /(?:^|::)(?:GCRuntime::|gc_collect|JS_RunGC|collectGarbage)/.test(node.name)) return "gc";
+  if (wasm(node) && /(?:js::Interpret|JS_CallBytecode|JS_CallInternal|JS_Execute|JSC::LLInt|llint_entry|llint_slow_path)/.test(node.name)) return "engine-interpreter";
+  if (wasm(node) && /(?:bunwasm|bun_core_|Bun__)/.test(node.name)) return "bun-runtime";
+  return "unknown";
 }
 
 if (import.meta.main) {

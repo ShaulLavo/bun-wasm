@@ -1,8 +1,18 @@
 // The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
 export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
   ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
-/** The chains that recurse through exactly one of JSC's two reserved parser functions per level: assignment and statement. */
-export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Assign|Block)/.test(mode));
+/**
+ * The chains that recurse through exactly one of JSC's two reserved parser functions per level:
+ * a conditional branch is a new assignment expression, and a block is a new statement.
+ */
+export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Conditional|Block)/.test(mode));
+/**
+ * JSC parses a chain of assignment targets without recursion (docs/bun-patches/jsc-assignment-chains.md),
+ * so the syntax-check pass loads every depth tried.
+ */
+export const iterativeChains = chainModes.filter(mode => /^chainAssignCompile/.test(mode));
+/** The full parse of an assignment chain stops in the code generator, so the parser reserve does not move it. */
+export const generatorChains = chainModes.filter(mode => /^chainAssignCall/.test(mode));
 /** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
 export const chainMaximum = 4096;
 const stackModes = [
@@ -66,6 +76,24 @@ function taggedLine(output: string, tag: string): unknown {
 /** The `capacities` line a `chainCapacity` run prints: one whole number per parser chain. */
 export function chainCapacities(output: string): Record<string, number> {
   return capacityRecord(taggedLine(output, "capacities"));
+}
+
+/** What stopped a chain one level past its capacity (null when it never stopped), and whether a shallow one parsed next. */
+export interface ChainBoundary { readonly refusal: string | null; readonly recovered: boolean }
+
+/** The `boundaries` line a `chainCapacity` run prints: one refusal and recovery per parser chain. */
+export function chainBoundaries(output: string): Record<string, ChainBoundary> {
+  const parsed = taggedLine(output, "boundaries");
+  if (!parsed || typeof parsed !== "object") throw new Error("Malformed chain boundaries");
+  const boundaries: Record<string, ChainBoundary> = {};
+  for (const [mode, value] of Object.entries(parsed)) {
+    const valid = chainModes.includes(mode) && value && typeof value === "object" && "refusal" in value && "recovered" in value
+      && (value.refusal === null || typeof value.refusal === "string") && typeof value.recovered === "boolean";
+    if (!valid) throw new Error(`Malformed chain boundary ${mode}`);
+    boundaries[mode] = { refusal: value.refusal, recovered: value.recovered };
+  }
+  if (Object.keys(boundaries).length !== chainModes.length) throw new Error("Missing chain boundaries");
+  return boundaries;
 }
 
 export interface ChainOwnership {

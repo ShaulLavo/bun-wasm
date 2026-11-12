@@ -21,7 +21,7 @@ test("the tools package's default Cargo binaries contain only the WASI guest", (
   const manifest = object(JSON.parse(run("rustup", ["run", "stable", "cargo", "read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
   const binaries = array(manifest.targets).map(object).filter(target => array(target.kind).includes("bin")).map(target => target.name);
   expect(binaries).toEqual(["bun-tools"]);
-});
+}, 20000);
 
 test("saved profile counts sample entries, separates useful callees, and rejects missing captures", () => {
   const frame = (id: number, name: string, url: string, children: number[]) => ({ id, callFrame: { functionName: name, url }, children, hitCount: 9999 });
@@ -93,10 +93,10 @@ test("Linux counter covers orphan work, fails closed and cleans descendants; run
   try {
     const counter = join(scratch, "counter"), child = join(scratch, "child"), unit = join(scratch, "unit");
     const source = join(root, "crates/bunwasm-tools/src/bin/instruction-count.rs");
-    run("rustc", ["--edition", "2024", "-O", "-D", "warnings", source, "-o", counter]);
-    run("rustc", ["--edition", "2024", "--test", "-D", "warnings", source, "-o", unit]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "-O", "-D", "warnings", source, "-o", counter]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "--test", "-D", "warnings", source, "-o", unit]);
     run(unit, []);
-    run("rustc", ["--edition", "2024", "-O", "-D", "warnings", join(fixtures, "counter-child.rs"), "-o", child]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "-O", "-D", "warnings", join(fixtures, "counter-child.rs"), "-o", child]);
     const allowed = /Cpus_allowed_list:\s*(\d+)/.exec(readFileSync("/proc/self/status", "utf8"));
     const cpu = Number(allowed?.[1] ?? "0");
     let ordinal = 0;

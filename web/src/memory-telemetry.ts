@@ -1,6 +1,9 @@
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
 import { programCoreMemoryLimits, type CoreMemoryLimits } from "../../src/program-memory.ts";
 import { isPairedEngine, type Engine } from "../../src/engine-kind.js";
+import type { ProcessService } from "waffle";
+import type { ProcessExit } from "waffle/proc/types";
+import { copyLaunchFailure, type LaunchFailureFact } from "./launch-failure.js";
 export type TelemetryEngine = Engine;
 export interface FailedAllocation { bytes: number | null; category: string }
 export interface FrozenAllocatorFailure extends FailedAllocation {
@@ -22,7 +25,7 @@ export interface MemoryCounters {
   failedAllocation: FailedAllocation | null;
   notes: string;
 }
-export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number; commandSequence: number }
+export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number; commandSequence: number; incarnation?: number }
 export type MemoryTelemetryTransport = MemoryIdentity & { buffer: SharedArrayBuffer; coreMemoryLimits: CoreMemoryLimits };
 export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   engine: TelemetryEngine;
@@ -32,6 +35,9 @@ export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   frozenAllocatorFailure: FrozenAllocatorFailure | null;
   engineFailure: FailedAllocation | null;
   engineCounters: Record<string, number | null>;
+  libcTelemetry?: { allocator: "read" | "unsupported"; failure: "read" | "unsupported" };
+  /** Immediate page-side launch failures, preserved across worker samples and end. */
+  launchFailures?: readonly LaunchFailureFact[];
 }
 export const emptyCounters: MemoryCounters = {
   wasmCapacityBytes: null, memoryLimitBytes: null, allocatorLiveBytes: null, allocatorPeakBytes: null,
@@ -65,8 +71,7 @@ function read(memory: WebAssembly.Memory, exports: WebAssembly.Exports, name: st
   return Array.from({ length: bytes / 8 }, (_, index) => view.getBigUint64(index * 8, true));
 }
 
-function readFrozenAllocatorFailure(memory: WebAssembly.Memory, exports: WebAssembly.Exports): FrozenAllocatorFailure | null {
-  const data = read(memory, exports, "bun_memory_failure_telemetry", 72);
+function readFrozenAllocatorFailure(data: bigint[] | null): FrozenAllocatorFailure | null {
   if (!data) return null;
   const request = failure(data[2], data[3], allocatorCategories);
   if (!request) return null;
@@ -111,7 +116,7 @@ export type EngineDiagnostics = (memory: WebAssembly.Memory, exports: WebAssembl
 /** `limitBytes` is the core's declared memory maximum (crates/bunwasm-cli/max-memory.txt at link time). */
 export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity, diagnostics?: EngineDiagnostics, memory: unknown = core.exports.memory) {
   const id = identity?.id ?? crypto.randomUUID();
-  const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence }
+  const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence, incarnation: identity.incarnation }
     : { id, commandId: id, commandStartedAt: Date.now(), commandSequence: 0 };
   if (!(memory instanceof WebAssembly.Memory)) throw new TypeError("Missing telemetry memory");
   let terminal = false;
@@ -121,7 +126,8 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       let data = engineReadout(engine, memory, side?.exports ?? {});
       const allocator = read(memory, core.exports, "bun_memory_telemetry", 80);
       const allocatorFailure = allocator ? failure(allocator[4], allocator[5], allocatorCategories) : null;
-      const frozenAllocatorFailure = readFrozenAllocatorFailure(memory, core.exports);
+      const frozenRecord = read(memory, core.exports, "bun_memory_failure_telemetry", 72);
+      const frozenAllocatorFailure = readFrozenAllocatorFailure(frozenRecord);
       failed ||= Boolean(allocatorFailure || frozenAllocatorFailure || data?.failure);
       if (refresh && !terminal && !failed && data !== null) {
         const getter = side?.exports[`${engine}_memory_telemetry_refresh`];
@@ -134,6 +140,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       }
       return {
         ...emptyCounters, ...provenance, engine, terminal, time: Date.now(),
+        libcTelemetry: { allocator: allocator ? "read" : "unsupported", failure: frozenRecord ? "read" : "unsupported" },
         wasmCapacityBytes: memory.buffer.byteLength,
         memoryLimitBytes: allocator ? limitBytes : null,
         allocatorLiveBytes: allocator ? count(allocator[2]) : null,
@@ -149,24 +156,50 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 }
 
 const retained = new Map<string, MemorySnapshot>();
+function retainSnapshot(snapshot: MemorySnapshot): void {
+  const previous = retained.get(snapshot.id);
+  if (previous && (previous.engine !== snapshot.engine || previous.commandId !== snapshot.commandId
+    || previous.commandStartedAt !== snapshot.commandStartedAt || previous.commandSequence !== snapshot.commandSequence
+    || previous.incarnation !== snapshot.incarnation)) return;
+  const latest = previous && previous.time > snapshot.time ? previous : snapshot;
+  const earlier = latest === snapshot ? previous : snapshot;
+  const traps = Object.fromEntries(Object.entries(earlier?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
+  retained.set(snapshot.id, { ...latest, terminal: snapshot.terminal || previous?.terminal || false,
+    engineCounters: { ...traps, ...latest.engineCounters }, launchFailures: previous?.launchFailures,
+    allocatorFailure: latest.allocatorFailure ?? earlier?.allocatorFailure ?? null,
+    frozenAllocatorFailure: latest.frozenAllocatorFailure ?? earlier?.frozenAllocatorFailure ?? null,
+    engineFailure: latest.engineFailure ?? earlier?.engineFailure ?? null,
+    failedAllocation: latest.failedAllocation ?? earlier?.failedAllocation ?? null });
+}
+export function recordLaunchFailure(id: string, failure: LaunchFailureFact): void {
+  const fact = copyLaunchFailure(failure);
+  const snapshot = retained.get(id);
+  if (!fact || !snapshot) return;
+  const launchFailures = (snapshot.launchFailures ?? []).filter(value => value.attempt !== fact.attempt).concat([fact]).slice(-2);
+  retained.set(id, { ...snapshot, launchFailures });
+}
 const channels = new Map<string, SharedArrayBuffer>();
 const runtimes = new WeakMap<object, string>();
 const commandTimes = new Map<string, number>();
 const commandOrders = new Map<string, number>();
 let commandSequence = 0;
-export function memoryCommandId(runtime: object, job: number): string {
+export function memoryRuntimeId(runtime: object): string {
   const identity = runtimes.get(runtime) ?? crypto.randomUUID();
   runtimes.set(runtime, identity);
-  return `${identity}:${job}`;
+  return identity;
+}
+export function memoryCommandId(runtime: object, job: number): string {
+  return `${memoryRuntimeId(runtime)}:${job}`;
 }
 export function beginMemorySnapshot(engine: TelemetryEngine, id: string, commandId = id, module?: WebAssembly.Module): MemoryTelemetryTransport | undefined {
   const commandStartedAt = commandTimes.get(commandId) ?? Date.now();
   commandTimes.set(commandId, commandStartedAt);
   const order = commandOrders.get(commandId) ?? ++commandSequence;
   commandOrders.set(commandId, order);
-  const identity = { id, commandId, commandStartedAt, commandSequence: order };
+  const identity = { id, commandId, commandStartedAt, commandSequence: order, incarnation: ++observationSequence };
   retained.set(id, { ...emptyCounters, ...identity, engine, time: Date.now(), terminal: false,
     allocatorFailure: null, frozenAllocatorFailure: null, engineFailure: null, engineCounters: {} });
+  beginProcessObservation(id, engine);
   trimTerminalSnapshots();
   if (typeof SharedArrayBuffer !== "function") return;
   const channel = createMemoryChannel();
@@ -178,9 +211,9 @@ export function beginMemorySnapshot(engine: TelemetryEngine, id: string, command
 export function publishBrowserCallTrap(instance: WebAssembly.Instance, index: number, transport: MemoryTelemetryTransport, post: (message: { type: "bun-memory"; snapshot: MemorySnapshot }) => void): void {
   const memory = instance.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) return;
-  const { id, commandId, commandStartedAt, commandSequence, coreMemoryLimits } = transport;
+  const { id, commandId, commandStartedAt, commandSequence, incarnation, coreMemoryLimits } = transport;
   const snapshot: MemorySnapshot = {
-    ...emptyCounters, id, commandId, commandStartedAt, commandSequence, engine: "browser", time: Date.now(), terminal: false,
+    ...emptyCounters, id, commandId, commandStartedAt, commandSequence, incarnation, engine: "browser", time: Date.now(), terminal: false,
     wasmCapacityBytes: memory.buffer.byteLength, memoryLimitBytes: coreMemoryLimits.factoryMaximumBytes,
     allocatorFailure: null, frozenAllocatorFailure: null, engineFailure: null,
     engineCounters: { browserCallTrapIndex: index, browserCallTrapCapacityBytes: memory.buffer.byteLength,
@@ -190,38 +223,23 @@ export function publishBrowserCallTrap(instance: WebAssembly.Instance, index: nu
   createMemoryPublisher(transport.buffer, { sample: () => snapshot, finish: () => snapshot }).capture(false, true);
   post({ type: "bun-memory", snapshot });
 }
-export function endMemorySnapshot(id: string): void {
-  const channel = channels.get(id);
-  const cached: unknown = channel ? readMemoryChannel(channel) : null;
-  if (cached && typeof cached === "object" && isMemorySnapshot(cached)) retained.set(id, cached);
-  channels.delete(id);
-  const snapshot = retained.get(id);
-  if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: Date.now() });
-  trimTerminalSnapshots();
+export function endMemorySnapshot(id: string, outcome?: () => ProcessExit | null): void {
+  try { finishProcessObservation(id, outcome); }
+  catch { observationError(id, "read-failed"); }
+  finally { channels.delete(id); }
 }
 
-export function recordMemorySnapshot(message: unknown): boolean {
-  if (!message || typeof message !== "object" || !("type" in message) || message.type !== "bun-memory") return false;
-  if (!("snapshot" in message) || !message.snapshot || typeof message.snapshot !== "object") throw new TypeError("Invalid memory snapshot");
-  const snapshot = message.snapshot;
-  if (!("id" in snapshot) || typeof snapshot.id !== "string") throw new TypeError("Invalid memory identity");
-  if (!isMemorySnapshot(snapshot)) throw new TypeError("Invalid memory snapshot fields");
-  const value = snapshot;
-  retained.set(value.id, value);
-  trimTerminalSnapshots();
+export function recordMemorySnapshot(message: unknown, expectedId?: string): boolean {
+  try {
+    if (!message || typeof message !== "object" || !("type" in message) || message.type !== "bun-memory") return false;
+    const value: unknown = Reflect.get(message, "snapshot");
+    acceptProcessSnapshot(value, expectedId);
+  } catch { if (expectedId) observationError(expectedId, "invalid"); }
   return true;
 }
 
 function trimTerminalSnapshots(): void {
-  const activeCommands = new Set(Array.from(retained.values()).filter(snapshot => !snapshot.terminal).map(snapshot => snapshot.commandId));
-  for (const [id, snapshot] of retained) {
-    if (retained.size <= 128) return;
-    if (!snapshot.terminal || snapshot.failedAllocation && activeCommands.has(snapshot.commandId)) continue;
-    retained.delete(id);
-    if (!Array.from(retained.values()).some(value => value.commandId === snapshot.commandId)) {
-      commandTimes.delete(snapshot.commandId); commandOrders.delete(snapshot.commandId);
-    }
-  }
+  trimProcessObservations();
 }
 export function retainedMemorySnapshots(): readonly MemorySnapshot[] { return Array.from(retained.values()); }
 
@@ -231,8 +249,10 @@ function isMemorySnapshot(value: object): value is MemorySnapshot {
   if (typeof order !== "number" || !isCounter(order)) return false;
   const startedAt: unknown = Reflect.get(value, "commandStartedAt");
   if (typeof startedAt !== "number" || !isCounter(startedAt)) return false;
+  const incarnation: unknown = Reflect.get(value, "incarnation");
+  if (incarnation !== undefined && (typeof incarnation !== "number" || !isCounter(incarnation))) return false;
   const byteKeys = ["wasmCapacityBytes", "memoryLimitBytes", "allocatorLiveBytes", "allocatorPeakBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"];
-  if (!stringKeys.every(key => typeof Reflect.get(value, key) === "string")) return false;
+  if (!stringKeys.every(key => typeof Reflect.get(value, key) === "string" && Reflect.get(value, key).length <= 8192)) return false;
   if (!byteKeys.every(key => isCounter(Reflect.get(value, key)))) return false;
   if (!["failedAllocation", "allocatorFailure", "engineFailure"].every(key => isFailure(Reflect.get(value, key)))) return false;
   if (!isFrozenAllocatorFailure(Reflect.get(value, "frozenAllocatorFailure"))) return false;
@@ -241,7 +261,11 @@ function isMemorySnapshot(value: object): value is MemorySnapshot {
   const time: unknown = Reflect.get(value, "time");
   if (typeof Reflect.get(value, "terminal") !== "boolean" || typeof time !== "number" || !isCounter(time)) return false;
   const counters: unknown = Reflect.get(value, "engineCounters");
-  return counters !== null && typeof counters === "object" && Object.values(counters).every(isCounter);
+  const support: unknown = Reflect.get(value, "libcTelemetry");
+  if (support !== undefined && (!support || typeof support !== "object"
+    || !["read", "unsupported"].includes(Reflect.get(support, "allocator")) || !["read", "unsupported"].includes(Reflect.get(support, "failure")))) return false;
+  return counters !== null && typeof counters === "object" && Object.keys(counters).length <= 1024
+    && Object.keys(counters).every(key => key.length <= 128) && Object.values(counters).every(isCounter);
 }
 function isCounter(value: unknown): value is number | null {
   return value === null || typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -249,7 +273,7 @@ function isCounter(value: unknown): value is number | null {
 function isFailure(value: unknown): value is FailedAllocation | null {
   if (value === null) return true;
   return typeof value === "object" && "bytes" in value && isCounter(value.bytes)
-    && "category" in value && typeof value.category === "string";
+    && "category" in value && typeof value.category === "string" && value.category.length <= 128;
 }
 function isFrozenAllocatorFailure(value: unknown): value is FrozenAllocatorFailure | null {
   if (value === null) return true;
@@ -258,6 +282,275 @@ function isFrozenAllocatorFailure(value: unknown): value is FrozenAllocatorFailu
   return ["previousUsableBytes", "allocatorLiveBytes", "allocatorPeakBytes", "wasmCapacityBeforeBytes", "wasmCapacityAfterBytes"]
     .every(key => isCounter(Reflect.get(value, key)));
 }
+
+export const memoryObservationLimits = { active: 128, terminal: 128, runtimes: 16, censuses: 16, workers: 128, outputBytes: 524288 } as const;
+type MemoryProcessBinding = { runtimeId: string; pid: number; parentPid: number; job: number };
+export type MemoryOutcome = { kind: "pending" } | { kind: "observed"; value: ProcessExit | null }
+  | { kind: "unavailable"; reason: "read-failed" | "unbound" };
+type SampleStatus = "pending" | "sampled" | "missing" | "invalid" | "read-failed";
+interface ProcessObservation {
+  id: string;
+  engine: Engine;
+  binding: MemoryProcessBinding | null;
+  launchedAt: number;
+  launchSequence: number;
+  endedAt: number | null;
+  endSequence: number | null;
+  outcome: MemoryOutcome;
+  outcomeBoundary: "revocation" | "adapter-cleanup" | null;
+  status: SampleStatus;
+  sample: MemorySnapshot | null;
+}
+export type MemoryProcessRow = Omit<ProcessObservation, "sample"> & {
+  sample: Pick<MemorySnapshot, "time" | "terminal" | "wasmCapacityBytes" | "memoryLimitBytes" | "allocatorLiveBytes" | "allocatorPeakBytes"
+    | "allocatorFailure" | "frozenAllocatorFailure" | "libcTelemetry"> | null;
+  engineHeap: "unsupported";
+};
+type MemoryWorker = { pid: number; parentPid: number; rootPid: number; job: number; directory: string; bytes: number | null; engine: Engine | null };
+export type MemoryCensus = {
+  runtimeId: string;
+  time: number;
+  sequence: number;
+  state: "observed" | "not-registered" | "disposed" | "read-failed";
+  workers: MemoryWorker[];
+  truncated: number;
+  unknownBytes: number;
+  knownSampledBytesSubtotal: number | null;
+  aliasing: "uncertain";
+};
+type CleanupCensus = MemoryCensus & { boundary: "adapter-cleanup"; telemetryId: string };
+export interface MemoryProcessEnvelope {
+  schema: 1;
+  time: number;
+  sequence: number;
+  sharedBuffers: boolean;
+  processes: MemoryProcessRow[];
+  runtimes: MemoryCensus[];
+  censuses: CleanupCensus[];
+  loss: { active: number; terminal: number; runtimes: number; censuses: number; outputCensuses: number; outputWorkerRows: number; outputProcesses: number };
+  incomplete: boolean;
+}
+const processes = new Map<string, ProcessObservation>();
+const services = new Map<string, { runtime: WeakRef<{ readonly disposed: boolean }>; service: WeakRef<Pick<ProcessService, "workerMemory">> }>();
+const censuses: CleanupCensus[] = [];
+const observationLoss = { active: 0, terminal: 0, runtimes: 0, censuses: 0 };
+let observationSequence = 0;
+
+function beginProcessObservation(id: string, engine: Engine): void {
+  const previous = processes.get(id);
+  processes.set(id, { id, engine, binding: previous?.endedAt === null ? previous.binding : null,
+    launchedAt: previous?.endedAt === null ? previous.launchedAt : Date.now(),
+    launchSequence: previous?.endedAt === null ? previous.launchSequence : ++observationSequence,
+    endedAt: null, endSequence: null, outcome: { kind: "pending" }, outcomeBoundary: null, status: "pending", sample: null });
+}
+
+/** Launcher entry only. No runtime activation; references held by diagnostics are weak. */
+export function registerMemoryProcess(engine: Engine, id: string, runtime: { readonly disposed: boolean },
+  process: { pid: number; parentPid: number; job: number }, service: Pick<ProcessService, "workerMemory">): void {
+  try {
+    if (!opaqueObservationId(id)) { observationLoss.active++; return; }
+    const runtimeId = memoryRuntimeId(runtime);
+    beginProcessObservation(id, engine);
+    const row = processes.get(id);
+    if (row) row.binding = { runtimeId, pid: process.pid, parentPid: process.parentPid, job: process.job };
+    services.set(runtimeId, { runtime: new WeakRef(runtime), service: new WeakRef(service) });
+    trimRuntimeServices();
+    trimProcessObservations();
+  } catch { /* Diagnostics cannot change launch admission. */ }
+}
+function trimRuntimeServices(): void {
+  if (services.size <= memoryObservationLimits.runtimes) return;
+  const oldest = services.keys().next().value;
+  if (oldest !== undefined) services.delete(oldest);
+  observationLoss.runtimes++;
+}
+
+function observationError(id: string, status: "invalid" | "read-failed"): void {
+  const row = processes.get(id);
+  if (row && row.endedAt === null) row.status = status;
+}
+export function observeMemoryOutcome(id: string, readOutcome: () => ProcessExit | null): void {
+  try {
+    const row = processes.get(id);
+    if (row && row.endedAt === null) readProcessOutcome(row, readOutcome, "revocation");
+  } catch { /* A diagnostic read cannot interfere with revocation. */ }
+}
+function readProcessOutcome(row: ProcessObservation, readOutcome: () => ProcessExit | null, boundary: "revocation" | "adapter-cleanup"): void {
+  if (row.outcome.kind === "observed" && row.outcome.value !== null) return;
+  try { row.outcome = { kind: "observed", value: readOutcome() }; }
+  catch { row.outcome = { kind: "unavailable", reason: "read-failed" }; }
+  row.outcomeBoundary = boundary;
+}
+
+function acceptProcessSnapshot(value: unknown, expectedId?: string, channelIdentity = false): void {
+  if (!channelIdentity && supersededSnapshot(value, expectedId)) return;
+  if (!value || typeof value !== "object" || !isMemorySnapshot(value)) {
+    if (expectedId) observationError(expectedId, "invalid");
+    return;
+  }
+  const id = expectedId ?? value.id;
+  const previous = retained.get(id);
+  const row = processes.get(id);
+  if (!previous || !row) return;
+  if (value.id !== id || value.engine !== previous.engine || value.commandId !== previous.commandId
+    || value.commandSequence !== previous.commandSequence || value.commandStartedAt !== previous.commandStartedAt || value.incarnation !== previous.incarnation) {
+    if (channelIdentity) observationError(id, "invalid");
+    return;
+  }
+  retainSnapshot(value);
+  if (row.endedAt !== null || row.sample?.terminal || row.sample && value.time < row.sample.time) return;
+  row.sample = retained.get(id) ?? value;
+  row.status = "sampled";
+}
+function supersededSnapshot(value: unknown, expectedId?: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  const id: unknown = expectedId ?? Reflect.get(value, "id");
+  const incarnation: unknown = Reflect.get(value, "incarnation");
+  if (typeof id !== "string" || typeof incarnation !== "number") return false;
+  const current = retained.get(id);
+  return current !== undefined && incarnation !== current.incarnation;
+}
+
+function finishProcessObservation(id: string, readOutcome?: () => ProcessExit | null): void {
+  const row = processes.get(id);
+  if (!row || row.endedAt !== null) return;
+  const channel = channels.get(id);
+  try {
+    const value = channel ? readMemoryChannel(channel) : null;
+    if (value !== null) acceptProcessSnapshot(value, id, true);
+  } catch { observationError(id, "read-failed"); }
+  if (row.status === "pending") row.status = "missing";
+  if (readOutcome) readProcessOutcome(row, readOutcome, "adapter-cleanup");
+  else if (row.outcome.kind !== "observed" || row.outcome.value === null) row.outcome = { kind: "unavailable", reason: "unbound" };
+  row.endedAt = Date.now();
+  row.endSequence = ++observationSequence;
+  const snapshot = retained.get(id);
+  if (snapshot) retained.set(id, { ...snapshot, terminal: true });
+  if (row.binding && adverseObservation(row)) retainCleanupCensus(row.binding.runtimeId, id);
+  trimProcessObservations();
+}
+
+function adverseObservation(row: ProcessObservation): boolean {
+  if (row.sample?.allocatorFailure || row.sample?.frozenAllocatorFailure || row.sample?.failedAllocation) return true;
+  if (row.outcome.kind === "unavailable") return true;
+  if (row.outcome.kind !== "observed" || !row.outcome.value) return false;
+  return row.outcome.value.kind !== "exited" || row.outcome.value.code !== 0;
+}
+
+function evictProcess(id: string, row: ProcessObservation): void {
+  const commandId = retained.get(id)?.commandId;
+  processes.delete(id);
+  retained.delete(id);
+  channels.delete(id);
+  observationLoss[row.endedAt === null ? "active" : "terminal"]++;
+  if (commandId && !Array.from(retained.values()).some(value => value.commandId === commandId)) {
+    commandTimes.delete(commandId);
+    commandOrders.delete(commandId);
+  }
+}
+
+function trimProcessObservations(): void {
+  for (const terminal of [false, true]) {
+    const rows = Array.from(processes).filter(([, row]) => (row.endedAt !== null) === terminal);
+    const excess = rows.length - memoryObservationLimits[terminal ? "terminal" : "active"];
+    for (const [id, row] of rows.slice(0, Math.max(0, excess))) evictProcess(id, row);
+  }
+}
+
+function workerEngine(runtimeId: string, pid: number): Engine | null {
+  for (const row of processes.values()) if (row.binding?.runtimeId === runtimeId && row.binding.pid === pid) return row.engine;
+  return null;
+}
+
+function runtimeCensus(runtimeId: string): MemoryCensus {
+  const base: MemoryCensus = { runtimeId, time: Date.now(), sequence: observationSequence, state: "not-registered", workers: [],
+    truncated: 0, unknownBytes: 0, knownSampledBytesSubtotal: null, aliasing: "uncertain" };
+  try {
+    const registered = services.get(runtimeId);
+    if (!registered) return base;
+    const runtime = registered.runtime.deref();
+    if (!runtime || runtime.disposed) return { ...base, state: "disposed" };
+    const service = registered.service.deref();
+    if (!service) return base;
+    const workers = service.workerMemory();
+    base.state = "observed";
+    base.truncated = Math.max(0, workers.length - memoryObservationLimits.workers);
+    base.workers = workers.slice(0, memoryObservationLimits.workers).map(worker => censusWorker(runtimeId, worker));
+    base.unknownBytes = base.workers.filter(worker => worker.bytes === null).length;
+    base.knownSampledBytesSubtotal = base.workers.reduce((sum, worker) => sum + (worker.bytes ?? 0), 0);
+    return base;
+  } catch { return { ...base, state: "read-failed", workers: [], knownSampledBytesSubtotal: null }; }
+}
+function censusWorker(runtimeId: string, worker: ReturnType<ProcessService["workerMemory"]>[number]): MemoryWorker {
+  if (!/^[A-Za-z0-9:._-]{1,128}$/.test(worker.directory)) throw new TypeError("Invalid worker memory identity");
+  return { pid: worker.pid, parentPid: worker.parentPid, rootPid: worker.rootPid, job: worker.job,
+    directory: worker.directory, bytes: worker.bytes, engine: workerEngine(runtimeId, worker.pid) };
+}
+
+function retainCleanupCensus(runtimeId: string, telemetryId: string): void {
+  censuses.push({ ...runtimeCensus(runtimeId), sequence: ++observationSequence, boundary: "adapter-cleanup", telemetryId });
+  if (censuses.length <= memoryObservationLimits.censuses) return;
+  censuses.shift();
+  observationLoss.censuses++;
+}
+
+function projectProcess(row: ProcessObservation): MemoryProcessRow {
+  const sample = row.sample;
+  return { ...row, binding: row.binding ? { ...row.binding } : null, outcome: structuredClone(row.outcome), engineHeap: "unsupported", sample: sample ? { time: sample.time, terminal: sample.terminal,
+    wasmCapacityBytes: sample.wasmCapacityBytes, memoryLimitBytes: sample.memoryLimitBytes, allocatorLiveBytes: sample.allocatorLiveBytes,
+    allocatorPeakBytes: sample.allocatorPeakBytes, allocatorFailure: projectFailure(sample.allocatorFailure),
+    frozenAllocatorFailure: projectFrozenFailure(sample.frozenAllocatorFailure), libcTelemetry: sample.libcTelemetry ? { ...sample.libcTelemetry } : undefined } : null };
+}
+function projectFailure(value: FailedAllocation | null): FailedAllocation | null {
+  return value ? { bytes: value.bytes, category: allocatorCategories.includes(value.category) ? value.category : "unknown" } : null;
+}
+function projectFrozenFailure(value: FrozenAllocatorFailure | null): FrozenAllocatorFailure | null {
+  if (!value) return null;
+  return { bytes: value.bytes, category: allocatorCategories.includes(value.category) ? value.category : "unknown",
+    previousUsableBytes: value.previousUsableBytes, allocatorLiveBytes: value.allocatorLiveBytes, allocatorPeakBytes: value.allocatorPeakBytes,
+    wasmCapacityBeforeBytes: value.wasmCapacityBeforeBytes, wasmCapacityAfterBytes: value.wasmCapacityAfterBytes, reason: "unknown" };
+}
+
+/** Synchronous cached samples plus registered service reads. Never requests a guest sample. */
+export function retainedMemoryProcesses(): MemoryProcessEnvelope {
+  const result: MemoryProcessEnvelope = { schema: 1, time: Date.now(), sequence: observationSequence, sharedBuffers: typeof SharedArrayBuffer === "function",
+    processes: [], runtimes: [], censuses: [], loss: { ...observationLoss, outputCensuses: 0, outputWorkerRows: 0, outputProcesses: 0 }, incomplete: true };
+  try {
+    const rows = Array.from(processes.values());
+    result.processes = rows.filter(row => opaqueObservationId(row.id)).map(projectProcess);
+    result.loss.outputProcesses = rows.length - result.processes.length;
+    const ids = new Set(Array.from(services.keys()).concat(result.processes.flatMap(row => row.binding ? [row.binding.runtimeId] : [])));
+    result.runtimes = Array.from(ids, runtimeCensus);
+    result.censuses = structuredClone(censuses);
+    while (serializedBytes(result) > memoryObservationLimits.outputBytes && result.censuses.length) {
+      result.censuses.shift();
+      result.loss.outputCensuses++;
+    }
+    trimOutputWorkers(result);
+    while (serializedBytes(result) > memoryObservationLimits.outputBytes && result.processes.length) {
+      result.processes.shift();
+      result.loss.outputProcesses++;
+    }
+    result.incomplete = services.size === 0 || Object.values(result.loss).some(Boolean)
+      || result.processes.some(row => !row.binding || row.status !== "sampled" || row.endedAt !== null && (row.outcome.kind === "unavailable" || !row.sample?.terminal))
+      || result.runtimes.concat(result.censuses).some(census => census.state !== "observed" || census.truncated > 0 || census.unknownBytes > 0);
+  } catch { /* A partially available observation still attributes nothing outside its rows. */ }
+  return result;
+}
+function opaqueObservationId(id: string): boolean { return /^[A-Za-z0-9:._-]{1,128}$/.test(id); }
+function serializedBytes(value: MemoryProcessEnvelope): number { return new TextEncoder().encode(JSON.stringify(value)).byteLength; }
+function trimOutputWorkers(result: MemoryProcessEnvelope): void {
+  for (const runtime of result.runtimes) {
+    if (serializedBytes(result) <= memoryObservationLimits.outputBytes) return;
+    result.loss.outputWorkerRows += runtime.workers.length;
+    runtime.truncated += runtime.workers.length;
+    runtime.workers = [];
+    runtime.unknownBytes = 0;
+    runtime.knownSampledBytesSubtotal = runtime.state === "observed" ? 0 : null;
+  }
+}
+Reflect.set(globalThis, "__bunMemoryProcesses", retainedMemoryProcesses);
+
 async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
   const requested = Array.from(channels, ([id, channel]) => ({ id, channel, commandId: retained.get(id)?.commandId }))
     .filter(entry => retained.get(entry.id)?.engine === engine && !retained.get(entry.id)?.terminal)
@@ -276,16 +569,18 @@ async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean)
       continue;
     }
     if (value.id !== entry.id || value.engine !== engine) throw new TypeError("Memory channel identity mismatch");
+    acceptProcessSnapshot(value, entry.id, true);
     const current = memoryChannelReady(entry.channel, entry.generation, false);
     if (!current) {
-      retained.set(entry.id, { ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
+      retainSnapshot({ ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
         notes: "Host snapshot was not acknowledged for this phase. " + value.notes });
       continue;
     }
     const normal = memoryChannelReady(entry.channel, entry.generation, refresh);
-    retained.set(entry.id, normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
+    retainSnapshot(normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
       notes: "Normal phase refresh not acknowledged. Engine counters are unavailable for this phase. " + value.notes });
   }
   return retainedMemorySnapshots();
 }
 Reflect.set(globalThis, "__bunMemorySnapshots", requestMemorySnapshots);
+Reflect.set(globalThis, "__bunRetainedMemorySnapshots", retainedMemorySnapshots);

@@ -107,6 +107,7 @@ test("plain transcript helper rejects prompt-on and implicit modes before readin
 const transcriptCallers = [
   "scripts/dev-html-browser.test.ts",
   "scripts/hot-run-browser.test.ts",
+  "scripts/spidermonkey-memory-browser.test.ts",
   "scripts/app-matrix/browser.mjs", "scripts/app-matrix/next-acceptance.ts", "scripts/io-resource-context.ts", "tests/esbuild/browser.mjs",
   "scripts/install-download-browser.test.ts", "scripts/shared-fresh-backing-browser.test.ts", "scripts/worker-large-message-browser.test.ts",
   "web/tests/bench-engines.mjs", "web/tests/bench-memory.mjs", "web/tests/browser-async-context-runtime.ts",
@@ -124,6 +125,8 @@ const nonTranscriptCallers = [
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
+  // Storage checks use only the server/browser lifecycle, never a terminal transcript.
+  "scripts/sandbox-storage-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

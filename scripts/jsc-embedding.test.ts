@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -37,16 +37,17 @@ test("the JSC artifact check runs the busy-loop stdout handshake on the same gue
   expect(command!.slice(2)).toEqual([new URL("../tests/test-stdout-busy-loop.ts", import.meta.url).pathname, "--engine", "jsc", "--wasm", "/dist/bun-jsc.wasm"]);
 });
 
-test("only the two parser sites read the parser reserve; every other reservation stays constant", () => {
+test("only the four parser sites read the parser reserve; every other reservation stays constant", () => {
   const sites = patch.match(/^\+ *WASM_RESERVE_STACK\(.*\);$/gm) ?? [];
-  expect(sites).toHaveLength(22);
-  expect(sites.filter(site => site.includes("2048 - wasmParserReserveDiscount"))).toHaveLength(2);
+  expect(sites).toHaveLength(24);
+  // parseStatement, parseAssignmentExpression, parseAssignmentChainLevel and parseAssignmentChainRest.
+  expect(sites.filter(site => site.includes("2048 - wasmParserReserveDiscount"))).toHaveLength(4);
   expect(sites.filter(site => /WASM_RESERVE_STACK\((?:512|1024|2048)\);$/.test(site))).toHaveLength(20);
   const parser = patch.split("diff --git a/Source/JavaScriptCore/parser/Parser.cpp")[1]?.split("diff --git")[0] ?? "";
   // The discount is zero-initialized data: no initializer, so zero-filled memory means 2048.
   expect(parser).toContain("+static uint32_t wasmParserReserveDiscount;\n");
   expect(parser).toContain("+    RELEASE_ASSERT(bytes >= 512 && bytes <= 2048 && !(bytes % 16));\n+    wasmParserReserveDiscount = 2048 - bytes;\n");
-  expect(parser.match(/wasmParserReserveDiscount/g)).toHaveLength(4);
+  expect(parser.match(/wasmParserReserveDiscount/g)).toHaveLength(6);
   expect(parser).toMatch(/\+    WASM_RESERVE_STACK\(2048\);\n\+    failIfStackOverflow\(\);\n     ASSERT\(match\(AWAIT\)\);/);
   // One definition and one declaration: nothing in WebKit calls the setter.
   expect(patch.match(/setWasmParserReserve/g)).toHaveLength(2);
@@ -99,6 +100,14 @@ test("the Node host's engine allocation fault refuses only its byte range and co
 
 test("the JSC gate requires the parser chain fixture's deeper chain to be refused", () => {
   expect(parserChainFixture()).toEqual({ path: "tests/fixtures/parser-chain-stack", hostOptions: ["--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] });
+});
+
+test("the JSC gate requires the code generator to refuse deep assignment chains on a small host stack", () => {
+  const strict = (budget: string) => ["--stack-mb", "1", "--env", `BUN_WASM_STACK_KIB=${budget}`, "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"];
+  expect(assignmentChainFixtures()).toEqual([
+    { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("192") },
+    { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("800") },
+  ]);
 });
 
 test("JSC stack controls use their discovered fixture with a small real host stack", () => {

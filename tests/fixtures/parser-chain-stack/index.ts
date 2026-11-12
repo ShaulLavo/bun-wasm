@@ -1,10 +1,10 @@
 // A chain of assignment targets, as generated CommonJS exports have (`exports.A = exports.B = … =
-// void 0`), costs a parser one recursion level per target. A real 100-target chain has to load
-// inside the smallest stack budget a browser passes to JSC once the parser reserve is lowered
-// (docs/stack-limits.md): at the default reserve JSC refuses it there. A chain four times deeper
-// is past JSC's guard at those settings: it must throw a catchable RangeError and leave the guest
-// working. The child runs with that budget and reserve. Engines that ignore either, and native
-// Bun, may load the deeper chain; BUNWASM_STACK_EXPECT_CAUGHT=1 requires the refusal.
+// void 0`), used to cost JSC's parser one recursion level per target. A real 100-target chain has to
+// load inside the smallest stack budget a browser passes to JSC, with the default parser reserve
+// (docs/stack-limits.md). A chain four times deeper is past JSC's guard there: its code generator
+// must throw a catchable RangeError and leave the guest working
+// (docs/bun-patches/jsc-assignment-chains.md). The child runs with that budget. Engines that ignore
+// it, and native Bun, may load the deeper chain; BUNWASM_STACK_EXPECT_CAUGHT=1 requires the refusal.
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 const fs: typeof import("node:fs") = require("node:fs");
 const path: typeof import("node:path") = require("node:path");
@@ -41,7 +41,8 @@ function loadChains(): void {
 if (process.argv[2] === "load") {
   loadChains();
 } else {
-  const env = { ...process.env, BUN_WASM_STACK_KIB: "192", BUN_WASM_JSC_PARSER_RESERVE: "1024" };
+  const env: Record<string, string | undefined> = { ...process.env, BUN_WASM_STACK_KIB: "192" };
+  delete env.BUN_WASM_JSC_PARSER_RESERVE;
   const child = spawnSync(process.execPath, [__filename, "load"], { env, encoding: "utf8" });
   process.stdout.write(child.stdout);
   process.stderr.write(child.stderr);

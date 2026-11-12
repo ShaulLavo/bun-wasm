@@ -355,6 +355,40 @@ a.nav:hover {
   background: var(--panel);
 }
 
+.playground-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.preview-address {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playground-preview button {
+  flex: none;
+  min-height: 34px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.playground-preview iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: white;
+  color-scheme: normal;
+}
+
 #copy-terminal {
   flex: none;
   margin-left: auto;

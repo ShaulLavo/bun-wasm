@@ -1,13 +1,14 @@
-import { browserTrapLog } from "./browser-memory";
+import { engineMemoryLog, memoryBudgetFallback, launchFailureLog } from "./browser-memory";
 import { cleanupTimeoutMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import { scoped, type ScopedTransport, type Transport } from "./transport";
-import { admit, Scope, type Admission } from "./scope";
+import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
+import { NextBuildObserver, closeNextBuildObserver, retainNextBuildObservation, type NextBuildObservation } from "./next-build-observer";
 export { bounded } from "./bounded";
 export interface Execution {
   profile?: PlaygroundProfile;
@@ -21,9 +22,11 @@ export interface Execution {
   createTransport(): Promise<Transport>;
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
+  nextBuildObservation?: (value: NextBuildObservation) => void;
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
-type FailureLog = { terminal: TerminalCapture; diagnostic: string; saved: boolean };
+type LogObservation = { terminal: TerminalCapture; diagnostic: string };
+type FailureLog = LogObservation & { saved: boolean };
 type ObservationTiming = "after server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: (admission: Admission) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
@@ -38,6 +41,7 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
   } finally { scope.close(new Error(`${name} phase ended`)); }
 }
 export async function execute(options: Execution, earlier: readonly Attempt[] = []): Promise<Cell> {
+  if (options.nextBuildObservation && (options.framework.id !== "next" || options.box.engine !== "quickjs")) throw new Error("Next build observation requires the Next QuickJS cell");
   const results: PhaseResult[] = [];
   const startedAt = new Date().toISOString();
   let transport: Transport | undefined;
@@ -93,7 +97,10 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
     const page = scoped(transport, admission);
     await page.closePreview();
     await stopServer(page, Math.min(timeoutMs, 15_000), port);
-    return command(page, "bun run build", buildTimeoutMs);
+    const observer = options.nextBuildObservation ? new NextBuildObserver(page, admission, buildTimeoutMs, options.nextBuildObservation) : undefined;
+    await observer?.prepare();
+    try { return await command(page, "bun run build", buildTimeoutMs, observer); }
+    finally { observer?.end(); }
   }, options.signal);
   await check("preview", async page => {
     await start(page, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : framework.rootPreview?.start.replaceAll("{port}", String(port)) ?? "bun run start", timeoutMs, port);
@@ -111,7 +118,7 @@ async function captureFailure(transport: Transport, options: Execution, results:
     await scope.run(admission => observeFailure(transport, options, capture, admission));
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
-    if (capture.terminal.status === "observed" && options.box.engine === "browser" && !capture.diagnostic) capture.diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
+    if (capture.terminal.status === "observed" && !capture.diagnostic) capture.diagnostic = memoryBudgetFallback(options.box.engine, "failure");
   } finally { scope.close(); }
   if (capture.terminal.status === "unavailable") return capture;
   const text = capture.terminal.text;
@@ -130,9 +137,13 @@ async function observeFailure(transport: Transport, options: Execution, capture:
   const text = await terminal(page);
   admit(admission);
   capture.terminal = { status: "observed", text };
-  const diagnostic = await browserTrapLog(page, options.box.engine);
+  capture.diagnostic = await launchFailureLog(page, options.box.engine);
   admit(admission);
-  capture.diagnostic = diagnostic;
+  const launchDiagnostic = capture.diagnostic;
+  capture.diagnostic += memoryBudgetFallback(options.box.engine, "failure");
+  const diagnostic = await engineMemoryLog(page, options.box.engine);
+  admit(admission);
+  capture.diagnostic = launchDiagnostic + diagnostic;
   if (options.framework.id !== "angular") return;
   const path = namedAngularDiagnostic(text);
   if (!path) return;
@@ -143,6 +154,15 @@ async function observeFailure(transport: Transport, options: Execution, capture:
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, admission: Admission): Promise<unknown> {
   if (!transport) return { transportCreated: false };
+  if (options.nextBuildObservation) {
+    const observerClose = Scope.open(1000, admission);
+    try {
+      const closed = await observerClose.run(guard => closeNextBuildObserver(scoped(transport, guard)));
+      retainNextBuildObservation(options.nextBuildObservation, closed);
+    } catch (error) {
+      retainNextBuildObservation(options.nextBuildObservation, { kind: "cleanup", at: Date.now(), status: "unavailable", reason: String(error) });
+    } finally { observerClose.close(); }
+  }
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup, admission);
   const errors: unknown[] = [];
@@ -174,7 +194,7 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   } catch (error) { errors.push(error); }
   finally { handoff.close(); }
   let evidence: unknown;
-  try { evidence = await bounded(() => close(10_000), 10_000); }
+  try { evidence = await awaitWithin(close(admit(admission)), admission); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return evidence;
@@ -183,28 +203,40 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
 async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, parent: Admission, timing: ObservationTiming = "before owned transport cleanup"): Promise<void> {
   const scope = Scope.open(2000, parent);
   let output: string;
-  const observation: { terminal: TerminalCapture } = { terminal: { status: "unavailable", reason: "not completed" } };
+  const observation: LogObservation = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: failureLog?.diagnostic ?? "" };
   try {
-    output = await scope.run(async guard => {
-      const page = scoped(transport, guard);
-      const text = await terminal(page);
-      admit(guard);
-      observation.terminal = { status: "observed", text };
-      return text + (failureLog?.diagnostic || await browserTrapLog(page, options.box.engine));
-    });
+    output = await scope.run(guard => observeFinalLog(transport, options.box.engine, observation, guard));
   }
   catch (error) {
     parent.signal.throwIfAborted();
     if (failureLog?.saved) return;
-    output = finalLogFallback(observation.terminal, options.box.engine, results, failureLog, error);
+    output = finalLogFallback(observation, options.box.engine, results, failureLog, error);
   } finally { scope.close(); }
   if (observation.terminal.status === "unavailable" && failureLog?.terminal.status === "observed") output = failureObservation(failureLog);
   else output = finalObservation(output, results, failureLog, timing);
   await bounded(() => options.saveLog(output), 2000, parent.signal);
 }
 
-function finalLogFallback(terminal: TerminalCapture, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
-  if (terminal.status === "observed") return terminal.text + (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "");
+async function observeFinalLog(transport: Transport, engine: string, observation: LogObservation, admission: Admission): Promise<string> {
+  const page = scoped(transport, admission);
+  const text = await terminal(page);
+  admit(admission);
+  observation.terminal = { status: "observed", text };
+  if (!observation.diagnostic) {
+    observation.diagnostic = await launchFailureLog(page, engine);
+    admit(admission);
+    const launchDiagnostic = observation.diagnostic;
+    observation.diagnostic += memoryBudgetFallback(engine, "final");
+    const diagnostic = await engineMemoryLog(page, engine);
+    admit(admission);
+    observation.diagnostic = launchDiagnostic + diagnostic;
+  }
+  return text + observation.diagnostic;
+}
+
+function finalLogFallback(observation: LogObservation, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
+  const { terminal, diagnostic } = observation;
+  if (terminal.status === "observed") return terminal.text + (failureLog?.diagnostic || diagnostic || memoryBudgetFallback(engine, "final"));
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
   return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;

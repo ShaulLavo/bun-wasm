@@ -47,6 +47,7 @@ async function newWindow(): Promise<string> {
 }
 async function ready(): Promise<void> {
   await evaluate("const limit=Date.now()+15000; while(!globalThis.persistenceHarness){if(Date.now()>limit)throw Error('fixture did not load');await new Promise(r=>setTimeout(r,25));} return true;");
+  await evaluate("globalThis.storageQuota = async () => false; return true;");
 }
 function cleanup(): Promise<void> {
   stopping = true;
