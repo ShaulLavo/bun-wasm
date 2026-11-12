@@ -7,6 +7,7 @@ import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
 import { bounded } from "./execute";
 import { buildAngularDiagnosticSource } from "./angular-diagnostic";
+import { buildNextBuildReaderSource } from "./next-build-observer";
 import { CommandExitError, ownedCommand, withSignals } from "./lifetime";
 import { quote, admission, nativeQueueScript } from "./mac-queue";
 class NativeUnavailable extends Error {}
@@ -40,7 +41,8 @@ export function combine(first: Report, second: Report): Report {
 async function bundle(destination: string, source: Report["source"]): Promise<void> {
   await mkdir(join(destination, "web"), { recursive: true });
   const diagnostic = await buildAngularDiagnosticSource();
-  const runner = await Bun.build({ entrypoints: [resolve(import.meta.dir, "run.ts")], outdir: destination, target: "bun", format: "esm", naming: "run.js", external: ["playwright"], define: { __GOALS_ANGULAR_DIAGNOSTIC__: JSON.stringify(diagnostic) } });
+  const nextBuildReader = await buildNextBuildReaderSource();
+  const runner = await Bun.build({ entrypoints: [resolve(import.meta.dir, "run.ts")], outdir: destination, target: "bun", format: "esm", naming: "run.js", external: ["playwright"], define: { __GOALS_ANGULAR_DIAGNOSTIC__: JSON.stringify(diagnostic), __GOALS_NEXT_BUILD_READER__: JSON.stringify(nextBuildReader) } });
   const server = await Bun.build({ entrypoints: [resolve("web/serve.ts")], outdir: join(destination, "web"), target: "bun", format: "esm", naming: "serve.ts" });
   if (!runner.success || !server.success) throw new AggregateError(runner.logs.concat(server.logs), "Fleet runner bundle failed");
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
@@ -79,7 +81,7 @@ async function removeSettledStaging(remote: string, config: Options): Promise<vo
 export function nativeRunnerArgs(config: Options, remote: string): string[] {
   const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
   const queue = admission(config);
-  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : [], config.safariOwnership ? ["--safari-ownership"] : []);
+  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.nextBuildObservation ? ["--next-build-observation"] : [], config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : [], config.safariOwnership ? ["--safari-ownership"] : []);
 }
 async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
   admission(config);
