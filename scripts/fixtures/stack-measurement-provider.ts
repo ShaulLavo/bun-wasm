@@ -91,6 +91,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   if (scenario === "hang" || (scenario === "hidden-timeout" && depth === 4)) await new Promise(() => setInterval(() => {}, 1000));
   const result = attempt(mode, depth);
   process.stdout.write(result.output);
+  if (result.code !== 0) process.stderr.write(`fake trap at ${mode} ${depth}\n`);
   process.exitCode = result.code ?? 1;
 } else {
   registerHooks({

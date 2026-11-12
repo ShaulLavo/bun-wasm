@@ -310,6 +310,7 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   }
   await writeFile(join(root, "jsc/common.sh"), (await readFile(join(root, "jsc/common.sh"), "utf8")) + "\ncheck_jsc_inputs_stamp() { :; }\n");
   await writeFile(join(root, "scripts/jsc-embedding.ts"), 'if (process.argv[2] === "inputs") console.log("{}");\n');
+  await writeFile(join(root, "scripts/jsc-cloop-frame.ts"), 'const [command, path, ...extra] = process.argv.slice(2);\nif (command !== "check" || !path || extra.length || !WebAssembly.validate(await Bun.file(path).bytes())) throw new Error("Expected one valid synthetic side for the fixture-only frame check");\n');
   await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(temporary)}\nexport CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"\n`);
   await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
   await executable(join(root, "scripts/sync-crypto.sh"), "exit 0");

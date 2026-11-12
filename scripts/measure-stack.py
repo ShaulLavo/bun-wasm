@@ -18,17 +18,34 @@ ROOT = Path(__file__).resolve().parent.parent
 # The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
 CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Conditional', 'Block', 'Call', 'Function')
                for parser_pass in ('Compile', 'Call') for width in ('8', '16')]
-MODES = ['plain', 'getter', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
+MODES = ['plain', 'getter', 'computedgetter', 'ajvnames', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
          'ternary', 'statement', 'awaitchain',
          'regexpnc', 'lookahead', 'proxychain', 'isarray', 'bound', 'join', 'flat', 'tostring', 'async',
          'promise', 'console', 'require'] + CHAIN_MODES
+# Modes that need an input the default sweep does not have: `ajv` reads an installed package.
+OPTIONAL_MODES = ['ajv']
 
 # Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
 # Each require level is a generated file, so the chain stays far above any real package depth and no higher.
 # A parser chain stays far past any budget's capacity and small enough to remain a parser test.
-MAX = {'bound': 2000, 'require': 512, **{mode: 4096 for mode in CHAIN_MODES}}
+# The Ajv walks merge one name set per level, so their depth stays where that work is small.
+MAX = {'bound': 2000, 'require': 512, 'ajvnames': 4096, 'ajv': 4096, **{mode: 4096 for mode in CHAIN_MODES}}
 REQUIRE_SCRATCH = '/stack-depth-scratch'
 REQUIRE_LEAF_ROOT = '/stack-depth-leaf'
+AJV_CODEGEN_ROOT = '/stack-depth-ajv'
+# Enough of a trap's backtrace to name its recursion cycle.
+STDERR_KEPT = 4000
+
+
+def ajv_codegen(args, parser):
+    """Guest flags for the ajv mode: a preopen of the installed package's compile/codegen directory."""
+    if ('ajv' in args.modes) != (args.ajv_codegen is not None):
+        parser.error('--ajv-codegen and the ajv mode go together')
+    if args.ajv_codegen is None:
+        return []
+    if not (args.ajv_codegen / 'index.js').is_file():
+        parser.error('--ajv-codegen needs the directory holding ajv/dist/compile/codegen/index.js')
+    return ['--dir', f'{args.ajv_codegen.absolute()}::{AJV_CODEGEN_ROOT}', '--env', f'STACK_DEPTH_AJV_CODEGEN={AJV_CODEGEN_ROOT}/index.js']
 
 
 def require_chain(stack, args, parser):
@@ -59,11 +76,25 @@ def accepted(mode, outcome):
     return outcome == 'caught:RangeError' or (outcome == 'caught:SyntaxError' and mode in SYNTAX_MODES)
 
 
-def run(command, mode, n):
+def kept(stream):
+    """The end of a child's stream as text, whether or not the child was cut off."""
+    text = stream.decode(errors='replace') if isinstance(stream, bytes) else (stream or '')
+    return text[-STDERR_KEPT:]
+
+
+def run(command, mode, n, attempts):
+    """One attempt's outcome. Every attempt is recorded with its exit status, timeout and stderr."""
     try:
         result = subprocess.run(command + [mode, str(n)], text=True, capture_output=True, timeout=120)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as expired:
+        attempts.append({'depth': n, 'outcome': 'timeout', 'status': None, 'timed_out': True, 'stderr': kept(expired.stderr)})
         return 'timeout'
+    outcome = classify(result, mode, n)
+    attempts.append({'depth': n, 'outcome': outcome, 'status': result.returncode, 'timed_out': False, 'stderr': kept(result.stderr)})
+    return outcome
+
+
+def classify(result, mode, n):
     if result.returncode != 0:
         return 'trap'
     lines = result.stdout.splitlines()
@@ -86,19 +117,23 @@ def run(command, mode, n):
 
 def capacity(command, mode, high):
     failures = []
+    attempts = []
 
     def trial(depth, require_completion=False):
-        outcome = run(command, mode, depth)
+        outcome = run(command, mode, depth, attempts)
         if not accepted(mode, outcome) or (require_completion and outcome != 'completed'):
             failures.append({'depth': depth, 'outcome': outcome})
         return outcome
 
+    def row(result):
+        return {**result, 'failures': failures, 'attempts': attempts}
+
     if mode == 'require':
         baseline = trial(0, require_completion=True)
         if baseline != 'completed':
-            return {'refused_at_zero': baseline, 'failures': failures}
+            return row({'refused_at_zero': baseline})
     if trial(high) == 'completed':
-        return {'completed_at_max': high, 'failures': failures}
+        return row({'completed_at_max': high})
     low = 0
     while low + 1 < high:
         middle = (low + high) // 2
@@ -106,7 +141,7 @@ def capacity(command, mode, high):
             low = middle
         else:
             high = middle
-    return {'capacity': low, 'beyond': trial(low + 1), 'failures': failures}
+    return row({'capacity': low, 'beyond': trial(low + 1)})
 
 
 def main():
@@ -121,12 +156,13 @@ def main():
     parser.add_argument('--max', type=int, default=200000, help='deepest nesting tried')
     parser.add_argument('--leaf-root', type=Path, help='host project directory, the one holding node_modules, that the require chain ends in')
     parser.add_argument('--leaf', help='module path inside --leaf-root that the last require level loads, such as node_modules/prompts/index.js')
+    parser.add_argument('--ajv-codegen', type=Path, help='host directory holding an installed ajv/dist/compile/codegen/index.js, for the ajv mode')
     parser.add_argument('modes', nargs='*', default=MODES)
     args = parser.parse_args()
     args.modes = list(dict.fromkeys(args.modes))
     if args.max <= 0:
         parser.error('--max must be positive')
-    if any(mode not in MODES for mode in args.modes):
+    if any(mode not in MODES + OPTIONAL_MODES for mode in args.modes):
         parser.error('unknown stack mode')
     args.host = args.host or ('node' if args.engine == 'browser' else 'launcher')
     if args.engine == 'browser' and args.host != 'node':
@@ -141,6 +177,7 @@ def main():
     env = ['--env', 'PWD=/'] + (['--env', f'BUN_WASM_STACK_KIB={args.budget_kib}'] if args.budget_kib else [])
     if args.parser_reserve is not None:
         env += ['--env', f'BUN_WASM_JSC_PARSER_RESERVE={args.parser_reserve}']
+    env += ajv_codegen(args, parser)
     with contextlib.ExitStack() as stack:
         env += require_chain(stack, args, parser)
         if args.host == 'launcher':
