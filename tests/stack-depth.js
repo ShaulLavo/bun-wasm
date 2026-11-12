@@ -12,6 +12,9 @@ function deepArray() { let a = []; for (let i = 0; i < n; i++) a = [a]; return a
 const actions = {
   plain() { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); f(); },
   getter() { let d = 0; const o = { get v() { return ++d === n ? 0 : 1 + o.v; } }; void o.v; },
+  // The same getter read through a key the compiler cannot see, so JSC calls it from C++
+  // (docs/stack-limits.md): `getter` no longer measures that reentry there.
+  computedgetter() { let d = 0; const key = ['v'][0]; const o = { get v() { return ++d === n ? 0 : 1 + o[key]; } }; void o[key]; },
   proxy() { let d = 0; const p = new Proxy({}, { get() { return ++d === n ? 0 : 1 + p.v; } }); void p.v; },
   json() { JSON.stringify(deepObject(), (k, v) => v); },
   jsonplain() { JSON.stringify(deepObject()); },
@@ -66,6 +69,35 @@ actions.require = () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+// The names walk of Ajv 8.17.1's code generator (lib/compile/codegen/index.ts, MIT), reduced to
+// its recursion: n nested `if` nodes, each read through `node.names` in a reduce callback and
+// through `super.names` in the subclass getter. Eight condition names keep the merges small.
+actions.ajvnames = () => {
+  const addNames = (names, from) => { for (const name in from) names[name] = (names[name] || 0) + from[name]; return names; };
+  class Node { get names() { return {}; } }
+  class ParentNode extends Node {
+    constructor(nodes = []) { super(); this.nodes = nodes; }
+    get names() { return this.nodes.reduce((names, node) => addNames(names, node.names), {}); }
+  }
+  class BlockNode extends ParentNode {}
+  class If extends BlockNode {
+    constructor(condition) { super(); this.condition = condition; }
+    get names() { const names = super.names; names[this.condition] = (names[this.condition] || 0) + 1; return names; }
+  }
+  const root = new ParentNode();
+  let parent = root;
+  for (let i = 0; i < n; i++) { const next = new If(`c${i % 8}`); parent.nodes.push(next); parent = next; }
+  const total = Object.values(root.names).reduce((sum, count) => sum + count, 0);
+  if (total !== n) throw new Error(`ajvnames counted ${total} of ${n} conditions`);
+};
+// The real package: STACK_DEPTH_AJV_CODEGEN names ajv/dist/compile/codegen/index.js of an installed
+// Ajv 8, and the walk is the one `CodeGen.optimize` starts. Not part of the default sweep.
+actions.ajv = () => {
+  const { CodeGen, ValueScope, _ } = require(process.env.STACK_DEPTH_AJV_CODEGEN);
+  const gen = new CodeGen(new ValueScope({ scope: {} }), {});
+  for (let i = 0; i < n; i++) gen.if(_`c${i}`);
+  void gen._root.names;
+};
 // Parser chains, one source shape per recursion in an engine's parser (docs/stack-limits.md). Each
 // is a function body. "Compile" only constructs the function, which syntax-checks the body; "Call"
 // also runs it, which parses the body in full and generates its code. "16" adds one character
@@ -95,10 +127,10 @@ function chainCompletes(attempt, depth) {
     throw error;
   }
 }
-function chainCapacity(attempt) {
-  if (chainCompletes(attempt, n)) return n;
+function chainCapacity(attempt, maximum = n) {
+  if (chainCompletes(attempt, maximum)) return maximum;
   let low = 0;
-  let high = n;
+  let high = maximum;
   while (low + 1 < high) {
     const middle = (low + high) >> 1;
     if (chainCompletes(attempt, middle)) low = middle;
@@ -108,13 +140,17 @@ function chainCapacity(attempt) {
 }
 // Every chain's capacity from one guest: the parser's refusal is catchable, so the search runs in
 // process and prints one JSON line before the usual result. n is the deepest nesting tried.
-function chainCapacities() {
+function chainCapacities(maximum = n) {
   const capacities = {};
-  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt);
+  for (const [name, attempt] of Object.entries(chainModes)) capacities[name] = chainCapacity(attempt, maximum);
   return capacities;
 }
 // Leave the loader's synchronous calls before comparing capacities across contexts.
-actions.chainCapacity = async () => { await Promise.resolve(); console.log('capacities', JSON.stringify(chainCapacities())); };
+actions.chainCapacity = async () => {
+  await Promise.resolve();
+  chainCapacities(0);
+  console.log('capacities', JSON.stringify(chainCapacities()));
+};
 // A parent and a Worker of this file in one run: the parent's capacities before the child starts
 // and after it exits, around the child's own `chainCapacity` output. STACK_DEPTH_WORKER_ENV is a
 // JSON object merged into the child's copy of the environment; a null value removes that key.
@@ -130,6 +166,8 @@ function workerEnvironment() {
 actions.chainWorker = async () => {
   const { Worker } = require('node:worker_threads');
   await Promise.resolve();
+  // Run the whole measurement loop once before comparing contexts.
+  chainCapacities(0);
   const before = chainCapacities();
   const worker = new Worker(__filename, { argv: ['chainCapacity', String(n)], env: workerEnvironment(), stdout: true });
   let output = '';

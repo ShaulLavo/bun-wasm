@@ -1,4 +1,4 @@
-import { tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
+import { BUN_MEMORY_GROUP_POLICY, tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
 
 const unsigned = (value: number): number[] => {
   const bytes: number[] = [];
@@ -19,18 +19,22 @@ const requireWord = (value: number) => load.concat([0x41, value, 0x47, 0x04, 0x4
 const copyData = [0x23, 1, 0x41, 0, 0x41, 4, 0xfc, 8, 0, 0, 0xfc, 9, 0];
 const dylink = section(0, name("dylink.0").concat([1, 4, 16, 2, 0, 0]));
 const globals = [imported("env", "__stack_pointer", [3, 0x7f, 1]), imported("env", "__memory_base", [3, 0x7f, 0]), imported("env", "__table_base", [3, 0x7f, 0])];
-const memory = (shared: boolean) => imported("env", "memory", [2].concat(shared ? [3, 1, 0x80, 0x80, 1] : [0, 1]));
+// A shared pair declares the group address space, like a produced core and side.
+const memory = (shared: boolean) => imported("env", "memory", [2].concat(shared ? [3, 1].concat(unsigned(BUN_MEMORY_GROUP_POLICY.maximumPages)) : [0, 1]));
 const table = imported("env", "__indirect_function_table", [1, 0x70, 0, 1]);
 
 /** Executable data/relocation fixture, not a qualified production guest. */
 export function initializationPair(kind: PairedEngine, shared = false) {
   const imports = [imported("runtime_proc", "signal", [0, 0]), imported("env", "trace", [0, 1])];
+  const bounds = shared && kind === "spidermonkey" ? ["__stack_low", "__stack_high"] : [];
+  const importInfo = vector(bounds.map(label => name("env").concat(name(label), [0x11])));
+  const coreDylink = section(0, name("dylink.0").concat([1, 4, 16, 2, 0, 0], bounds.length ? [4].concat(unsigned(importInfo.length), importInfo) : []));
   const exports = [exported("core_initialize_memory", 0, 2), exported("__wasm_apply_data_relocs", 0, 3),
     exported("__wasm_call_ctors", 0, 4), exported("bun_core_alloc", 0, 5), exported("_start", 0, 6),
     exported("read", 0, 7), exported("bun_core_bind_engine", 0, 8), exported("core_checkpoint", 0, 8), exported("trace", 0, 1)];
-  const core = binary((shared ? [dylink] : []).concat([
+  const core = binary((shared ? [coreDylink] : []).concat([
     section(1, [4, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 1, 0x7f, 0, 0x60, 0, 0, 0x60, 0, 1, 0x7f]),
-    section(2, vector(shared ? imports.concat([memory(true), table], globals) : imports)),
+    section(2, vector(shared ? imports.concat([memory(true), table], globals, bounds.map(label => imported("GOT.mem", label, [3, 0x7f, 1]))) : imports)),
     section(3, [7, 2, 2, 2, 0, 2, 3, 2]),
   ], shared ? [] : [
     section(4, [1, 0x70, 0, 1]), section(5, [1, 0, 1]),

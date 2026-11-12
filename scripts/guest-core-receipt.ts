@@ -3,7 +3,7 @@ import { lstatSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { isSupportedPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type SupportedPairedEngine } from "../src/engine-kind.ts";
 import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type SourceOptions } from "./guest-source-manifest.ts";
-import { parseProgramProfile, SHARED_GROUP_OPTIMIZER, SHARED_GROUP_SIDE_LINK, sharedGroupCoreLink, sharedGroupEnvironment, verifySharedSysroot,
+import { parseProgramProfile, SHARED_GROUP_OPTIMIZER, sharedGroupCoreLink, sharedGroupEnvironment, sharedGroupSideLink, verifySharedSysroot,
   verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
 
 export interface ProgramInputSnapshot {
@@ -227,7 +227,7 @@ function sharedGroupContent(options: SourceOptions, scope: ProgramInputSnapshot[
   const base = { target: "wasm32-wasip1", release: true, locked: true, offline: true, buildStd: ["std", "panic_abort"], environment };
   const command = scope === "core"
     ? { ...base, optimizer: SHARED_GROUP_OPTIMIZER, link: sharedGroupCoreLink(), finalize: "core_initialize_memory" }
-    : { ...base, link: SHARED_GROUP_SIDE_LINK, spillPointers: scope === "jsc", smokeExports: false };
+    : { ...base, link: sharedGroupSideLink(), spillPointers: scope === "jsc", smokeExports: false };
   const selection = core ?? { kind: scope, profile: "shared-group" };
   return { selection, sharedSysroot, command, groups: manifest.groups, tools: manifest.tools, omissions: manifest.omissions };
 }

@@ -20,7 +20,9 @@ group_errno_wraps=()
 if [[ "$profile" == shared-group ]]; then
   bun "$root/scripts/src/program-profile.ts" environment jsc > /dev/null
   group_errno_wraps=(write writev clock_gettime getcwd)
-  link_profile=(--shared-memory)
+  # The side declares the group address space, like its core (program-profile.ts sharedGroupSideLink).
+  group_address_space=$(bun "$root/scripts/src/program-profile.ts" group-address-space)
+  link_profile=(--shared-memory "--max-memory=$group_address_space")
   for name in "${group_errno_wraps[@]}"; do link_profile+=("--wrap=$name"); done
   init_profile=(-matomics -mbulk-memory -mmutable-globals)
   explicit_profile=(--group)
@@ -42,8 +44,14 @@ trap 'exit 143' TERM
 inputs=$(mktemp "$TMPDIR/bun-jsc-engine-inputs-XXXXXX")
 bun "$root/scripts/guest-engine-receipt.ts" inputs jsc "${profile_argument[@]}" > "$inputs"
 side="$out/engine.wasm"
+# No side leaves this producer unless its interpreter keeps the measured guarded frame
+# (docs/stack-limits.md): every native reentry path's depth depends on it.
+check_interpreter_frame() {
+  bun "$root/scripts/jsc-cloop-frame.ts" check "$side"
+}
 if [[ -e "$side" || -e "$side.engine.json" ]]; then
   bun "$root/scripts/guest-engine-receipt.ts" verify "$side" "$inputs"
+  check_interpreter_frame
   printf 'JSC engine: verified unchanged origin %s\n' "$side"
   exit 0
 fi
@@ -74,4 +82,5 @@ fi
 "$root/jsc/finalize.sh" "$out/engine.implicit.wasm" "$out/engine.spilled.wasm"
 node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side" "${explicit_profile[@]}"
 wasm-tools validate "$side"
+check_interpreter_frame
 bun "$root/scripts/guest-engine-receipt.ts" write "$side" "$inputs"

@@ -42,6 +42,11 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/ci-spidermonkey-prebuild.ts", "scripts/ci-spidermonkey-prebuild.test.ts", "checks/quality-ci-spidermonkey-prebuild.json",
+  "scripts/spidermonkey-browser-ci.test.ts", "checks/quality-spidermonkey-browser-ci.json",
+  "scripts/spidermonkey-browser-stack.test.ts", "checks/quality-spidermonkey-browser-stack.json",
+  "web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts",
+  "checks/browser-guest-shared-wasm-memory.json",
   "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
   "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
   "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
@@ -79,7 +84,7 @@ const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
@@ -99,6 +104,8 @@ const jscFiles = new Set([
   "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
   "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
   "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json",
+  // The interpreter frame gate the JSC side producer runs, and the getter fixture the embedding gate runs.
+  "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts", "checks/native-getter-dispatch.json",
 ]);
 
 const webGuestDirectories = [

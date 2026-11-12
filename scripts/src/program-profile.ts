@@ -16,35 +16,71 @@ const C_FEATURES = "-fPIC -matomics -mbulk-memory -mmutable-globals";
 
 const PAGE_BYTES = 65536;
 
+const MAX_MEMORY_FILE = "max-memory.txt";
+const GROUP_ADDRESS_SPACE_FILE = "group-address-space.txt";
+
 /**
  * One line of decimal bytes: a page multiple, at most 2 GiB (browser hosts still read i32
- * addresses as signed above that). Mirrors crates/bunwasm-cli/max_memory.rs, the Rust reader.
+ * addresses as signed above that). Mirrors `parse` in crates/bunwasm-cli/max_memory.rs, the one
+ * Rust parser of both authority files.
  */
-export function parseMaxMemory(text: string): number {
-  if (!/^[0-9]+\n$/.test(text)) throw new Error("max-memory.txt holds one line of decimal bytes");
+function parseMemoryAuthority(text: string, file: string): number {
+  if (!/^[0-9]+\n$/.test(text)) throw new Error(`${file} holds one line of decimal bytes`);
   const bytes = Number(text.slice(0, -1));
-  if (bytes <= 0 || bytes % PAGE_BYTES !== 0 || bytes > 2 ** 31) throw new Error("max-memory.txt must be a page multiple in (0, 2 GiB]");
+  if (bytes <= 0 || bytes % PAGE_BYTES !== 0 || bytes > 2 ** 31) throw new Error(`${file} must be a page multiple in (0, 2 GiB]`);
   return bytes;
 }
 
-/** The wasm32 memory maximum of every Bun guest, from its one authority (docs/memory-ceiling.md). */
-export function maxMemoryBytes(): number {
-  return parseMaxMemory(readFileSync(join(ROOT, "crates/bunwasm-cli/max-memory.txt"), "utf8"));
+export function parseMaxMemory(text: string): number {
+  return parseMemoryAuthority(text, MAX_MEMORY_FILE);
 }
 
-/** The page maximum a shared-group core declares for its imported group memory. */
+/** The group address space holds at least what the guest memory maximum lets its members use. */
+export function parseGroupAddressSpace(text: string, maxMemory: number): number {
+  const bytes = parseMemoryAuthority(text, GROUP_ADDRESS_SPACE_FILE);
+  if (bytes < maxMemory) throw new Error(`${GROUP_ADDRESS_SPACE_FILE} must hold at least the guest memory maximum`);
+  return bytes;
+}
+
+/**
+ * The wasm32 memory maximum of every Bun guest, from its one authority (docs/memory-ceiling.md):
+ * split links, engine heap sizing, and the pages a group's members may hold together.
+ */
+export function maxMemoryBytes(): number {
+  return parseMaxMemory(readFileSync(join(ROOT, "crates/bunwasm-cli", MAX_MEMORY_FILE), "utf8"));
+}
+
+/** The address space of one shared-group memory, from its one authority (docs/memory-ceiling.md, stage 2). */
+export function groupAddressSpaceBytes(): number {
+  return parseGroupAddressSpace(readFileSync(join(ROOT, "crates/bunwasm-cli", GROUP_ADDRESS_SPACE_FILE), "utf8"), maxMemoryBytes());
+}
+
+/** The page maximum a shared-group core and its side declare for the imported group memory. */
 export function sharedGroupMaxPages(): number {
+  return groupAddressSpaceBytes() / PAGE_BYTES;
+}
+
+/** The pages the members of one group may hold together: the guest memory maximum. Regions are not counted. */
+export function sharedGroupMemberPages(): number {
   return maxMemoryBytes() / PAGE_BYTES;
 }
 
 /** The core's exact link arguments, in crates/bunwasm-cli/build.rs order. */
 export function sharedGroupCoreLink(): string[] {
   const list = readFileSync(join(ROOT, "crates/bunwasm-cli/shared-group-link.txt"), "utf8").split("\n").filter(Boolean);
-  return [`--max-memory=${maxMemoryBytes()}`].concat(list);
+  return [`--max-memory=${groupAddressSpaceBytes()}`].concat(list);
 }
 
-export const SHARED_GROUP_SIDE_LINK = ["--shared", "--shared-memory", "--Bsymbolic", "--no-export-dynamic", "--gc-sections", "--no-entry",
-  "--import-memory=env,memory", "--import-table", "--allow-undefined"] as const;
+/**
+ * A side's exact link arguments, in producer order. Without `--max-memory`, wasm-ld gives a
+ * shared PIC image the whole wasm32 space (65536 pages), which import matching would accept
+ * for any narrower group memory. The side declares the group address space itself, so a side
+ * linked for another stage is refused like its core.
+ */
+export function sharedGroupSideLink(): string[] {
+  return ["--shared", "--shared-memory", `--max-memory=${groupAddressSpaceBytes()}`, "--Bsymbolic", "--no-export-dynamic", "--gc-sections", "--no-entry",
+    "--import-memory=env,memory", "--import-table", "--allow-undefined"];
+}
 
 export const SHARED_GROUP_OPTIMIZER = ["-O2", "-g", "--strip-dwarf", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-ext",
   "--enable-mutable-globals", "--enable-threads"] as const;
@@ -158,12 +194,17 @@ if (import.meta.main) {
     console.log(maxMemoryBytes());
     process.exit(0);
   }
+  // A shared-group side links at the group address space, never at the guest memory maximum.
+  if (command === "group-address-space" && !kind) {
+    console.log(groupAddressSpaceBytes());
+    process.exit(0);
+  }
   if (command === "link-proof" && kind && output) {
     linkProof(kind, output);
     process.exit(0);
   }
   const sysroot = process.env.BUN_WASM_SYSROOT;
-  if (command !== "environment" || (kind !== "core" && kind !== "quickjs" && kind !== "jsc") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs|jsc | link-proof MAP OUTPUT | max-memory");
+  if (command !== "environment" || (kind !== "core" && kind !== "quickjs" && kind !== "jsc") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs|jsc | link-proof MAP OUTPUT | max-memory | group-address-space");
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("shared-group builds set BUN_WASM_SHARED_SYSROOT and BUN_WASM_SYSROOT to the same J2 sysroot");
   verifySharedSysroot(sysroot);
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

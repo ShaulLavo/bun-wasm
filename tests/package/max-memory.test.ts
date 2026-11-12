@@ -3,11 +3,14 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { maxMemoryBytes, parseMaxMemory, sharedGroupCoreLink, sharedGroupMaxPages } from "../../scripts/src/program-profile.ts";
-import { memoryMaximumBytes } from "../../src/engine-kind.ts";
+import { groupAddressSpaceBytes, maxMemoryBytes, parseGroupAddressSpace, parseMaxMemory, sharedGroupCoreLink, sharedGroupMaxPages, sharedGroupMemberPages,
+  sharedGroupSideLink } from "../../scripts/src/program-profile.ts";
+import { BUN_MEMORY_GROUP_POLICY, memoryMaximumBytes } from "../../src/engine-kind.ts";
 
-// docs/memory-ceiling.md: crates/bunwasm-cli/max-memory.txt is the one authority for the wasm32
-// memory maximum. Every consumer derives from it; none keeps its own number.
+// docs/memory-ceiling.md: two quantities, each with one authority. crates/bunwasm-cli/max-memory.txt
+// is the wasm32 memory maximum of a Bun guest; crates/bunwasm-cli/group-address-space.txt is the
+// address space of one shared-group memory. Every consumer derives from one of them; none keeps
+// its own number.
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const read = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
@@ -20,7 +23,30 @@ function tracked(pattern: string): string[] {
 test("stage 1: the guest memory maximum is 1 GiB", () => {
   // Raising it is a MEM02 stage of its own. Above 2 GiB, hosts must first read addresses unsigned.
   expect(maxMemoryBytes()).toBe(1073741824);
-  expect(sharedGroupMaxPages()).toBe(16384);
+  expect(sharedGroupMemberPages()).toBe(16384);
+});
+
+test("stage 2, shared groups only: the group address space is 2 GiB", () => {
+  // The first value whose one-past-end address needs the sign bit; nothing above it is accepted.
+  expect(groupAddressSpaceBytes()).toBe(2147483648);
+  expect(sharedGroupMaxPages()).toBe(32768);
+});
+
+test("the group address space has the same bounded reader and never falls below the guest maximum", () => {
+  expect(parseGroupAddressSpace("2147483648\n", 1073741824)).toBe(2147483648);
+  expect(parseGroupAddressSpace("1073741824\n", 1073741824)).toBe(1073741824);
+  for (const text of ["", "2147483648", "0x80000000\n", "2147483649\n", "2147549184\n", "184467440737095516161073741824\n"]) {
+    expect(() => parseGroupAddressSpace(text, 65536)).toThrow(/group-address-space\.txt/);
+  }
+  expect(() => parseGroupAddressSpace("536870912\n", 1073741824)).toThrow(/at least the guest memory maximum/);
+});
+
+test("the packaged Bun group policy is pinned to both authorities", () => {
+  // src/engine-kind.ts ships in the package and cannot read the repository at run time.
+  const policy: { readonly maximumPages: number; readonly memberPages: number } = BUN_MEMORY_GROUP_POLICY;
+  expect(policy.maximumPages).toBe(sharedGroupMaxPages());
+  expect(policy.memberPages).toBe(sharedGroupMemberPages());
+  expect(Object.keys(BUN_MEMORY_GROUP_POLICY).sort()).toEqual(["maximumPages", "memberPages", "stackBytes"]);
 });
 
 test("the authority is one line of decimal bytes, a page multiple in (0, 2 GiB]", () => {
@@ -32,11 +58,50 @@ test("the authority is one line of decimal bytes, a page multiple in (0, 2 GiB]"
   }
 });
 
-test("the shared-group link records the maximum once, in build.rs order", () => {
+test("the shared-group core link records the group address space once, in build.rs order", () => {
   const link = sharedGroupCoreLink();
-  expect(link[0]).toBe(`--max-memory=${maxMemoryBytes()}`);
+  expect(link[0]).toBe(`--max-memory=${groupAddressSpaceBytes()}`);
   expect(link.filter(argument => argument.startsWith("--max-memory"))).toHaveLength(1);
   expect(read("crates/bunwasm-cli/shared-group-link.txt")).not.toContain("--max-memory");
+});
+
+test("the real core linker selects its maximum by explicit profile", () => {
+  const build = read("crates/bunwasm-cli/build.rs");
+  expect(build).toMatch(/fn declared_maximum\(\) -> u64 \{\s*if shared_group\(\) \{\s*group_address_space::GROUP_ADDRESS_SPACE_BYTES\s*\} else \{\s*max_memory::MAX_MEMORY_BYTES\s*\}\s*\}/);
+  expect(build.match(/--max-memory/g)).toHaveLength(1);
+  expect(build).toMatch(/"cargo:rustc-link-arg-bin=bun=--max-memory=\{\}",\s*declared_maximum\(\)/);
+});
+
+test("every shared side producer links at the group address space its receipt records", () => {
+  const link = sharedGroupSideLink();
+  expect(link.slice(0, 3)).toEqual(["--shared", "--shared-memory", `--max-memory=${groupAddressSpaceBytes()}`]);
+  expect(link.filter(argument => argument.startsWith("--max-memory"))).toHaveLength(1);
+  for (const path of ["scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-spidermonkey-shared.sh"]) {
+    const producer = read(path);
+    expect(producer).toMatch(/group_address_space=\$\(bun (?:"\$root\/)?scripts\/src\/program-profile\.ts"? group-address-space\)/);
+    expect(producer).toMatch(/--shared-memory "--max-memory=\$group_address_space"/);
+    expect(producer).not.toMatch(/program-profile\.ts"? max-memory/);
+  }
+  // A split side imports its core's own unshared memory and declares no maximum.
+  const receipt = read("scripts/guest-core-receipt.ts");
+  expect(receipt).toContain("link: sharedGroupSideLink(), spillPointers");
+  expect(receipt).toContain('link: ["--shared", "--Bsymbolic", "--no-export-dynamic"');
+  for (const path of ["scripts/src/engine-explicit-init.ts", "scripts/spidermonkey-side-core-receipt.ts"]) expect(read(path)).toContain("assertSideMemory(input, profile);");
+});
+
+test("only shared-group consumers follow the group address space", () => {
+  expect(read("crates/bunwasm-host/src/linked_group.rs")).toContain("crate::group_address_space::GROUP_ADDRESS_SPACE_BYTES / PAGE as u64");
+  expect(read("crates/bunwasm-host/src/linked_group.rs")).toContain("member_pages: Some(MEMBER_PAGES)");
+  expect(read("scripts/guest-source-manifest.ts")).toContain(".concat(sharedGroup ? GROUP_ADDRESS_SPACE_INPUTS : [])");
+  // Split links, engine heap sizing and the JSC prebuild's input hash never read it, so
+  // changing it cannot rebuild an engine archive.
+  for (const path of ["crates/bunwasm-build/build.rs", "crates/bunwasm-tools/build.rs", "crates/bunwasm-jsc/build.rs", "crates/bunwasm-spidermonkey/build.rs",
+    "crates/bunwasm-spidermonkey/src/lib.rs", "crates/bunwasm-host/src/process/stdio.rs", "jsc/common.sh", "jsc/configure.sh", "spidermonkey/build-probe-core.ts"]) {
+    expect(read(path)).not.toMatch(/group.address.space/i);
+  }
+  const readers = tracked("group-address-space\\.txt").filter(path => !path.startsWith(".internal/") && !path.startsWith("tests/"));
+  expect(readers).toEqual(["crates/bunwasm-cli/build.rs", "crates/bunwasm-cli/group_address_space.rs", "crates/bunwasm-host/src/linked_group.rs",
+    "scripts/guest-source-manifest.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts"]);
 });
 
 test("every consumer reads the authority", () => {
@@ -69,12 +134,17 @@ test("no consumer keeps its own capacity number", () => {
     expect(read(path).split("\n").filter(line => capacity.test(line)))
       .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
   }
+  // The one packaged copy of the group policy, and the tests that state it.
+  expect(tracked("maximumPages: (16384|32768)")).toEqual(["src/engine-kind.ts", "web/tests/group-address-space.test.ts", "web/tests/playground-memory-groups.test.ts"]);
 });
 
 test("shell consumers read the maximum through the validating reader", () => {
   const result = Bun.spawnSync([process.execPath, join(ROOT, "scripts/src/program-profile.ts"), "max-memory"]);
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toBe("1073741824\n");
+  const group = Bun.spawnSync([process.execPath, join(ROOT, "scripts/src/program-profile.ts"), "group-address-space"]);
+  expect(group.exitCode).toBe(0);
+  expect(group.stdout.toString()).toBe("2147483648\n");
 });
 
 // jsc/configure.sh's refusal is in scripts/engine-producer.test.ts, beside its other recipe checks.
@@ -122,13 +192,13 @@ const module = (...sections: number[][]) => Uint8Array.from([0, 97, 115, 109, 1,
 
 // Allocator telemetry reports the linked core's own declared maximum, never a constant of its own.
 test("memory telemetry's limit is the core's declared maximum", () => {
-  const pages = sharedGroupMaxPages();
-  const defined = module(section(5, [1, 1, 1].concat(leb(pages))));
-  const imported = module(section(2, [1].concat(name("env"), name("memory"), [2, 3, 1], leb(pages))));
-  for (const bytes of [defined, imported]) {
-    expect(WebAssembly.validate(bytes)).toBe(true);
-    expect(memoryMaximumBytes(bytes)).toBe(maxMemoryBytes());
-  }
+  // A split core defines its memory at the guest maximum; a group core imports the group memory
+  // at the group address space.
+  const defined = module(section(5, [1, 1, 1].concat(leb(sharedGroupMemberPages()))));
+  const imported = module(section(2, [1].concat(name("env"), name("memory"), [2, 3, 1], leb(sharedGroupMaxPages()))));
+  for (const bytes of [defined, imported]) expect(WebAssembly.validate(bytes)).toBe(true);
+  expect(memoryMaximumBytes(defined)).toBe(maxMemoryBytes());
+  expect(memoryMaximumBytes(imported)).toBe(groupAddressSpaceBytes());
   expect(memoryMaximumBytes(module(section(5, [1, 0, 1])))).toBeUndefined();
   expect(memoryMaximumBytes(module())).toBeUndefined();
   expect(read("web/src/bun-executor.ts")).toContain("memoryMaximumBytes(req.linkPlan.core.source) ?? null");

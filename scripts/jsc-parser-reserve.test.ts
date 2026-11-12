@@ -150,10 +150,12 @@ for (const kind of ["quickjs", "browser"]) {
 for (const mode of ["chainCapacity", "chainWorker"]) {
   test(`${mode} measures only after leaving the initial loader stack`, async () => {
     const phases: boolean[] = [];
+    const compilations: string[] = [];
     const output: string[] = [];
     let insideLoader = true;
     function compile(...source: string[]): unknown {
       phases.push(insideLoader);
+      compilations.push(source.join("\n"));
       return Reflect.construct(Function, source);
     }
     class Worker {
@@ -174,7 +176,9 @@ for (const mode of ["chainCapacity", "chainWorker"]) {
     insideLoader = false;
     await completed;
     expect(output).toContain(`completed ${mode} 1`);
-    expect(phases).toHaveLength(mode === "chainWorker" ? 40 : 20);
+    expect(phases).toHaveLength(mode === "chainWorker" ? 60 : 40);
     expect(phases).toEqual(phases.map(() => false));
+    expect(compilations[0]).toBe("var o = {};\n0;");
+    expect(compilations[20]).toBe("var o = {};\no.a = 0;");
   });
 }
