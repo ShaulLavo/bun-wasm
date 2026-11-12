@@ -148,14 +148,14 @@ test("a terminal log write failure cannot skip native resource teardown", async 
 
 test("a failed final observation preserves the already captured failure diagnostic", async () => {
   const { result, closed, logs } = await nativeLifecycle("failed-install");
-  expect(result).toMatchObject({ status: "fail", phase: "install" });
-  expect(logs).toEqual(["Error: detailed install diagnostic\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: expect.stringContaining("bun install exited 17: Error: detailed install diagnostic") });
+  expect(logs).toEqual(["--- Failure-time terminal observation ---\nError: detailed install diagnostic\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n\n--- End failure-time terminal observation ---\n"]);
   expect(closed).toBe(true);
 });
 
 test("a never-settling failure log write is bounded before native teardown", async () => {
   const { result, closed } = await nativeLifecycle("stalled-failure-log");
-  expect(result).toMatchObject({ status: "fail", phase: "install" });
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: expect.stringContaining("bun install exited 17: Error: detailed install diagnostic") });
   expect(closed).toBe(true);
 }, 8000);
 
@@ -163,8 +163,9 @@ test("empty successful failure capture stays observed when optional Browser fact
   const { result, closed, logs } = await nativeLifecycle("empty-capture");
   expect(result).toMatchObject({ status: "fail", phase: "install", error: "Error: bun install exited 17: " });
   expect(closed).toBe(true);
-  expect(logs.length).toBeGreaterThan(0);
-  expect(logs.every(text => text === "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n")).toBe(true);
+  const diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
+  const failure = `--- Failure-time terminal observation ---\n${diagnostic}\n--- End failure-time terminal observation ---\n`;
+  expect(logs).toEqual([failure, `${failure}\n--- Cleanup-time terminal observation (before owned transport cleanup) ---\n${diagnostic}\n--- End cleanup-time terminal observation ---\n`]);
 }, 8000);
 
 test("empty final terminal stays observed when optional Browser facts expire", async () => {
@@ -200,7 +201,7 @@ function lifecycleObservation(evaluate: Transport["evaluate"], scenario: NativeS
     reads++;
     if (scenario === "empty-capture" || scenario === "empty-final") return evaluate<T>('""', admission, options);
     if (scenario === "stalled-terminal" && reads === 3) return new Promise<T>(() => {});
-    if (scenario === "failed-install" && reads === 2) return Promise.reject(new Error("final observation failed"));
+    if (scenario === "failed-install" && reads === 3) return Promise.reject(new Error("final observation failed"));
     if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"), admission, options);
     return scenario === "stalled-terminal" ? evaluate<T>(JSON.stringify("saved build transcript"), admission, options) : evaluate<T>(source, admission, options);
   };

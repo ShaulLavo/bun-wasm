@@ -4,6 +4,27 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
+
+test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
+  const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
+    "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
+    .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
+  for (const path of paths) expect(needsRust([path])).toBe(true);
+  expect(needsRust(["docs/bun-patches/spidermonkey-side-core-qualification.md", "spidermonkey/README.md"])).toBe(false);
+});
+
+test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
+});
+
+test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
+});
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -57,12 +78,18 @@ test.each([
 
 const browserBuildFiles = ["scripts/browser-build.ts", "web/build.ts"];
 
-test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumer bundling selects its launcher; page builds stay web-only: $paths", ({ paths }) => {
-  const sharedConsumer = paths.includes("scripts/browser-build.ts");
-  expect(needsRust(paths)).toBe(sharedConsumer);
-  expect(needsSharedNative(paths)).toBe(sharedConsumer);
+test.each([{ paths: browserBuildFiles.slice(0, 1) }, { paths: browserBuildFiles.slice(1) }, { paths: browserBuildFiles }])("shared consumers and profile-aware page bundling select their launcher: $paths", ({ paths }) => {
+  expect(needsRust(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
   expect(needsJsc(paths)).toBe(false);
   expect(needsSharedSysroot(paths)).toBe(false);
+});
+
+test.each(["web/index.html", "web/src/playground/app.tsx"])("presentation-only page input %s does not select native producers", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+  expect(needsSharedSysroot([path])).toBe(false);
 });
 
 test.each(browserBuildFiles)("browser bundling with native inputs retains their gates: %s", path => {

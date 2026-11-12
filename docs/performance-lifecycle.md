@@ -31,6 +31,7 @@ SpiderMonkey split pair, and checks the installed Waffle version.
 source env.sh
 scratch=$(mktemp -d /work/tmp/bun-wasm-lifecycle-XXXXXX)
 export GOALS_CHROME_EXECUTABLE=/work/cache/google-chrome/opt/google/chrome/chrome
+export BASH_WEB_GUESTS_DIR=/absolute/current-receipt-backed-shell
 bun /work/heavy-runner/current/run.js --host local --class build lifecycle-host -- \
   bun scripts/performance/prepare-lifecycle.ts \
   /work/tmp/bun-wasm-chrome-firefox-guests-20261111 "$scratch" \
@@ -47,6 +48,9 @@ The caller owns the newly created scratch directory. Remove it after the runner
 exits and its servers, native children, and browsers have stopped. Preserve the
 coordinator-owned canonical delivery and prepared native source. Do not remove
 the prepared host while another lane is copying it.
+Preparation explicitly selects the split program profile and verifies current shell
+receipts independently of Bun guest source. Its closed site inventory includes the
+lifecycle metadata added by this adapter.
 
 ## Collect and resume runs
 
@@ -82,6 +86,9 @@ reasons. Polling endpoints carry observation brackets, not a fixed error bound.
 The native endpoint observes process closure; it is not a kernel exit timestamp.
 Browser requests use separate preparation and measurement deadline scopes. Cleanup
 has an independent deadline and still runs after measurement cancellation.
+Execution evidence separately brackets browser launch and navigation to runtime
+readiness. Readiness includes any transfer, preparation, compilation and shell
+startup in that envelope; it does not isolate compilation alone.
 `execution.json` preserves each acquired observation even if the adapter throws;
 unreached observations remain unavailable with a reason. Each invocation has its
 own environment and host-verification record under `invocations/`. The original

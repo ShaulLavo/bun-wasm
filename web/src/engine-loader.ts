@@ -6,6 +6,7 @@ import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
 import { measureStartup } from "./startup";
 import { observeCompile, withoutCompileSpans } from "./compile-observer";
+import { profileAsset, requireProfileEngine, verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 
 export type { Engine } from "../../src/engine-kind.ts";
 
@@ -24,10 +25,11 @@ export function engineBuildHint(engine: Engine): string {
 }
 
 /** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
-export function engineUnavailable(engine: Engine): string | null {
+export function engineUnavailable(engine: Engine, memoryProfile: ProgramMemoryProfile = "split"): string | null {
   if (engine !== "spidermonkey") return null;
   const { core, side } = programProfile(engine);
-  if (assetBuild(core) !== null && assetBuild(side) !== null) return null;
+  if (assetBuild(profileAsset(core, memoryProfile)) !== null && assetBuild(profileAsset(side, memoryProfile)) !== null) return null;
+  if (memoryProfile === "shared-group") return "SpiderMonkey shared-group is not in this build. Stage its matching pair with SHARED_SPIDERMONKEY_PROGRAM=/absolute/program-spidermonkey before building this host.";
   return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
 }
 
@@ -40,6 +42,20 @@ export function mb(bytes: number): string {
 }
 
 export class WasmMissing extends Error {}
+
+/** Select the engine and memory profile before fetching any program bytes. */
+export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryProfile, progress: (text: string) => void, override?: string) {
+  requireProfileEngine(engine, profile);
+  const unavailable = engineUnavailable(engine, profile);
+  if (unavailable) throw new Error(unavailable);
+  const url = new URL(override ?? profileAsset(ENGINES[engine].wasm, profile), location.href).href;
+  const loaded = engine === "browser" ? await loadWasm(url, progress)
+    : await loadPaired(url, engine, progress, profile);
+  const expected = engine === "browser" ? "single" : engine;
+  if (programKind(loaded.module) !== expected) throw new TypeError(`Bun engine mismatch: selected ${engine}`);
+  verifyMemoryProfile(loaded.module, profile);
+  return loaded;
+}
 
 /**
  * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
@@ -148,13 +164,15 @@ async function compileCached(response: Response, key: string) {
   }
 }
 
-async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void) {
-  const core = await loadVerifiedFile(url, programProfile(expected).core, progress);
+async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void, memoryProfile?: ProgramMemoryProfile) {
+  const core = await loadVerifiedFile(url, profileAsset(programProfile(expected).core, memoryProfile ?? "split"), progress, true, memoryProfile);
   // Preparation compiles asynchronously and rejects a core that declares another engine.
-  return loadProgramSide(url, expected, core, progress, true);
+  const loaded = await loadProgramSide(url, expected, core, progress, true, memoryProfile);
+  verifyMemoryProfile(loaded.module, memoryProfile ?? "split");
+  return loaded;
 }
 
-async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
+async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean, memoryProfile?: ProgramMemoryProfile) {
   const profile = programProfile(kind);
   if (kind === "spidermonkey" && !verifyBuild) {
     const build = assetBuild(profile.core);
@@ -164,7 +182,7 @@ async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: U
     verifyBuild = true;
   }
   const sideUrl = new URL(profile.side, new URL(url, location.href));
-  const side = await loadVerifiedFile(sideUrl.href, profile.side, progress, verifyBuild);
+  const side = await loadVerifiedFile(sideUrl.href, profileAsset(profile.side, memoryProfile ?? "split"), progress, verifyBuild, memoryProfile);
   const module = await withoutCompileSpans(() => prepareProgram({ kind, core: core.bytes, side: side.bytes }));
   return { module, size: core.bytes.length + side.bytes.length, build: core.build };
 }
@@ -175,10 +193,12 @@ async function loadVerifiedTools(url: string, progress: (text: string) => void):
   return { module: await prepareProgram({ kind: "single", core: bytes }), size: bytes.length, build };
 }
 
-async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {
+async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true, memoryProfile?: ProgramMemoryProfile): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {
   const build = verifyBuild ? assetBuild(name) : null;
   if (verifyBuild && build === null) throw new Error(`${name}: build manifest fingerprint is missing`);
-  const key = new URL(url, location.href).href;
+  const requested = new URL(url, location.href);
+  if (memoryProfile === "shared-group") requested.searchParams.set("profile", memoryProfile);
+  const key = requested.href;
   const cached = build === null ? null : await cachedEngine(key, build);
   if (cached && build !== null) {
     const bytes = new Uint8Array(await cached.arrayBuffer());
@@ -188,10 +208,12 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
     return { bytes, build };
   }
   progress(`downloading ${name}…`);
-  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  let response = await fetch(build === null ? gzUrl : `${gzUrl}?v=${build}`);
+  const compressed = new URL(requested);
+  if (!compressed.pathname.endsWith(".gz")) compressed.pathname += ".gz";
+  if (build !== null) compressed.searchParams.set("v", build);
+  let response = await fetch(compressed.href);
   const gzipped = response.ok;
-  if (!gzipped) response = await fetch(url);
+  if (!gzipped) response = await fetch(requested.href);
   if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   if (!response.body) throw new Error(`${url}: empty response body`);

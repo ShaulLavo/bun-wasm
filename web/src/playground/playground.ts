@@ -5,7 +5,7 @@ import { createRuntime, type Runtime } from "waffle";
 import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
 import { playgroundProfile, registerPlaygroundBun, requireProfileEngine, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -246,18 +246,17 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       void shell.dispose().finally(registration.dispose).catch(console.error);
     });
 
-    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, profile: registration.profile } });
+    Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews, sharedObjects, engine, profile: registration.profile } });
     this.ready = !fs.ownershipLost;
     this.setStatus(`bun.wasm ready · ${ENGINES[engine].name} · ${mb(wasm.size)}`, "ok");
     if (this.ready) whenIdle(warmFirstCommand);
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
-    const unavailable = engineUnavailable(this.engine);
+    const unavailable = engineUnavailable(this.engine, this.profile);
     if (unavailable) return new Error(unavailable);
-    const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
-      return await loadWasm(wasmUrl, (text) => this.setStatus(text));
+      return await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);
     } catch (err) {
       return new Error(err instanceof WasmMissing
         ? `${String(err)}. ${engineBuildHint(this.engine)}`

@@ -1,0 +1,3 @@
+async allocation stacks, reactions, generators and combinators ok
+captured and primitive rejection identities and late handlers ok
+lazy stack descriptors and async local storage ok

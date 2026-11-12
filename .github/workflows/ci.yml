@@ -1177,6 +1177,53 @@ jobs:
           key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
         run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile
+      - name: Install ordinary SpiderMonkey producer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm autoconf2.13 python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
+      - uses: actions/cache/restore@v4
+        id: ordinary-cbindgen-cache
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Prepare ordinary pinned cbindgen
+        env:
+          CBINDGEN_CACHE_HIT: ${{ steps.ordinary-cbindgen-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
+            CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
+          fi
+          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
+      - name: Identify ordinary SpiderMonkey native generation
+        id: ordinary-spidermonkey-inputs
+        run: |
+          source env.sh
+          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/ordinary" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/ordinary-native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_ENGINE_BUILD_DIR=$RUNNER_TEMP/ordinary-side" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_PAIR_DIR=$RUNNER_TEMP/ordinary-pair" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_WASM=$RUNNER_TEMP/ordinary-pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
+          echo "hash=$(bun scripts/spidermonkey-ordinary-ci.ts identity)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: ordinary-spidermonkey-cache
+        with:
+          path: ${{ runner.temp }}/spidermonkey/ordinary
+          key: spidermonkey-ordinary-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-inputs.outputs.hash }}
+      - name: Build or verify the ordinary SpiderMonkey library
+        id: ordinary-spidermonkey-native
+        run: |
+          source env.sh
+          bun scripts/spidermonkey-ordinary-ci.ts native
+          echo "ordinary SpiderMonkey exact cache hit=${{ steps.ordinary-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.ordinary-spidermonkey-cache.outputs.cache-matched-key }}"
+      - uses: actions/cache/restore@v4
+        id: ordinary-spidermonkey-cargo
+        with:
+          # Only Cargo objects persist. Completed side/pair outputs must be fresh.
+          path: ${{ runner.temp }}/ordinary-side-cargo
+          key: spidermonkey-ordinary-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-native.outputs.generation }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'crates/**', 'scripts/build-engine-spidermonkey.sh', 'scripts/build-bun-spidermonkey.sh', 'scripts/spidermonkey-side-*.ts', 'scripts/src/engine-init.c') }}
+          restore-keys: |
+            spidermonkey-ordinary-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ordinary-spidermonkey-native.outputs.generation }}-
       - name: Build the common engine core once
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -1206,6 +1253,13 @@ jobs:
           trap 'exit 143' TERM
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build.sh
+      - name: Build the ordinary SpiderMonkey side using the completed core
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source env.sh
+          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
+          export SPIDERMONKEY_CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-side-cargo/${{ steps.ordinary-spidermonkey-native.outputs.generation }}"
+          CARGO_BUILD_JOBS=2 bash scripts/build-bun-spidermonkey.sh
       - name: Package the native profile launcher
         if: needs.quality.outputs.shared-native == 'true'
         run: |
@@ -1278,9 +1332,46 @@ jobs:
           JOBS=2 bash scripts/build-bash-web-shell.sh
           ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm
           ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json
+          export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
+          export BUN_WASM_SHELL="$GITHUB_WORKSPACE/dist/bash-web-shell.wasm"
+          export BUN_WASM_ENV_UTILITY="$GITHUB_WORKSPACE/dist/bash-web-env.wasm"
           bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
+
+      - name: Export the live-gated ordinary SpiderMonkey pair
+        run: |
+          source env.sh
+          bun scripts/spidermonkey-ordinary-ci.ts export "$RUNNER_TEMP/ordinary-spidermonkey-program"
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-spidermonkey-program
+          path: ${{ runner.temp }}/ordinary-spidermonkey-program/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save verified ordinary SpiderMonkey native generation
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/spidermonkey/ordinary
+          key: ${{ steps.ordinary-spidermonkey-cache.outputs.cache-primary-key }}
+      - name: Save ordinary SpiderMonkey side Cargo objects
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ordinary-side-cargo
+          key: ${{ steps.ordinary-spidermonkey-cargo.outputs.cache-primary-key }}
+      - name: Save ordinary pinned cbindgen
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-cbindgen-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: ${{ steps.ordinary-cbindgen-cache.outputs.cache-primary-key }}
+      - name: Remove ordinary cbindgen build scratch
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/ordinary-cbindgen-target"
 
       - name: Save the completed bash-web shell guest build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
@@ -1805,6 +1896,16 @@ jobs:
         run: |
           test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
           chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+      - name: Reuse the production playground for shared profile checks
+        if: needs.quality.outputs.shared-native == 'true'
+        uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: browser-guest-site
+          path: ${{ runner.temp }}/shared-playground-site
+      - name: Select the existing playground site for shared profile checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-playground-site" >> "$GITHUB_ENV"
       - name: Configure private shared sysroot paths
         run: |
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
@@ -2024,22 +2125,6 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program/
           if-no-files-found: error
           retention-days: 1
-      - name: Consume the shared native feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared Browser feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
-          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Produce the shared JSC profile once
         id: shared-jsc-producer
         if: needs.quality.outputs.shared-native == 'true'
@@ -2051,15 +2136,6 @@ jobs:
         run: |
           source env.sh
           bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" jsc
-      - name: Consume the shared JSC feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Retain the matched shared JSC program for qualification
         if: ${{ always() && steps.shared-jsc-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
@@ -2108,20 +2184,6 @@ jobs:
             ${{ env.SPIDERMONKEY_BUILD_DIR }}/receipt/
           if-no-files-found: error
           retention-days: 1
-      - name: Consume the shared SpiderMonkey native feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared SpiderMonkey Browser feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -2141,9 +2203,49 @@ jobs:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
+      - name: Consume the shared native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
+          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Consume the shared JSC feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Consume the shared SpiderMonkey native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared SpiderMonkey Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+
   web:
-    needs: quality
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [quality, web-unit]
+    if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2153,7 +2255,49 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - name: Require all Web host unit gates
+        env:
+          WEB_UNIT_RESULT: ${{ needs.web-unit.result }}
+        run: test "$WEB_UNIT_RESULT" = success
       - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install Web host browser test dependencies
+        run: bash ../scripts/test-web-host.sh --setup
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
+      - name: Web host browser gates
+        env:
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+        run: bash ../scripts/test-web-host.sh --browser
+      - uses: ./.github/actions/save-release-downloads
+
+  web-unit:
+    needs: quality
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web host unit and types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
@@ -2196,15 +2340,6 @@ jobs:
           path: ${{ runner.temp }}/c1-webkit-failures
           if-no-files-found: ignore
           retention-days: 7
-      - uses: ./.github/actions/browser-deps
-        with:
-          browsers: chromium firefox webkit
-      - name: Install Chromium, Firefox and WebKit
-        run: bunx playwright install chromium firefox webkit
-      - name: Web host browser gates
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bash ../scripts/test-web-host.sh --browser
       - uses: ./.github/actions/save-release-downloads
 
   process-bundles:
@@ -2336,7 +2471,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, process-bundles, browser-process]
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-process]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

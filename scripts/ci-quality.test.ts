@@ -53,7 +53,7 @@ test("JavaScript quality prepares only preinstalled tiny controls without toolch
 });
 
 test("Web parser probe uses the pinned compiler and restored toolchain before its unit gate", () => {
-  const web = (workflow.split("\n  web:\n")[1] ?? "").split(/\n  \S/)[0] ?? "";
+  const web = (workflow.split("\n  web-unit:\n")[1] ?? "").split(/\n  \S/)[0] ?? "";
   const channel = readFileSync(new URL("../rust-toolchain.toml", import.meta.url), "utf8").match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
   if (!channel) throw new Error("Missing pinned compiler");
   const unit = web.indexOf("- name: Web host unit, CLI shim, type and bundle gates");
@@ -91,12 +91,12 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
-    package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
+    package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
@@ -727,7 +727,7 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(11);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(14);
   expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(5);
   expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
