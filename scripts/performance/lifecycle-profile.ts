@@ -66,10 +66,13 @@ async function capture(config: Config, base: string, signal: AbortSignal, hostId
     catch (error) { observerFailure = String(error); }
     await writeFile(join(config.output, "terminal.txt"), await bounded(() => terminal(transport), 3000).catch(String));
     await bounded(() => stopServer(transport, 3000), 4000).catch(() => {});
-    await transport.close();
+    let browserClosed = false;
+    try { await transport.close(); browserClosed = true; }
+    catch (error) { observerFailure = `${observerFailure ?? ""} Browser cleanup: ${String(error)}`; }
     signal.removeEventListener("abort", interrupt);
     await save(join(config.output, "workers.json"), session.workers);
-    await save(join(config.output, "cleanup.json"), { browserClosed: true, workersClosed: true });
+    await save(join(config.output, "cleanup.json"), { browserClosed, workersClosed: browserClosed ? true : null,
+      reason: browserClosed ? "Browser close resolved" : "Browser close failed; the enclosing runner must reap descendants and verify cleanup" });
   }
   const profile = observerFailure ? { available: false, reason: observerFailure } : await analysis(config, window, enabled).catch(error => ({ available: false, reason: String(error) }));
   await save(join(config.output, "run.json"), { schema: 1, configuration: { browser: config.browser, engine: config.engine, phase: config.phase, profile: "split" },

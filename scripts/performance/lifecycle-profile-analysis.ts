@@ -61,9 +61,11 @@ export function chromeControl(input: unknown, targetsInput: unknown, engine: str
     const inWindow = birth && exit && number(birth.at) >= window.before && number(exit.at) <= window.after;
     const compute = engine === "browser" ? row.analysis.self.some(frame => /lifecycleProfile(Root|Child)/.test(frame.frame))
       : row.analysis.self.some(frame => frame.kind === "engine-interpreter");
-    return { tid: row.tid, worker: row.worker, birth: birth ?? null, exit: exit ?? null, inWindow: Boolean(inWindow), compute, samples: row.analysis.samples };
+    return { tid: row.tid, worker: row.worker, birth: birth ?? null, exit: exit ?? null, inWindow: Boolean(inWindow), compute,
+      childComputation: row.analysis.self.some(frame => /lifecycleProfileChild/.test(frame.frame)), samples: row.analysis.samples };
   });
-  return { available: evidence.filter(row => row.inWindow && row.compute).length >= 2, evidence,
+  const classified = evidence.filter(row => row.inWindow && row.compute);
+  return { available: new Set(classified.map(row => row.worker?.workerId)).size >= 2 && (engine !== "browser" || classified.some(row => row.childComputation)), evidence,
     rule: "At least two distinct worker profiles with engine computation samples and workerId-matched birth and exit inside capture; browser-engine names or named interpreter frames required" };
 }
 
