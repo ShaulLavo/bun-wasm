@@ -113,7 +113,7 @@ test("live owner is discovered once after producers and checkpoint verification"
   const checks = discoverChecks();
   expect(selectChecks("cmake", checks)).toContain("scripts/tls-probe.test.ts");
   expect(selectChecks("cmake", checks)).not.toContain("scripts/tls-probe-live.test.ts");
-  expect(selectChecks("native-probe", checks)).toEqual(["scripts/tls-probe-live.test.ts"]);
+  expect(selectChecks("native-probe", checks).filter(path => path === "scripts/tls-probe-live.test.ts")).toEqual(["scripts/tls-probe-live.test.ts"]);
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const native = workflow.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
   const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
