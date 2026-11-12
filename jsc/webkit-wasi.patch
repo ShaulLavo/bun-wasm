@@ -1501,7 +1501,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
  end:
 +    state = AssignmentLevelState::Completed;
      if (hadAssignment)
-@@ -4407,2 +4462,41 @@ end:
+@@ -4407,2 +4462,55 @@ end:
 
 +// The driver. Its reservation and frame are the only ones a chain uses: one per real call, as
 +// before for every other route. A suspended level's record is copied out of the vector, so no
@@ -1526,7 +1526,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +            lhs = parseAssignmentLevelOperator(context, level, lhs, state);
 +            continue;
 +        case AssignmentLevelState::Suspended:
-+            m_suspendedAssignmentLevels.append(level);
++            suspendAssignmentLevel(level);
 +            state = AssignmentLevelState::Fresh;
 +            continue;
 +        case AssignmentLevelState::Completed:
@@ -1535,15 +1535,29 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +            // and returns 0, so the failure drains every suspended level without a fresh one.
 +            if (m_suspendedAssignmentLevels.size() == outerLevelCount)
 +                return lhs;
-+            level = m_suspendedAssignmentLevels.takeLast();
++            resumeAssignmentLevel(level);
 +            state = AssignmentLevelState::Resumed;
 +            continue;
 +        }
 +    }
 +}
 +
++// Out of line: only a chain reaches them, and inlined vector growth would enlarge the driver's
++// host frame on every route through it.
++template <typename LexerType>
++NEVER_INLINE void Parser<LexerType>::suspendAssignmentLevel(const AssignmentLevel& level)
++{
++    m_suspendedAssignmentLevels.append(level);
++}
++
++template <typename LexerType>
++NEVER_INLINE void Parser<LexerType>::resumeAssignmentLevel(AssignmentLevel& level)
++{
++    level = m_suspendedAssignmentLevels.takeLast();
++}
++
  template <typename LexerType>
-@@ -4446,2 +4540,4 @@
+@@ -4446,2 +4554,4 @@
  {
 +    WASM_RESERVE_STACK(2048);
 +    failIfStackOverflow();
@@ -1585,13 +1599,15 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
 +    };
 +
      // Used to determine type of error to report.
-@@ -1802,2 +1830,5 @@ private:
+@@ -1802,2 +1830,7 @@ private:
      template <class TreeBuilder> TreeExpression parseAssignmentExpression(TreeBuilder&);
 +    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelStart(TreeBuilder&, AssignmentLevel&, AssignmentLevelState&);
 +    template <class TreeBuilder> ALWAYS_INLINE TreeExpression parseAssignmentLevelOperator(TreeBuilder&, AssignmentLevel&, TreeExpression, AssignmentLevelState&);
 +    template <typename Expression> ALWAYS_INLINE Expression finishAssignmentLevel(Expression, AssignmentLevelState&);
++    NEVER_INLINE void suspendAssignmentLevel(const AssignmentLevel&);
++    NEVER_INLINE void resumeAssignmentLevel(AssignmentLevel&);
      template <typename TreeBuilder> NEVER_INLINE TreeExpression parseArrowFunctionCandidate(TreeBuilder&, SavePoint&, const JSTokenLocation&, bool isArrowFunctionToken, bool wasOpenParen, size_t usedVariablesSize, bool& shouldReturnResult);
-@@ -2133,2 +2164,5 @@ private:
+@@ -2133,2 +2166,5 @@ private:
      bool m_hasStackOverflow;
 +    // bun-wasm: the suspended levels of every parseAssignmentExpression activation of this parse,
 +    // innermost last. An activation removes exactly what it appended before it returns.
