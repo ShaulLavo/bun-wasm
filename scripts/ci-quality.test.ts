@@ -28,7 +28,21 @@ test("CI uses a Node host that preserves direct spread eval scope", () => {
   expect(reference.stdout).toBe("17");
 });
 
-test("JavaScript quality does not set up or compile Rust", () => {
+test("JavaScript quality prepares only preinstalled tiny controls without toolchain installation or heavy builds", () => {
+  const job = workflowField(workflowField(Bun.YAML.parse(workflow), "jobs"), "quality");
+  expect(workflowField(job, "timeout-minutes")).toBe(10);
+  const preparation = nativeWorkflowStep("name", "Prepare preinstalled native control compilers", "quality");
+  expect(workflowField(preparation, "run")).toBe("bun scripts/ci-native-control-compilers.ts");
+  expect(workflowField(preparation, "env")).toEqual({ TMPDIR: "${{ runner.temp }}" });
+  expect(preparation).not.toHaveProperty("if");
+  expect(preparation).not.toHaveProperty("continue-on-error");
+  expect(preparation).not.toHaveProperty("timeout-minutes");
+  expect(quality).not.toMatch(/RUSTUP_HOME|CARGO_HOME|CARGO_TARGET_DIR/);
+  expect(selectChecks("quality").filter(path => path === "scripts/ci-native-control-compilers.test.ts")).toHaveLength(1);
+  expect(quality).toMatch(/run: bun scripts\/ci-native-control-compilers\.ts\n      - name: Blocking quality gates/);
+  expect(quality).not.toMatch(/rustup\s+(?:toolchain|target|component)\s+(?:install|add|update)|rustup\s+update|cargo\s+(?:build|test|check)|build-(?:bun|jsc|spidermonkey)|native-library|core-producer|side-producer/);
+  const preparationSource = readFileSync(new URL("./ci-native-control-compilers.ts", import.meta.url), "utf8");
+  expect(preparationSource).not.toMatch(/\b(?:cargo|curl|wget)\b|"(?:install|update|download)"|cache\/(?:restore|save)/);
   expect(quality).toContain("bun run quality --javascript");
   expect(quality).not.toContain("rust-toolchain");
   expect(quality).not.toContain("sync-bun.sh");

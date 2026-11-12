@@ -8,7 +8,6 @@ import { definition, nativeControls } from "./spidermonkey-native-controls";
 const shim = readFileSync("crates/bunwasm-spidermonkey/cpp/engine.cpp", "utf8");
 const adapter = readFileSync("crates/bunwasm-engine-spidermonkey/src/vm.rs", "utf8");
 
-
 test("dynamic imports load their dependency graph before finishing the native import", () => {
   expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module)");
   const load = definition(shim, "bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,\n                        JS::HandleValue payload, JS::HandleObject module) {");

@@ -7,6 +7,7 @@ const finalizerTest = "deferred native destruction permits destructor reentry in
 const commonjsTest = "the real CommonJS wrapper keeps its exact body and other negative shapes reject";
 const inputs = [
   "scripts/spidermonkey-semantics.test.ts",
+  "scripts/spidermonkey-native-controls.ts",
   "crates/bunwasm-spidermonkey/cpp/engine.cpp",
   "crates/bunwasm-engine-spidermonkey/src/vm.rs",
   "crates/bunwasm-runtime/src/modules.rs",
@@ -29,10 +30,68 @@ function processOutcome(result: Pick<Bun.SyncSubprocess, "exitCode" | "signalCod
   };
 }
 
+function readObservation(path: string): string | null {
+  try { return readFileSync(path, "utf8"); }
+  catch { return null; }
+}
+
+function parseStat(text: string) {
+  const start = text.indexOf(" (");
+  const end = text.lastIndexOf(")");
+  if (start < 1 || end <= start || text[end + 1] !== " ") return null;
+  const fields = text.slice(end + 2).trim().split(/\s+/);
+  const numeric = [text.slice(0, start), fields[1], fields[2], fields[3], fields[9], fields[11], fields[12], fields[19]];
+  if (numeric.some(value => value === undefined || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) return null;
+  if (!fields[0] || !/^[A-Za-z]$/.test(fields[0])) return null;
+  return {
+    pid: Number(numeric[0]), parent: Number(numeric[1]), group: Number(numeric[2]), session: Number(numeric[3]),
+    name: text.slice(start + 2, end), state: fields[0], majorFaults: Number(numeric[4]),
+    userTicks: Number(numeric[5]), systemTicks: Number(numeric[6]), startTicks: Number(numeric[7]),
+  };
+}
+
+function processObservation(pid: string, group: number) {
+  const text = readObservation(`/proc/${pid}/stat`);
+  const stat = text === null ? null : parseStat(text);
+  if (!stat || stat.pid !== Number(pid) || stat.group !== group) return null;
+  const io = readObservation(`/proc/${pid}/io`);
+  const bytes = io?.match(/^read_bytes: (\d+)$/m)?.[1];
+  const readBytes = bytes !== undefined && Number.isSafeInteger(Number(bytes)) ? Number(bytes) : null;
+  return { ...stat, readBytes };
+}
+
+function scanOwnedGroup(group: number | undefined) {
+  if (process.platform !== "linux" || group === undefined || !Number.isSafeInteger(group) || group <= 0) return null;
+  try {
+    return readdirSync("/proc").filter(pid => /^\d+$/.test(pid))
+      .map(pid => processObservation(pid, group)).filter(entry => entry !== null);
+  } catch { return null; }
+}
+
+function scratchNames(root: string): string[] | null {
+  try { return readdirSync(root, { recursive: true, encoding: "utf8" }).sort(); }
+  catch { return null; }
+}
+
+function hostPressure(kind: string): string | null {
+  const text = readObservation(`/proc/pressure/${kind}`);
+  const first = text?.split("\n")[0];
+  return first && /^some avg10=\d+(?:\.\d+)? avg60=\d+(?:\.\d+)? avg300=\d+(?:\.\d+)? total=\d+$/.test(first) ? first : null;
+}
+
+function deadlineObservation(pid: number | undefined, temporary: string) {
+  const scanStartedAt = Date.now();
+  const processes = scanOwnedGroup(pid);
+  const files = scratchNames(temporary);
+  const hostWidePressure = { io: hostPressure("io"), cpu: hostPressure("cpu"), memory: hostPressure("memory") };
+  return { group: pid ?? null, boundary: "post-child-return/pre-group-kill", scanStartedAt, scanEndedAt: Date.now(), processes, files, hostWidePressure };
+}
+
 function runControls(root: string, args: readonly string[] = [], env = process.env) {
   const trace = join(root, "compiler.trace");
   const temporary = mkdtempSync(join(root, "tmp/control-"));
   writeFileSync(trace, "");
+  writeFileSync(`${trace}.progress`, "");
   const started = performance.now();
   let pid: number | undefined;
   try {
@@ -50,6 +109,8 @@ function runControls(root: string, args: readonly string[] = [], env = process.e
       output: result.stdout.toString() + result.stderr.toString(),
       leftovers: readdirSync(temporary),
       compilerTrace: readFileSync(trace, "utf8"),
+      compilerProgress: readObservation(`${trace}.progress`),
+      deadline: deadlineObservation(pid, temporary),
       compilerCommands: { cxx: readFileSync(join(root, "bin/c++"), "utf8"), rustup: readFileSync(join(root, "bin/rustup"), "utf8") },
     };
   } finally {
@@ -123,11 +184,14 @@ function prepareRegressionControls() {
     compilerWrapper(join(root, "bin"), "c++", 'printf "%s\\n" "$$" > "$BUN_WASM_SM_COMPILER_TRACE.pid"\nkill -KILL "$PPID"\nexec sleep 30');
     compilerWrapper(join(root, "bin"), "rustup", "");
     const interrupted = runControls(root);
+    const interruptedCompilerPid = Number(readFileSync(join(root, "compiler.trace.pid"), "utf8"));
     const interruptedTemporaryEntries = readdirSync(join(root, "tmp"));
     compilerWrapper(join(root, "bin"), "c++", "");
     const afterInterruption = runControls(root);
     const interruptedCompilerAlive = processExists(Number(readFileSync(join(root, "compiler.trace.pid"), "utf8")));
-    return { slow, compileElapsedMs, wrongBorrow, filtered, failedBuild, interrupted, interruptedTemporaryEntries, interruptedCompilerAlive, afterInterruption };
+    compilerWrapper(join(root, "bin"), "c++", 'rm -f "$BUN_WASM_SM_COMPILER_TRACE.progress"\nmkdir "$BUN_WASM_SM_COMPILER_TRACE.progress"');
+    const unavailableProgress = runControls(root);
+    return { unavailableProgress, slow, compileElapsedMs, wrongBorrow, filtered, failedBuild, interrupted, interruptedTemporaryEntries, interruptedCompilerPid, interruptedCompilerAlive, afterInterruption };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -190,4 +254,66 @@ test("an interrupted setup removes its temporary files and compiler without cont
   expect(controls.interruptedCompilerAlive).toBe(false);
   expectCompleted(controls.afterInterruption, 0);
   expect(controls.afterInterruption.leftovers).toEqual([]);
+});
+
+function expectSuccessfulCompilers(result: ReturnType<typeof runControls>): void {
+  expect(result.compilerProgress).not.toBeNull();
+  for (const compiler of ["c++", "rustup"]) {
+    expect(result.compilerProgress).toMatch(new RegExp(`\\d+ ${compiler === "c++" ? "c\\+\\+" : compiler} spawned [1-9]\\d*`));
+    expect(result.compilerProgress).toContain(`${compiler} exited 0 -`);
+    expect(result.compilerProgress).toContain(`${compiler} stderr-eof 0`);
+  }
+  if (process.platform === "linux") expect(result.deadline.processes).toEqual([]);
+  expect(result.deadline.scanEndedAt).toBeGreaterThanOrEqual(result.deadline.scanStartedAt);
+}
+
+test("successful and wrong-borrow controls record independent compiler exit and EOF observations", () => {
+  for (const result of [controls.slow, controls.wrongBorrow, controls.afterInterruption]) expectSuccessfulCompilers(result);
+  expect(controls.failedBuild.compilerProgress).toContain("rustup exited 7 -");
+  expect(controls.failedBuild.compilerProgress).toContain("c++ exited 0 -");
+  expect(controls.failedBuild.compilerProgress).toContain("c++ stderr-eof 0");
+  expect(controls.failedBuild.compilerProgress).toContain("rustup stderr-eof 0");
+});
+
+test("post-return snapshot observes the interrupted owned compiler slot before group teardown", () => {
+  if (process.platform !== "linux") return;
+  const members = controls.interrupted.deadline.processes;
+  expect(members).not.toBeNull();
+  const compiler = members?.find(member => member.pid === controls.interruptedCompilerPid);
+  expect(compiler).toBeDefined();
+  // The wrapper may still be between killing its parent and exec of sleep.
+  if (!compiler) throw new Error("Owned compiler slot absent from the available scan");
+  expect(["sh", "sleep"]).toContain(compiler.name);
+  const group = controls.interrupted.deadline.group;
+  if (group === null) throw new Error("Missing spawned group identity");
+  expect(compiler.group).toBe(group);
+  expect(compiler.group).toBe(compiler.session);
+  expect(compiler.group).toBeGreaterThan(0);
+  expect(compiler.startTicks).toBeGreaterThan(0);
+  expect(controls.interruptedCompilerAlive).toBe(false);
+});
+
+test("stat parsing preserves names with parentheses and raw ticks and rejects missing or malformed data", () => {
+  const fields = Array.from({ length: 20 }, () => "0");
+  fields[0] = "S"; fields[1] = "1"; fields[2] = "42"; fields[3] = "42";
+  fields[9] = "3"; fields[11] = "4"; fields[12] = "5"; fields[19] = "12345";
+  expect(parseStat(`43 (a name (with) parens) ${fields.join(" ")}`)).toEqual({
+    pid: 43, parent: 1, group: 42, session: 42, name: "a name (with) parens", state: "S",
+    majorFaults: 3, userTicks: 4, systemTicks: 5, startTicks: 12345,
+  });
+  expect(parseStat("gone")).toBeNull();
+  expect(parseStat("43 (short) S 1")).toBeNull();
+  fields[19] = "NaN";
+  expect(parseStat(`43 (bad) ${fields.join(" ")}`)).toBeNull();
+  expect(readObservation("/proc/0/stat")).toBeNull();
+  expect(processObservation("0", 42)).toBeNull();
+  expect(scanOwnedGroup(undefined)).toBeNull();
+  expect(scratchNames("/proc/0/missing")).toBeNull();
+});
+
+test("unavailable progress observations preserve the real outcome and cleanup", () => {
+  expectRuntimeControls(controls.unavailableProgress);
+  expect(controls.unavailableProgress.compilerProgress).toBeNull();
+  expect(controls.unavailableProgress.leftovers).toEqual([]);
+  if (process.platform === "linux") expect(controls.unavailableProgress.deadline.processes).toEqual([]);
 });

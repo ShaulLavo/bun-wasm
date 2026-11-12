@@ -94,6 +94,29 @@ Each control checks that child scratch is empty after success, failure, or a run
 that filters out every test.
 Both test files remain owned by the blocking quality gate.
 
+The original control builders now live in
+`scripts/spidermonkey-native-controls.ts`. This is an original test adapter
+extraction, with unchanged generated C++ and Rust bytes, assertions and argument
+vectors. Each call reads the current shim and Rust adapter, including deliberately
+mutated copies. `scripts/ci-native-control-compilers.ts` identifies the preinstalled
+C++ and stable Rust compilers, concurrently compiles this exact pair and runs both
+outputs before the quality gates. It reports total and phase cost, CPU milliseconds
+and filesystem input-operation counts. Unavailable counters are null. Explicit
+stable selection and disabled automatic installation keep identity queries from
+selecting the repository's nightly pin. Executable concurrency and partial-start
+controls use the system `mkfifo`, declared alongside other system binaries in the
+unused-dependency check. No compiler installation or heavier build
+is added, and all existing control clocks remain unchanged.
+
+With `BUN_WASM_SM_COMPILER_TRACE` set, semantics setup appends compiler PID,
+exit code/signal and stderr EOF length to a separate `.progress` file. Setup
+controls also record an allowlisted post-child-return, pre-group-kill snapshot of
+owned process-group members, relative scratch names and nullable host pressure.
+These callback and scan observations can race with termination and do not identify
+the cause or exact expiry state of historical timeouts. Preparation owns child
+groups through cleanup and retains scratch with an error if writers cannot be
+proved stopped. Forced job termination remains the runner's responsibility.
+
 `crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` is a deferred native
 regression driver. Its syntax is checked against retained headers, but it has not
 been linked or run. It does not add a native build recipe or CI build demand.
