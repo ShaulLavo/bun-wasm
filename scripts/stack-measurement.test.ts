@@ -16,16 +16,17 @@ const provider = new URL("./fixtures/stack-measurement-provider.ts", import.meta
 
 function command(kind: "browser" | "python", scenario: string, options: {
   cold?: boolean; output?: string; mode?: string; code?: number; repeat?: boolean; leaf?: boolean; maximum?: number;
-  budget?: string; parserReserve?: string; guestSettings?: GuestStackSettings; recordCommands?: boolean;
+  budget?: string; parserReserve?: string; guestSettings?: GuestStackSettings; recordCommands?: boolean; ajvCodegen?: "installed" | "missing";
 } = {}) {
   const { cold = false, output, mode = "plain", code = 0, repeat = false, leaf = false, maximum } = options;
   const directory = mkdtempSync(join(scratch, `${kind}-${scenario}-`));
   if (leaf) writeFileSync(join(directory, "leaf.cjs"), "module.exports = 42;\n");
+  if (options.ajvCodegen === "installed") writeFileSync(join(directory, "index.js"), "module.exports = {};\n");
   const browser = ["node", "--import", provider, "web/tests/browser-stack.mjs", "--measure"].concat(cold ? ["--cold"] : [], ["chromium"]);
   const shortenTimeout = "import runpy, subprocess; original = subprocess.run; subprocess.run = lambda *a, **kw: original(*a, **dict(kw, timeout=0.2)); runpy.run_path('scripts/measure-stack.py', run_name='__main__')";
   const python = ["python3"].concat(["hang", "hidden-timeout"].includes(scenario) ? ["-c", shortenTimeout] : ["scripts/measure-stack.py"],
     ["--launcher", provider, "--max", String(maximum ?? (output === undefined ? 8 : 1))],
-    leaf ? ["--leaf-root", directory, "--leaf", "leaf.cjs"] : [], [mode], repeat ? [mode] : []);
+    leaf ? ["--leaf-root", directory, "--leaf", "leaf.cjs"] : [], options.ajvCodegen ? ["--ajv-codegen", directory] : [], [mode], repeat ? [mode] : []);
   const result = Bun.spawnSync(kind === "browser" ? browser : python, {
     cwd: root,
     env: { ...process.env, ENGINES: "jsc", STACK_KIB: options.budget, JSC_PARSER_RESERVE: options.parserReserve,
@@ -78,6 +79,47 @@ test("Python timeout kills and reaps every attempted launcher before returning f
   expect(pids.length).toBeGreaterThan(0);
   for (const pid of pids) expect(() => process.kill(Number(pid), 0)).toThrow("No such process");
 });
+
+test("Python keeps every attempt's status and stderr, and a trap hidden inside the search fails it", () => {
+  const run = command("python", "hidden");
+  const row = JSON.parse(run.stdout).results.plain;
+  expect(run.result.exitCode).toBe(1);
+  expect(row).toMatchObject({ capacity: 2, beyond: "caught:RangeError", failures: [{ depth: 4, outcome: "trap" }] });
+  expect(row.attempts).toEqual([
+    { depth: 8, outcome: "caught:RangeError", status: 0, timed_out: false, stderr: "" },
+    { depth: 4, outcome: "trap", status: 1, timed_out: false, stderr: "fake trap at plain 4\n" },
+    { depth: 2, outcome: "completed", status: 0, timed_out: false, stderr: "" },
+    { depth: 3, outcome: "caught:RangeError", status: 0, timed_out: false, stderr: "" },
+    { depth: 3, outcome: "caught:RangeError", status: 0, timed_out: false, stderr: "" },
+  ]);
+});
+
+test("Python records a timeout hidden inside the search and fails it", () => {
+  const run = command("python", "hidden-timeout");
+  const row = JSON.parse(run.stdout).results.plain;
+  expect(run.result.exitCode).toBe(1);
+  expect(row.failures).toEqual([{ depth: 4, outcome: "timeout" }]);
+  expect(row.attempts).toContainEqual({ depth: 4, outcome: "timeout", status: null, timed_out: true, stderr: "" });
+  expect(row.attempts.every((attempt: { timed_out: boolean; status: number | null }) => attempt.timed_out === (attempt.status === null))).toBe(true);
+});
+
+test("the Ajv mode needs its installed package, and the package option needs the mode", () => {
+  const transcript = "completed {mode} {depth}\ncontinued\n";
+  expect(command("python", "transcript", { output: transcript, mode: "ajv" }).result.exitCode).toBe(2);
+  expect(command("python", "transcript", { output: transcript, mode: "ajv", ajvCodegen: "missing" }).result.exitCode).toBe(2);
+  expect(command("python", "transcript", { output: transcript, mode: "plain", ajvCodegen: "installed" }).result.exitCode).toBe(2);
+  const run = command("python", "transcript", { output: transcript, mode: "ajv", ajvCodegen: "installed" });
+  expect(run.result.exitCode).toBe(0);
+  expect(JSON.parse(run.stdout).results.ajv).toMatchObject({ completed_at_max: 1 });
+});
+
+for (const mode of ["computedgetter", "ajvnames"]) {
+  test(`both sweeps accept the ${mode} path`, () => {
+    const output = `caught ${mode} RangeError 1 stack overflow\ncontinued\n`;
+    expect(stackOutcome({ code: 0, output }, mode, 1)).toBe("caught:RangeError");
+    expect(command("python", "transcript", { output: "caught {mode} RangeError {depth} stack overflow\ncontinued\n", mode }).result.exitCode).toBe(0);
+  });
+}
 
 const transcripts = [
   { label: "completion", output: "completed {mode} {depth}\ncontinued\n", mode: "plain", expected: "completed" },
@@ -182,7 +224,10 @@ for (const entry of refusedBaselines) {
 
 test("require zero-depth timeout is recorded and its launcher and scratch are gone", () => {
   const run = command("python", "hang", { mode: "require", leaf: true });
-  expect(JSON.parse(run.stdout).results.require).toEqual({ refused_at_zero: "timeout", failures: [{ depth: 0, outcome: "timeout" }] });
+  expect(JSON.parse(run.stdout).results.require).toEqual({
+    refused_at_zero: "timeout", failures: [{ depth: 0, outcome: "timeout" }],
+    attempts: [{ depth: 0, outcome: "timeout", status: null, timed_out: true, stderr: "" }],
+  });
   expect(expectRequireCleanup(run.directory)).toHaveLength(1);
   const pid = Number(readFileSync(join(run.directory, "launcher.pid"), "utf8").trim());
   expect(() => process.kill(pid, 0)).toThrow("No such process");

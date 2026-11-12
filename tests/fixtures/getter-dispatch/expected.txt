@@ -1,0 +1,94 @@
+ok own getter receiver
+ok own getter value
+ok prototype getter receiver
+ok prototype getter value
+ok computed own getter receiver
+ok computed prototype getter value
+ok missing property
+ok setter without getter
+ok missing property on a primitive
+ok throwing getter reaches the caller's catch
+ok stack names the getter, then its caller
+ok finally runs before the outer catch
+ok a getter catches its inner getter's throw
+ok the same getter after its throw
+ok nested getters after the throw
+ok null base
+ok undefined base
+ok revoked proxy base
+ok a read after those errors
+ok string receiver in a strict getter
+ok string receiver in a sloppy getter
+ok string receiver through a computed key
+ok number receiver in a strict getter
+ok number receiver in a sloppy getter
+ok number receiver through a computed key
+ok boolean receiver in a strict getter
+ok boolean receiver in a sloppy getter
+ok boolean receiver through a computed key
+ok symbol receiver in a strict getter
+ok symbol receiver in a sloppy getter
+ok symbol receiver through a computed key
+ok bigint receiver in a strict getter
+ok bigint receiver in a sloppy getter
+ok bigint receiver through a computed key
+ok super getter receiver
+ok super getter value
+ok static super getter
+ok object literal super getter
+ok super data property
+ok super missing property
+ok super getter through a computed key
+ok super getter with another receiver
+ok host getter
+ok typed array host getter
+ok bound function getter
+ok callable proxy getter
+ok arrow function getter
+ok class constructor getter
+ok generator function getter
+ok getter that declares parameters
+ok getter that declares parameters, computed
+ok getter on a proxy target
+ok proxy get trap
+ok proxy get trap passes other getters through
+ok getter inherited through a proxy
+ok one site across property changes
+ok a getter that replaces itself with data
+ok nested getter returns
+ok a hot getter site
+ok 48 nested getters
+ok getters read by a generator
+ok getter read with 8 live locals
+ok super getter read with 8 live locals
+ok throwing getter read with 8 live locals
+ok getter read with 200 live locals
+ok super getter read with 200 live locals
+ok throwing getter read with 200 live locals
+ok getter read with 2000 live locals
+ok super getter read with 2000 live locals
+ok throwing getter read with 2000 live locals
+ok getter read with the most live locals
+ok super getter read with the most live locals
+ok throwing getter read with the most live locals
+ok first calls of fresh getters under allocation
+ok unbounded getter recursion
+ok unbounded super getter recursion
+ok unbounded computed getter recursion
+ok reads after the overflows
+ok first calls near the stack limit return or throw RangeError
+ok the same getters with the stack back
+ok destructured getters
+ok optional chain getter
+ok optional chain on nothing
+ok getter on the global object
+ok getter ending in a call with more arguments
+ok getter ending in another getter
+ok a hot site of getters ending in calls
+ok overflow caught inside a getter
+ok overflow caught inside a computed getter
+ok getters after the swallowed overflows
+ok nested Ajv names walk
+ok getter running async code
+ok getter returning a promise
+continued

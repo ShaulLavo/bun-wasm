@@ -10,6 +10,9 @@ import { createBunExecutor, type RunRequest } from "../src/bun-executor.ts";
 import { readFileSync } from "node:fs";
 
 const STACK = BUN_MEMORY_GROUP_POLICY.stackBytes;
+const GROUP_PAGES = BUN_MEMORY_GROUP_POLICY.maximumPages;
+/** One past the last byte of a full Bun group: 0x80000000. */
+const END = GROUP_PAGES * 65536;
 
 test("Browser SpiderMonkey member stack size matches the side's bound derivation", () => {
   const vm = readFileSync(new URL("../../crates/bunwasm-engine-spidermonkey/src/vm.rs", import.meta.url), "utf8");
@@ -17,7 +20,7 @@ test("Browser SpiderMonkey member stack size matches the side's bound derivation
   expect(STACK).toBe(8 * 1024 * 1024);
 });
 
-async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: number; low?: number; high?: number; pointer?: number; missing?: string; unbalance?: 1 | 8 } = {}) {
+async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: number; low?: number; high?: number; pointer?: number; missing?: string; unbalance?: 1 | 8; pages?: number } = {}) {
   const source = await engineLinkPlan(initializationPair("spidermonkey", true));
   const module = await WebAssembly.compile(source.core.source);
   const low = options.low ?? 65536;
@@ -28,7 +31,7 @@ async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: n
     __stack_high: new WebAssembly.Global({ value: "i32", mutable: true }, high),
   };
   const env: WebAssembly.ModuleImports = {
-    memory: new WebAssembly.Memory({ initial: 130, maximum: 16384, shared: true }),
+    memory: new WebAssembly.Memory({ initial: options.pages ?? 130, maximum: GROUP_PAGES, shared: true }),
     __indirect_function_table: new WebAssembly.Table({ element: "anyfunc", initial: 1 }),
     __stack_pointer: pointer,
     __memory_base: new WebAssembly.Global({ value: "i32", mutable: false }, 16),
@@ -58,7 +61,8 @@ async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: n
     try { executor.initialize?.({ ...context, instance }); }
     finally { expect(wasi.imports).toBe(originalImports); }
     expect(trace).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(pointer.value).toBe(high);
+    // An i32 global holds the one-past-end address 0x80000000 as a negative number.
+    expect(pointer.value >>> 0).toBe(high);
   } catch (error) {
     if (!options.unbalance) expect(trace).toEqual([]);
     throw error;
@@ -77,6 +81,13 @@ for (const missing of ["__stack_pointer", "__stack_low", "__stack_high"]) test(`
 });
 test("SpiderMonkey refuses a carve outside its memory", async () => {
   await expect(exercise({ low: STACK, high: 2 * STACK, pointer: 2 * STACK })).rejects.toThrow("SpiderMonkey group stack");
+});
+test("a member stack carved as the last chunk of a full 2 GiB group has its top at the signed endpoint", async () => {
+  expect(END).toBe(0x8000_0000);
+  await exercise({ pages: GROUP_PAGES, low: END - STACK, high: END });
+});
+test("SpiderMonkey refuses a carve that ends one page past the 2 GiB group", async () => {
+  await expect(exercise({ pages: GROUP_PAGES, low: END - STACK + 65536, high: END + 65536 })).rejects.toThrow("SpiderMonkey group stack");
 });
 test("SpiderMonkey refuses an initializer that does not restore the stack pointer", async () => {
   await expect(exercise({ unbalance: 8 })).rejects.toThrow("SpiderMonkey group stack pointer was not restored");

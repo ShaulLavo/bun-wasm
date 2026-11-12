@@ -1,7 +1,8 @@
 // Browser nested-memory admission through the real NestedHost and Waffle's real group owner. The
 // declared maximum is a limit for import matching; the reservation is what the group can supply
-// now. Small policy ceilings keep these fast; one row uses the real 1 GiB group.
+// now. Small policy ceilings keep these fast; one row uses the real Bun group policy.
 import { describe, expect, test } from "bun:test";
+import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { GroupOp } from "../node_modules/waffle/group/protocol.ts";
 import { MEMORY_PUBLICATION } from "../src/nested/publication";
 import { PAGE, count, counters, errorText, group, handle, type Member, type ReplyOf } from "./nested-host-owner";
@@ -217,8 +218,8 @@ describe("a published reservation", () => {
 });
 
 describe("the published Oxc parser binding's descriptor", () => {
-  test("4000 initial and 65536 maximum pages are admitted in the real 1 GiB group", () => {
-    const { groups, join } = group({ maximumPages: 16384 });
+  test("4000 initial and 65536 maximum pages are admitted in a Bun group, and Rolldown's memory beside it", () => {
+    const { groups, join } = group(BUN_MEMORY_GROUP_POLICY);
     const member = join();
     try {
       const memory = handle(reserve(member, 4000, 65536));
@@ -229,7 +230,9 @@ describe("the published Oxc parser binding's descriptor", () => {
       expect(errorText(grow(member, memory, 1))).toContain("memory growth: NoMem");
       expect(span(member, memory)).toMatchObject({ pointer, pages: 5024, maximum: 65536 });
       expect(Array.from(bytes(member, pointer + 4000 * PAGE - 1, 2))).toEqual([9, 0]);
-      // Rolldown's 16384 initial pages still cannot share a 16384-page group with its member.
+      // Rolldown's 16384 initial pages share the 2 GiB group with it; a second such memory cannot.
+      const rolldown = handle(reserve(member, 16384, 65536));
+      expect(span(member, rolldown)).toMatchObject({ pages: 16384, maximum: 65536, committed: 17408 * PAGE });
       const before = ledger(member, groups);
       expect(errorText(reserve(member, 16384, 65536))).toBe("region admission: NoMem");
       expect(ledger(member, groups)).toEqual(before);
