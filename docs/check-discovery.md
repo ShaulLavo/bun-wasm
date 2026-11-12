@@ -14,7 +14,7 @@ Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
 `browser-guest` and `native`. `browser-guest` checks serve the playground site built from
 the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's rust job builds that
 site once from its receipt-verified guest and uploads it with its identities
-(`browser-guest-site`). The Processes job's Chromium and WebKit legs download it and pass it
+(`browser-guest-site`). Browser guest batch jobs in Chromium and WebKit download it and pass it
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
@@ -29,8 +29,13 @@ the split selection. Missing artifacts or capability fail this blocking gate. Ot
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.
-Web manifests also retain the three original subprocess batches with ordered
-`batch` labels. A failed batch stops the runner; later batches never run.
+Web manifests retain the three original subprocess batches with ordered `batch`
+labels. A failed batch stops a local runner before later batches. Browser guest
+manifests also accept these labels. CI discovers them with `--batches` and gives
+each browser and batch its own runner, selecting it with `--batch NAME`. The
+existing required Processes gates wait for every batch and reject failures,
+cancellations and unexpected skips. A producer-disabled run skips the guest jobs.
+All jobs keep their existing ten-minute budget, and the site is still built once.
 
 `localRuntime` retains the former local `check-runtime.sh` selection. It does not
 add a second CI owner. The `runtime` owner runs in the compiled native fixture
