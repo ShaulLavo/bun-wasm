@@ -1,3 +1,6 @@
+import type { Admission } from "./goals-matrix/scope";
+import type { Transport } from "./goals-matrix/transport";
+import { withAdmission } from "./goals-matrix/scope-fixture";
 import { expect, test } from "bun:test";
 import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
@@ -86,14 +89,14 @@ test.each([false, true])("a stalled diagnostic keeps the original error and log 
   if (!framework) throw Error("Missing matrix framework");
   await withPlayground(framework, 0, async transport => {
     const evaluate = transport.evaluate;
-    await evaluate('playground.shell.submit = async () => { throw Error("original command failure"); }');
-    await evaluate('playground.term.buffer.active = { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => "kept terminal" }) };');
+    await withAdmission(admission => evaluate('playground.shell.submit = async () => { throw Error("original command failure"); }', admission));
+    await withAdmission(admission => evaluate('playground.term.buffer.active = { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => "kept terminal" }) };', admission));
     let terminalReads = 0;
     const diagnostic = Promise.withResolvers<string>();
-    transport.evaluate = <T>(expression: string): Promise<T> => {
+    transport.evaluate = <T>(expression: string, admission: Admission, options?: Parameters<Transport["evaluate"]>[2]): Promise<T> => {
       if (expression.includes("transcript") && ++terminalReads === 2) return Promise.reject(Error("failure-time terminal unavailable"));
-      if (expression.includes("browserTrapFacts")) return diagnostic.promise.then(() => evaluate<T>(JSON.stringify("late diagnostic")));
-      return evaluate<T>(expression);
+      if (expression.includes("browserTrapFacts")) return diagnostic.promise.then(() => evaluate<T>(JSON.stringify("late diagnostic"), admission, options));
+      return evaluate<T>(expression, admission, options);
     };
     let closed = false;
     let saved = "";

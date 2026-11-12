@@ -1,3 +1,5 @@
+import type { Admission } from "./scope";
+import { withScoped } from "./scope-fixture";
 import { test, expect } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
@@ -27,10 +29,10 @@ test("native click hook bypasses the script click without changing other transpo
   await withPlayground(framework, 0, async transport => {
     let native = 0;
     transport.nativeClick = async () => { native++; return { before: "0", after: "1", trusted: true }; };
-    expect(await checkClick(transport, framework, 90000)).toEqual({ before: "0", after: "1", trusted: true });
+    expect(await withScoped(transport, page => checkClick(page, framework, 90000))).toEqual({ before: "0", after: "1", trusted: true });
     expect(native).toBe(1);
     delete transport.nativeClick;
-    expect(await checkClick(transport, framework, 90000)).toEqual({ before: "count 0", after: "count 1" });
+    expect(await withScoped(transport, page => checkClick(page, framework, 90000))).toEqual({ before: "count 0", after: "count 1" });
   });
 });
 
@@ -41,7 +43,7 @@ test("bus rejects wrong documents, stale replies and expired commands", async ()
   const key = { nonce: state.nonce, url: state.url, timeOrigin: 1, visible: true };
   expect(() => bus.poll("host", { ...key, nonce: "wrong" }, "http://127.0.0.1:1234")).toThrow();
   bus.poll("host", key, "http://127.0.0.1:1234");
-  const pending = bus.execute("host", "1", 20);
+  const pending = bus.execute("host", "1", 20, false, Date.now() + 20);
   const rejected = expect(pending).rejects.toThrow("expired");
   await rejected;
   expect(() => bus.reply("host", { ...key, id: 1, ok: true, value: 1 }, "http://127.0.0.1:1234")).toThrow("Late");
@@ -83,7 +85,7 @@ test("transport close is cached and reaps its timed-out native command before an
   } });
   const transport = await createIphoneTransport({ control: server.url.origin + path, agent, deviceUDID: "fixture", timeoutMs: 90000 });
   try {
-    await transport.navigate("http://127.0.0.1:1234/");
+    await withScoped(transport, page => page.navigate("http://127.0.0.1:1234/"));
     const started = Date.now();
     const closing = transport.close(true, 150);
     expect(transport.close(true, 150)).toBe(closing);
@@ -157,7 +159,22 @@ test("a never-settling failure log write is bounded before native teardown", asy
   expect(closed).toBe(true);
 }, 8000);
 
-type NativeScenario = "normal" | "stalled-terminal" | "write-failure" | "failed-install" | "stalled-failure-log";
+test("empty successful failure capture stays observed when optional Browser facts expire", async () => {
+  const { result, closed, logs } = await nativeLifecycle("empty-capture");
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: "Error: bun install exited 17: " });
+  expect(closed).toBe(true);
+  expect(logs.length).toBeGreaterThan(0);
+  expect(logs.every(text => text === "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n")).toBe(true);
+}, 8000);
+
+test("empty final terminal stays observed when optional Browser facts expire", async () => {
+  const { result, closed, logs } = await nativeLifecycle("empty-final");
+  expect(result.status).toBe("pass");
+  expect(closed).toBe(true);
+  expect(logs).toEqual(["\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n"]);
+}, 8000);
+
+type NativeScenario = "normal" | "stalled-terminal" | "write-failure" | "failed-install" | "stalled-failure-log" | "empty-capture" | "empty-final";
 async function nativeLifecycle(scenario: NativeScenario) {
   const framework = frameworks[0]!;
   return withPlayground(framework, 0, async transport => {
@@ -175,15 +192,17 @@ async function nativeLifecycle(scenario: NativeScenario) {
 
 function lifecycleObservation(evaluate: Transport["evaluate"], scenario: NativeScenario): Transport["evaluate"] {
   let reads = 0;
-  const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log";
-  return <T>(source: string) => {
-    if (failedInstall && source.includes("function shellState")) return evaluate<T>(JSON.stringify({ done: true, code: 17, error: null }));
-    if (!source.includes("function transcript")) return evaluate<T>(source);
+  const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log" || scenario === "empty-capture";
+  return <T>(source: string, admission: Admission, options?: Parameters<Transport["evaluate"]>[2]) => {
+    if ((scenario === "empty-capture" || scenario === "empty-final") && source.includes("function browserTrapFacts")) return new Promise<T>(() => {});
+    if (failedInstall && source.includes("function shellState")) return evaluate<T>(`(${JSON.stringify({ done: true, code: 17, error: null })})`, admission, options);
+    if (!source.includes("function transcript")) return evaluate<T>(source, admission, options);
     reads++;
+    if (scenario === "empty-capture" || scenario === "empty-final") return evaluate<T>('""', admission, options);
     if (scenario === "stalled-terminal" && reads === 3) return new Promise<T>(() => {});
     if (scenario === "failed-install" && reads === 2) return Promise.reject(new Error("final observation failed"));
-    if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"));
-    return scenario === "stalled-terminal" ? evaluate<T>(JSON.stringify("saved build transcript")) : evaluate<T>(source);
+    if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"), admission, options);
+    return scenario === "stalled-terminal" ? evaluate<T>(JSON.stringify("saved build transcript"), admission, options) : evaluate<T>(source, admission, options);
   };
 }
 
@@ -200,7 +219,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
   const framework = frameworks[0]!;
   await withPlayground(framework, 0, async fixture => {
     const release = Promise.withResolvers<void>();
-    const state = { pending: false, scriptedCleanup: 0, released: release.promise, evaluate: fixture.evaluate };
+    const state = { pending: false, scriptedCleanup: 0, released: release.promise, evaluate: (source: string) => withScoped(fixture, page => page.evaluate(source)) };
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => pendingObserver(request, state) });
     const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "d".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000 });
     const logs: string[] = [];
@@ -231,5 +250,5 @@ async function pendingObserver(request: Request, state: { pending: boolean; scri
   if (row.source.includes("presentIphonePreview")) state.scriptedCleanup++;
   if (state.pending) return Response.json({ error: "iPhone observer command already pending" }, { status: 400 });
   if (row.source.includes("function shellState")) { state.pending = true; await state.released; }
-  return Response.json(await state.evaluate(row.source));
+  return Response.json({ settled: true, ok: true, value: await state.evaluate(row.source) });
 }

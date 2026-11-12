@@ -1,6 +1,7 @@
 import { createContext, runInContext } from "node:vm";
 import type { Framework } from "./catalog";
 import type { Transport } from "./transport";
+import { admit, awaitWithin, type Admission } from "./scope";
 import { phases, type Attempt, type Phase } from "./model";
 import type { Runtime } from "waffle";
 function evidence(phase: Phase): unknown {
@@ -50,8 +51,8 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     },
   });
   const transport: Transport = { capabilities: { browserName: "chrome", transport: "unit-fixture" },
-    async navigate(url) { context.location.href = url; },
-    async evaluate<R>(expression: string): Promise<R> { return runInContext(expression, context); },
+    async navigate(url, admission) { admit(admission); context.location.href = url; },
+    async evaluate<R>(expression: string, admission: Admission): Promise<R> { admit(admission); return awaitWithin(Promise.resolve(runInContext(expression, context)), admission); },
     async openPreview() {}, async useHost() {}, async usePreview() {}, async closePreview() {},
     async close() { await Promise.all(pending); },
   };

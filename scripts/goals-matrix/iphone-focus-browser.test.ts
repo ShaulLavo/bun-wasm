@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { chromium, webkit, type BrowserType } from "playwright";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
@@ -6,7 +7,7 @@ import { withHeldPreview } from "./iphone-load-fixture";
 async function pendingLoadFocus(engine: BrowserType): Promise<void> {
   await withHeldPreview(engine, "resource", 1000, async ({ page, transport, preview, requested, release }) => {
     let presented = false;
-    const opening = transport.openPreview(preview).then(() => { presented = true; });
+    const opening = withScoped(transport, page => page.openPreview(preview)).then(() => { presented = true; });
     void opening.catch(() => {});
     await requested;
     const arm = `(${armIphoneClick.toString()})("button", "button")`;
@@ -17,9 +18,9 @@ async function pendingLoadFocus(engine: BrowserType): Promise<void> {
     release();
     await opening;
     await page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: 1000 });
-    expect(await transport.evaluate(arm)).toMatchObject({ ready: true, before: "Count 0" });
-    expect(await transport.evaluate("document.hasFocus()")).toBe(false);
-    await transport.closePreview();
+    expect(await withScoped(transport, page => page.evaluate(arm))).toMatchObject({ ready: true, before: "Count 0" });
+    expect(await withScoped(transport, page => page.evaluate("document.hasFocus()"))).toBe(false);
+    await withScoped(transport, page => page.closePreview());
   });
 }
 
