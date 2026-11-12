@@ -2142,8 +2142,8 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   web:
-    needs: quality
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [quality, web-unit]
+    if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2153,7 +2153,49 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - name: Require all Web host unit gates
+        env:
+          WEB_UNIT_RESULT: ${{ needs.web-unit.result }}
+        run: test "$WEB_UNIT_RESULT" = success
       - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install Web host browser test dependencies
+        run: bash ../scripts/test-web-host.sh --setup
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
+      - name: Web host browser gates
+        env:
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+        run: bash ../scripts/test-web-host.sh --browser
+      - uses: ./.github/actions/save-release-downloads
+
+  web-unit:
+    needs: quality
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web host unit and types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
@@ -2196,15 +2238,6 @@ jobs:
           path: ${{ runner.temp }}/c1-webkit-failures
           if-no-files-found: ignore
           retention-days: 7
-      - uses: ./.github/actions/browser-deps
-        with:
-          browsers: chromium firefox webkit
-      - name: Install Chromium, Firefox and WebKit
-        run: bunx playwright install chromium firefox webkit
-      - name: Web host browser gates
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bash ../scripts/test-web-host.sh --browser
       - uses: ./.github/actions/save-release-downloads
 
   process-bundles:
@@ -2336,7 +2369,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, process-bundles, browser-process]
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-process]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
