@@ -1,7 +1,7 @@
 // macOS native access for the opt-in Safari causal capture: CPU time and kernel start time of
 // given PIDs, a task-owned launchd control job, and an exact-target launchd log query.
 // See docs/bun-patches/goals-safari-causal-capture.md for the rusage layout source.
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType, ptr, read } from "bun:ffi";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ownedCommand } from "./lifetime";
@@ -16,7 +16,7 @@ export type NativeEvent = Readonly<{
 }>;
 export type NativeQuery = Readonly<{ events: readonly NativeEvent[]; ignored: number }>;
 export type ControlReceipt = {
-  passed: boolean; failure: string | null; label: string; pid: number | null; cpuRatio: number | null; birthStable: boolean;
+  passed: boolean; failure: string | null; label: string; pid: number | null; readErrno: number | null; cpuRatio: number | null; birthStable: boolean;
   exitObserved: boolean; killerPid: number | null; event: NativeEvent | null; classes: NativeEvent["kind"][];
   jobRemoved: boolean; fileRemoved: boolean; startedAt: string; finishedAt: string | null;
 };
@@ -27,25 +27,32 @@ export interface NativePort {
   query(pid: number, service: NativeService, start: Date, end: Date): Promise<NativeQuery>;
 }
 
-type Libproc = { rusage: (pid: number, flavor: number, buffer: ReturnType<typeof ptr>) => number; numer: bigint; denom: bigint };
+type Libproc = { rusage: (pid: number, flavor: number, buffer: ReturnType<typeof ptr>) => number; errno: () => number; numer: bigint; denom: bigint };
 let libproc: Libproc | undefined;
 function loadLibproc(): Libproc {
   if (process.platform !== "darwin") throw new Error("Safari causal capture native access requires macOS");
   const proc = dlopen("/usr/lib/libproc.dylib", { proc_pid_rusage: { args: [FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.i32 } });
-  const system = dlopen("/usr/lib/libSystem.B.dylib", { mach_timebase_info: { args: [FFIType.ptr], returns: FFIType.i32 } });
+  const system = dlopen("/usr/lib/libSystem.B.dylib", { mach_timebase_info: { args: [FFIType.ptr], returns: FFIType.i32 }, __error: { args: [], returns: FFIType.ptr } });
   const timebase = new Uint32Array(2);
   if (system.symbols.mach_timebase_info(ptr(timebase)) !== 0 || !timebase[0] || !timebase[1]) throw new Error("mach_timebase_info failed");
-  return { rusage: proc.symbols.proc_pid_rusage, numer: BigInt(timebase[0]), denom: BigInt(timebase[1]) };
+  const errno = () => {
+    const location = system.symbols.__error();
+    return location ? read.i32(location, 0) : -1;
+  };
+  return { rusage: proc.symbols.proc_pid_rusage, errno, numer: BigInt(timebase[0]), denom: BigInt(timebase[1]) };
 }
+// errno of the last failed read, or 0 when the kernel returned a zero start time.
+let lastReadErrno: number | null = null;
 // rusage_info_v4 is 296 bytes; the buffer is larger. Offsets: user time 16, system time 24 (Mach ticks),
 // proc_start_abstime 80. Only these three fields are read.
 const usage = new BigUint64Array(48);
 function readProcess(pid: number): ProcessClock | null {
   const lib = libproc ??= loadLibproc();
   usage.fill(0n);
-  if (lib.rusage(pid, 4, ptr(usage)) !== 0) return null;
+  lastReadErrno = null;
+  if (lib.rusage(pid, 4, ptr(usage)) !== 0) { lastReadErrno = lib.errno(); return null; }
   const birth = usage[10] ?? 0n;
-  if (birth === 0n) return null;
+  if (birth === 0n) { lastReadErrno = 0; return null; }
   const nanoseconds = ((usage[2] ?? 0n) + (usage[3] ?? 0n)) * lib.numer / lib.denom;
   return { cpuMs: Number(nanoseconds) / 1e6, birth: String(birth) };
 }
@@ -154,8 +161,9 @@ async function jobPid(target: string): Promise<number> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const text = await ownedCommand(["/bin/launchctl", "print", target], undefined, 5000).catch(() => "");
+    // launchd reports the PID while xpcproxy is still preparing the exec; wait for the program itself.
     const pid = Number(/^\s*pid = (\d+)$/m.exec(text)?.[1]);
-    if (Number.isSafeInteger(pid) && pid > 1) return pid;
+    if (/^\s*state = running$/m.test(text) && Number.isSafeInteger(pid) && pid > 1) return pid;
     await Bun.sleep(100);
   }
   throw new Error("control job did not report a PID");
@@ -170,15 +178,28 @@ async function waitForExit(pid: number, birth: string): Promise<boolean> {
   return false;
 }
 
+// Bounded wait for the exec to settle. Failures keep their errno in the receipt.
+async function firstReading(pid: number): Promise<ProcessClock | null> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const reading = readProcess(pid);
+    if (reading || Date.now() >= deadline) return reading;
+    await Bun.sleep(50);
+  }
+}
+
 /** Exercise the reader, the kill path and the log parser on a uniquely labelled job this task owns. */
 async function exerciseControl(receipt: ControlReceipt, target: string): Promise<void> {
   const pid = receipt.pid = await jobPid(target);
-  const first = readProcess(pid);
+  const first = await firstReading(pid);
+  receipt.readErrno = lastReadErrno;
+  if (!first) throw new Error(`control process unreadable at first read (errno ${String(lastReadErrno)})`);
   const started = performance.now();
   await Bun.sleep(600);
   const second = readProcess(pid);
   const wall = performance.now() - started;
-  if (!first || !second) throw new Error("control process unreadable");
+  receipt.readErrno = lastReadErrno;
+  if (!second) throw new Error(`control process unreadable at second read (errno ${String(lastReadErrno)})`);
   receipt.birthStable = first.birth === second.birth;
   receipt.cpuRatio = Math.round((second.cpuMs - first.cpuMs) / wall * 100) / 100;
   if (!receipt.birthStable || receipt.cpuRatio < 0.3 || receipt.cpuRatio > 1.5) throw new Error("control CPU or start-time reading is implausible");
@@ -203,7 +224,7 @@ function provingEvent(query: NativeQuery, receipt: ControlReceipt): NativeEvent 
 async function launchdControl(directory: string): Promise<ControlReceipt> {
   const uid = process.getuid?.();
   const label = `dev.bun-wasm.causal-control.${crypto.randomUUID()}`;
-  const receipt: ControlReceipt = { passed: false, failure: null, label, pid: null, cpuRatio: null, birthStable: false, exitObserved: false, killerPid: null,
+  const receipt: ControlReceipt = { passed: false, failure: null, label, pid: null, readErrno: null, cpuRatio: null, birthStable: false, exitObserved: false, killerPid: null,
     event: null, classes: [], jobRemoved: false, fileRemoved: false, startedAt: new Date().toISOString(), finishedAt: null };
   const target = `gui/${uid}/${label}`;
   const plist = join(directory, `${label}.plist`);

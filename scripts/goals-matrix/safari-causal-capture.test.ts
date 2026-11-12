@@ -104,7 +104,7 @@ function fakeNative(control: Partial<ControlReceipt>, query: () => Promise<Nativ
   return { births, cpu, reads,
     read(pid): ProcessClock | null { reads.push(pid); const birth = births.get(pid); return birth ? { cpuMs: cpu.get(pid) ?? 0, birth } : null; },
     async candidates() { return [101, 202]; },
-    async control() { return { passed: true, failure: null, label: "control", pid: 5, cpuRatio: 1, birthStable: true, exitObserved: true, killerPid: 6, event: null,
+    async control() { return { passed: true, failure: null, label: "control", pid: 5, readErrno: null, cpuRatio: 1, birthStable: true, exitObserved: true, killerPid: 6, event: null,
       classes: ["signal-service"], jobRemoved: true, fileRemoved: true, startedAt: "", finishedAt: "", ...control }; },
     query: () => query(),
   };
@@ -212,6 +212,15 @@ test("the launchd parser keeps only exact target tokens and normalized fields", 
     ["exit", 10005, 13792, 9, { name: "Safari", pid: 13792 }, "2026-11-13T01:34:11.745Z"],
   ]);
   expect(JSON.stringify(result)).not.toContain("ran for");
+  // Shape of the task-owned control job's own launchd records from the 2026-11-12 capture unit.
+  const job = "gui/501/dev.bun-wasm.causal-control.f74593a5-4140-4341-baf7-2d6a82709ecf";
+  const control = normalizeLaunchdLog(JSON.stringify([
+    launchd(`${job} [49951]`, "xpcproxy spawned with pid 49951"),
+    launchd(`${job} [49951]`, "signaled service: Terminated: 15"),
+    launchd(`${job} [49951]`, "exited due to SIGTERM | sent by launchd[1], ran for 624ms"),
+  ]), 49951, service => service === job ? "control" : undefined);
+  expect(control.ignored).toBe(2);
+  expect(control.events.map(event => [event.kind, event.service, event.signal, event.caller])).toEqual([["exit", "control", 15, { name: "launchd", pid: 1 }]]);
   expect(launchdPredicate(10005)).toBe('process == "launchd" AND (subsystem ENDSWITH " [10005]" OR eventMessage CONTAINS "[10005]:]")');
   expect(() => launchdPredicate(1)).toThrow();
 });
