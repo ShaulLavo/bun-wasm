@@ -44,6 +44,7 @@ test("Gecko retains exited root and child computation, excludes out-of-window sa
   const input = { meta: { startTime: 100 }, threads: [geckoThread(1), geckoThread(2, true)], processes: [] };
   const rows = analyzeGecko(input, window);
   expect(rows[0]?.samples).toBe(3);
+  expect(rows[0]?.retention.firstSampleLagMs).toBe(4);
   expect(rows[0]?.unknownLeafSamples).toBe(2);
   expect(rows[1]?.childComputation).toBe(1);
   expect(geckoControl(input, window, "browser").available).toBe(true);

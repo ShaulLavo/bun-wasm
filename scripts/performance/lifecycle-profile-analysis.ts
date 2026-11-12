@@ -101,6 +101,7 @@ export function analyzeGecko(input: unknown, window: { before: number; after: nu
     const tables = { stacks: table(thread.stackTable), frames: table(thread.frameTable), strings: array(thread.stringTable).map(frameString) };
     const selected = samples.data.filter(row => { const time = start + number(row[number(samples.schema.time)]); return time >= window.before && time <= window.after; });
     const observedTimes = selected.map(row => start + number(row[number(samples.schema.time)]));
+    const expectedStart = typeof thread.registerTime === "number" ? Math.max(window.before, start + thread.registerTime) : window.before;
     const stacks = selected.map(row => geckoStack(tables, row[number(samples.schema.stack)]));
     const names = new Map<string, number>();
     const named = new Map<string, number>();
@@ -109,6 +110,8 @@ export function analyzeGecko(input: unknown, window: { before: number; after: nu
     return { name: thread.name, pid: thread.pid, tid: thread.tid, registerTime: thread.registerTime, unregisterTime: thread.unregisterTime,
       start, samples: selected.length, notNamedWaitSamples: stacks.filter(stack => !stack.some(frame => frame.includes("WorkerPrivate::WaitForWorkerEvents"))).length,
       observedWindowEpochMs: { first: observedTimes[0] ?? null, last: observedTimes.at(-1) ?? null },
+      retention: { expectedStartEpochMs: expectedStart, firstSampleLagMs: observedTimes[0] === undefined ? null : observedTimes[0] - expectedStart,
+        coverage: "Observed endpoints only; shutdown buffers can lose early samples and sampling does not prove coverage between endpoints" },
       waitCoverage: "Only symbolically named waits excluded; unresolved native addresses may include waits. This is not CPU time or a busy-sample denominator",
       scriptLabels: tables.strings.filter(frame => frame.startsWith("WorkerThreadPrimaryRunnable::Run")),
       rootComputation: stacks.filter(stack => stack.some(frame => /lifecycleProfileRoot/.test(frame))).length,
