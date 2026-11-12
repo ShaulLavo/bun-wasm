@@ -24,7 +24,7 @@ export async function browserTrapLog(transport: Pick<ScopedTransport, "useHost" 
 
 function launchFailureFacts(engine: string): string {
   const getter: unknown = Reflect.get(globalThis, "__bunRetainedMemorySnapshots");
-  if (typeof getter !== "function") return "";
+  if (typeof getter !== "function") return "\n\nBun immediate launch failure snapshots unavailable: retained diagnostic hook is unavailable.\n";
   const snapshots: unknown = getter();
   if (!Array.isArray(snapshots)) throw new TypeError("Invalid retained memory snapshots");
   const launches = snapshots.filter((snapshot: unknown) => snapshot !== null && typeof snapshot === "object"

@@ -32,6 +32,14 @@ worker/channel samples arrive or cleanup marks a record terminal. The goals log
 collector saves launch facts for every engine before page disposal using its
 existing observation budget and terminal/Angular fallback behavior.
 
+The retained sample time stays with the newest memory observation; marking it
+terminal does not create a new memory sample. Delayed older frames cannot replace
+newer values or identity. Frames from a different command cannot fill a reused
+diagnostic record. Frozen failure facts retain their earlier meaning when
+later ordinary samples have no failure. Final logging retains copied launch facts
+before waiting for active trap observations, including on budget expiry. A missing
+retained hook is unavailable, distinct from a callable hook returning no facts.
+
 The Browser CJS invocation gap is deferred. The frozen guest bootstrap captures
 `Reflect.apply` and directly invokes returned wrappers. This change adds no
 Browser module observation and requires no guest rebuild.

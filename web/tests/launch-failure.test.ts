@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { launchFailureFixture } from "../../scripts/fixtures/launch-failure.ts";
 import { browserTrapSource } from "../../scripts/fixtures/browser-call-trap.ts";
 import { copyLaunchFailure, errorFact, launchFailureFact, maxLaunchFailureBytes } from "../src/launch-failure.ts";
-import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots } from "../src/memory-telemetry.ts";
+import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots, type FrozenAllocatorFailure } from "../src/memory-telemetry.ts";
 import { createMemoryPublisher } from "../src/memory-channel.ts";
 
 test("bounded scalar copies include admitted identity outside the truncated worker table", () => {
@@ -87,5 +87,49 @@ test("launch facts coexist with Browser traps and survive later samples, end and
     const facts = retainedMemorySnapshots().find(value => value.id === id)?.launchFailures;
     expect(facts?.map(value => value.attempt)).toEqual([4, 5]);
     expect(facts?.[1]?.cleanupError?.message).toBe("cleanup");
+  } finally { endMemorySnapshot(id); }
+});
+
+test("cached terminal telemetry stays newer than delayed messages while retaining launch facts", () => {
+  const id = crypto.randomUUID();
+  const transport = beginMemorySnapshot("browser", id, "delayed-launch-control");
+  if (!transport) throw Error("Missing telemetry channel");
+  const initial = retainedMemorySnapshots().find(value => value.id === id);
+  if (!initial) throw Error("Missing initial snapshot");
+  const frozen = (bytes: number): FrozenAllocatorFailure => ({ bytes, category: "libc.malloc", previousUsableBytes: 0,
+    allocatorLiveBytes: bytes, allocatorPeakBytes: bytes, wasmCapacityBeforeBytes: 65536, wasmCapacityAfterBytes: 65536, reason: "unknown" });
+  const old = { ...initial, time: initial.time + 60_000, engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536 }, frozenAllocatorFailure: frozen(111) };
+  const newer = { ...old, time: old.time + 60_000, engineCounters: { browserCallTrapIndex: 9, browserCallTrapCapacityBytes: 131072 }, frozenAllocatorFailure: frozen(222) };
+  const latest = { ...newer, time: newer.time + 1, engineCounters: { browserCallTrapIndex: 11, browserCallTrapCapacityBytes: 262144 }, frozenAllocatorFailure: frozen(333) };
+  try {
+    const fact = launchFailureFixture().capture();
+    recordLaunchFailure(id, fact);
+    createMemoryPublisher(transport.buffer, { sample: () => newer, finish: () => newer }).capture(false, true);
+    endMemorySnapshot(id);
+    recordMemorySnapshot({ type: "bun-memory", snapshot: old });
+    expect(retainedMemorySnapshots().find(value => value.id === id)).toMatchObject({ terminal: true, time: newer.time,
+      engineCounters: newer.engineCounters, frozenAllocatorFailure: newer.frozenAllocatorFailure, launchFailures: [fact] });
+    recordMemorySnapshot({ type: "bun-memory", snapshot: latest });
+    expect(retainedMemorySnapshots().find(value => value.id === id)).toMatchObject({ terminal: true, time: latest.time,
+      engineCounters: latest.engineCounters, frozenAllocatorFailure: latest.frozenAllocatorFailure, launchFailures: [fact] });
+  } finally { endMemorySnapshot(id); }
+});
+
+test("a delayed command frame cannot replace another command's reused diagnostic record", () => {
+  const id = crypto.randomUUID();
+  beginMemorySnapshot("browser", id, "previous-launch-command");
+  const old = retainedMemorySnapshots().find(value => value.id === id);
+  if (!old) throw Error("Missing previous snapshot");
+  beginMemorySnapshot("browser", id, "current-launch-command");
+  const current = retainedMemorySnapshots().find(value => value.id === id);
+  if (!current) throw Error("Missing current snapshot");
+  try {
+    const fact = launchFailureFixture().capture();
+    recordLaunchFailure(id, fact);
+    recordMemorySnapshot({ type: "bun-memory", snapshot: { ...old, time: current.time + 1,
+      failedAllocation: { bytes: 111, category: "previous command" } } });
+    expect(retainedMemorySnapshots().find(value => value.id === id)).toMatchObject({ commandId: current.commandId,
+      commandSequence: current.commandSequence, commandStartedAt: current.commandStartedAt, time: current.time,
+      failedAllocation: null, launchFailures: [fact] });
   } finally { endMemorySnapshot(id); }
 });

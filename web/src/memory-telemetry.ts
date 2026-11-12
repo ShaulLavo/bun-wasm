@@ -154,13 +154,17 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 const retained = new Map<string, MemorySnapshot>();
 function retainSnapshot(snapshot: MemorySnapshot): void {
   const previous = retained.get(snapshot.id);
-  const traps = Object.fromEntries(Object.entries(previous?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
-  retained.set(snapshot.id, { ...snapshot, terminal: snapshot.terminal || previous?.terminal || false,
-    engineCounters: { ...traps, ...snapshot.engineCounters }, launchFailures: previous?.launchFailures,
-    allocatorFailure: snapshot.allocatorFailure ?? previous?.allocatorFailure ?? null,
-    frozenAllocatorFailure: snapshot.frozenAllocatorFailure ?? previous?.frozenAllocatorFailure ?? null,
-    engineFailure: snapshot.engineFailure ?? previous?.engineFailure ?? null,
-    failedAllocation: snapshot.failedAllocation ?? previous?.failedAllocation ?? null });
+  if (previous && (previous.engine !== snapshot.engine || previous.commandId !== snapshot.commandId
+    || previous.commandStartedAt !== snapshot.commandStartedAt || previous.commandSequence !== snapshot.commandSequence)) return;
+  const latest = previous && previous.time > snapshot.time ? previous : snapshot;
+  const earlier = latest === snapshot ? previous : snapshot;
+  const traps = Object.fromEntries(Object.entries(earlier?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
+  retained.set(snapshot.id, { ...latest, terminal: snapshot.terminal || previous?.terminal || false,
+    engineCounters: { ...traps, ...latest.engineCounters }, launchFailures: previous?.launchFailures,
+    allocatorFailure: latest.allocatorFailure ?? earlier?.allocatorFailure ?? null,
+    frozenAllocatorFailure: latest.frozenAllocatorFailure ?? earlier?.frozenAllocatorFailure ?? null,
+    engineFailure: latest.engineFailure ?? earlier?.engineFailure ?? null,
+    failedAllocation: latest.failedAllocation ?? earlier?.failedAllocation ?? null });
 }
 export function recordLaunchFailure(id: string, failure: LaunchFailureFact): void {
   const fact = copyLaunchFailure(failure);
@@ -216,7 +220,7 @@ export function endMemorySnapshot(id: string): void {
   if (cached && typeof cached === "object" && isMemorySnapshot(cached)) retainSnapshot(cached);
   channels.delete(id);
   const snapshot = retained.get(id);
-  if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: Date.now() });
+  if (snapshot) retained.set(id, { ...snapshot, terminal: true });
   trimTerminalSnapshots();
 }
 

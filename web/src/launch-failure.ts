@@ -44,14 +44,16 @@ const encoder = new TextEncoder();
 
 // Read data properties only. Diagnostics never invoke an error's getters or coercion hooks.
 function data(value: unknown, key: string): unknown {
-  try {
-    let owner = value;
-    for (let depth = 0; owner !== null && typeof owner === "object" && depth < 4; depth++) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
-      if (descriptor) return "value" in descriptor ? descriptor.value : undefined;
-      owner = Object.getPrototypeOf(owner);
-    }
-  } catch { /* Unknown diagnostic fields stay unavailable. */ }
+  try { return dataProperty(value, key); }
+  catch { /* Unknown diagnostic fields stay unavailable. */ }
+}
+function dataProperty(value: unknown, key: string): unknown {
+  let owner = value;
+  for (let depth = 0; owner !== null && typeof owner === "object" && depth < 4; depth++) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+    if (descriptor) return "value" in descriptor ? descriptor.value : undefined;
+    owner = Object.getPrototypeOf(owner);
+  }
 }
 function text(value: unknown, limit = maxText): string | null {
   return typeof value === "string" ? value.slice(0, limit) : null;
@@ -98,11 +100,12 @@ function appendRows(result: RowsFact, values: unknown[], project: (value: unknow
 }
 function ledgerRow(value: unknown): Row {
   const result = row(value, ["label", "scope", "state", "declaredBytes", "grownBytes", "phase", "fence", "chargedBytes", "initialPages", "actualMaximumPages", "sourceMaximumPages", "requestedBytes", "totalChargedBytesAfterRefund"]);
-  for (const key of ["shape", "owner", "aliases", "continuations"]) {
-    const nested = row(data(value, key), ["kind", "initial", "maximum", "maximumPages", "pages", "bytes", "length", "directory", "pid", "reserved", "transferred", "retained", "active"]);
-    for (const [name, value] of Object.entries(nested)) if (value !== null) result[`${key}.${name}`] = value;
-  }
+  for (const key of ["shape", "owner", "aliases", "continuations"]) appendNestedRow(result, key, data(value, key));
   return result;
+}
+function appendNestedRow(result: Row, key: string, value: unknown): void {
+  const nested = row(value, ["kind", "initial", "maximum", "maximumPages", "pages", "bytes", "length", "directory", "pid", "reserved", "transferred", "retained", "active"]);
+  for (const [name, entry] of Object.entries(nested)) if (entry !== null) result[`${key}.${name}`] = entry;
 }
 function ledgerFact(runtime: Pick<ProcessRuntime, "sharedMemory">): LedgerFact {
   const sampleStartedAt = now();
