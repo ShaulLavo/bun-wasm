@@ -55,6 +55,17 @@ so Waffle receives the actual WebSocket handshake and duplex bytes.
 `web/scripts/preview-exchanges.ts` holds the native HTTP stream and socket exchange
 state, keeping their callbacks outside the owner session's request handlers.
 
+Safari keeps previews in an iframe of the playground, which is cross-origin
+isolated with `Cross-Origin-Embedder-Policy: require-corp`. A browser commits a
+cross-origin document into such a page only when the document opts in: Chromium
+replaces it with an error page and WebKit never finishes the frame load. So when a
+request's Fetch metadata names an `iframe` or `frame` destination, the listener adds
+`Cross-Origin-Embedder-Policy: require-corp` and
+`Cross-Origin-Resource-Policy: cross-origin` to the response if the application set
+neither. Top-level tabs and an application's own explicit policies are unchanged.
+Inside that frame the application's same-origin requests are unaffected; a
+cross-origin subresource needs its own CORP header, as on any isolated page.
+
 The defaults bound the host to 128 lifetime origin allocations, 128 outstanding tickets or
 connected owners, 16 ports per owner, 64 active exchanges across owners, 256 root
 sockets across the host, 64 sockets per origin, 4 MiB request bodies/chunks and
@@ -132,7 +143,8 @@ reserves `localhost` and its children for loopback resolution. This adapter requ
 the browser and local resolver to honor that rule. The single-label names also
 keep distinct roots cross-site and reject a shared `Domain=localhost` cookie.
 The executable browser control checks actual resolution, both cookie properties,
-Fetch metadata and foreign-owner rejection without resolver overrides.
+Fetch metadata, foreign-owner rejection and a root document loading in an iframe of
+a cross-origin isolated owner, without resolver overrides.
 
 [WebKit bug 160504](https://bugs.webkit.org/show_bug.cgi?id=160504#c19) records
 macOS 26 support, with implementation confirmed in OS frameworks below WebKit.

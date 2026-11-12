@@ -121,6 +121,21 @@ function rejected(request: IncomingMessage, origin: string, signal: AbortSignal,
   if (request.headers["sec-fetch-site"] === "cross-site" && request.headers["sec-fetch-mode"] !== "navigate" && !request.headers.origin) return 403;
 }
 
+const FRAME_EMBEDDING = [["cross-origin-embedder-policy", "require-corp"], ["cross-origin-resource-policy", "cross-origin"]] as const;
+
+/**
+ * Safari shows previews in an iframe of the cross-origin isolated playground (COEP require-corp).
+ * Browsers commit a cross-origin document there only when it opts into that embedding, so frame
+ * navigations default to it. Top-level tabs and explicit app policies are left unchanged.
+ */
+function framedResponseHeaders(request: IncomingMessage, source: Headers): Headers {
+  const destination = request.headers["sec-fetch-dest"];
+  if (destination !== "iframe" && destination !== "frame") return source;
+  const headers = new Headers(source);
+  for (const [name, value] of FRAME_EMBEDDING) if (!headers.has(name)) headers.set(name, value);
+  return headers;
+}
+
 export async function dispatchPreviewHTTP(incoming: IncomingMessage, outgoing: ServerResponse, origin: string, endpoint: Pick<PreviewOriginEndpoint, "fetch">, lifetime: AbortSignal, acceptsOrigin: (source: string) => boolean): Promise<void> {
   const cancelled = new AbortController();
   const abort = () => cancelled.abort();
@@ -136,8 +151,9 @@ export async function dispatchPreviewHTTP(incoming: IncomingMessage, outgoing: S
     });
     const response = await endpoint.fetch(request);
     if (request.signal.aborted) { await response.body?.cancel(); outgoing.destroy(); return; }
-    const responseHeaders = Array.from(response.headers).filter(([key]) => key !== "set-cookie").flat();
-    for (const cookie of response.headers.getSetCookie()) responseHeaders.push("set-cookie", cookie);
+    const sent = framedResponseHeaders(incoming, response.headers);
+    const responseHeaders = Array.from(sent).filter(([key]) => key !== "set-cookie").flat();
+    for (const cookie of sent.getSetCookie()) responseHeaders.push("set-cookie", cookie);
     outgoing.writeHead(response.status, response.statusText, responseHeaders);
     if (!response.body) { outgoing.end(); return; }
     await pipeline(Readable.from(response.body), outgoing);

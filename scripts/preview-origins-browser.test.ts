@@ -1,22 +1,26 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { chromium, firefox, webkit, type Browser } from "playwright";
+import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { LoopbackPreviewOrigins } from "../web/preview-origin-host";
 import { fixture } from "../web/tests/fixtures/preview-origin-native";
 
 const registry = new LoopbackPreviewOrigins();
+// Stands in for the cross-origin isolated playground page that embeds previews on Safari.
+const isolatedOwner = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><title>owner</title>", {
+  headers: { "content-type": "text/html", "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" },
+}) });
 let browser: Browser | undefined;
 let closing: Promise<void> | undefined;
 function cleanup(): Promise<void> {
-  return closing ??= Promise.all([browser?.close(), registry.close()]).then(() => {});
+  return closing ??= Promise.all([browser?.close(), registry.close(), isolatedOwner.stop(true)]).then(() => {});
 }
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 
-const observations: { path: string; cookie: string | null; site: string | null }[] = [];
+const observations: { path: string; cookie: string | null; site: string | null; destination: string | null }[] = [];
 function endpoint(label: string) {
   const target = fixture(label);
   target.fetch = request => {
-    observations.push({ path: new URL(request.url).pathname, cookie: request.headers.get("cookie"), site: request.headers.get("sec-fetch-site") });
+    observations.push({ path: new URL(request.url).pathname, cookie: request.headers.get("cookie"), site: request.headers.get("sec-fetch-site"), destination: request.headers.get("sec-fetch-dest") });
     const headers = new Headers({ "content-type": "text/html" });
     if (new URL(request.url).pathname === "/cookies") {
       headers.append("set-cookie", `scoped=${label}; Path=/`);
@@ -48,11 +52,37 @@ async function verify(name: keyof typeof engines, first: string, sibling: string
     const before = observations.length;
     await page.evaluate(async url => { await fetch(url, { method: "POST", mode: "no-cors", body: "forbidden" }); }, foreign);
     assert.equal(observations.length, before, `${name}: foreign owner request never dispatches`);
-    console.log(`${name}: localhost resolution, host cookies, parent-cookie rejection and cross-site metadata passed`);
+    await verifyIsolatedFrame(name, page, first);
+    console.log(`${name}: localhost resolution, host cookies, parent-cookie rejection, cross-site metadata and isolated in-page frame passed`);
   } finally {
     await browser.close();
     browser = undefined;
   }
+}
+
+// Safari keeps previews in an iframe of the cross-origin isolated owner. The root-origin document must load
+// there, while a top-level preview tab keeps the app's own embedder policy.
+async function verifyIsolatedFrame(name: keyof typeof engines, page: Page, first: string): Promise<void> {
+  const topLevel = await page.goto(`${first}/top-level`);
+  assert.equal(topLevel?.headers()["cross-origin-embedder-policy"], undefined, `${name}: top-level preview keeps the app's embedder policy`);
+  await page.goto(isolatedOwner.url.href);
+  assert.equal(await page.evaluate(() => crossOriginIsolated), true, `${name}: owner is cross-origin isolated`);
+  const url = `${first}/framed`;
+  // WebKit never finishes a blocked frame, so bound the wait instead of hanging the test.
+  const loaded = await page.evaluate(source => new Promise<boolean>(resolve => {
+    const frame = document.createElement("iframe");
+    const timer = setTimeout(() => resolve(false), 5_000);
+    frame.addEventListener("load", () => { clearTimeout(timer); resolve(true); }, { once: true });
+    frame.src = source;
+    document.body.appendChild(frame);
+  }), url);
+  assert.equal(loaded, true, `${name}: preview frame finishes loading in the isolated owner`);
+  assert.equal(observations.findLast(row => row.path === "/framed")?.destination, "iframe", `${name}: frame navigation reports its destination`);
+  // Playwright's Firefox driver cannot describe cross-origin frames; the load assertion above still applies.
+  if (name === "firefox") return;
+  const frame = await (await page.$("iframe"))?.contentFrame();
+  assert.equal(frame?.url(), url, `${name}: isolated owner commits the preview frame`);
+  assert.equal(await frame.evaluate(() => document.body.textContent), "root preview", `${name}: framed preview document renders`);
 }
 
 const engines = { chromium, firefox, webkit };
