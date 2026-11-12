@@ -29,20 +29,24 @@ function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Tr
   };
 }
 
-/** Pipes as spawn creates them: the child's reader is retained before the parent's closes. */
-function spawnPipes(pid: number, trace: Trace) {
+/**
+ * Pipes as spawn creates them: the child's reader is retained before the parent's closes, so
+ * the pipe to the child relays and its relay is never serviced. `direct` keeps one reader, for
+ * cases about what the parent sends the child rather than about lane visibility.
+ */
+function spawnPipes(pid: number, trace: Trace, direct = false) {
   const down = new PipeController({ capacity: 65536, relay: "manual" });
   const parentWrite = down.retain(1, "write");
-  const original = down.retain(1, "read");
+  const original = direct ? undefined : down.retain(1, "read");
   const childRead = down.retain(pid, "read");
-  original.close();
+  original?.close();
   const up = new PipeController({ capacity: 65536 });
   const childWrite = up.retain(pid, "write");
   const parentRead = up.retain(1, "read");
   cleanup.add(() => { for (const end of [parentWrite, childRead, childWrite, parentRead]) end.close(); down.dispose?.(); up.dispose?.(); });
   return {
     parentWrite, childRead,
-    parent: sourceChannel(host(parentRead, parentWrite, "parent", trace)),
+    parent: sourceChannel(host(parentRead, parentWrite, `parent to ${pid}`, trace)),
     child: sourceChannel(host(childRead, childWrite, `child ${pid}`, trace)),
   };
 }
@@ -56,19 +60,20 @@ function group() {
   cleanup.add(() => root.__fixtureShutdown());
   let next = 2;
   /** Starts a child whose workerData is `data`, carrying `transfer` and its parent port. */
-  function spawn(data: unknown = null, transfer: unknown[] = []) {
+  function spawn(data: unknown = null, transfer: unknown[] = [], direct = false) {
     const pid = next++;
-    const pipes = spawnPipes(pid, trace);
+    const id = pid - 2;
+    const pipes = spawnPipes(pid, trace, direct);
     const lanes = model.member(pid);
     const { port1, port2 } = new root.MessageChannel();
     const cell = rootLanes.cell();
     const plan = root.codec.prepare([data, [], port2], transfer.concat([port2]), [], { kind: "cell", cell });
     plan.commit();
-    root.__fixtureChild(pipes.parent, plan.graph);
-    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), channel: pipes.child, graph: plan.graph, lanes: { ledger: 4096, cell } });
+    root.__fixtureChild(pipes.parent, plan.graph, id);
+    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell } });
     cleanup.add(() => child.__fixtureShutdown());
     child.initialize();
-    return { child, port: port1, pipes, cell };
+    return { child, port: port1, pipes, cell, pid };
   }
   return { model, trace, root, rootLanes, spawn };
 }
@@ -200,4 +205,80 @@ test("a worker exit closes its ends and the parent's port sees the lane end", as
   root.pump();
   await new Promise(resolve => setTimeout(resolve, 5));
   expect(closed).toBe(true);
+});
+
+/**
+ * A port carried to a receiver that never reads it, whose peer lives in a third guest that is
+ * idle: nothing reaches that peer except what the root sends after it retires the record.
+ */
+async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof group>["spawn"]>, lanes: BunWasm.GroupLanes) => void) {
+  const { root, rootLanes, trace, spawn } = group();
+  const pair = new root.MessageChannel();
+  const holder = spawn({ port: pair.port1 }, [pair.port1], true);
+  const receiver = spawn();
+  const peer = carried(holder.child.workerData);
+  let closed = false;
+  peer.on("close", () => { closed = true; });
+  // The root learns the holder's bind and the carried port's move.
+  root.step();
+  receiver.port.postMessage({ port: pair.port2 }, [pair.port2]);
+  const records = root.__fixtureOwners().length;
+  finish(receiver, rootLanes);
+  const toHolder = () => trace.filter(item => item.from === `parent to ${holder.pid}` && item.text.includes("port-close"));
+  expect(toHolder()).toHaveLength(0);
+  // An ordinary step: the sweep, then the retirement of records whose lane end closed.
+  root.step();
+  expect(toHolder().length).toBeGreaterThan(0);
+  expect(root.__fixtureOwners().length).toBeLessThan(records);
+  // The frame on its pipe is what wakes the idle holder; its next step closes the port.
+  holder.child.step();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(closed).toBe(true);
+}
+
+test("the root retires a carried port whose receiver died unread and closes its idle peer", async () => {
+  await carriedToIdlePeer((receiver, lanes) => lanes.exited(receiver.cell));
+});
+
+test("the root retires a carried port whose receiver closed unread and closes its idle peer", async () => {
+  await carriedToIdlePeer(receiver => receiver.child.parentPort.close());
+});
+
+test("a rescan keeps ports that are open or still in flight", () => {
+  const { root, rootLanes, trace, spawn } = group();
+  const pair = new root.MessageChannel();
+  const holder = spawn({ port: pair.port1 }, [pair.port1], true);
+  const receiver = spawn();
+  const peer = carried(holder.child.workerData);
+  root.step();
+  receiver.port.postMessage({ port: pair.port2 }, [pair.port2]);
+  // An unrelated worker exits, so the root rescans while pair.port2 is in flight.
+  const third = spawn();
+  rootLanes.exited(third.cell);
+  root.step();
+  expect(trace.some(item => item.from === `parent to ${holder.pid}` && item.text.includes("port-close"))).toBe(false);
+  // The receiver restores the in-flight port and it still reaches the holder.
+  const message = receiver.child.receiveMessageOnPort(receiver.child.parentPort)?.message as { port: SourcePort };
+  message.port.postMessage("after the rescan");
+  expect(holder.child.receiveMessageOnPort(peer)?.message).toBe("after the rescan");
+});
+
+test("a synchronous receive never sweeps; the next ordinary step does", () => {
+  const { model, root, spawn } = group();
+  const { child, port, pipes, pid } = spawn(null, [], true);
+  const full = (tag: number) => model.control.sweeps.filter(item => item.tag === tag && item.full).length;
+  // The parent's channel ends while the child is inside receiveMessageOnPort.
+  pipes.parentWrite.close();
+  port.postMessage("still here");
+  expect(child.receiveMessageOnPort(child.parentPort)?.message).toBe("still here");
+  expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+  expect(full(pid)).toBe(0);
+  child.step();
+  expect(full(pid)).toBe(1);
+  // A gone frame handled inside the root's receive also waits for the root's step.
+  pipes.child.send({ kind: "up", body: { kind: "gone", path: [9] } });
+  expect(root.receiveMessageOnPort(port)).toBeUndefined();
+  expect(full(1)).toBe(0);
+  root.step();
+  expect(full(1)).toBe(1);
 });

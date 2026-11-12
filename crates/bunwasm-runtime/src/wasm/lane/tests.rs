@@ -794,7 +794,7 @@ fn a_sender_released_before_the_receiver_decodes_loses_nothing() {
     s.transfer(carried, 1, Custody::Lane(carrier, 1));
     post(&s, carrier, 0, &frame(epoch as usize, 300_000));
     sender.release();
-    r.sweep(true);
+    r.sweep(Sweep::Full);
     let got = take(&d, carrier, 1);
     assert_eq!(got, [frame(epoch as usize, 300_000)]);
     assert!(d.adopt(carried, 1, epoch, 2));
@@ -826,7 +826,7 @@ fn a_receiver_released_before_decoding_closes_the_carried_end() {
         ledger: root.ledger,
         tag: root.tag,
     }
-    .sweep(true);
+    .sweep(Sweep::Full);
     assert_eq!(r.end_state(carried, 1).0, end::CLOSED);
     assert!(r.drain(carried, 0, 8).unwrap().terminal);
     assert!(r.peer_closed(carrier, 0));
@@ -860,8 +860,9 @@ fn an_exit_report_waits_for_the_host_release_before_storage_is_reused() {
     post(&c, lane, 1, &frame(1, 30_000));
     // The child is reported exited but the host has not released it.
     r.exited(cell);
-    r.sweep(true);
+    assert!(r.sweep(Sweep::Full), "the dead end still awaits release");
     assert_eq!(r.end_state(lane, 1).0, end::CLOSED_DEAD);
+    assert_eq!(r.census().awaiting, 1);
     assert!(r.peer_closed(lane, 0), "the parent stops writing to it");
     assert_eq!(
         phases(&root).get(&phase::LIVE),
@@ -873,11 +874,11 @@ fn an_exit_report_waits_for_the_host_release_before_storage_is_reused() {
     assert_eq!(drain.frames, [frame(1, 30_000)]);
     assert!(drain.terminal);
     child.release();
-    r.sweep(false);
+    assert!(!r.sweep(Sweep::Dead), "nothing awaits release any more");
     assert_eq!(r.end_state(lane, 1).0, end::CLOSED);
-    assert_eq!(r.mem.load(root.ledger + H_AWAITING), 0);
+    assert_eq!(r.census().awaiting, 0);
     r.close_end(lane, 0);
-    r.sweep(false);
+    r.sweep(Sweep::Trim);
     assert_settled(&root);
 }
 
@@ -896,7 +897,7 @@ fn a_retained_member_keeps_its_storage() {
     r.exited(cell);
     r.close_end(lane, 0);
     for _ in 0..3 {
-        r.sweep(true);
+        r.sweep(Sweep::Full);
     }
     assert_eq!(r.end_state(lane, 1).0, end::CLOSED_DEAD);
     assert_eq!(phases(&root).get(&phase::LIVE), Some(&1));
@@ -936,7 +937,7 @@ fn a_creator_killed_at_any_host_step_leaves_nothing_behind() {
         };
         let _ = catch_unwind(AssertUnwindSafe(|| lanes.create_lane()));
         worker.release();
-        root.lanes().sweep(true);
+        root.lanes().sweep(Sweep::Full);
         assert_settled(&root);
     }
     for steps in 0..=4 {
@@ -961,7 +962,7 @@ fn a_creator_killed_at_any_host_step_leaves_nothing_behind() {
             lanes.reserve(lane, 0, &frame(0, 40_000))
         }));
         worker.release();
-        root.lanes().sweep(true);
+        root.lanes().sweep(Sweep::Full);
         root.lanes().close_end(lane, 1);
         assert_settled(&root);
     }
@@ -989,13 +990,13 @@ fn a_cleaner_killed_before_unpin_is_recovered_once() {
         ledger: root.ledger,
         tag: cleaner.tag,
     };
-    let _ = catch_unwind(AssertUnwindSafe(|| lanes.sweep(false)));
+    let _ = catch_unwind(AssertUnwindSafe(|| lanes.sweep(Sweep::Trim)));
     assert_eq!(
         phases(&root).get(&phase::CLEANING),
         Some(&1),
         "the cleaner kept the slot exclusive"
     );
-    r.sweep(true);
+    r.sweep(Sweep::Full);
     assert_eq!(
         phases(&root).get(&phase::CLEANING),
         Some(&1),
@@ -1003,9 +1004,9 @@ fn a_cleaner_killed_before_unpin_is_recovered_once() {
     );
     cleaner.release();
     let unpinned = group.state.lock().unwrap().unpinned;
-    r.sweep(true);
+    r.sweep(Sweep::Full);
     assert_eq!(group.state.lock().unwrap().unpinned, unpinned + 1);
-    r.sweep(true);
+    r.sweep(Sweep::Full);
     assert_eq!(group.state.lock().unwrap().unpinned, unpinned + 1);
     r.close_end(lane, 0);
     r.close_end(lane, 1);
@@ -1065,8 +1066,8 @@ fn two_sweepers_unpin_each_slot_once() {
     let other = root.child();
     let unpinned = group.state.lock().unwrap().unpinned;
     std::thread::scope(|scope| {
-        scope.spawn(|| root.lanes().sweep(true));
-        scope.spawn(|| other.lanes().sweep(true));
+        scope.spawn(|| root.lanes().sweep(Sweep::Full));
+        scope.spawn(|| other.lanes().sweep(Sweep::Full));
     });
     let after = group.state.lock().unwrap().unpinned;
     assert_eq!(after - unpinned, 6, "every slot above the pool limit, once");
@@ -1284,7 +1285,7 @@ fn a_writer_and_reader_on_two_threads_agree_on_every_frame() {
             lanes.close_end(lane, 1);
         });
     });
-    root.lanes().sweep(true);
+    root.lanes().sweep(Sweep::Full);
     assert_settled(&root);
 }
 
@@ -1343,7 +1344,7 @@ fn the_census_names_every_pin_the_lanes_keep() {
     r.exited(cell);
     r.close_end(lane, 0);
     r.close_end(lane, 1);
-    r.sweep(false);
+    r.sweep(Sweep::Trim);
     let census = r.census();
     assert_eq!(
         (
@@ -1356,4 +1357,274 @@ fn the_census_names_every_pin_the_lanes_keep() {
     );
     assert_eq!(census.pooled, 2);
     assert_eq!(census.pins as usize, group.counts().1);
+}
+
+/// Memory for one finalizer that parks before its `stop`th access until released, so a test can
+/// run other guests at that exact point and then let the finalizer finish.
+struct Parking<'a> {
+    inner: &'a Buffer,
+    stop: usize,
+    seen: std::sync::atomic::AtomicUsize,
+    state: Mutex<(bool, bool)>,
+    changed: std::sync::Condvar,
+}
+
+impl<'a> Parking<'a> {
+    fn new(inner: &'a Buffer, stop: usize) -> Parking<'a> {
+        Parking {
+            inner,
+            stop,
+            seen: std::sync::atomic::AtomicUsize::new(0),
+            state: Mutex::new((false, false)),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+    /// Blocks until the finalizer parked; false when it finished first.
+    fn parked(&self, done: &std::sync::atomic::AtomicBool) -> bool {
+        let mut state = self.state.lock().unwrap();
+        while !state.0 && !done.load(SeqCst) {
+            state = self
+                .changed
+                .wait_timeout(state, std::time::Duration::from_millis(1))
+                .unwrap()
+                .0;
+        }
+        state.0
+    }
+    fn resume(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.changed.notify_all();
+    }
+}
+
+impl Memory for Parking<'_> {
+    fn size(&self) -> u64 {
+        self.inner.size()
+    }
+    fn raw(&self, at: u32, len: u32) -> *mut u8 {
+        if self.seen.fetch_add(1, SeqCst) == self.stop {
+            let mut state = self.state.lock().unwrap();
+            state.0 = true;
+            self.changed.notify_all();
+            while !state.1 {
+                state = self.changed.wait(state).unwrap();
+            }
+        }
+        self.inner.raw(at, len)
+    }
+}
+
+/// The new use of a reused lane slot is untouched by a finalizer of its earlier use.
+fn assert_fresh_lane(other: &Peer, lane: LaneRef) {
+    let o = other.lanes();
+    for dir in 0..2 {
+        let at = o.dir_at(lane.slot, dir);
+        assert_eq!(
+            o.mem.load(at + READER_CLOSED),
+            0,
+            "reader-closed of the new use"
+        );
+        assert_eq!(o.mem.load(at + WRITING), 0, "writer fence of the new use");
+        assert_eq!(o.mem.get(o.end_at(lane.slot, dir)).kind, end::OPEN);
+        assert!(!o.peer_closed(lane, dir));
+    }
+    post(&o, lane, 0, b"new use");
+    assert_eq!(take(&o, lane, 1), [b"new use".to_vec()]);
+    let census = o.census();
+    assert_eq!(
+        (census.awaiting, census.dead_ends, census.in_flight),
+        (0, 0, 0)
+    );
+}
+
+/// Runs `finalize` on its own thread parked before each of its accesses in turn. While it is
+/// parked, `other` finishes the lane and reuses its slot. Then the finalizer resumes.
+fn every_interleaving<T: Copy + Send + Sync>(
+    setup: impl Fn(&Arc<Group>, &Peer) -> (LaneRef, T),
+    finalize: impl Fn(&Lanes<'_, Parking<'_>, Guest>, T) + Sync,
+) {
+    /// Marks the finalizer finished however it ends, so the test never waits on a panic.
+    struct Done<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, SeqCst);
+        }
+    }
+    let mut overlaps = 0;
+    for stop in 0.. {
+        let group = Group::new(16);
+        let root = Peer::root(&group);
+        let other = root.child();
+        let (lane, context) = setup(&group, &root);
+        let parking = Parking::new(&group.mem, stop);
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let finished = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _done = Done(&done);
+                let lanes = Lanes {
+                    mem: &parking,
+                    host: &root.guest,
+                    ledger: root.ledger,
+                    tag: root.tag,
+                };
+                finalize(&lanes, context);
+            });
+            let parked = parking.parked(&done);
+            if parked {
+                other.lanes().sweep(Sweep::Full);
+                other.lanes().cascade();
+            }
+            let reused = parked.then(|| other.lanes().create_lane().unwrap());
+            parking.resume();
+            (parked, reused)
+        });
+        let (parked, reused) = finished;
+        if !parked {
+            assert!(
+                overlaps > 0,
+                "no stop of {stop} overlapped a reuse of the slot"
+            );
+            return;
+        }
+        let Some(reused) = reused else { continue };
+        if reused.slot == lane.slot {
+            overlaps += 1;
+            assert_fresh_lane(&other, reused);
+        }
+    }
+}
+
+#[test]
+fn a_death_declaration_racing_its_release_never_touches_the_reused_slot() {
+    every_interleaving(
+        |_, root| {
+            let r = root.lanes();
+            let cell = r.create_cell().unwrap();
+            let worker = root.child();
+            assert!(worker.lanes().register(cell));
+            let lane = r.create_lane().unwrap();
+            let epoch = r.transfer_epoch(lane, 1).unwrap();
+            r.transfer(lane, 1, Custody::Cell(cell));
+            assert!(worker.lanes().adopt(lane, 1, epoch, 1));
+            post(&worker.lanes(), lane, 1, &frame(0, 30_000));
+            r.close_end(lane, 0);
+            // The finalizer is the parent's exit report. The other guest's sweep releases the
+            // same end, because the host has already released the worker.
+            worker.release();
+            (lane, cell)
+        },
+        |lanes, cell| lanes.exited(cell),
+    );
+}
+
+#[test]
+fn two_finalizers_of_one_lane_never_touch_the_reused_slot() {
+    every_interleaving(
+        |group, root| {
+            let r = root.lanes();
+            let lane = r.create_lane().unwrap();
+            let cell = r.create_cell().unwrap();
+            r.transfer(lane, 1, Custody::Cell(cell));
+            r.close_end(lane, 0);
+            // The custody is gone but no cascade ran yet: both finalizers will try.
+            let at = r.small_slot(cell.index);
+            let claim = group.mem.get(at + CLAIM);
+            group
+                .mem
+                .set(at + CLAIM, Word::new(0, claim.count, phase::FREE));
+            (lane, ())
+        },
+        |lanes, ()| lanes.cascade(),
+    );
+}
+
+#[test]
+fn near_limit_epochs_close_without_wrapping_and_retire_the_slot() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let at = r.end_at(lane.slot, 1);
+    // An end two epochs too close to the limit cannot move at all.
+    r.mem.set(at, Word::new(root.tag, MAX_COUNT - 3, end::OPEN));
+    assert_eq!(r.transfer_epoch(lane, 1), Err(Refusal::Exhausted));
+    // The last end that may move still has room to be adopted, declared dead and released.
+    r.mem.set(at, Word::new(root.tag, MAX_COUNT - 4, end::OPEN));
+    let cell = r.create_cell().unwrap();
+    let worker = root.child();
+    assert!(worker.lanes().register(cell));
+    let epoch = r.transfer_epoch(lane, 1).unwrap();
+    r.transfer(lane, 1, Custody::Cell(cell));
+    assert!(worker.lanes().adopt(lane, 1, epoch, 7));
+    assert_eq!(r.end_state(lane, 1), (end::OPEN, 7));
+    assert_eq!(
+        worker.lanes().transfer_epoch(lane, 1),
+        Err(Refusal::Exhausted)
+    );
+    r.exited(cell);
+    worker.release();
+    r.sweep(Sweep::Full);
+    let word = r.mem.get(at);
+    assert_eq!(
+        (word.kind, word.count),
+        (end::CLOSED, MAX_COUNT),
+        "the epoch stops at the limit"
+    );
+    assert_eq!(Word::unpack(word.pack()), word);
+    r.close_end(lane, 0);
+    assert_eq!(
+        r.mem.get(r.lane_slot(lane.slot) + CLAIM).kind,
+        phase::RELEASED
+    );
+    let next = r.create_lane().unwrap();
+    assert_ne!(
+        next.slot, lane.slot,
+        "a lane whose epochs ran out is never used again"
+    );
+    r.close_end(next, 0);
+    r.close_end(next, 1);
+    r.sweep(Sweep::Trim);
+    for _ in 0..3 {
+        let again = r.create_lane().unwrap();
+        assert_ne!(again.slot, lane.slot);
+        r.close_end(again, 0);
+        r.close_end(again, 1);
+    }
+}
+
+#[test]
+fn late_versions_and_severs_from_an_earlier_use_are_ignored() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let first = r.create_lane().unwrap();
+    r.sever(first, 0);
+    assert!(r.drain(first, 1, 8).unwrap().terminal);
+    r.close_end(first, 0);
+    r.close_end(first, 1);
+    let second = r.create_lane().unwrap();
+    assert_eq!(second.slot, first.slot);
+    // A late sever aimed at the first use cannot mark the second.
+    r.sever(first, 0);
+    r.mem
+        .raise(r.dir_at(first.slot, 1) + SEVERED, first.generation);
+    assert!(!r.drain(second, 1, 8).unwrap().terminal);
+    // A version not recorded for the current open epoch reads as unknown.
+    let at = r.end_at(second.slot, 1);
+    r.mem.put64(at + END_VERSION, 3);
+    assert_eq!(r.end_state(second, 1), (end::OPEN, u32::MAX));
+}
+
+#[test]
+fn closures_count_cascade_and_release_closings() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let carrier = r.create_lane().unwrap();
+    let carried = r.create_lane().unwrap();
+    let before = r.closures();
+    r.transfer(carried, 1, Custody::Lane(carrier, 1));
+    r.close_read(carrier, 1);
+    assert_eq!(r.end_state(carried, 1).0, end::CLOSED);
+    assert_eq!(r.closures(), before + 1, "the cascade counts its closing");
 }

@@ -13,7 +13,8 @@ const STATES = { open: 1, "in-flight": 2, closed: 3 } as const;
 export function createGroupLaneModel() {
   const lanes: Lane[] = [];
   const cells: ({ tag: number; open: boolean } | null)[] = [];
-  const control = { refuse: false, reserved: 0, drained: 0 };
+  /** `sweeps` records each sweep request by member tag, so tests can see where housekeeping runs. */
+  const control = { refuse: false, reserved: 0, drained: 0, closures: 0, sweeps: [] as { tag: number; full: boolean }[] };
   function lane(ref: BunWasm.GroupLaneRef) {
     const found = lanes[ref.slot];
     if (!found || ref.generation !== 1) throw new Error("Unknown lane");
@@ -29,6 +30,7 @@ export function createGroupLaneModel() {
     if (end.state !== "in-flight" || !custodyClosed(end.custody)) return false;
     Object.assign(end, { state: "closed", epoch: end.epoch + 1 });
     item.directions[side].readerClosed = true;
+    control.closures++;
     return true;
   }
   function cascade() {
@@ -122,15 +124,18 @@ export function createGroupLaneModel() {
         for (const item of lanes) for (const side of [0, 1] as const) {
           const end = item.ends[side];
           if (end.state !== "open" || end.owner !== found.tag || found.tag === tag) continue;
+          // The model releases at once what lane.rs declares dead and releases after the host.
           Object.assign(end, { state: "closed", owner: 0, epoch: end.epoch + 1 });
           item.directions[side].readerClosed = true;
+          control.closures++;
         }
         cascade();
       },
-      sweep() {},
+      sweep(full) { control.sweeps.push({ tag, full }); },
       end(ref, side) { const end = lane(ref).ends[side]; return [STATES[end.state], end.version]; },
       sever(ref, side) { lane(ref).directions[side === 0 ? 1 : 0].severed = true; },
       census: () => null,
+      closures: () => control.closures,
     };
   }
   return { member, control, lanes };

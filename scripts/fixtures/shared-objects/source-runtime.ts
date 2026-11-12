@@ -22,7 +22,9 @@ interface PortsRuntime {
   parentPort: SourcePort;
   workerData: SourcePort;
   __fixtureShutdown(): void;
-  __fixtureChild(channel: Channel, graph: Graph): void;
+  __fixtureChild(channel: Channel, graph: Graph, id?: number): void;
+  /** Port ids the root's broker still has a record for. */
+  __fixtureOwners(): string[];
   __fixturePacket(port: SourcePort, sequence: number, graph: Graph): void;
 }
 const native = {
@@ -64,18 +66,21 @@ function childOverlay(source: string) {
   if (source.split(target).length !== 2) throw new Error("Fixture child hook is no longer unique");
   return source.replace(target, `return Object.assign(exports, {
     __fixtureShutdown() { for (const port of Array.from(localPorts.values())) portOps.discard(port); },
-    __fixtureChild(channel, graph) {
-      children.set(0, { ref: true, send: frame => channel.send(frame), pump: () => channel.pump(incoming), watch: () => channel.subscriptions(), event() {} });
-      claimTransferred(graph, [0]);
+    __fixtureChild(channel, graph, id = 0) {
+      children.set(id, { ref: true, send: frame => channel.send(frame), pump: () => channel.pump(incoming), watch: () => channel.subscriptions(), event() {} });
+      claimTransferred(graph, [id]);
     },
+    __fixtureOwners() { return Array.from(owners.keys()); },
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean } = {}) {
+export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean } = {}) {
   const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
-  const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph, lanes: options.lanes }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
+  // The runtime's own event-loop waiter, so a test can run real steps.
+  let waiter: BunWasm.IoWaiter | undefined;
+  const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: options.route ?? [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph, lanes: options.lanes }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
   const modules = new Map<string, unknown>([
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
     ["events", EventEmitter], ["structured_clone", { structuredClone }], ["net", {}],
@@ -88,10 +93,12 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
     realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
-    addIoWaiter() {},
+    addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },
     set workerPump(callback: () => void) { pump = callback; },
   }, lifecycle);
   const runtime: PortsRuntime = factory("worker_threads", childOverlay)(internal);
   if (!codec || !pump) throw new Error("Missing codec or pump");
-  return Object.assign(runtime, { codec, pump, internal });
+  /** One ordinary event-loop step of this runtime's waiter, housekeeping included. */
+  const step = () => waiter?.step();
+  return Object.assign(runtime, { codec, pump, step, internal });
 }
