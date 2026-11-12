@@ -31,6 +31,28 @@ The child document's `hasFocus()` is not a readiness predicate: native iPhone
 Safari can report false with an enabled counter and the parent iframe active.
 Controls preserve that false value while proving load ordering and native arming.
 
+The wait for that load does not occupy the owner's observer. Each page runs one
+command at a time, so a presentation command that awaited the frame's load event
+left the owner unable to answer terminal or diagnostic reads whenever a preview
+never finished loading. A native SvelteKit run on JSC reached that state: its
+render phase expired with the preview configured but never attached, and the final
+terminal read was refused as already pending. The presentation command now inserts
+the frame and returns. The frame's own load listener focuses it and records that on
+the frame element, so the record is discarded with the frame. Opening then waits
+under one deadline, in three stages of short reads: the preview observer attaches
+and is visible, the preview document reports `readyState` complete through
+read-only observations in the preview role, and cached owner state confirms the
+frame's focus record. Regular owner polls publish that record with a fresh
+presentation identity. The controller never enqueues an owner command to confirm
+focus, so cancellation there cannot block failure-time terminal reads. A record
+from an earlier presentation cannot admit input. No read starts after the deadline, after cleanup begins, or after the
+presentation changes, and an expiry names its stage and last observation. The
+transport accepts native input only between a completed opening and the next
+presentation change, so an expired or cancelled opening cannot arm or press even
+when the frame loads later. Chromium and WebKit controls hold the
+preview navigation and a load-blocking image, read the owner repeatedly meanwhile,
+expire and close a held opening, and check that a late load brings no input.
+
 Native arming reports a missing or disabled SSR counter as pending until its
 hydration enables the button. The transport polls that state within the original
 click phase deadline before taking a native snapshot or pressing once. A ready

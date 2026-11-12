@@ -82,20 +82,24 @@ workers join their parent's group. Stage-2 capacity and native iPhone acceptance
 
 ## Memory ceiling
 
-A group's address space is the guest memory maximum, `crates/bunwasm-cli/max-memory.txt`
-(1 GiB, 16384 pages, at stage 1; see [Memory ceiling](memory-ceiling.md)). The core declares its
-imported memory with exactly that page maximum, so a group memory with another maximum cannot
-instantiate it, and a core linked for another stage is refused.
+A group's address space is `crates/bunwasm-cli/group-address-space.txt` (2 GiB, 32768 pages, at
+stage 2; see [Memory ceiling](memory-ceiling.md)). The core and its side each declare the imported
+memory with exactly that page maximum, so a pair linked for another stage is refused. What the
+group's members may hold together is the guest memory maximum, `crates/bunwasm-cli/max-memory.txt`
+(1 GiB, 16384 pages): regions are not counted against it.
 
-Waffle's `memoryGroups.maximumPages` and `stackBytes` are runtime-wide options: every group in
-one `createRuntime()` uses the same policy. A runtime that hosts Bun groups must opt in with
-`createRuntime({ memoryGroups: { maximumPages: 16384, stackBytes: 8 << 20 } })`, and that also caps
-every other group in the same runtime at 1 GiB. Waffle's defaults (4 GiB, 1 MiB stacks) still
-apply to runtimes that don't set them. A Waffle runtime left at the defaults cannot admit a Bun
-core: the import check fails. There is no fallback. One consequence: stock Rolldown's 1 GiB initial nested memory cannot be a
-region of a 1 GiB Bun group, because the members need room too. That needs the 2 GiB stage.
+Waffle's `memoryGroups` options are runtime-wide: every group in one `createRuntime()` uses the
+same policy. A runtime that hosts Bun groups must opt in with
+`createRuntime({ memoryGroups: { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } })`
+(`BUN_MEMORY_GROUP_POLICY`), and that also gives every other group in the same runtime a 2 GiB
+declared maximum and a 1 GiB member cap. Waffle's defaults (4 GiB, 1 MiB stacks) still apply to
+runtimes that don't set them. A Waffle runtime left at the defaults cannot admit a Bun core: the
+import check fails. There is no fallback. `memberPages` needs a Waffle release that enforces it;
+an older one would admit the core and ignore the cap.
 
-On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { maximum_pages }` at the guest maximum; the service default (65536) refuses the core the same way.
+On wasmtime, a Bun group is an `shm::MemoryGroup` created with
+`GroupPolicy { maximum_pages, member_pages }` at those two values; the service default (65536)
+refuses the core the same way.
 
 ## Initialization
 
@@ -113,16 +117,18 @@ On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { ma
 
 `bunwasm-host` and Waffle's link loader refuse a group image that contains `memory.grow` or an
 opcode they cannot decode, exports a memory, needs a shared library, still has a start section,
-or imports an unshared memory or one whose maximum is not the guest maximum in pages. A pair whose halves disagree
-on the profile is refused. A group core cannot run as a single module. There is no bypass.
+or imports an unshared memory. The native host also refuses a core or a side whose memory maximum
+is not the group address space in pages. A pair whose halves disagree on the profile is refused. A group core cannot run as a single module. There is no bypass.
 
 Receipts of one profile never verify against inputs of the other.
 
 ## Processes on the native host
 
 A shared-group program started by `bun-wasm` becomes the first member of a new group (the
-guest maximum) on one runtime-wide backing budget. A worker it spawns reserves its slot in the parent's
-group before the worker thread exists, and gets `EAGAIN` when the group is full. Any other spawn
+group address space, with the member cap) on one runtime-wide backing budget of 2 GiB. A worker it
+spawns reserves its slot in the parent's group before the worker thread exists, and gets `EAGAIN`
+when the group is full. A member's `group_grow` past the cap is `ENOMEM`, like one past the
+address space or the budget. Any other spawn
 of a group program starts its own group. Host imports read and write a member's memory only
 through atomic cells and owned copies. The group backing outlives the member's Store, and the
 member is released once its thread has stopped and its instances are destroyed. A fatal signal
@@ -151,8 +157,8 @@ room is chosen in steps rather than as half of what is left.
 The page admits a group core as the first member of a new group. A `worker_threads` Worker joins
 its parent's group, and any other spawn starts its own. Members share WebAssembly objects by
 reference, as on the native host. The runtime that hosts it needs the `memoryGroups` policy above
-(`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's 1 GiB, and
-each Memory's reservation is committed in full when it is created. A shared-backend module may
+(`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's group and
+its member cap, and each Memory's reservation is charged in full when it is created. A shared-backend module may
 export its function tables on both hosts. One that exports a global loads on the native host only.
 [The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs from
 the native host.

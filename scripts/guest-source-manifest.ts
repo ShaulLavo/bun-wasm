@@ -139,12 +139,13 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
 
 export type ProgramInputScope = "core" | SupportedPairedEngine;
 
-export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest", includeBuildStd = false): Promise<SourceManifest> {
+/** `sharedGroup`: the program is a shared-group one, which builds std and links at the group address space. */
+export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest", sharedGroup = false): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
   const repositoryPaths = scope === "guest"
     ? ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "src/engine-kind.ts", "src/quickjs-program.ts", "web/src/native-direct-stream.ts", "web/src/dev-html-client.ts"]
-    : scopedRepositoryPaths(scope);
+    : scopedRepositoryPaths(scope, sharedGroup);
   const groups = [await committedGroup("repository", repository, repositoryPaths, "reject", path => scope === "core" && /^(crates\/bunwasm-(engine-quickjs|engine-jsc|jsc|engine-hermes|hermes)\/|third_party\/rquickjs)/.test(path))];
   const bun = join(repository, "vendor/bun");
   if (scope === "guest" || scope === "core") {
@@ -157,7 +158,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   groups.push(await group("sysroot", sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sdk]));
   groups.push(await group("sdk", sdk, ["VERSION", "lib/clang"]));
   groups.push(await group("rust-target", rustTargetLib, ["."]));
-  if (programKindForBuild(build) !== "single" || includeBuildStd) {
+  if (programKindForBuild(build) !== "single" || sharedGroup) {
     if (!options.rustSourceLib) throw new Error("Engine program build requires Rust build-std source inputs");
     groups.push(await group("rust-build-std", options.rustSourceLib, ["."]));
   }
@@ -192,10 +193,17 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   };
 }
 
-function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
+/**
+ * The group address space a shared-group core and side link at. Only shared-group programs
+ * inventory it, so a split side's receipt does not follow an authority it never reads.
+ */
+const GROUP_ADDRESS_SPACE_INPUTS = ["crates/bunwasm-cli/group-address-space.txt", "crates/bunwasm-cli/group_address_space.rs"];
+
+function scopedRepositoryPaths(scope: ProgramInputScope, sharedGroup: boolean): string[] {
   const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/rustc-cache.sh", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts",
-    // The guest memory maximum: the core links at it and JSC's helpers size their heap from it.
-    "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs", "crates/bunwasm-runtime/build/program_profile.rs"];
+    // The guest memory maximum: a split core links at it and JSC's helpers size their heap from it.
+    "crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs", "crates/bunwasm-runtime/build/program_profile.rs"]
+    .concat(sharedGroup ? GROUP_ADDRESS_SPACE_INPUTS : []);
   if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts",
     "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts", "scripts/generate-dev-html-client.ts", "web/src/native-direct-stream.ts", "web/src/dev-html-client.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]);
   const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs", "wasm/nested_frame.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);

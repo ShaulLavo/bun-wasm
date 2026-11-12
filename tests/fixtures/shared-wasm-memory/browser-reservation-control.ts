@@ -1,5 +1,6 @@
 import { runReservationGuests } from './reservation-guests.ts';
 
-// reservation-capacity.ts stays with the native host: its 14000-page row is that host's measured
-// room beside a member, and a Browser member's own footprint has not been measured.
+// reservation-capacity.ts stays with the native host. The Browser host admits the same Rolldown
+// descriptor as the root guest of tests/fixtures/shared-group-address-space, where its group is
+// the only one charged to the page's backing budget.
 await runReservationGuests(['reservation', 'reservation-binding']);

@@ -1,11 +1,17 @@
-import { installIphoneObserver } from "./iphone-browser";
+import { installIphoneObserver, iphonePreviewFocus } from "./iphone-browser";
 
-type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string };
+type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: ReturnType<typeof iphonePreviewFocus> | null };
 type Pending = { id: number; source: string; deadline: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 type Role = "host" | "preview";
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected iPhone observer object");
   return value as Record<string, unknown>;
+}
+function focusRecord(value: unknown): ReturnType<typeof iphonePreviewFocus> | null {
+  if (value === undefined || value === null) return null;
+  const row = object(value);
+  if (typeof row.presented !== "boolean" || typeof row.focused !== "boolean" || (row.presentation !== null && typeof row.presentation !== "string")) throw new Error("Invalid iPhone focus record");
+  return { presented: row.presented, focused: row.focused, presentation: row.presentation };
 }
 export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
@@ -26,7 +32,7 @@ export class IphoneBus {
     const page = (this.issued.has(role) || previous.timeOrigin !== undefined) ? this.reload(role, previous) : previous;
     this.issued.add(role);
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
-    return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)});`;
+    return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)},${iphonePreviewFocus.toString()});`;
   }
   inject(html: string, url: string, endpoint: string): string {
     const source = this.script(url, endpoint);
@@ -66,6 +72,7 @@ export class IphoneBus {
     const row = object(value);
     const page = this.accept(role, row, origin);
     page.visible = row.visible === true;
+    page.previewFocus = focusRecord(row.previewFocus);
     if (typeof row.userAgent === "string") page.userAgent = row.userAgent;
     const pending = this.pending.get(role);
     if (!pending || pending.delivered) return null;

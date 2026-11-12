@@ -48,7 +48,9 @@ source "$root/scripts/src/group-errno-wraps.sh"
 check_group_errno_wraps "$archive" "$out" "${group_errno_wraps[@]}"
 wraps=()
 for name in "${group_errno_wraps[@]}"; do wraps+=("--wrap=$name"); done
-"$WASI_SDK_PATH/bin/wasm-ld" --shared --shared-memory "${wraps[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
+# The side declares the group address space, like its core (program-profile.ts sharedGroupSideLink).
+group_address_space=$(bun scripts/src/program-profile.ts group-address-space)
+"$WASI_SDK_PATH/bin/wasm-ld" --shared --shared-memory "--max-memory=$group_address_space" "${wraps[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined --export=spidermonkey_ctor_value \
   --export=__stack_pointer --export=__wasm_call_ctors --export=spidermonkey_register --export=spidermonkey_run \
   -Map="$out/engine-link.map" -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$out/group-errno.o" "$archive"

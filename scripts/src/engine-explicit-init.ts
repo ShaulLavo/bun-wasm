@@ -70,6 +70,21 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
 
 
 /**
+ * A side's decoded `env.memory` import must match its program profile. A shared-group side
+ * declares the group address space exactly, like its core: wasm-ld's implicit 65536-page
+ * maximum would also instantiate against a narrower group memory, but it would hide a side
+ * linked for another stage. A split side imports its core's unshared memory.
+ */
+export function assertSideMemory(bytes: Uint8Array, profile: ProgramProfile): void {
+    const memory = importedMemory(bytes);
+    if (profile === "split") {
+        assert.equal(memory?.shared, false, "side memory sharing must match its program profile");
+        return;
+    }
+    assert.deepEqual(memory, { shared: true, maximum: sharedGroupMaxPages() }, "side memory must match its program profile: shared, at the group address space");
+}
+
+/**
  * A shared-group side imports the group memory and must never export it (Waffle group admission).
  * Only QuickJS and JSC are qualified for the shared-group profile; other engines' inputs have no atomics.
  */
@@ -93,7 +108,7 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: SupportedPa
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
     const memories = imports.filter((entry) => entry.kind === "memory");
     assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "sole core-owned memory import");
-    assert.equal(importedMemory(input)?.shared, profile === "shared-group", "side memory sharing must match its program profile");
+    assertSideMemory(input, profile);
     assert.deepEqual(imports.filter((entry) => entry.kind === "table"),
         [{ module: "env", name: "__indirect_function_table", kind: "table" }], "sole core-owned table import");
     assert(!original.some((entry) => entry.kind === 2 || entry.name === "memory"), "side must not already export memory");
@@ -142,7 +157,7 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
     assert.equal(WebAssembly.Module.customSections(module, "dylink.0").length, 1, "PIE core has one dylink.0 section");
     assert.deepEqual(WebAssembly.Module.imports(module).filter((entry) => entry.kind === "memory"),
         [{ module: "env", name: "memory", kind: "memory" }], "PIE core imports the group memory");
-    assert.deepEqual(importedMemory(input), { shared: true, maximum: sharedGroupMaxPages() }, "group memory is shared at the guest memory maximum");
+    assert.deepEqual(importedMemory(input), { shared: true, maximum: sharedGroupMaxPages() }, "group memory is shared at the group address space");
     const original = exportsOf(exportSection.payload);
     assert(!original.some((entry) => entry.kind === 2), "PIE core must not export memory");
     assert(!original.some((entry) => entry.name === "core_initialize_memory"), "core is already converted");

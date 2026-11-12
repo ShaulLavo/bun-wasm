@@ -9,6 +9,7 @@ bun-wasm is pre-1.0 and experimental. The package is version 0.0.58 and private.
 | Limit | Value | Source |
 | --- | --- | --- |
 | Linear memory of one guest | 1 GiB maximum (`--max-memory=1073741824`) | `crates/bunwasm-cli/max-memory.txt`, the one source for every link, admission check and JSC's heap sizing. A maximum is not memory a device can supply. See [Memory ceiling](memory-ceiling.md). |
+| Address space of one shared-group memory | 2 GiB maximum (`--max-memory=2147483648` on a shared-group core and side) | `crates/bunwasm-cli/group-address-space.txt`. Its members together hold at most the 1 GiB above; shared memories and buffers use the rest. See [Memory ceiling](memory-ceiling.md). |
 | Typed arrays live at once on JSC | About 485 MiB before `RangeError: Out of memory`, measured at the earlier 512 MiB maximum | [JavaScriptCore for wasm32-wasip1](jsc-build.md) |
 | Small live objects on JSC | About 3 million (QuickJS: about 4 million) | same |
 | Heap exhaustion on JSC | The process aborts instead of throwing | same |

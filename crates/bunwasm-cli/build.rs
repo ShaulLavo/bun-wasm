@@ -1,4 +1,6 @@
 //! Link settings for bun.wasm.
+#[path = "group_address_space.rs"]
+mod group_address_space;
 #[path = "max_memory.rs"]
 mod max_memory;
 
@@ -9,10 +11,9 @@ fn main() {
     if !target.starts_with("wasm32") {
         return;
     }
-    // Both profiles: the declared maximum of the core's own or imported memory.
     println!(
         "cargo:rustc-link-arg-bin=bun=--max-memory={}",
-        max_memory::MAX_MEMORY_BYTES
+        declared_maximum()
     );
     memory_telemetry();
     if shared_group() {
@@ -60,8 +61,20 @@ fn shared_group() -> bool {
     }
 }
 
-/// A PIE member image: the host supplies its memory, table, bases and stack, and the
-/// memory maximum (`max-memory.txt`) becomes the declared maximum of the imported group memory.
+/// The declared maximum of the core's memory, by explicit profile. A split core owns its
+/// memory and stops at the guest memory maximum (`max-memory.txt`). A shared-group core
+/// imports the group memory, whose maximum is the group address space
+/// (`group-address-space.txt`); what its members may hold together is the host's member cap.
+fn declared_maximum() -> u64 {
+    if shared_group() {
+        group_address_space::GROUP_ADDRESS_SPACE_BYTES
+    } else {
+        max_memory::MAX_MEMORY_BYTES
+    }
+}
+
+/// A PIE member image: the host supplies its memory, table, bases and stack, and the group
+/// address space becomes the declared maximum of the imported group memory.
 fn shared_group_link() {
     assert!(
         std::env::var_os("CARGO_FEATURE_ENGINE_SPLIT").is_some(),

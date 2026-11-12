@@ -52,6 +52,11 @@ pub struct GroupPolicy {
     pub members: usize,
     pub parallelism: u32,
     pub maximum_pages: u32,
+    /// The most pages all members may hold together through `group_grow`: every granted
+    /// chunk (image, stack, side, heap) of every reserved, launched or retained member.
+    /// Regions are not counted. `None` is the configured `maximum_pages`; `MemoryGroup::new`
+    /// derives it, because a field default cannot follow another field.
+    pub member_pages: Option<u32>,
     pub regions: usize,
     pub pins: usize,
     pub watches: usize,
@@ -63,6 +68,7 @@ impl Default for GroupPolicy {
             members: DEFAULT_MEMBERS,
             parallelism: 1,
             maximum_pages: MAX_GROUP_PAGES,
+            member_pages: None,
             regions: DEFAULT_REGIONS,
             pins: DEFAULT_PINS,
             watches: DEFAULT_WATCHES,
@@ -360,7 +366,11 @@ pub struct GroupSnapshot {
     pub holds: usize,
     pub watches: usize,
     pub waiters: usize,
+    /// The backing's high-water charge. It falls only when the group's backing is dropped.
     pub committed_bytes: u64,
+    /// Pages members hold now, counted against the policy's member cap. It falls when a
+    /// member is released, unlike `committed_bytes`.
+    pub member_pages: u32,
     pub free_bytes: u64,
     pub bypassed: bool,
     pub published: usize,
@@ -374,6 +384,8 @@ pub struct MemoryGroup {
 struct GroupInner {
     backing: Arc<Backing>,
     policy: GroupPolicy,
+    /// The effective member cap in pages, normalized from the policy at creation.
+    member_cap: u32,
     state: Mutex<GroupState>,
     #[cfg(test)]
     fail_next_tail_growth: AtomicBool,
@@ -387,6 +399,8 @@ struct GroupState {
     waiters: HashMap<WaiterId, Arc<Waiter>>,
     queues: HashMap<u32, VecDeque<WaiterId>>,
     free: Vec<Chunk>,
+    /// Pages in every member's `chunks`, kept equal to their sum under this lock.
+    member_pages: u32,
     next_incarnation: u64,
     next_handle: u32,
     next_pin: u32,
@@ -483,6 +497,7 @@ impl MemoryGroup {
             (1..=MAX_GROUP_PAGES).contains(&policy.maximum_pages),
             "memory group maximum exceeds wasm32"
         );
+        let member_cap = effective_member_pages(&policy)?;
         let memory = SharedMemory::new(engine, MemoryType::shared(1, policy.maximum_pages))?;
         let backing = budget
             .register(memory)
@@ -498,6 +513,7 @@ impl MemoryGroup {
             waiters: HashMap::new(),
             queues: HashMap::new(),
             free: Vec::new(),
+            member_pages: 0,
             next_incarnation: 1,
             next_handle: 1,
             next_pin: 1,
@@ -511,6 +527,7 @@ impl MemoryGroup {
             inner: Arc::new(GroupInner {
                 backing,
                 policy,
+                member_cap,
                 state: Mutex::new(state),
                 #[cfg(test)]
                 fail_next_tail_growth: AtomicBool::new(false),
@@ -589,6 +606,7 @@ impl MemoryGroup {
             watches: state.watches.len(),
             waiters: state.waiters.len(),
             committed_bytes: u64::from(self.inner.backing.charged_pages()) * u64::from(PAGE_BYTES),
+            member_pages: state.member_pages,
             free_bytes: state
                 .free
                 .iter()
@@ -727,7 +745,13 @@ impl GroupInner {
         let chunks = Self::current_member_mut(&mut state, id)
             .map(|member| std::mem::take(&mut member.chunks))
             .unwrap_or_default();
+        // The only place member pages are returned: a released member, or an aborted
+        // reservation. A retained member keeps its chunks and stays charged.
         for chunk in chunks {
+            state.member_pages = state
+                .member_pages
+                .checked_sub(chunk.pages)
+                .expect("member pages released twice");
             give_chunk(&mut state.free, chunk);
         }
         state.members[id.index] = None;
@@ -747,11 +771,19 @@ impl GroupInner {
         }
         let mut state = self.lock();
         Self::receives(&state, member)?;
+        // Refused before any placement, so a grow past the cap changes nothing.
+        let charged = state
+            .member_pages
+            .checked_add(pages)
+            .filter(|total| *total <= self.member_cap)
+            .ok_or(Errno::NoMem)?;
         let chunk = self.take_chunk_locked(&mut state, pages)?;
         let page = chunk.page;
         Self::current_member_mut(&mut state, member)?
             .chunks
             .push(chunk);
+        // Charged only now that the chunk is placed and owned by the member.
+        state.member_pages = charged;
         Ok(page)
     }
 
@@ -1488,6 +1520,17 @@ fn wait_status(status: WaitStatus) -> WaitResult {
     }
 }
 
+/// An omitted member cap is the configured group maximum. An explicit one is a positive page
+/// count no greater than that maximum; anything else refuses the group rather than clamping.
+fn effective_member_pages(policy: &GroupPolicy) -> Result<u32> {
+    let pages = policy.member_pages.unwrap_or(policy.maximum_pages);
+    anyhow::ensure!(
+        (1..=policy.maximum_pages).contains(&pages),
+        "memory group member cap must be between one page and the group maximum"
+    );
+    Ok(pages)
+}
+
 fn valid_alignment(align: u32) -> bool {
     align.is_power_of_two() && align <= PAGE_BYTES
 }
@@ -1972,5 +2015,7 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod member_cap_tests;
 #[cfg(test)]
 mod tests;

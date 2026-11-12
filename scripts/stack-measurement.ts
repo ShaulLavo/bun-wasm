@@ -6,18 +6,19 @@ export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Assign|Bloc
 /** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
 export const chainMaximum = 4096;
 const stackModes = [
-  "plain", "getter", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
+  "plain", "getter", "computedgetter", "ajvnames", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
   "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
   "async", "promise", "console",
 ].concat(chainModes);
 // Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
-const searched = new Set(["plain", "getter", "proxy", "json", "parse", "promise"].concat(chainModes));
+const searched = new Set(["plain", "getter", "computedgetter", "proxy", "json", "parse", "promise"].concat(chainModes));
 const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead"].concat(chainModes));
 
 function deepestAttempt(mode: string): number {
   // Each bind prefixes the name with "bound ", so deeper chains run out of memory first.
   if (mode === "bound") return 2000;
-  return mode.startsWith("chain") ? chainMaximum : 200000;
+  // The Ajv walk merges one name set per level, so its depth stays where that work is small.
+  return mode.startsWith("chain") || mode === "ajvnames" ? chainMaximum : 200000;
 }
 
 export interface GuestStackSettings { readonly budget: string | null; readonly parserReserve: string | null }
