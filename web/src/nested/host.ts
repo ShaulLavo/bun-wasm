@@ -4,7 +4,7 @@
 import { WasiExit } from "waffle/core/wasi";
 import { compileSections, section, utf8Name } from "./binary.js";
 import { FunctionTypes, type WasmFunction } from "./function-type.js";
-import { isReference, readModuleInfo, type FunctionType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
+import { isReference, readModuleInfo, type FunctionType, type GlobalType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
 import {
   BACKEND, BAD_FRAME, FRAME_ALIGN, FRAME_BYTES, MAX_DEPTH, MAX_RESOURCES, MAX_VALUES, OK, PENDING_EXCEPTION,
   decodeRequest, encodeReply, type Binding, type Reply, type Request, type WasmNumber,
@@ -24,8 +24,6 @@ const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const NO_MEMORY = 48;
 const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
-const GLOBAL_REFUSAL = "Nested globals are not available on the Browser host";
-const GLOBAL_REQUESTS = ["GlobalGet", "GlobalSet"];
 const MODULE_ALIGN = 16;
 const encoder = new TextEncoder();
 
@@ -280,12 +278,14 @@ function bindingNames(binding: Binding): { module: string; name: string } {
   return "Callback" in binding ? binding.Callback : "Function" in binding ? binding.Function : binding.Global;
 }
 
-/** One path for Compile and AttachModule, so both keep the global refusal. */
+/** One path for Compile and AttachModule, before any instance's start code can run. */
 function compileRegionized(bytes: Uint8Array<ArrayBuffer>): Pick<CompiledModule, "module" | "info"> {
   const module = new WebAssembly.Module(bytes);
-  // Refuse here, before an instance's start code can run and then fail building its exports.
-  if (WebAssembly.Module.exports(module).some(item => item.kind === "global")) throw new Error(GLOBAL_REFUSAL);
-  return { module, info: readModuleInfo(bytes) };
+  const info = readModuleInfo(bytes);
+  for (const type of info.globals.values()) {
+    if (!type || isReference(type.value)) throw new Error("unsupported nested global export");
+  }
+  return { module, info };
 }
 
 /** One member's nested service. `checkActive` is its cancellation boundary. */
@@ -428,7 +428,8 @@ export class NestedHost {
     if ("TableGet" in request) return this.tableGet(request.TableGet.table, request.TableGet.index);
     if ("TableSet" in request) return this.tableSet(request.TableSet.table, request.TableSet.index, request.TableSet.function);
     if ("TableGrow" in request) return this.tableGrow(request.TableGrow.table, request.TableGrow.delta, request.TableGrow.function);
-    if (GLOBAL_REQUESTS.some(item => item in request)) throw new Error(GLOBAL_REFUSAL);
+    if ("GlobalGet" in request) return this.globalGet(request.GlobalGet.instance, request.GlobalGet.name);
+    if ("GlobalSet" in request) return this.globalSet(request.GlobalSet.instance, request.GlobalSet.name, request.GlobalSet.value);
     if (!("Call" in request)) throw new Error("Unknown nested request");
     const { function: id, arguments: args, invocation } = request.Call;
     return this.enter(invocation, () => this.call(id, args));
@@ -606,6 +607,30 @@ export class NestedHost {
     this.region();
     const bytes = this.copy(pointer, length);
     return { Handle: pushResource(this.modules, { ...compileRegionized(bytes), bytes }) };
+  }
+
+  private global(instanceId: number, name: string): { readonly global: WebAssembly.Global; readonly type: GlobalType } {
+    const guest = getResource(this.guests, instanceId, "invalid instance");
+    const global = guest.instance.exports[name];
+    const type = guest.compiled.info.globals.get(name);
+    if (!(global instanceof WebAssembly.Global) || !type) throw new Error("missing nested global");
+    return { global, type };
+  }
+
+  private globalGet(instanceId: number, name: string): Reply {
+    const { global, type } = this.global(instanceId, name);
+    // JSC and V8 throw different errors on v128 reads, so decide from the declaration first.
+    if (SLOT_KINDS[type.value] === undefined) throw new Error("unsupported nested result value");
+    return { Values: [toNumber(global.value, type.value)] };
+  }
+
+  private globalSet(instanceId: number, name: string, value: WasmNumber): Reply {
+    const { global, type } = this.global(instanceId, name);
+    if (!type.mutable) throw new Error("immutable nested global");
+    // The page engine would silently coerce another numeric type.
+    if (numberType(value) !== type.value) throw new Error("incompatible nested global value type");
+    global.value = toValue(value);
+    return { Count: 0 };
   }
 
   private enter(invocation: number, run: () => Reply): Reply {

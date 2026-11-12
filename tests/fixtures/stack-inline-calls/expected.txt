@@ -1,0 +1,24 @@
+direct true
+mutual true
+method true
+no arguments true
+many arguments true
+fewer arguments than parameters true
+tail positions true true
+exception through frames RangeError true
+unbounded recursion RangeError
+after the refusal true
+recursion through a native function RangeError
+continued true
+direct true
+mutual true
+method true
+no arguments true
+many arguments true
+fewer arguments than parameters true
+tail positions true true
+exception through frames RangeError true
+unbounded recursion RangeError
+after the refusal true
+recursion through a native function RangeError
+continued true

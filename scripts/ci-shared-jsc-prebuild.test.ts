@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { excludedJscSentinels, excludedSharedSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 
@@ -77,6 +78,7 @@ function fixture(sharedNative: "true" | "false") {
   mkdirSync(bin);
   mkdirSync(temp);
   copyFileSync(new URL("../env.sh", import.meta.url), join(repo, "env.sh"));
+  copyFileSync(new URL("./ci-jsc-artifact.ts", import.meta.url), join(repo, "scripts/ci-jsc-artifact.ts"));
   // Only expensive build/input verification is substituted. Transport runs the workflow's real shell.
   writeFileSync(join(repo, "jsc/common.sh"), [
     'check_jsc_inputs_stamp() {',
@@ -86,7 +88,7 @@ function fixture(sharedNative: "true" | "false") {
     '}', "",
   ].join("\n"));
   writeFileSync(join(repo, "scripts/build-jsc.sh"), 'echo compile >> "$CALLS"\nprintf expected > "$JSC_BUILD_DIR/inputs-stamp"\n');
-  writeFileSync(join(bin, "bun"), '#!/bin/bash\nset -euo pipefail\ntest "$*" = "scripts/build-wasi-sysroot.ts --shared-pic"\necho sysroot-verify >> "$CALLS"\ntest "$(cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json")" = "$EXPECTED_SYSROOT"\n', { mode: 0o755 });
+  writeFileSync(join(bin, "bun"), `#!/bin/bash\nset -euo pipefail\nif [[ "$1" == scripts/ci-jsc-artifact.ts ]]; then exec '${process.execPath}' "$@"; fi\ntest "$*" = "scripts/build-wasi-sysroot.ts --shared-pic"\necho sysroot-verify >> "$CALLS"\ntest "$(cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json")" = "$EXPECTED_SYSROOT"\n`, { mode: 0o755 });
   const env = {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root,
     RUNNER_TEMP: temp, WASM_TOOLS: join(temp, "wasm-tools"), TMPDIR: temp,
@@ -107,6 +109,7 @@ function seed(h: Fixture) {
   symlinkSync("../lib", join(h.sysroot, "include/sdk-link"));
   if (h.env.SHARED_NATIVE !== "true") return;
   mkdirSync(h.prebuild, { recursive: true });
+  seedJscArtifact(h.prebuild, true);
   writeFileSync(join(h.prebuild, "libJavaScriptCore.a"), "archive\0bytes", { mode: 0o640 });
   writeFileSync(join(h.prebuild, "inputs-stamp"), "expected");
   symlinkSync("libJavaScriptCore.a", join(h.prebuild, "archive-link"));
@@ -200,6 +203,8 @@ for (const sharedNative of ["true", "false"] satisfies ("true" | "false")[]) {
     expect(lstatSync(archive).mode & 0o777).toBe(0o640);
     expect(lstatSync(archive).mtimeMs).toBe(1_700_000_000_000);
     expect(readlinkSync(join(h.prebuild, "archive-link"))).toBe("libJavaScriptCore.a");
+    for (const path of excludedJscSentinels.concat(excludedSharedSentinels)) expect(existsSync(join(h.prebuild, path))).toBe(false);
+    for (const path of ["build/jsc/headers.hmap", "build/jsc/Source/JSCBuiltins.cpp.obj", "webkit/.git/index", "icu/prefix/include/unicode/utypes.h", "libcxx/include/__config_site", "libcxx/.bunwasm-archives"]) expect(readFileSync(join(h.prebuild, path), "utf8")).toBe(`synthetic fixture ${path}\n`);
   }));
 }
 
