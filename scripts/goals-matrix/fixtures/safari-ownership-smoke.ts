@@ -18,8 +18,10 @@ export async function runOwnershipSmoke(output: string, commit: string): Promise
   const identity = { run: crypto.randomUUID(), source: { commit, dirty: false }, cell: "fixture/safari/browser", attempt: 1 };
   const sink = ownershipReceipt(output, identity);
   const events: SafariOwnershipEvent[] = [];
+  let fixturePort: number | undefined;
   await withNativeDriver(async (endpoint, signal) => {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("<!doctype html><title>Ownership fixture</title><p>Own fixture</p>", { headers: { "content-type": "text/html" } }) });
+    fixturePort = server.port;
     let transport: Awaited<ReturnType<typeof createSafariTransport>> | undefined;
     const scope = Scope.open(15_000, signal);
     try {
@@ -44,7 +46,7 @@ export async function runOwnershipSmoke(output: string, commit: string): Promise
   }, { desktopSafari: true, cleanupFile: join(output, "native-cleanup.json") });
   assert.ok(events.some(event => event.operation.kind === "frame-remove" && event.outcome.state === "acknowledged"));
   assert.ok(events.some(event => event.operation.kind === "session-delete" && event.outcome.state === "acknowledged"));
-  await writeFile(join(output, "smoke.json"), JSON.stringify({ ...identity, events: events.length, beforeTeardownRetained: true, frameRemovalAcknowledged: true, sessionDeletionAcknowledged: true, physicalWindowAbsence: "unknown" }, null, 2));
+  await writeFile(join(output, "smoke.json"), JSON.stringify({ ...identity, fixturePid: process.pid, fixturePort, fixtureServerStopped: true, events: events.length, beforeTeardownRetained: true, frameRemovalAcknowledged: true, sessionDeletionAcknowledged: true, physicalWindowAbsence: "unknown" }, null, 2));
 }
 
 if (import.meta.main) {
