@@ -2452,16 +2452,7 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 diff --git a/Source/JavaScriptCore/parser/NodeConstructors.h b/Source/JavaScriptCore/parser/NodeConstructors.h
 --- a/Source/JavaScriptCore/parser/NodeConstructors.h
 +++ b/Source/JavaScriptCore/parser/NodeConstructors.h
-@@ -1006,6 +1006,8 @@ namespace JSC {
-         : StatementNode(location)
-         , m_name(name)
-         , m_statement(statement)
-+        , m_hasCompletionValue(statement->hasCompletionValue())
-+        , m_hasEarlyBreakOrContinue(statement->hasEarlyBreakOrContinue())
-     {
-     }
- 
-@@ -1141,6 +1143,8 @@ namespace JSC {
+@@ -1141,6 +1141,8 @@ namespace JSC {
          : StatementNode(location)
          , VariableEnvironmentNode(WTF::move(lexicalVariables), WTF::move(functionStack))
          , m_statements(statements)
@@ -2528,22 +2519,24 @@ diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser
          void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
          bool tryFoldBreakAndContinue(BytecodeGenerator&, StatementNode* ifBlock,
              Label*& trueTarget, FallThroughMode&);
-@@ -1890,12 +1899,16 @@ namespace JSC {
+@@ -1890,8 +1899,18 @@ namespace JSC {
          bool isLabel() const final { return true; }
  
      private:
 -        bool hasCompletionValue() const final { return m_statement->hasCompletionValue(); }
 -        bool hasEarlyBreakOrContinue() const final { return m_statement->hasEarlyBreakOrContinue(); }
-+        // Stored when the label is built, so a run of labels answers without walking the run. The
-+        // labelled statement is fixed by the constructor.
-+        bool hasCompletionValue() const final { return m_hasCompletionValue; }
-+        bool hasEarlyBreakOrContinue() const final { return m_hasEarlyBreakOrContinue; }
++        // A run of labels is built in a loop, so it is answered in one too: the queries go to the
++        // first statement that is not a label, without recursion. That statement answers in
++        // constant time (a block from its stored bits).
++        bool hasCompletionValue() const final { return unlabelledStatement()->hasCompletionValue(); }
++        bool hasEarlyBreakOrContinue() const final { return unlabelledStatement()->hasEarlyBreakOrContinue(); }
++        StatementNode* unlabelledStatement() const
++        {
++            StatementNode* statement = m_statement;
++            while (statement->isLabel())
++                statement = static_cast<const LabelNode*>(statement)->m_statement;
++            return statement;
++        }
          void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
  
          const Identifier& m_name;
-         StatementNode* m_statement;
-+        bool m_hasCompletionValue : 1;
-+        bool m_hasEarlyBreakOrContinue : 1;
-     };
- 
-     class ThrowNode final : public StatementNode, public ThrowableExpressionData {
