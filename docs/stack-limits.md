@@ -494,6 +494,16 @@ targets at 192 KiB, so the parser reserve no longer moves that limit. A nest wit
 operator per level, such as `a = f(b = f(…))`, keeps upstream's two frames and two reservations
 per level. The measurements below predate that change.
 
+Nests of blocks and `if` statements no longer recurse in the parser or the code generator either
+([JSC block and `if` nests](bun-patches/jsc-statement-records.md),
+[the code generator's loop](bun-patches/jsc-statement-spine.md)). Up to 10,000 open blocks and
+`if`s in one parse load at every budget and reserve, and past that the parser throws `RangeError`.
+Next 15.5.6's `bundle5.js` now loads alone at 176 and 192 KiB with the default reserve. A nest
+that passes through another statement per level, such as a braced loop, `switch`, `with`, `try`
+or label, still recurses through `parseStatement` with its reservation per level. The gate's
+statement witness is therefore an unbraced `while` nest, and block nests must load the deepest
+nest tried at every setting.
+
 `BUN_WASM_JSC_PARSER_RESERVE` is the number of shadow bytes those functions reserve
 (`parseStatement`, `parseAssignmentExpression` and its two chain functions). The
 default is 2048. The other 20 reserve sites, `parseAwaitExpression`, `StackBounds`, the hard and

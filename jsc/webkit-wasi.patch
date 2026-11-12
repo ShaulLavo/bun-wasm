@@ -2540,3 +2540,508 @@ diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser
          void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
  
          const Identifier& m_name;
+diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
+--- a/Source/JavaScriptCore/parser/Parser.cpp
++++ b/Source/JavaScriptCore/parser/Parser.cpp
+@@ -2113,6 +2113,264 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseBlockStatemen
+     return result;
+ }
+ 
++// bun-wasm: a nest of block statements and `if` statements is parsed in one parseStatementNest
++// activation (docs/bun-patches/jsc-statement-records.md). parseStatement calls it for a `{` or an
++// `if`, where upstream called parseBlockStatement or parseIfStatement. Upstream's cycles
++// parseStatement → parseBlockStatement → parseSourceElements → parseStatementListItem →
++// parseStatement and parseStatement → parseIfStatement → parseStatement become records on
++// m_statementRecords, with every side effect of the replaced frames made at the same point of the
++// token stream. Inside a nest, a block or an `if` opens a record. Any other statement is parsed by
++// parseStatement itself, with the reserve and stack check of the frame upstream had for it, and a
++// declaration list item by parseStatementListItem, as upstream's list did. parseStatement is
++// otherwise upstream's, so a statement route that opens no block or `if` keeps upstream's frames.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE TreeStatement Parser<LexerType>::parseStatementNest(TreeBuilder& context)
++{
++    StatementRecordScope records(*this);
++    // A statement below a record is never a directive: blocks and branches read none.
++    const Identifier* nestedDirective = nullptr;
++    unsigned nestedDirectiveLength = 0;
++    StatementNext next = StatementNext::Deliver;
++    // parseStatement has entered the root: its depth is incremented, its stack checked.
++    TreeStatement result = openStatementRecord(context, m_statementDepth - 1, next);
++    for (;;) {
++        propagateError();
++        if (next != StatementNext::Deliver) {
++            result = parseNestedStatement(context, next, nestedDirective, nestedDirectiveLength);
++            continue;
++        }
++        // A finished statement, or the end of a list, for the record it completes.
++        if (!records.hasOwnRecord())
++            return result;
++        result = deliverToStatementRecord(context, result, next);
++    }
++}
++
++// One statement inside a nest. `next` says whether it is a list item or a branch, and on return
++// whether a record opened (and what it waits for) or a statement is ready to deliver.
++template <typename LexerType>
++template <class TreeBuilder> ALWAYS_INLINE TreeStatement Parser<LexerType>::parseNestedStatement(TreeBuilder& context, StatementNext& next, const Identifier*& directive, unsigned& directiveLiteralLength)
++{
++    bool listItem = next == StatementNext::ListItem;
++    next = StatementNext::Deliver;
++    if (listItem && matchStatementListDeclaration())
++        return parseStatementListItem(context, directive, &directiveLiteralLength);
++    if (!match(OPENBRACE) && !match(IF))
++        return parseStatement(context, directive, &directiveLiteralLength);
++    // parseStatement's entry for a block or an `if`, without its frame.
++    int savedStatementDepth = m_statementDepth;
++    m_statementDepth++;
++    failIfStackOverflow();
++    m_immediateParentAllowsFunctionDeclarationInStatement = false;
++    return openStatementRecord(context, savedStatementDepth, next);
++}
++
++// Opens the record for a `{` or an `if`. An empty block finishes at once and is ready to deliver.
++template <typename LexerType>
++template <class TreeBuilder> ALWAYS_INLINE TreeStatement Parser<LexerType>::openStatementRecord(TreeBuilder& context, int savedStatementDepth, StatementNext& next)
++{
++    if (match(IF)) {
++        if (openIfRecord(context, savedStatementDepth))
++            next = StatementNext::Statement;
++        return 0;
++    }
++    bool opened = false;
++    TreeStatement result = openBlockRecord(context, savedStatementDepth, opened);
++    next = opened ? StatementNext::ListItem : StatementNext::Deliver;
++    return result;
++}
++
++// What the top record does with a finished statement (or 0, the end of a list): upstream's
++// parseSourceElements loop, the end of parseBlockStatement, and parseIfStatement's steps.
++template <typename LexerType>
++template <class TreeBuilder> ALWAYS_INLINE TreeStatement Parser<LexerType>::deliverToStatementRecord(TreeBuilder& context, TreeStatement result, StatementNext& next)
++{
++    StatementRecord& top = m_statementRecords.last();
++    switch (top.phase) {
++    case StatementRecordPhase::BlockBody:
++        if (result) {
++            context.appendStatement(fromRecordHandle<TreeSourceElements>(top.tree0), result);
++            next = StatementNext::ListItem;
++            return result;
++        }
++        propagateError();
++        matchOrFail(CLOSEBRACE, "Expected a closing '}' at the end of a block statement");
++        return closeBlockRecord(context);
++    case StatementRecordPhase::IfThen:
++        failIfFalse(result, "Expected a statement as the body of an if block");
++        top.tree1 = toRecordHandle(result);
++        break;
++    case StatementRecordPhase::IfElseIfThen:
++        failIfFalse(result, "Expected a statement as the body of an if block");
++        if (!m_ifBranches.tryAppend(toRecordHandle(result))) [[unlikely]]
++            failWithStackOverflow();
++        break;
++    case StatementRecordPhase::IfFinalElse:
++        failIfFalse(result, "Expected a statement as the body of an else block");
++        if (!m_ifBranches.tryAppend(toRecordHandle(result))) [[unlikely]]
++            failWithStackOverflow();
++        return closeIfRecord(context, true);
++    }
++    if (!match(ELSE))
++        return closeIfRecord(context, false);
++    // The clause sets its own error when it fails.
++    if (!parseElseClause(context)) [[unlikely]]
++        return 0;
++    next = StatementNext::Statement;
++    return result;
++}
++
++// parseBlockStatement up to its statement list, for a Normal block. The record is secured before
++// the switch flag, the scope or the token change, so a refusal leaves nothing to unwind.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE TreeStatement Parser<LexerType>::openBlockRecord(TreeBuilder& context, int savedStatementDepth, bool& opened)
++{
++    ASSERT(match(OPENBRACE));
++    if (!reserveStatementRecord()) [[unlikely]]
++        failWithStackOverflow();
++    bool savedInsideSwitchCaseBody = m_insideSwitchCaseBody;
++    // A block statement inside a switch case/default clause allows using declarations.
++    m_insideSwitchCaseBody = false;
++    // The body of a function being parsed again is a block at depth 0 and gets no scope of its own.
++    Scope* scope = nullptr;
++    if (m_statementDepth > 0) {
++        scope = pushScope();
++        scope->setIsLexicalScope();
++        scope->preventVarDeclarations();
++    }
++    int startOffset = m_token.m_startPosition.offset;
++    m_statementRecords.append(StatementRecord { StatementRecordPhase::BlockBody, !!scope, savedInsideSwitchCaseBody, savedStatementDepth, tokenLocation(), startOffset, scope, 0, 0, 0, 0 });
++    next();
++    if (match(CLOSEBRACE))
++        return closeBlockRecord(context);
++    m_statementRecords.last().tree0 = toRecordHandle(context.createSourceElements());
++    opened = true;
++    return 0;
++}
++
++// The end of parseBlockStatement once `}` is matched, then parseStatement's return for a block.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE TreeStatement Parser<LexerType>::closeBlockRecord(TreeBuilder& context)
++{
++    ASSERT(match(CLOSEBRACE));
++    StatementRecord record = m_statementRecords.last();
++    VariableEnvironment lexicalEnvironment;
++    DeclarationStacks::FunctionStack functionStack;
++    int endOffset = m_token.m_startPosition.offset;
++    next();
++    if (record.pushedLexicalScope)
++        std::tie(lexicalEnvironment, functionStack) = popScope(record.scope, TreeBuilder::NeedsFreeVariableInfo);
++    TreeStatement result = context.createBlockStatement(record.location, fromRecordHandle<TreeSourceElements>(record.tree0), WTF::move(lexicalEnvironment), WTF::move(functionStack));
++    context.setStartOffset(result, record.startOffset);
++    context.setEndOffset(result, endOffset);
++    m_insideSwitchCaseBody = record.savedInsideSwitchCaseBody;
++    m_statementDepth = record.savedStatementDepth;
++    m_statementRecords.removeLast();
++    return result;
++}
++
++// parseIfStatement up to its first branch.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE bool Parser<LexerType>::openIfRecord(TreeBuilder& context, int savedStatementDepth)
++{
++    ASSERT(match(IF));
++    JSTokenLocation ifLocation(tokenLocation());
++    next();
++    handleProductionOrFail2(OPENPAREN, "(", "start", "'if' condition");
++
++    TreeExpression condition = parseExpression(context);
++    failIfFalse(condition, "Expected an expression as the condition for an if statement");
++    recordPauseLocation(context.breakpointLocation(condition));
++    handleProductionOrFail2(CLOSEPAREN, ")", "end", "'if' condition");
++
++    if (!reserveStatementRecord()) [[unlikely]]
++        failWithStackOverflow();
++    unsigned clauseBase = m_ifClauses.size();
++    unsigned branchBase = m_ifBranches.size();
++    m_statementRecords.append(StatementRecord { StatementRecordPhase::IfThen, false, false, savedStatementDepth, ifLocation, 0, nullptr, toRecordHandle(condition), 0, clauseBase, branchBase });
++    m_immediateParentAllowsFunctionDeclarationInStatement = true;
++    return true;
++}
++
++// One turn of parseIfStatement's `else` loop up to its branch. The current token is `else`.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE bool Parser<LexerType>::parseElseClause(TreeBuilder& context)
++{
++    JSTokenLocation tempLocation = tokenLocation();
++    next();
++    if (!match(IF)) {
++        m_statementRecords.last().phase = StatementRecordPhase::IfFinalElse;
++        m_immediateParentAllowsFunctionDeclarationInStatement = true;
++        return true;
++    }
++    next();
++
++    handleProductionOrFail2(OPENPAREN, "(", "start", "'if' condition");
++
++    TreeExpression innerCondition = parseExpression(context);
++    failIfFalse(innerCondition, "Expected an expression as the condition for an if statement");
++    recordPauseLocation(context.breakpointLocation(innerCondition));
++    handleProductionOrFail2(CLOSEPAREN, ")", "end", "'if' condition");
++    if (!m_ifClauses.tryAppend(IfClause { toRecordHandle(innerCondition), tempLocation })) [[unlikely]]
++        failWithStackOverflow();
++    // The condition may have parsed nested statements, which can move the record stack.
++    m_statementRecords.last().phase = StatementRecordPhase::IfElseIfThen;
++    m_immediateParentAllowsFunctionDeclarationInStatement = true;
++    return true;
++}
++
++// The end of parseIfStatement: the `else if` chain folded from the inside out, as upstream did,
++// then parseStatement's end offset for an `if`.
++template <typename LexerType>
++template <class TreeBuilder> NEVER_INLINE TreeStatement Parser<LexerType>::closeIfRecord(TreeBuilder& context, bool trailingElse)
++{
++    StatementRecord record = m_statementRecords.last();
++    TreeStatement elseBlock = 0;
++    if (m_ifBranches.size() > record.branchBase) {
++        if (!trailingElse) {
++            IfClause clause = m_ifClauses.takeLast();
++            TreeStatement trueBlock = fromRecordHandle<TreeStatement>(m_ifBranches.takeLast());
++            TreeStatement ifStatement = context.createIfStatement(clause.location, fromRecordHandle<TreeExpression>(clause.condition), trueBlock, 0);
++            context.setEndOffset(ifStatement, context.endOffset(trueBlock));
++            m_ifBranches.append(toRecordHandle(ifStatement));
++        }
++        while (m_ifClauses.size() > record.clauseBase) {
++            IfClause clause = m_ifClauses.takeLast();
++            TreeStatement falseBlock = fromRecordHandle<TreeStatement>(m_ifBranches.takeLast());
++            TreeStatement trueBlock = fromRecordHandle<TreeStatement>(m_ifBranches.takeLast());
++            TreeStatement ifStatement = context.createIfStatement(clause.location, fromRecordHandle<TreeExpression>(clause.condition), trueBlock, falseBlock);
++            context.setEndOffset(ifStatement, context.endOffset(falseBlock));
++            m_ifBranches.append(toRecordHandle(ifStatement));
++        }
++        elseBlock = fromRecordHandle<TreeStatement>(m_ifBranches.last());
++        m_ifBranches.shrink(record.branchBase);
++    }
++    TreeStatement result = context.createIfStatement(record.location, fromRecordHandle<TreeExpression>(record.tree0), fromRecordHandle<TreeStatement>(record.tree1), elseBlock);
++    context.setEndOffset(result, m_lastTokenLocation.endOffset);
++    m_statementDepth = record.savedStatementDepth;
++    m_statementRecords.removeLast();
++    return result;
++}
++
++// The failure path of the replaced frames, innermost first: a block pops its scope, then restores
++// the switch flag, then the depth; an `if` restores the depth. Native callees popped their own
++// scopes before they returned, so each block's scope is the current one when it is popped.
++template <typename LexerType>
++NEVER_INLINE void Parser<LexerType>::unwindStatementRecords(unsigned recordBase, unsigned clauseBase, unsigned branchBase)
++{
++    while (m_statementRecords.size() > recordBase) {
++        StatementRecord record = m_statementRecords.takeLast();
++        if (record.phase == StatementRecordPhase::BlockBody) {
++            if (record.pushedLexicalScope)
++                popScope(record.scope, false);
++            m_insideSwitchCaseBody = record.savedInsideSwitchCaseBody;
++        }
++        m_statementDepth = record.savedStatementDepth;
++    }
++    m_ifClauses.shrink(clauseBase);
++    m_ifBranches.shrink(branchBase);
++}
++
+ template <typename LexerType>
+ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseStatement(TreeBuilder& context, const Identifier*& directive, unsigned* directiveLiteralLength)
+ {
+@@ -2129,7 +2387,7 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseStatement(Tre
+ 
+     switch (m_token.m_type) {
+     case OPENBRACE:
+-        result = parseBlockStatement(context);
++        result = parseStatementNest(context);
+         shouldSetEndOffset = false;
+         break;
+     case VAR:
+@@ -2147,7 +2405,7 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseStatement(Tre
+         break;
+     }
+     case IF:
+-        result = parseIfStatement(context);
++        result = parseStatementNest(context);
+         break;
+     case DO:
+         result = parseDoWhileStatement(context);
+@@ -3595,78 +3853,6 @@ template <class TreeBuilder> TreeStatement Parser<LexerType>::parseExpressionSta
+     return context.createExprStatement(location, expression, start);
+ }
+ 
+-template <typename LexerType>
+-template <class TreeBuilder> TreeStatement Parser<LexerType>::parseIfStatement(TreeBuilder& context)
+-{
+-    ASSERT(match(IF));
+-    JSTokenLocation ifLocation(tokenLocation());
+-    next();
+-    handleProductionOrFail2(OPENPAREN, "(", "start", "'if' condition");
+-
+-    TreeExpression condition = parseExpression(context);
+-    failIfFalse(condition, "Expected an expression as the condition for an if statement");
+-    recordPauseLocation(context.breakpointLocation(condition));
+-    handleProductionOrFail2(CLOSEPAREN, ")", "end", "'if' condition");
+-
+-    const Identifier* unused = nullptr;
+-    m_immediateParentAllowsFunctionDeclarationInStatement = true;
+-    TreeStatement trueBlock = parseStatement(context, unused);
+-    failIfFalse(trueBlock, "Expected a statement as the body of an if block");
+-
+-    if (!match(ELSE))
+-        return context.createIfStatement(ifLocation, condition, trueBlock, 0);
+-
+-    Vector<std::tuple<TreeExpression, JSTokenLocation>, 8> exprStack;
+-    Vector<TreeStatement, 8> statementStack;
+-    bool trailingElse = false;
+-    do {
+-        JSTokenLocation tempLocation = tokenLocation();
+-        next();
+-        if (!match(IF)) {
+-            const Identifier* unused = nullptr;
+-            m_immediateParentAllowsFunctionDeclarationInStatement = true;
+-            TreeStatement block = parseStatement(context, unused);
+-            failIfFalse(block, "Expected a statement as the body of an else block");
+-            statementStack.append(block);
+-            trailingElse = true;
+-            break;
+-        }
+-        next();
+-        
+-        handleProductionOrFail2(OPENPAREN, "(", "start", "'if' condition");
+-
+-        TreeExpression innerCondition = parseExpression(context);
+-        failIfFalse(innerCondition, "Expected an expression as the condition for an if statement");
+-        recordPauseLocation(context.breakpointLocation(innerCondition));
+-        handleProductionOrFail2(CLOSEPAREN, ")", "end", "'if' condition");
+-        const Identifier* unused = nullptr;
+-        m_immediateParentAllowsFunctionDeclarationInStatement = true;
+-        TreeStatement innerTrueBlock = parseStatement(context, unused);
+-        failIfFalse(innerTrueBlock, "Expected a statement as the body of an if block");
+-        exprStack.append(std::tuple { innerCondition, tempLocation });
+-        statementStack.append(innerTrueBlock);
+-    } while (match(ELSE));
+-
+-    if (!trailingElse) {
+-        auto [condition, location] = exprStack.takeLast();
+-        TreeStatement trueBlock = statementStack.takeLast();
+-        TreeStatement ifStatement = context.createIfStatement(location, condition, trueBlock, 0);
+-        context.setEndOffset(ifStatement, context.endOffset(trueBlock));
+-        statementStack.append(ifStatement);
+-    }
+-
+-    while (!exprStack.isEmpty()) {
+-        auto [condition, location] = exprStack.takeLast();
+-        TreeStatement falseBlock = statementStack.takeLast();
+-        TreeStatement trueBlock = statementStack.takeLast();
+-        TreeStatement ifStatement = context.createIfStatement(location, condition, trueBlock, falseBlock);
+-        context.setEndOffset(ifStatement, context.endOffset(falseBlock));
+-        statementStack.append(ifStatement);
+-    }
+-
+-    return context.createIfStatement(ifLocation, condition, trueBlock, statementStack.last());
+-}
+-
+ template <typename LexerType>
+ template <class TreeBuilder> typename TreeBuilder::ModuleName Parser<LexerType>::parseModuleName(TreeBuilder& context)
+ {
+diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
+--- a/Source/JavaScriptCore/parser/Parser.h
++++ b/Source/JavaScriptCore/parser/Parser.h
+@@ -1603,6 +1603,87 @@ private:
+     // chain level. The chain level suspends: it publishes its record and returns to its driver.
+     enum class AssignmentEdge : uint8_t { Call, Suspend };
+ 
++    // bun-wasm: one open block statement or `if` statement of a nest that one parseStatement
++    // activation parses without calling itself. Values only: no RAII member, so moving or popping
++    // a record runs no cleanup; unwindStatementRecords does it explicitly. Tree handles are stored
++    // as integers because ASTBuilder's are node pointers and SyntaxChecker's are ints.
++    enum class StatementRecordPhase : uint8_t {
++        BlockBody, // The block's statement list is being parsed.
++        IfThen, // The first branch is being parsed.
++        IfElseIfThen, // The branch of an `else if` is being parsed.
++        IfFinalElse, // The final `else` branch is being parsed.
++    };
++    struct StatementRecord {
++        StatementRecordPhase phase;
++        bool pushedLexicalScope; // Block.
++        bool savedInsideSwitchCaseBody; // Block.
++        int savedStatementDepth; // The depth before the statement was entered.
++        JSTokenLocation location; // Block: the brace. If: the `if` token.
++        int startOffset; // Block.
++        Scope* scope; // Block, when pushedLexicalScope. ScopeStack never moves a scope.
++        uintptr_t tree0; // Block: the statement list. If: the condition.
++        uintptr_t tree1; // If: the first branch.
++        unsigned clauseBase; // If: m_ifClauses.size() when the `if` opened.
++        unsigned branchBase; // If: m_ifBranches.size() when the `if` opened.
++    };
++    static_assert(std::is_trivially_copyable_v<StatementRecord>);
++    struct IfClause {
++        uintptr_t condition;
++        JSTokenLocation location; // The `else` token, as upstream's chain used.
++    };
++    // The same bound as QuickJS's statement parser. A memory bound, not a stack bound: no consumer
++    // spends host stack per record.
++    static constexpr unsigned maxStatementRecords = 10000;
++
++    // Unwinds an activation's records on every return, innermost first, as the replaced frames'
++    // destructors did. On success the records are already gone.
++    struct StatementRecordScope {
++        StatementRecordScope(Parser& parser)
++            : m_parser(parser)
++            , m_recordBase(parser.m_statementRecords.size())
++            , m_clauseBase(parser.m_ifClauses.size())
++            , m_branchBase(parser.m_ifBranches.size())
++        {
++        }
++        ~StatementRecordScope()
++        {
++            if (m_parser.m_statementRecords.size() > m_recordBase || m_parser.m_ifClauses.size() > m_clauseBase || m_parser.m_ifBranches.size() > m_branchBase) [[unlikely]]
++                m_parser.unwindStatementRecords(m_recordBase, m_clauseBase, m_branchBase);
++        }
++        bool hasOwnRecord() const { return m_parser.m_statementRecords.size() > m_recordBase; }
++
++    private:
++        Parser& m_parser;
++        unsigned m_recordBase;
++        unsigned m_clauseBase;
++        unsigned m_branchBase;
++    };
++
++    template <typename T> static uintptr_t toRecordHandle(T tree)
++    {
++        if constexpr (std::is_pointer_v<T>)
++            return reinterpret_cast<uintptr_t>(tree);
++        else
++            return static_cast<uintptr_t>(tree);
++    }
++    template <typename T> static T fromRecordHandle(uintptr_t handle)
++    {
++        if constexpr (std::is_pointer_v<T>)
++            return reinterpret_cast<T>(handle);
++        else
++            return static_cast<T>(handle);
++    }
++    ALWAYS_INLINE bool reserveStatementRecord()
++    {
++        size_t size = m_statementRecords.size();
++        if (size >= maxStatementRecords) [[unlikely]]
++            return false;
++        if (size < m_statementRecords.capacity()) [[likely]]
++            return true;
++        return m_statementRecords.tryReserveCapacity(std::min<size_t>(maxStatementRecords, std::max<size_t>(16, size * 2)));
++    }
++    NEVER_INLINE void unwindStatementRecords(unsigned recordBase, unsigned clauseBase, unsigned branchBase);
++
+     // Used to determine type of error to report.
+     bool isFunctionMetadataNode(ScopeNode*) { return false; }
+     bool isFunctionMetadataNode(FunctionMetadataNode*) { return true; }
+@@ -1827,7 +1908,34 @@ private:
+     template <class TreeBuilder> TreeStatement parseDebuggerStatement(TreeBuilder&);
+     template <class TreeBuilder> TreeStatement parseExpressionStatement(TreeBuilder&);
+     template <class TreeBuilder> TreeStatement parseExpressionOrLabelStatement(TreeBuilder&, bool allowFunctionDeclarationAsStatement);
+-    template <class TreeBuilder> TreeStatement parseIfStatement(TreeBuilder&);
++    // bun-wasm: parseIfStatement is gone; parseStatement parses `if` statements on records.
++    enum class StatementNext : uint8_t { Deliver, Statement, ListItem };
++    template <class TreeBuilder> NEVER_INLINE TreeStatement parseStatementNest(TreeBuilder&);
++    template <class TreeBuilder> ALWAYS_INLINE TreeStatement parseNestedStatement(TreeBuilder&, StatementNext&, const Identifier*& directive, unsigned& directiveLiteralLength);
++    template <class TreeBuilder> ALWAYS_INLINE TreeStatement openStatementRecord(TreeBuilder&, int savedStatementDepth, StatementNext&);
++    template <class TreeBuilder> ALWAYS_INLINE TreeStatement deliverToStatementRecord(TreeBuilder&, TreeStatement, StatementNext&);
++    template <class TreeBuilder> NEVER_INLINE TreeStatement openBlockRecord(TreeBuilder&, int savedStatementDepth, bool& opened);
++    template <class TreeBuilder> NEVER_INLINE TreeStatement closeBlockRecord(TreeBuilder&);
++    template <class TreeBuilder> NEVER_INLINE bool openIfRecord(TreeBuilder&, int savedStatementDepth);
++    template <class TreeBuilder> NEVER_INLINE bool parseElseClause(TreeBuilder&);
++    template <class TreeBuilder> NEVER_INLINE TreeStatement closeIfRecord(TreeBuilder&, bool trailingElse);
++    ALWAYS_INLINE bool matchStatementListDeclaration() const
++    {
++        // The token cases parseStatementListItem handles itself, without parseStatement.
++        switch (m_token.m_type) {
++        case CONSTTOKEN:
++        case LET:
++        case CLASSTOKEN:
++        case FUNCTION:
++        case ESCAPED_KEYWORD:
++        case IDENT:
++        case AWAIT:
++        case YIELD:
++            return true;
++        default:
++            return false;
++        }
++    }
+     enum class BlockType : uint8_t { Normal, CatchBlock, StaticBlock };
+     template <class TreeBuilder> TreeStatement parseBlockStatement(TreeBuilder&, BlockType = BlockType::Normal);
+     template <class TreeBuilder> TreeExpression parseExpression(TreeBuilder&);
+@@ -2176,6 +2284,12 @@ private:
+     // bun-wasm: the suspended levels of every chain driver of this parse, innermost last. A driver
+     // removes exactly the records above its base before it returns.
+     Vector<AssignmentLevel, 8> m_suspendedAssignmentLevels;
++    // bun-wasm: the open blocks and `if`s of every parseStatement activation of this parse,
++    // innermost last, and the `else if` chains of the open `if`s (upstream's two chain vectors).
++    // Shared by both tree builders: a SyntaxChecker parse runs inside an ASTBuilder parse.
++    Vector<StatementRecord> m_statementRecords;
++    Vector<IfClause> m_ifClauses;
++    Vector<uintptr_t> m_ifBranches;
+     ScopeStack m_scopeStack;
+ 
+     static void verifyLayout();
