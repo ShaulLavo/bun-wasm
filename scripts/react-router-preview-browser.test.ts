@@ -19,7 +19,9 @@ async function command(args: string[], cwd: string): Promise<void> {
 
 async function checkPage(page: Page, url: string, mounted: boolean): Promise<number> {
   const response = await page.goto(url);
-  assert.equal(response?.status(), 200, await response?.text());
+  const html = await response?.text();
+  assert.equal(response?.status(), 200, html ?? 'Missing response');
+  assert.ok(html?.includes(`href="${new URL(url).pathname}details"`), 'SSR links must use the browser mount');
   assert.equal(response?.fromServiceWorker(), mounted);
   await page.waitForFunction(() => document.querySelector('#increment:not([disabled])') || document.body.innerText.includes('404 Not Found'));
   assert.ok(!(await page.locator('body').innerText()).includes('404 Not Found'), await page.locator('body').innerText());
@@ -40,40 +42,54 @@ async function checkNavigation(page: Page, base: string, timeOrigin: number): Pr
   assert.equal(page.url(), base);
 }
 
-test('React Router hydrates, navigates and hot reloads in mounted previews and retains root production behavior', async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'bun-wasm-router-'));
-  const app = join(scratch, 'app');
-  let browser: Browser | undefined;
-  let process: ReturnType<typeof Bun.spawn> | undefined;
-  let bridge: ReturnType<typeof Bun.serve<{ upstream: Socket }>> | undefined;
-  let owner: ReturnType<typeof Bun.serve> | undefined;
-  const sockets = new Set<Socket>();
-  let cleaning: Promise<void> | undefined;
-  function cleanup(): Promise<void> {
-    return cleaning ??= (async () => {
-      await browser?.close();
-      process?.kill();
-      await process?.exited;
-      for (const socket of sockets) socket.destroy();
-      await bridge?.stop(true);
-      await owner?.stop(true);
-      await rm(scratch, { recursive: true, force: true });
-    })();
+class RouterPreviewFixture {
+  readonly app: string;
+  readonly sockets = new Set<Socket>();
+  readonly errors: string[] = [];
+  browser: Browser | undefined;
+  child: ReturnType<typeof Bun.spawn> | undefined;
+  bridge: ReturnType<typeof Bun.serve<{ upstream: Socket }>> | undefined;
+  owner: ReturnType<typeof Bun.serve> | undefined;
+  page: Page | undefined;
+  home = '';
+  source = '';
+  mounted = '';
+  direct = '';
+  port = 0;
+  closing: Promise<void> | undefined;
+
+  constructor(readonly scratch: string) { this.app = join(scratch, 'app'); }
+
+  cleanup(): Promise<void> { return this.closing ??= this.teardown(); }
+
+  private async teardown(): Promise<void> {
+    await this.browser?.close();
+    this.child?.kill();
+    await this.child?.exited;
+    for (const socket of this.sockets) socket.destroy();
+    await this.bridge?.stop(true);
+    await this.owner?.stop(true);
+    await rm(this.scratch, { recursive: true, force: true });
   }
-  const onSignal = () => { void cleanup(); };
-  globalThis.process.once('SIGTERM', onSignal);
-  globalThis.process.once('SIGINT', onSignal);
-  try {
-    await cp(join(root, 'sandbox/template-react-router'), app, { recursive: true, filter: path => !path.includes('node_modules') });
-    const home = join(app, 'app/routes/home.tsx');
-    const source = (await Bun.file(home).text()).replace('useLoaderData,', 'Link, useLoaderData,').replace('<main>', '<main><Link id="navigate" to="?value=navigated">Navigate</Link>');
-    await Bun.write(home, source);
-    await command([globalThis.process.execPath, 'install'], app);
+
+  async setup(): Promise<void> {
+    await cp(join(root, 'sandbox/template-react-router'), this.app, { recursive: true, filter: path => !path.includes('node_modules') });
+    this.home = join(this.app, 'app/routes/home.tsx');
+    this.source = (await Bun.file(this.home).text()).replace('useLoaderData,', 'Link, useLoaderData,').replace('<main>', '<main><Link id="details" to="/details">Details</Link><Link id="navigate" to="?value=navigated">Navigate</Link>');
+    await Bun.write(this.home, this.source);
+    const routes = join(this.app, 'app/routes.ts');
+    await Bun.write(routes, (await Bun.file(routes).text()).replace('index,', 'index, route,').replace("index('routes/home.tsx')", "index('routes/home.tsx'), route('details', 'routes/details.tsx')"));
+    await Bun.write(join(this.app, 'app/routes/details.tsx'), `import { useLoaderData } from 'react-router';
+export function loader() { return 'detail loader'; }
+export default function Details() { return <p id="detail-value">{useLoaderData<typeof loader>()}</p>; }`);
+    await command([globalThis.process.execPath, 'install'], this.app);
     const reservation = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response() });
     const port = reservation.port;
     assert(port);
+    this.port = port;
     await reservation.stop(true);
-    bridge = Bun.serve<{ upstream: Socket }>({ hostname: '127.0.0.2', port: 0,
+    const sockets = this.sockets;
+    this.bridge = Bun.serve<{ upstream: Socket }>({ hostname: '127.0.0.2', port: 0,
       fetch(request, server) {
         const upstream = connect(port, '127.0.0.1');
         sockets.add(upstream);
@@ -92,15 +108,15 @@ test('React Router hydrates, navigates and hot reloads in mounted previews and r
         close(socket) { socket.data.upstream.destroy(); },
       },
     });
-    const entry = join(root, 'web/tests/react-router-preview-main.ts');
-    const built = await Bun.build(browserBuildConfig([entry], scratch, { splitting: false }));
+    const entry = join(root, 'web/tests/browser-react-router-preview-main.ts');
+    const built = await Bun.build(browserBuildConfig([entry], this.scratch, { splitting: false }));
     assert(built.success, built.logs.map(String).join('\n'));
     const script = built.outputs[0];
     const socketScript = await previewWebsocketScript();
-    const sw = await buildClassicWorker(join(root, 'web/src/sw.ts'), scratch, { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(socketScript) });
+    const sw = await buildClassicWorker(join(root, 'web/src/sw.ts'), this.scratch, { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(socketScript) });
     const worker = sw.outputs[0];
     assert(script && worker);
-    owner = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+    this.owner = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       const path = new URL(request.url).pathname;
       const headers = { 'content-type': 'text/javascript', 'cache-control': 'no-store' };
       if (path.startsWith('/__native/')) {
@@ -118,52 +134,98 @@ test('React Router hydrates, navigates and hot reloads in mounted previews and r
       if (path === '/') return new Response('<!doctype html><script type="module" src="/main.js"></script>', { headers: { 'content-type': 'text/html' } });
       return new Response('Preview must be served by the real service worker', { status: 500 });
     } });
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
+    this.browser = await chromium.launch({ headless: true });
+    const context = await this.browser.newContext();
     context.setDefaultTimeout(timeout);
     const host = await context.newPage();
     host.on('console', message => console.log('owner', message.type(), message.text()));
     host.on('pageerror', error => console.error('owner', error));
-    await host.goto(`${owner.url}?bridge=${encodeURIComponent(bridge.url.href.replace('http:', 'ws:'))}`);
+    await host.goto(`${this.owner.url}?bridge=${encodeURIComponent(this.bridge.url.href.replace('http:', 'ws:'))}`);
     assert.equal(await host.evaluate(() => Reflect.get(globalThis, 'routerPreviewReady')), 'ready');
-    const page = await context.newPage();
-    const errors: string[] = [];
+    this.page = await context.newPage();
+    const page = this.page;
+    const errors = this.errors;
     page.on('pageerror', error => errors.push(error.message));
-    page.on('console', message => { if (message.type() === 'error' || message.text().includes('No routes matched')) errors.push(message.text()); });
-    const mounted = `${owner.url.origin}/__preview/5173/`;
-    const direct = `http://127.0.0.1:${port}/`;
-    for (const mode of ['dev', 'production']) {
-      const args = mode === 'dev' ? ['node_modules/@react-router/dev/bin.js', 'dev', '--host', '127.0.0.1', '--port', String(port), '--strictPort'] : ['start.ts', String(port)];
-      process = Bun.spawn([globalThis.process.execPath].concat(args), { cwd: app, stdout: 'pipe', stderr: 'pipe', env: { ...globalThis.process.env, NODE_ENV: mode === 'dev' ? 'development' : 'production' } });
-      const log = new Response(process.stdout).text();
-      const stderr = new Response(process.stderr).text();
-      await assertServer(direct, process);
-      for (const [url, isMounted] of [[mounted, true], [direct, false]] as const) {
-        const origin = await checkPage(page, url, isMounted);
-        await checkNavigation(page, url, origin);
-        console.log(`${mode} ${isMounted ? 'mounted' : 'root'} render, hydration, click and navigation passed`);
-      }
-      if (mode === 'dev') {
-        const origin = await checkPage(page, mounted, true);
-        await Bun.write(home, source.replace('Hello from react-router', 'Hello from react-router hot updated'));
-        await page.locator('#message').filter({ hasText: 'Hello from react-router hot updated' }).waitFor();
-        assert.equal(await page.evaluate(() => performance.timeOrigin), origin, 'HMR must retain document');
-        assert.equal(await page.locator('#count').innerText(), '1', 'HMR must retain counter state');
-        console.log('mounted HMR retained document and counter state');
-        await Bun.write(home, source);
-      }
-      await page.goto('about:blank');
-      process.kill();
-      await process.exited;
-      process = undefined;
-      console.log(await log, await stderr);
-      if (mode === 'dev') await command([globalThis.process.execPath, 'node_modules/@react-router/dev/bin.js', 'build'], app);
+    page.on('console', message => { if (message.type() === 'error' || message.text().includes('No routes matched')) { console.error(message.text()); errors.push(message.text()); } });
+    this.mounted = `${this.owner.url.origin}/__preview/5173/`;
+    this.direct = `http://127.0.0.1:${port}/`;
+  }
+
+  async runMode(mode: 'dev' | 'production'): Promise<void> {
+    const { app, port, page, home, source, mounted, direct } = this;
+    assert(page);
+    const args = mode === 'dev' ? ['node_modules/@react-router/dev/bin.js', 'dev', '--host', '127.0.0.1', '--port', String(port), '--strictPort'] : ['start.ts', String(port)];
+    this.child = Bun.spawn([globalThis.process.execPath].concat(args), { cwd: app, stdout: 'pipe', stderr: 'pipe', env: { ...globalThis.process.env, NODE_ENV: mode === 'dev' ? 'development' : 'production' } });
+    assert(this.child.stdout instanceof ReadableStream && this.child.stderr instanceof ReadableStream);
+    const log = new Response(this.child.stdout).text();
+    const stderr = new Response(this.child.stderr).text();
+    await assertServer(direct, this.child);
+    await checkBoundary(direct);
+    await checkVariants(page, mounted, direct, mode);
+    if (mode === 'dev') {
+      for (const url of [mounted, direct]) await checkHmr(page, url, home, source, url === mounted);
     }
-    assert.deepEqual(errors, []);
+    await page.goto('about:blank');
+    this.child.kill();
+    await this.child.exited;
+    this.child = undefined;
+    console.log(await log, await stderr);
+    if (mode === 'dev') await command([globalThis.process.execPath, 'node_modules/@react-router/dev/bin.js', 'build'], app);
+  }
+}
+
+async function checkBoundary(url: string): Promise<void> {
+  for (const mount of ['https://evil.test/', '//evil.test/', '/__preview/0/', '/__preview/65536/', '/__preview/5173/?x=1', '/__preview/5173/#x', '/../__preview/5173/', '/x//__preview/5173/', '/__preview/5173']) {
+    const response = await fetch(url, { headers: { 'x-bun-preview-base': mount } });
+    assert.equal(response.status, 500, mount);
+    await response.body?.cancel();
+  }
+  const nested = await fetch(url, { headers: { 'x-bun-preview-base': '/nested/app/__preview/1234/' } });
+  assert.equal(nested.status, 200);
+  assert.ok((await nested.text()).includes('href="/nested/app/__preview/1234/details"'));
+}
+
+async function checkHmr(page: Page, url: string, home: string, source: string, mounted: boolean): Promise<void> {
+  const origin = await checkPage(page, url, mounted);
+  await Bun.write(home, source.replace('Hello from react-router', 'Hello from react-router hot updated'));
+  await page.locator('#message').filter({ hasText: 'Hello from react-router hot updated' }).waitFor();
+  assert.equal(await page.evaluate(() => performance.timeOrigin), origin, 'HMR must retain document');
+  assert.equal(await page.locator('#count').innerText(), '1', 'HMR must retain counter state');
+  console.log(`${mounted ? 'mounted' : 'root'} HMR retained document and counter state`);
+  await Bun.write(home, source);
+  await page.waitForFunction(() => document.querySelector('#message')?.textContent === 'Hello from react-router');
+}
+
+async function checkVariants(page: Page, mounted: string, direct: string, mode: string): Promise<void> {
+  for (const [url, isMounted] of [[mounted, true], [direct, false]] as const) {
+    const origin = await checkPage(page, url, isMounted);
+    await checkNavigation(page, url, origin);
+    const link = page.locator('#details');
+    assert.equal(await link.getAttribute('href'), `${new URL(url).pathname}details`);
+    await link.click();
+    await page.waitForURL(`${url}details`);
+    await page.locator('#detail-value').filter({ hasText: 'detail loader' }).waitFor();
+    assert.equal(await page.evaluate(() => performance.timeOrigin), origin, 'route discovery must retain document');
+    await page.goBack();
+    await page.locator('#message').waitFor();
+    console.log(`${mode} ${isMounted ? 'mounted' : 'root'} render, hydration, click and navigation passed`);
+  }
+}
+
+test('React Router hydrates, navigates and hot reloads in mounted previews and retains root production behavior', async () => {
+  const fixture = new RouterPreviewFixture(await mkdtemp(join(tmpdir(), 'bun-wasm-router-')));
+  const onSignal = () => { void fixture.cleanup(); };
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
+  try {
+    await fixture.setup();
+    await fixture.runMode('dev');
+    await fixture.runMode('production');
+    assert.deepEqual(fixture.errors, []);
   } finally {
-    await cleanup();
-    globalThis.process.off('SIGTERM', onSignal);
-    globalThis.process.off('SIGINT', onSignal);
+    await fixture.cleanup();
+    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSignal);
   }
 }, 180_000);
 

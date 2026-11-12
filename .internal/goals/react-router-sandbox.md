@@ -1,8 +1,23 @@
 # React Router mounted sandbox preview
 
-Status: Approved. Investigation and regression in progress.
+Status: Approved. Implemented; independent review and CI remain with the parent.
 
-The public sandbox mounts guest previews at `/__preview/5173/`. The proxy forwards
-`/` to React Router, while its browser router sees the mounted pathname. This lane
-owns the React Router template and its focused mounted-preview regression. The
-shared preview transport and other framework templates remain separate work.
+The public sandbox mounts previews at `/__preview/5173/`. Its proxy forwards `/`
+to React Router, while hydration sees the mounted pathname. A client-only
+basename correction also mismatches server-rendered links and was discarded.
+
+The Bun preview adapter now derives an internal mount header from actual routing
+metadata. The template validates it and derives matching server-rendering and
+browser-handoff contexts after normal root request matching. Root previews omit
+the metadata. Mounted rendering uses the full initial route manifest because
+lazy discovery sends browser paths inside query parameters.
+
+The regression was committed before the fix. It reproduces `404 Not Found`, then
+checks real mounted and root development and production servers, hydration,
+loader and route navigation, back navigation, SSR links and state-preserving HMR.
+The test uses the actual preview worker and socket shim. Test fixtures add their
+own second route; the starter remains unchanged except for its server adapter.
+
+Evidence and rerunnable sandbox checks are under
+`/work/reports/goals/sandbox-fixes/react-router/`. No Waffle source, package pin,
+version, generated matrix or other framework template changed.
