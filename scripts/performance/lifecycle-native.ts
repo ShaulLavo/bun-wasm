@@ -1,3 +1,4 @@
+import { captureExecution, type RecordExecution } from "./lifecycle-evidence";
 import { nativeObserverControls, previewObserverControl } from "./native-observation";
 import { startObservation, finishObservation } from "./sharing-controls";
 import { cp, mkdir, mkdtemp, rm, stat, writeFile, readFile } from "node:fs/promises";
@@ -45,23 +46,34 @@ async function viteOutcome(transport: Transport, url: string, timeoutMs: number)
   return { kind: "vite", listening, rendered, counter: { beforeMs: beforeCounter, afterMs: performance.now() }, before: counter.before, after: counter.after };
 }
 
-export async function nativeLifecycle(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off" = "timing") {
+export async function nativeLifecycle(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" = "timing") {
+  return captureNative(cell, prepared, scratch, output, timeoutMs, signal, mode);
+}
+export async function diagnosticNativeLifecycle(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "observation" | "observer-off") {
+  return captureNative(cell, prepared, scratch, output, timeoutMs, signal, mode);
+}
+async function captureNative(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off") {
+  return captureExecution(output, ["command", "env", "runtime", "browser", "actualProcess", "control", "inputs", "reset", "completion"], record => prepareNative(cell, prepared, scratch, output, timeoutMs, signal, mode, record));
+}
+async function prepareNative(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off", record: RecordExecution) {
   if (cell.arm.kind !== "native") throw new Error("Expected native lifecycle arm");
   const root = await mkdtemp(join(scratch, cell.id + "-"));
   try {
     await cp(join(prepared, cell.workload), root, { recursive: true, verbatimSymlinks: true });
     verifyInstalledPacket(root, join(prepared, `${cell.workload}-inventory.json`));
     verifyExactFixture(root, cell.workload);
-    return await measureNative(cell, root, output, timeoutMs, signal, mode);
+    return await measureNative(cell, root, output, timeoutMs, signal, mode, record);
   } finally { await rm(root, { recursive: true, force: true }); }
 }
-async function measureNative(cell: LifecycleCell, root: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off") {
+async function measureNative(cell: LifecycleCell, root: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off", record: RecordExecution) {
   if (cell.arm.kind !== "native") throw new Error("Expected native lifecycle arm");
   const executable = Bun.which(cell.arm.runtime);
   if (!executable) throw new Error(`Missing ${cell.arm.runtime}`);
   const executableSha256 = sha256(await readFile(executable));
+  record("runtime", { executable, executableSha256 });
   const env = { PATH: process.env.PATH, HOME: join(output, "home"), TMPDIR: join(output, "tmp"), NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: cell.workload === "next" ? "production" : "development",
     ...(mode === "selection" ? { LIFECYCLE_SELECTION_OUTPUT: join(output, "selection.jsonl"), NODE_OPTIONS: cell.arm.runtime === "node" ? `--require=${resolve("scripts/performance/lifecycle-selection.ts")}` : undefined } : {}) };
+  record("env", env);
   let preview: Transport | null = null;
   let job: ReturnType<typeof launchProcess> | undefined;
   let serverObserver: Awaited<ReturnType<typeof startObservation>> | null = null;
@@ -71,23 +83,29 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
   try {
     await mkdir(env.HOME); await mkdir(env.TMPDIR);
     const control = await ownedCommand([executable, "-e", "process.stdout.write(JSON.stringify({execPath:process.execPath,argv:process.argv,versions:process.versions}))"], signal);
+    record("control", JSON.parse(control));
     const nativeControlPassed = useControls ? await nativeObserverControls(executable, root, env, output, signal) : false;
     await rm(join(root, ".perf-activity"), { force: true });
     const inputs = immutableIdentity(root, cell.workload);
+    record("inputs", { before: inputs, after: null, valid: null, reason: "Post-run observation not reached" });
     preview = cell.arm.browser ? await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true) : null;
     const previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
+    record("browser", preview ? { ...preview.capabilities, headless: true, launchProcesses: previewProcesses, display: null, renderer: null } : null);
     const port = preview ? await previewPort() : null;
     const previewControlPassed = useControls && preview ? await previewObserverControl(preview, output) : false;
     if (mode === "observation" && preview) previewObserver = previewControlPassed ? await startObservation(preview.processRoot, "Native preview browser subprocess tree only; server and controller excluded") : { observer: null, unavailable: "Preview CPU control failed" };
     const reset = await resetNativeCache(root, cell.workload);
+    record("reset", reset);
     const preload = mode === "selection" && cell.arm.runtime === "bun" ? ["--preload", resolve("scripts/performance/lifecycle-selection.ts")] : [];
     const command = [executable].concat(preload, cell.workload === "next" ? ["node_modules/next/dist/bin/next", "build"] : ["node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", String(port), "--strictPort"]);
+    record("command", command);
     const submission = { beforeMs: performance.now(), afterMs: 0 };
     job = launchProcess(command, root, env, output);
     const running = job;
     submission.afterMs = performance.now();
     timing = { submission, completion: null };
     const actualProcess = await processIdentity(job.child.pid);
+    record("actualProcess", actualProcess);
     if (mode === "observation") serverObserver = nativeControlPassed ? await startObservation(job.child.pid, "Native framework subprocess tree only; preview browser and controller excluded; first read follows process launch") : { observer: null, unavailable: "Native CPU root/child control failed" };
     const outcome = await bounded(async (): Promise<LifecycleOutcome> => {
       if (preview) return viteOutcome(preview, `http://127.0.0.1:${port}/`, timeoutMs);
@@ -98,10 +116,12 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
     const completion = outcome.kind === "vite" ? outcome.counter : job.observation.exit;
     if (!completion) throw new Error("Missing process-close observation");
     timing.completion = completion;
+    record("completion", completion);
     if (serverObserver) { await finishObservation(serverObserver, join(output, "server-observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); serverObserver = null; }
     if (previewObserver) { await finishObservation(previewObserver, join(output, "preview-observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); previewObserver = null; }
     if (preview) await job.close();
     const after = immutableIdentity(root, cell.workload);
+    record("inputs", { before: inputs, after, valid: inputs === after });
     return { outcome, submission, completion, wallMs: completion.afterMs - submission.beforeMs, command, env, actualProcess, executableSha256,
       browser: preview ? { ...preview.capabilities, headless: true, launchProcesses: previewProcesses, display: null, renderer: null, unavailableReason: "Headless experimental preview" } : null,
       control: JSON.parse(control), inputs: { before: inputs, after, valid: inputs === after }, reset };

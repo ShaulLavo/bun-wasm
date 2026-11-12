@@ -57,8 +57,12 @@ resume. Use a new output directory for another attempt. Interrupted partial
 output is renamed beside the next attempt. An output-directory lock prevents
 concurrent writers.
 
-Resume requires the same host assets, harness, templates, installed-input
-inventories, locks, observation mode, and timeout. Inputs are hashed before
+Resume requires the same host assets, maintained drivers, templates, installed-input
+inventories, locks, observation mode, and timeout. Comparison identity also covers
+the controller, Node/Bun, explicit Chrome executable, Firefox executable and engine,
+Playwright implementation, kernel, effective CPU allowance and display environment.
+Set `GOALS_CHROME_EXECUTABLE` even for a selected native subset so a resumed sweep
+has one defined browser configuration. Inputs are hashed before
 execution. Host assets are checked again afterward. Native installed copies
 must match their prepared inventories, preserve relative symlinks, and match
 the checked-in starter source. Per-run immutable hashes exclude only declared
@@ -76,6 +80,13 @@ and guest file inventories remain alongside browser runs. Native stdout and
 stderr remain alongside native runs. Missing outputs have null sizes with
 reasons. Polling endpoints carry observation brackets, not a fixed error bound.
 The native endpoint observes process closure; it is not a kernel exit timestamp.
+`execution.json` preserves each acquired observation even if the adapter throws;
+unreached observations remain unavailable with a reason. Each invocation has its
+own environment and host-verification record under `invocations/`. The original
+campaign environment is preserved. Timings remain provisional until host checks
+finish; failed verification invalidates affected timings without changing workload
+outcomes. Summaries honor both recorded timing validity and the source invocation's
+verification, including when reading an explicit list of records.
 
 `--mode=selection` supports separate native runs with the same cell IDs in a new
 output directory. It preloads `lifecycle-selection.ts` into the actual runtime

@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { baseMatrix } from "./lifecycle-model";
 import { array, object, string } from "./input";
 
@@ -12,8 +12,12 @@ export async function summarizeLifecycle(output: string, sources: ReadonlyMap<st
     const run = object(JSON.parse(bytes));
     const outcome = object(run.workloadOutcome);
     const result = run.result === null ? null : object(run.result);
-    const valid = outcome.status === "pass" && result !== null && object(result.inputs).valid === true && object(run.observation).kind === "timing";
-    rows.push({ id: cell.id, status: outcome.status, milliseconds: result?.wallMs ?? null, timingValid: valid, headlineEligible: false, reason: outcome.reason ?? null, file });
+    const timing = run.timing === undefined ? null : object(run.timing);
+    const verificationPath = typeof timing?.hostVerification === "string" ? timing.hostVerification : join(dirname(dirname(file)), "host-verification.json");
+    const verification = await readFile(verificationPath, "utf8").then(text => object(JSON.parse(text))).catch(() => null);
+    const valid = timing?.valid === true && verification?.valid === true && outcome.status === "pass" && result !== null && object(result.inputs).valid === true && object(run.observation).kind === "timing";
+    rows.push({ id: cell.id, status: outcome.status, milliseconds: result?.wallMs ?? null, timingValid: valid, headlineEligible: false, reason: outcome.reason ?? null,
+      hostVerification: verification?.valid ?? null, verificationReason: verification?.reason ?? (verification === null ? "Host verification unavailable" : null), file });
   }
   await writeFile(join(output, "summary.json"), JSON.stringify({ schema: 1, scope: "One nonquiet experimental sweep; no paired or headline claim", rows }, null, 2) + "\n");
   const table = ["# Framework lifecycle matrix", "", "Nonquiet PC experiments. Headless browser timings are ineligible for headline claims.", "", "| Run | Outcome | Observed ms | Timing valid |", "| --- | --- | ---: | --- |"];
