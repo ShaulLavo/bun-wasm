@@ -1,3 +1,5 @@
+import type { Transport } from "./transport";
+import { admit, awaitWithin, type Admission } from "./scope";
 export type SafariTransportOptions = {
   endpoint: string;
   browser: "safari" | "iphone-safari";
@@ -6,17 +8,7 @@ export type SafariTransportOptions = {
   cleanupTimeoutMs?: number;
 };
 
-export type SafariTransport = {
-  readonly capabilities: Readonly<Record<string, unknown>>;
-  beginCleanup(): Promise<void>;
-  navigate(url: string): Promise<void>;
-  evaluate<T>(expression: string): Promise<T>;
-  openPreview(url: string): Promise<void>;
-  useHost(): Promise<void>;
-  usePreview(): Promise<void>;
-  closePreview(): Promise<void>;
-  close(interruptPending?: boolean): Promise<void>;
-};
+export type SafariTransport = Transport;
 
 type Request = (path: string, body?: unknown, method?: string) => Promise<unknown>;
 type CleanupRequests = { command: Request; session: Request; timeoutMs: number };
@@ -97,61 +89,68 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
   let operationRequest = request;
-  const command: Request = (path, body, method) => operationRequest(sessionPath + path, body, method);
-  const select = async (selected: string): Promise<void> => { await command("/window", { handle: selected }); };
-  const navigate = async (url: string): Promise<void> => { await command("/url", { url }); };
+  const command = (admission: Admission | undefined, path: string, body?: unknown, method?: string): Promise<unknown> => {
+    if (admission) admit(admission);
+    return operationRequest(sessionPath + path, body, method);
+  };
+  const select = async (selected: string, admission?: Admission): Promise<void> => { await command(admission, "/window", { handle: selected }); };
+  const navigate = async (url: string, admission: Admission): Promise<void> => { await command(admission, "/url", { url }); };
 
-  function serial<T>(action: () => Promise<T>): Promise<T> {
+  function serial<T>(admission: Admission, action: () => Promise<T>): Promise<T> {
+    admit(admission);
     if (closing) return Promise.reject(new Error("Safari transport is closed"));
-    const result = tail.then(() => { lifetime.signal.throwIfAborted(); return action(); });
+    const result = tail.then(() => { lifetime.signal.throwIfAborted(); admit(admission); return action(); });
     // Recover only the queue tail. The caller still receives the original rejection.
     tail = result.then(() => undefined, () => undefined);
-    return result;
+    return awaitWithin(result, admission);
   }
 
-  async function closePreview(): Promise<void> {
+  async function closePreview(admission?: Admission): Promise<void> {
     if (preview === undefined) return;
     try {
-      await select(preview);
-      await command("/window", undefined, "DELETE");
+      await select(preview, admission);
+      await command(admission, "/window", undefined, "DELETE");
       preview = undefined;
     } catch (error) { return cleanupAfterFailure(error, () => select(host)); }
-    await select(host);
+    await select(host, admission);
   }
 
-  async function openPreview(url: string): Promise<void> {
+  async function openPreview(url: string, admission: Admission): Promise<void> {
     try {
       if (preview === undefined) {
-        const created = handle(object(await command("/window/new", { type: "tab" })).handle);
+        const created = handle(object(await command(admission, "/window/new", { type: "tab" })).handle);
         if (created === host) throw new Error("Safari returned the host handle for a new preview");
         preview = created;
       }
-      await select(preview);
-      await navigate(url);
-    } catch (error) { return cleanupAfterFailure(error, closePreview); }
+      await select(preview, admission);
+      await navigate(url, admission);
+    } catch (error) {
+      if (admission.signal.aborted || Date.now() >= admission.deadline) throw error;
+      return cleanupAfterFailure(error, () => closePreview());
+    }
   }
 
-  async function evaluate<T>(expression: string): Promise<T> {
-    const result = object(await command("/execute/async", { script: evaluateScript, args: [expression] }));
+  async function evaluate<T>(expression: string, admission: Admission): Promise<T> {
+    const result = object(await command(admission, "/execute/async", { script: evaluateScript, args: [expression] }));
     if (result.ok !== true) throw new Error(`Safari evaluation failed: ${String(result.message)}\n${String(result.stack ?? "")}`);
     if (typeof result.json !== "string") throw new Error("Safari evaluation returned no JSON value");
     return JSON.parse(result.json);
   }
 
   return Object.freeze({ capabilities,
-    beginCleanup: () => serial(async () => {
+    beginCleanup: (admission: Admission) => serial(admission, async () => {
       operationRequest = cleanup.command;
-      await command("/timeouts", { script: cleanup.timeoutMs, pageLoad: cleanup.timeoutMs, implicit: 0 });
+      await command(admission, "/timeouts", { script: cleanup.timeoutMs, pageLoad: cleanup.timeoutMs, implicit: 0 });
     }),
-    navigate: (url: string) => serial(() => navigate(url)),
-    evaluate: <T>(expression: string) => serial(() => evaluate<T>(expression)),
-    openPreview: (url: string) => serial(() => openPreview(url)),
-    useHost: () => serial(() => select(host)),
-    usePreview: () => serial(async () => {
+    navigate: (url: string, admission: Admission) => serial(admission, () => navigate(url, admission)),
+    evaluate: <T>(expression: string, admission: Admission) => serial(admission, () => evaluate<T>(expression, admission)),
+    openPreview: (url: string, admission: Admission) => serial(admission, () => openPreview(url, admission)),
+    useHost: (admission: Admission) => serial(admission, () => select(host, admission)),
+    usePreview: (admission: Admission) => serial(admission, async () => {
       if (preview === undefined) throw new Error("Safari transport has no preview");
-      await select(preview);
+      await select(preview, admission);
     }),
-    closePreview: () => serial(closePreview),
+    closePreview: (admission: Admission) => serial(admission, () => closePreview(admission)),
     close(interruptPending = false) {
       if (interruptPending) lifetime.abort(new Error("Safari session cleanup interrupted pending commands"));
       return closing ??= tail.then(async () => { await cleanup.session(sessionPath, undefined, "DELETE"); });
