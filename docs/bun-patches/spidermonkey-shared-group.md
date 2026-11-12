@@ -3,7 +3,8 @@
 Classification: Port of upstream source, plus original build and engine adapters.
 
 This is an opt-in experimental engine profile, not a supported producer or release engine. It
-covers the native launcher only. The Browser host still refuses a SpiderMonkey group pair.
+covers the native launcher and an experimental Browser loader path. Browser admission checks
+the actual stack carve, but admission alone does not qualify a selected tier.
 
 ## Upstream
 
@@ -63,6 +64,36 @@ split patch, recipe files and admitted split archive are not changed.
   The nested bridge in `crates/bunwasm-engine-quickjs/src/nested_bridge.rs` is reused unchanged
   through its `NestedEngine` alias.
 - `crates/bunwasm-host/src/linked.rs`: the native loader admits a SpiderMonkey group pair.
+- `src/quickjs-program.ts`, `web/src/bun-executor.ts`: the Browser loader admits an explicitly
+  selected SpiderMonkey pair through the existing Waffle link plan. The executor checks the
+  broker's `memoryGroup.stackBytes` and the core's imported stack globals before linking. Both
+  must describe an exact, page-aligned 8 MiB carve within the imported memory, with the stack
+  pointer at its top. It checks the same globals before and after the top-level initializers.
+  A mismatch fails before the guest starts. This is an original adapter over Waffle 0.0.118,
+  not a change to Mozilla's stack quota or its 64 KiB gap.
+- `web/src/nested/host.ts`: the Browser host admits at most 16 active SpiderMonkey nested calls.
+  The next call returns the existing `RangeError` reply without entering Wasm again. This protects
+  the browser-native call stack, which is separate from the 8 MiB linear stack. Other engines keep
+  the 64-call admission path. A caught refusal leaves the invocation stack balanced and later
+  callbacks usable.
+- `web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts`: test-only observation of real
+  core and side imports. It records carved bounds and verifies that both instances receive
+  the same stack-pointer Global. It never replaces imported values. The Browser driver
+  compares these host facts with the side's traced bounds and `register_depth=16`, checks
+  actual interpreter or portable-baseline counters, then tests catchable recursion, callback
+  reentry refusal and recovery before the unchanged shared-memory and retained-debt assertions.
+- `scripts/shared-wasm-memory-browser.test.ts`: the discovered Browser check uses the selected
+  shared program for separate interpreter and portable-baseline tests. Each retains the original
+  test and Browser-driver deadline. The existing shared CI producer supplies both tests; no
+  additional common core, library or side is built.
+- `scripts/ci-spidermonkey-prebuild.ts`: an original CI transfer adapter. The library recipe
+  runs in a separate 30-minute prebuild job after the existing shared sysroot producer. It
+  retains the recipe's Python isolation and upstream, command, object and header checks.
+  Only `native/`, `receipt/` and a file manifest reach the existing SharedPIC owner. The
+  manifest binds the run, checkout, recipe bytes, native tools, sysroot and transferred bytes.
+  SharedPIC requires producer success, verifies the manifest, then links the side against its
+  existing common core and atomics libc++. Every native and Browser consumer keeps its clock.
+  The exact native cache has no prefix restore and saves only on successful main pushes.
 
 ## Limits
 
@@ -75,6 +106,14 @@ stack size. The native quota and its 64 KiB gap are therefore the split build's.
 three sizes and the loader's call order together. The engine refuses to start if its entry frame
 is outside those bounds. A host that entered the initializers with other frames on the stack
 would need its own bound source.
+
+Waffle 0.0.118 preserves supplied Global objects through `Wasi.imports` and shares the core's
+`env.__stack_pointer` with the side. Its group worker returns from the core's memory stages
+before calling the executor's initializer. The executor then calls `group.initialize()` at
+JavaScript's top level. That runs the core constructors and each side initializer in order.
+The member protocol supplies `stackBytes`, but Waffle defaults it to 1 MiB. The Browser checks
+therefore use both that request and the actual imported bounds, rather than assuming the
+embedder selected Bun's policy.
 
 `BUN_WASM_SPIDERMONKEY_TRACE` in the guest environment prints one line on stderr when the engine
 returns: the stack bounds, the stack in use at registration and at engine entry, the interrupt

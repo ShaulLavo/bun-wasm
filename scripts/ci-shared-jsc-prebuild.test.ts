@@ -19,7 +19,7 @@ test("shared C++ production starts independently of Rust and has one owner outsi
   expect(producer).toContain("needs: quality");
   expect(producer).not.toContain("needs.rust");
   expect(producer).toContain("timeout-minutes: 45");
-  expect(consumer).toContain("needs: [quality, rust, shared-prebuild]");
+  expect(consumer).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(consumer).toContain("timeout-minutes: 30");
   expect(producer).toContain("JSC_PROFILE=shared-group bash scripts/build-jsc.sh");
   expect(consumer).not.toContain("bash scripts/build-jsc.sh");
@@ -143,6 +143,35 @@ function pack(h: Fixture): string {
 
 function consume(h: Fixture, digest: string, env: Record<string, string> = {}) {
   return bash(h, command("shared-sysroot", importName), { SHARED_PREBUILD_MANIFEST_SHA256: digest, ...env });
+}
+
+function consumeSpiderMonkeySysroot(h: Fixture, digest: string, env: Record<string, string> = {}) {
+  return bash(h, command("shared-spidermonkey-prebuild", "Import only the verified shared sysroot for SpiderMonkey"),
+    { SHARED_PREBUILD_MANIFEST_SHA256: digest, ...env });
+}
+
+test("the SM library imports the same verified sysroot without unpacking or building JSC", () => withFixture("true", h => {
+  seed(h);
+  const digest = pack(h);
+  const result = consumeSpiderMonkeySysroot(h, digest);
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(join(h.sysroot, "lib/wasm32-wasip1/libc.a"), "utf8")).toBe("libc");
+  expect(readlinkSync(join(h.sysroot, "include/absolute-sdk-link"))).toBe(h.env.WASM_TOOLS);
+  expect(existsSync(h.prebuild)).toBe(false);
+  expect(readFileSync(h.env.CALLS, "utf8")).toBe("sysroot-verify\n");
+}));
+
+const smWrongSourceCases: Record<string, string>[] = [
+  { GITHUB_RUN_ID: "other" }, { GITHUB_SHA: "b".repeat(40) }, { SHARED_PREBUILD_MANIFEST_SHA256: "" },
+];
+for (const env of smWrongSourceCases) {
+  test(`the SM sysroot import rejects ${Object.keys(env)[0]} mismatch before extracting`, () => withFixture("true", h => {
+    seed(h);
+    const digest = pack(h);
+    expect(consumeSpiderMonkeySysroot(h, digest, env).status).not.toBe(0);
+    expect(existsSync(h.sysroot)).toBe(false);
+    expect(existsSync(h.prebuild)).toBe(false);
+  }));
 }
 
 for (const hit of ["false", "true"]) {
