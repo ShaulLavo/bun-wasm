@@ -386,6 +386,24 @@ pub(crate) struct Segment {
     claim: Word,
 }
 
+/// What the ledger holds now, for tests and diagnostics. Every slot counted in `pins` names one
+/// group pin; with the ledger's own pin that is every pin the lanes keep.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Census {
+    pub live_lanes: u32,
+    pub open_ends: u32,
+    pub in_flight: u32,
+    pub dead_ends: u32,
+    pub linked_segments: u32,
+    pub cells: u32,
+    /// Slots mid-way through a claim, a staging or a cleaning.
+    pub busy: u32,
+    pub pooled: u32,
+    pub pooled_bytes: u32,
+    pub pins: u32,
+    pub awaiting: u32,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Drain {
     pub frames: Vec<Vec<u8>>,
@@ -1019,6 +1037,45 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     }
 
     // ---- Sweeps ----
+
+    /// Counts ledger slots by phase and lane ends by state. Ledger reads only.
+    pub(crate) fn census(&self) -> Census {
+        let mut census = Census {
+            pins: 1,
+            awaiting: self.mem.load(self.ledger + H_AWAITING),
+            ..Census::default()
+        };
+        for at in self.slots(true) {
+            let claim = self.mem.get(at + CLAIM);
+            self.count_slot(&mut census, at, claim, true);
+            if claim.kind == phase::LIVE {
+                (0..2).for_each(|side| {
+                    count_end(&mut census, self.mem.get(at + END + side * SIDE).kind)
+                });
+            }
+        }
+        for at in self.slots(false) {
+            self.count_slot(&mut census, at, self.mem.get(at + CLAIM), false);
+        }
+        census
+    }
+
+    fn count_slot(&self, census: &mut Census, at: u32, claim: Word, lane: bool) {
+        match claim.kind {
+            phase::FREE => return,
+            phase::LIVE if lane => census.live_lanes += 1,
+            phase::LIVE => census.linked_segments += 1,
+            phase::RELEASED => {
+                census.pooled += 1;
+                census.pooled_bytes += self.mem.load(at + LENGTH);
+            }
+            phase::STARTING | phase::RUNNING => census.cells += 1,
+            _ => census.busy += 1,
+        }
+        if self.mem.load(at + PIN) != 0 {
+            census.pins += 1;
+        }
+    }
 
     /// The counter every member compares with its last sweep.
     pub(crate) fn deaths(&self) -> u32 {
@@ -1665,6 +1722,15 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     }
 }
 
+fn count_end(census: &mut Census, state: u32) {
+    match state {
+        end::OPEN => census.open_ends += 1,
+        end::IN_FLIGHT => census.in_flight += 1,
+        end::CLOSED_DEAD => census.dead_ends += 1,
+        _ => {}
+    }
+}
+
 /// Liveness of other members' tags within one sweep. A failed attach on a tag means the host
 /// released that member; anything else counts as alive.
 #[derive(Default)]
@@ -1998,6 +2064,31 @@ pub(crate) mod guest {
             with(|lanes| lanes.exited(cell))?;
             sweep(true)?;
             Ok(Val::Undefined)
+        });
+        table.add("wasm.laneCensus", |_| {
+            if STATE.with(|state| state.borrow().ledger) == 0 {
+                return Ok(Val::Null);
+            }
+            let census = with(|lanes| lanes.census())?;
+            let fields = [
+                ("liveLanes", census.live_lanes),
+                ("openEnds", census.open_ends),
+                ("inFlight", census.in_flight),
+                ("deadEnds", census.dead_ends),
+                ("linkedSegments", census.linked_segments),
+                ("cells", census.cells),
+                ("busy", census.busy),
+                ("pooled", census.pooled),
+                ("pooledBytes", census.pooled_bytes),
+                ("pins", census.pins),
+                ("awaiting", census.awaiting),
+            ];
+            Ok(Val::Object(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), Val::from(value)))
+                    .collect(),
+            ))
         });
         table.add("wasm.laneSweep", |a| {
             sweep(a.bool(0))?;

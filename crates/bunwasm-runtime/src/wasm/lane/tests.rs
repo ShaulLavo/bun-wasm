@@ -1309,3 +1309,51 @@ fn a_severed_writer_is_terminal_for_its_peer_and_deaths_are_counted() {
     r.exited(cell);
     assert_eq!(r.deaths(), deaths + 1);
 }
+
+#[test]
+fn the_census_names_every_pin_the_lanes_keep() {
+    let group = Group::new(128);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    assert_eq!(
+        r.census(),
+        Census {
+            pins: 1,
+            ..Census::default()
+        }
+    );
+    let lane = r.create_lane().unwrap();
+    post(&r, lane, 0, &frame(0, 50_000));
+    let cell = r.create_cell().unwrap();
+    let census = r.census();
+    assert_eq!(
+        (
+            census.live_lanes,
+            census.open_ends,
+            census.linked_segments,
+            census.cells
+        ),
+        (1, 2, 1, 1)
+    );
+    assert_eq!(
+        census.pins as usize,
+        group.counts().1,
+        "every host pin is a ledger pin"
+    );
+    r.exited(cell);
+    r.close_end(lane, 0);
+    r.close_end(lane, 1);
+    r.sweep(false);
+    let census = r.census();
+    assert_eq!(
+        (
+            census.live_lanes,
+            census.linked_segments,
+            census.busy,
+            census.cells
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(census.pooled, 2);
+    assert_eq!(census.pins as usize, group.counts().1);
+}

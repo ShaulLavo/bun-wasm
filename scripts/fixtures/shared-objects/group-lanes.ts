@@ -130,6 +130,7 @@ export function createGroupLaneModel() {
       sweep() {},
       end(ref, side) { const end = lane(ref).ends[side]; return [STATES[end.state], end.version]; },
       sever(ref, side) { lane(ref).directions[side === 0 ? 1 : 0].severed = true; },
+      census: () => null,
     };
   }
   return { member, control, lanes };

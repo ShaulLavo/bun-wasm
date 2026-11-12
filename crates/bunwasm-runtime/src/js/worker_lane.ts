@@ -92,5 +92,6 @@
     sweep(full) { if (ledger) native.laneSweep(full); },
     end(ref, side) { return ledger ? native.laneEnd(ref.slot, ref.generation, side) : [CLOSED, 0]; },
     sever(ref, side) { if (ledger) native.laneSever(ref.slot, ref.generation, side); },
+    census() { return native.laneCensus(); },
   };
 })

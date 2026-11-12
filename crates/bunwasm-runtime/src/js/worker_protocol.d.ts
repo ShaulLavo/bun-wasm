@@ -62,6 +62,12 @@ declare namespace BunWasm {
     sweep(full: boolean): void;
     end(ref: GroupLaneRef, side: 0 | 1): [state: number, version: number];
     sever(ref: GroupLaneRef, side: 0 | 1): void;
+    /** Ledger counts for tests (`internal/bunwasm/group-lanes`); null before this member has a ledger. */
+    census(): GroupLaneCensus | null;
+  }
+  interface GroupLaneCensus {
+    liveLanes: number; openEnds: number; inFlight: number; deadEnds: number; linkedSegments: number;
+    cells: number; busy: number; pooled: number; pooledBytes: number; pins: number; awaiting: number;
   }
   type WorkerNode =
     | ["undefined"] | ["null"] | ["string", string] | ["number", string] | ["boolean", boolean] | ["bigint", string]

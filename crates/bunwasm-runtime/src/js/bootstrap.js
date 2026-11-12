@@ -667,6 +667,9 @@
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
         if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
+        // Group lane ledger counts for the shared-group fixtures; read only.
+        const lanes = internal.sharedObjects?.groupLanes;
+        if (spec === "internal/bunwasm/group-lanes" && lanes) return { census: () => lanes.census() };
       }
       const resolved = typeof spec === "string" && spec.startsWith("node:")
         ? native.resolve(spec, parent.filename, true)
