@@ -113,7 +113,7 @@ export class Editor {
   async flush(path: string): Promise<void> {
     clearTimeout(this.timers.get(path));
     this.timers.delete(path);
-    const revision = this.pending.get(path) ?? this.editRevision;
+    const revision = this.pending.get(path) ?? ++this.editRevision;
     this.pending.set(path, revision);
     const text = this.text(path);
     const save = this.saves ? this.saves.then(() => this.host.save(path, text, revision)) : this.host.save(path, text, revision);

@@ -78,6 +78,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private filesRevision = 0;
   private readonly previews = new Previews();
   private wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
+  private engineLoading?: Promise<void>;
   private firstStart = true;
   private run: Run | null = null;
   private server: Server | null = null;
@@ -148,7 +149,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private launchPersistent(): void {
     const pending = this.startPersistent().catch(error => {
       this.failure = "storage";
-      this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. Keep this page open and retry. ${errorText(error)}`;
+      const action = this.canReloadStartup() ? "Retry reloads this page." : "Keep this page open and retry.";
+      this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
       this.changed();
       this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
     }).finally(() => { if (this.startup === pending) this.startup = undefined; });
@@ -210,6 +212,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   restart(): void {
     if (this.failure === "storage") {
       if (this.startup) return;
+      if (!this.started && this.workspace?.fs.state.status === "failed") {
+        if (this.canReloadStartup()) location.reload();
+        return;
+      }
       this.failure = undefined;
       if (!this.started && getVfsDescriptor(this.params.get("mode") ?? "fast").mode === "fast") this.launchPersistent();
       else if (!this.started) this.startWorkspace();
@@ -220,6 +226,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     if (!this.started) return;
     this.term?.write("\r\n");
     void this.startDevServer().catch(this.report);
+  }
+
+  private canReloadStartup(): boolean {
+    const workspace = this.workspace;
+    return !this.started && !!workspace && workspace.fs.state.status === "failed"
+      && workspace.editor.path === "" && !workspace.editor.hasPending && workspace.editor.view.state.doc.length === 0;
   }
 
   async reset(): Promise<void> {
@@ -300,14 +312,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       changed: () => this.changed(),
     });
     Object.assign(globalThis, {
-      sandbox: { fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, engine: this.engine, template: this.template },
+      sandbox: { fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, started: () => this.started, engine: this.engine, template: this.template },
     });
     return { runtime, fs, browserPrograms, editor, term, moduleScope };
   }
 
   private async boot({ fs, editor }: Workspace, engine = this.loadEngine()): Promise<void> {
     await this.terminalOpen;
-    await fs.mkdirp("/tmp");
+    await this.retryStorage(() => fs.mkdirp("/tmp"));
     this.setServerState("starting", "loading…");
     if (!globalThis.crossOriginIsolated) {
       this.setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
@@ -327,7 +339,12 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     await this.startDevServer();
   }
 
-  private async loadEngine(): Promise<void> {
+  private loadEngine(): Promise<void> {
+    if (this.wasm) return Promise.resolve();
+    return this.engineLoading ??= this.downloadEngine().finally(() => { this.engineLoading = undefined; });
+  }
+
+  private async downloadEngine(): Promise<void> {
     const wasmUrl = this.params.get("wasm") ?? ENGINES[this.engine].wasm;
     try {
       this.wasm = await loadWasm(wasmUrl, (text) => this.setStatus(text));

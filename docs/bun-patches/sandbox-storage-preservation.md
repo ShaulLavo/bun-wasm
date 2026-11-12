@@ -25,3 +25,9 @@ Pure checks, native IndexedDB checks, and the shared Browser guest site producer
 are registered through feature-owned check manifests. The producer packages the
 sandbox and playground once from its already-built guest. Browser consumers verify
 the same file inventory and guest identity before using that artifact.
+
+Explicit saves of unchanged documents receive their own pending identity, so they
+cannot hide another document's failed save. Storage retries share an engine
+download already in progress. A terminal filesystem startup failure can be
+retried by manual page reload only before any editor document, text or pending
+save exists; active source remains in the current page.

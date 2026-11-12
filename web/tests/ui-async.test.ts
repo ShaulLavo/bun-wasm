@@ -206,7 +206,7 @@ test("sandbox flushAll retries a failed save after its debounce timer was remove
   expect(editor.hasPending).toBe(false);
 });
 
-test("sandbox keeps failed-file warnings until every pending document is saved", async () => {
+test.each([false, true])("sandbox keeps failed-file warnings when the next saved file is edited: %s", async edited => {
   const page = await pageFixture();
   const sandbox = new page.Sandbox("?mode=memory");
   sandbox.start();
@@ -222,7 +222,7 @@ test("sandbox keeps failed-file warnings until every pending document is saved",
   editor.setText("A is still only in this editor");
   await expect(editor.flush("a.ts")).rejects.toThrow("errno 51");
   await editor.open("b.ts");
-  editor.setText("B saves successfully");
+  if (edited) editor.setText("B saves successfully");
   await editor.flush("b.ts");
   expect(editor.hasPending).toBe(true);
   expect(sandbox.failure).toBe("storage");

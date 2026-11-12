@@ -96,7 +96,11 @@ class TerminalFixture {
 }
 
 let identity = 0;
-export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }) {
+function fixtureWasm() {
+  return { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null };
+}
+
+export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }, engine?: () => Promise<ReturnType<typeof fixtureWasm>>) {
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
   const runs: { args: string[]; env: Record<string, string>; hooks: RunHooks; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
@@ -121,7 +125,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     },
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => { loads.push(url); return { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null }; },
+    loadWasm: async (url: string) => { loads.push(url); return engine ? engine() : fixtureWasm(); },
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
@@ -203,7 +207,14 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     loadTemplate: typeof import("../../sandbox/src/template").loadTemplate;
     runtimeSharedObjectRoute(runtime: Pick<Runtime, "filesystem" | "disposed">): ReturnType<typeof import("../src/shared-objects/runtime").runtimeSharedObjectRoute>;
   };
-  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, storageEvents, boundary, async cleanup() { for (const listener of listeners) listener({ persisted: false }); Reflect.deleteProperty(globalThis, key); for (const run of runs) run.done.resolve({ code: 0 }); await rm(scratch, { recursive: true }); } };
+  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, storageEvents, boundary, async cleanup() {
+    try { for (const listener of listeners) listener({ persisted: false }); }
+    finally {
+      Reflect.deleteProperty(globalThis, key);
+      for (const run of runs) run.done.resolve({ code: 0 });
+      await rm(scratch, { recursive: true });
+    }
+  } };
 }
 
 export function method<T extends (...args: never[]) => unknown>(target: object, name: string): T {
