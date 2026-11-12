@@ -23,3 +23,8 @@ and errors use the same disposal path.
 Waffle can reject further resolution from a removed directory. Such a replacement
 leaves the diagnostic unavailable; replacing the final file after its stat still
 reads the retained original file. Neither case follows the replacement symlink.
+
+The reader now receives a phase-bound transport view. Its existing absolute
+observation cutoff also bounds each transport await, including after guest reads.
+Browser trap facts captured before the Angular read remain in the fallback if
+that optional read expires. No guest reader or filesystem behavior changes.

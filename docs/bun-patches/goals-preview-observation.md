@@ -19,3 +19,11 @@ The browser-owned regression runs the actual edit observer with a real document
 reload. It also checks missing text, evaluation errors and one-shot command
 errors. Safari's transport is unchanged; this adapter does not claim a Safari
 navigation fix.
+
+The raw transport now requires finite phase admission, while helpers receive a
+bound view that checks each call and bounds its await. Playwright checks again
+after closing an old preview or acquiring a new page before switching the active
+page or navigating. A page acquired after cancellation remains owned by its
+browser for teardown. Observation handle extraction rechecks admission after
+`waitForFunction`; disposal remains unconditional. No dispatched page action is
+replayed or cancelled merely because its caller stops awaiting it.

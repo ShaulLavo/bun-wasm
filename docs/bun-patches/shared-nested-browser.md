@@ -101,6 +101,32 @@ member's worker and takes no group region, hold or charge.
 - Limits. Growth is bounded by the table's declared maximum and the engine's own table limit.
   The native Store sets no element limit either.
 
+## Exported globals
+
+The host answers the existing `GlobalGet` and `GlobalSet` requests by instance id and export
+name, using the page engine's live `WebAssembly.Global` storage. It caches neither values nor
+global objects and adds no handle, registry, owner entry or charge. Aliases see the same storage,
+including writes from Wasm. Guest object identity stays in the core. V8 and JavaScriptCore do
+not preserve one page-engine Global object per underlying global across export names.
+
+`module-info.ts` reads declared value types and mutability from the actual regionized import
+and global sections. Its closed initializer traversal covers numeric constants, `global.get`,
+`ref.null`, `ref.func` and `v128.const`. A known reference global that is not exported does not
+hide later declarations. An unknown declaration length stops that entry and later entries;
+an unknown initializer stops later entries. Both `Compile` and `AttachModule` refuse exported
+reference globals and undecoded exported globals before instantiation can run a start function.
+
+Reads and writes use the same four numeric conversions as function calls. A write checks
+mutability and requires the declared wire tag before assigning, because the page engine would
+silently coerce some other numeric types. A `v128` export is admitted, but value access stays
+refused before reading the engine's `.value`. Immutable numeric imports still pass by value.
+Mutable imports, standalone globals and reference or SIMD transport remain outside this adapter.
+
+Global value operations add no callback or invocation. Replies still enter the core allocator
+through the existing transport and keep its failure propagation and member cancellation boundary.
+Releasing a memory does not change an instance's global identity. A retained stop still retains
+the member's existing memory, publication and backing debt until physical stop.
+
 Differences from the native host:
 
 - There is no Wasmtime Store, so the 40-instance ceiling and the admission closure that guards
@@ -116,9 +142,11 @@ Differences from the native host:
 - A Memory's reservation is zeroed by Waffle when it is created, growth room included.
 - The JS API reads one value per import module and name. Two imports with the same name and
   different function types are refused with a `LinkError`.
-- f32 and f64 values cross JS numbers at this boundary, so NaN payload bits are not guaranteed.
-- Nested modules that export a global are refused at compile and at attachment, before any start
-  code runs, and `GlobalGet` and `GlobalSet` are refused. Exported tables are supported, above.
+- f32 and f64 values, including globals, cross JS numbers at this boundary, so NaN payload and
+  sign bits are not guaranteed.
+- A wrong-tag `GlobalSet` reports `incompatible nested global value type`; native uses its
+  engine's message. The Browser host also refuses exported reference globals at compile and
+  attachment as a second boundary, while native relies on the core's earlier refusal.
 - An imported callback read back from a table is the engine's wrapper for that import. V8 keeps
   one wrapper when it is imported again into another instance. JavaScriptCore, as measured in Bun
   1.4.4, makes a new one, so there the second instance's entry gets its own function id.
@@ -167,4 +195,11 @@ initial and 65,536 maximum pages. It controls admission only.
 `web/tests/nested-host-table.test.ts` covers exported tables the same way, on modules assembled
 from the `.wat` files beside it (`wasm-tools parse`): identity, entry types, callbacks, every
 refusal, growth to both limits, the handle limit, and that a table takes nothing from the owner.
-The group fixture runs `table-controls.ts` on both hosts and `global-refusal.ts` on this one.
+`web/tests/nested-host-global.test.ts` covers numeric global reads and writes, live aliases,
+exact wire values, type and mutability refusals, compile and attachment admission, start failures,
+reentrant access, instance lifetimes and unchanged owner accounting. The codec suite covers
+regionized global indices and every admitted initializer form, including ten-byte signed LEBs
+and vector immediates containing end bytes. The harness's no-op `checkActive` does not establish
+production cancellation after a stop.
+The group fixture runs `table-controls.ts`, `table-global.ts` and `table-global-guest.ts` on both
+hosts, preserving alias identity, imported Global branding and clone rollback assertions.

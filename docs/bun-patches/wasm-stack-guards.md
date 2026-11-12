@@ -236,3 +236,9 @@ session on a new document. `stackModeSlice` in `scripts/stack-measurement.ts` sp
 consecutive parts that together cover every path once, so a sweep can hold the shared Mac in short
 turns. The adapter checks that Safari fetched the JSC side the site holds and prints the session's
 capabilities.
+
+Each measurement operation uses the goals matrix's `Scope` and `scoped` transport, with the
+native driver's cancellation signal. Polls retain their operation's deadline. Warm commands
+receive separate scopes, so one attempt's budget does not expire the entire sweep. Session
+closure interrupts pending commands and runs even after cancellation. Source-only admission
+checks exercise late observations, cancellation, warm reuse and foreground timeout cleanup.

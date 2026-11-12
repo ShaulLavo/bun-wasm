@@ -1,3 +1,4 @@
+import { withScoped, withAdmission } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { object } from "./evidence";
 import { createIphoneTransport } from "./iphone-transport";
@@ -47,7 +48,7 @@ async function withControl(script: Script, timeoutMs: number, action: (transport
     const name = Object.keys(answers).find(candidate => String(row.source).includes("function " + candidate));
     if (!name) throw new Error("Unexpected controller expression");
     log.push(`${route} ${name}${row.observation === true ? " observation" : ""}`);
-    return Response.json(answers[name]?.() ?? null);
+    return Response.json({ settled: true, ok: true, value: answers[name]?.() ?? null });
   } });
   const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "f".repeat(64), agent: "/bound/agent-device", deviceUDID: "fixture", timeoutMs });
   try { await action(transport, log); }
@@ -57,7 +58,7 @@ async function withControl(script: Script, timeoutMs: number, action: (transport
 test("opening a preview waits in the preview document and reads cached owner focus", async () => {
   const script = { states: [configured, configured, attached], loads: [loading, loading, complete], focuses: [unfocused, focusedFrame] };
   await withControl(script, 2000, async (transport, log) => {
-    await transport.openPreview(url);
+    await withScoped(transport, page => page.openPreview(url));
     expect(log).toEqual([
       "preview/configure", "host/execute presentIphonePreview",
       "preview/state", "preview/state", "preview/state",
@@ -69,7 +70,7 @@ test("opening a preview waits in the preview document and reads cached owner foc
 
 test("a preview document that never attaches expires without holding any observer command", async () => {
   await withControl({ states: [configured], loads: [complete], focuses: [focusedFrame] }, 300, async (transport, log) => {
-    await expect(transport.openPreview(url)).rejects.toThrow(`iPhone preview document did not finish within 300 ms; last observation: ${JSON.stringify(configured)}`);
+    await expect(withScoped(transport, page => page.openPreview(url))).rejects.toThrow(`iPhone preview document did not finish within 300 ms; last observation: ${JSON.stringify(configured)}`);
     expect(log.filter(entry => entry.includes("/execute"))).toEqual(["host/execute presentIphonePreview"]);
     const settled = log.length;
     await Bun.sleep(250);
@@ -79,35 +80,35 @@ test("a preview document that never attaches expires without holding any observe
 
 test("a preview that attaches but never completes loading never reads owner focus", async () => {
   await withControl({ states: [attached], loads: [loading], focuses: [focusedFrame] }, 300, async (transport, log) => {
-    await expect(transport.openPreview(url)).rejects.toThrow(`iPhone preview load did not finish within 300 ms; last observation: ${JSON.stringify(loading)}`);
+    await expect(withScoped(transport, page => page.openPreview(url))).rejects.toThrow(`iPhone preview load did not finish within 300 ms; last observation: ${JSON.stringify(loading)}`);
     expect(log.filter(entry => entry.startsWith("host/execute"))).toEqual(["host/execute presentIphonePreview"]);
-    await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 200))).rejects.toThrow("not focused after load");
     expect(log.some(entry => entry.includes("armIphoneClick"))).toBe(false);
   });
 });
 
 test("a loaded preview whose frame was never focused expires without native input", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [unfocused] }, 300, async (transport, log) => {
-    await expect(transport.openPreview(url)).rejects.toThrow(`iPhone preview focus did not finish within 300 ms; last observation: ${JSON.stringify({ previewFocus: unfocused })}`);
-    await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.openPreview(url))).rejects.toThrow(`iPhone preview focus did not finish within 300 ms; last observation: ${JSON.stringify({ previewFocus: unfocused })}`);
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 200))).rejects.toThrow("not focused after load");
     expect(log.some(entry => entry.includes("armIphoneClick"))).toBe(false);
   });
 });
 
 test("cached focus for a previous presentation cannot admit native input", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [{ ...focusedFrame, presentation: "previous-frame" }] }, 200, async (transport, log) => {
-    await expect(transport.openPreview(url)).rejects.toThrow("preview focus did not finish");
-    await expect(transport.nativeClick!("button", "output", 100)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.openPreview(url))).rejects.toThrow("preview focus did not finish");
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 100))).rejects.toThrow("not focused after load");
     expect(log.some(entry => entry.includes("armIphoneClick"))).toBe(false);
   });
 });
 
 test("cleanup withdraws native input after a completed opening", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [focusedFrame] }, 1000, async (transport, log) => {
-    await transport.openPreview(url);
-    await transport.beginCleanup?.();
+    await withScoped(transport, page => page.openPreview(url));
+    await withAdmission(async admission => transport.beginCleanup?.(admission));
     const completed = log.length;
-    await expect(transport.nativeClick!("button", "output", 100)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 100))).rejects.toThrow("not focused after load");
     expect(log).toHaveLength(completed);
   });
 });
@@ -115,18 +116,18 @@ test("cleanup withdraws native input after a completed opening", async () => {
 for (const [cause, message] of [["cleanup", "iPhone cleanup began before the preview opened"], ["presentation", "iPhone preview presentation changed"]] as const) {
   test(`a waiting opening stops at the next ${cause} step and starts no further read`, async () => {
     await withControl({ states: [configured], loads: [complete], focuses: [focusedFrame] }, 5000, async (transport, log) => {
-      const opening = transport.openPreview(url).then(() => "presented", (error: unknown) => String(error));
+      const opening = withScoped(transport, page => page.openPreview(url)).then(() => "presented", (error: unknown) => String(error));
       await Bun.sleep(150);
-      if (cause === "cleanup") await transport.beginCleanup?.();
-      else await transport.closePreview();
+      if (cause === "cleanup") await withAdmission(async admission => transport.beginCleanup?.(admission));
+      else await withScoped(transport, page => page.closePreview());
       expect(await opening).toContain(message);
       const settled = log.length;
       await Bun.sleep(250);
       expect(log).toHaveLength(settled);
-      await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+      await expect(withScoped(transport, page => page.nativeClick!("button", "output", 200))).rejects.toThrow("not focused after load");
       if (cause !== "cleanup") return;
       // Cleanup is final: a later opening presents its frame but never waits on it.
-      await expect(transport.openPreview(url)).rejects.toThrow(message);
+      await expect(withScoped(transport, page => page.openPreview(url))).rejects.toThrow(message);
       expect(log.slice(settled)).toEqual(["preview/configure", "host/execute presentIphonePreview"]);
     });
   });
@@ -135,15 +136,15 @@ for (const [cause, message] of [["cleanup", "iPhone cleanup began before the pre
 test("native input is accepted only between a completed opening and the next presentation change", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [focusedFrame] }, 1000, async (transport, log) => {
     const arms = () => log.filter(entry => entry.includes("armIphoneClick")).length;
-    await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 200))).rejects.toThrow("not focused after load");
     expect(log).toEqual([]);
-    await transport.openPreview(url);
+    await withScoped(transport, page => page.openPreview(url));
     // The gate is open: arming polls the unhydrated fixture counter until the click deadline.
-    await expect(transport.nativeClick!("button", "output", 150)).rejects.toThrow();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 150))).rejects.toThrow();
     const polled = arms();
     expect(polled).toBeGreaterThan(0);
-    await transport.closePreview();
-    await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+    await withScoped(transport, page => page.closePreview());
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 200))).rejects.toThrow("not focused after load");
     expect(arms()).toBe(polled);
   });
 });

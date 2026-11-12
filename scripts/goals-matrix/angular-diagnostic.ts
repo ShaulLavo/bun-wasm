@@ -1,4 +1,4 @@
-import type { Transport } from "./transport";
+import type { ScopedTransport } from "./transport";
 declare const __GOALS_ANGULAR_DIAGNOSTIC__: string;
 let source: Promise<string> | undefined;
 
@@ -12,7 +12,7 @@ export async function buildAngularDiagnosticSource(): Promise<string> {
   return result.outputs[0].text();
 }
 
-export async function angularDiagnostic(transport: Transport, path: string, deadline: number): Promise<string> {
+export async function angularDiagnostic(transport: ScopedTransport, path: string, deadline: number): Promise<string> {
   source ??= typeof __GOALS_ANGULAR_DIAGNOSTIC__ === "string" ? Promise.resolve(__GOALS_ANGULAR_DIAGNOSTIC__) : buildAngularDiagnosticSource();
   const script = await source;
   if (Date.now() >= deadline) throw new Error("Failure observation deadline expired");

@@ -1,24 +1,15 @@
-import { chromium, firefox, type Page } from "playwright";
+import { chromium, firefox, type Page, type BrowserContext } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
-type EvaluationOptions = { observation: true };
-interface CleanupEvidence { browserClosed: true; foregroundStopped: true; previewClosed: true }
-export interface Transport {
-  readonly capabilities: Record<string, unknown>;
-  beginCleanup?(): void | Promise<void>;
-  nativeClick?(button: string, clicked: string, timeoutMs: number): Promise<unknown>;
-  cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
-  navigate(url: string): Promise<void>;
-  evaluate<T>(expression: string, options?: EvaluationOptions): Promise<T>;
-  openPreview(url: string): Promise<void>;
-  useHost(): Promise<void>;
-  usePreview(): Promise<void>;
-  closePreview(): Promise<void>;
-  close(interruptPending?: boolean, timeoutMs?: number): Promise<void>;
-}
-export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, options?: EvaluationOptions): Promise<T> {
+import { admit, awaitWithin, type Admission } from "./scope";
+import type { EvaluationOptions, Transport } from "./scoped-transport";
+export type { Transport, ScopedTransport } from "./scoped-transport";
+export { scoped } from "./scoped-transport";
+export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, admission: Admission, options?: EvaluationOptions): Promise<T> {
+  admit(admission);
   if (!options?.observation) return page.evaluate(expression);
   const handle = await page.waitForFunction(`(async () => JSON.stringify({ value: await (${expression}) }))()`, undefined, { timeout: timeoutMs });
   try {
+    admit(admission);
     const serialized = await handle.jsonValue();
     if (typeof serialized !== "string") throw new Error("DOM observation returned no serialized value");
     return JSON.parse(serialized).value;
@@ -36,24 +27,47 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
   try {
     const context = await browser.newContext({ serviceWorkers: "allow" });
     const host = await context.newPage();
-    let preview: typeof host | undefined;
-    let page = host;
-    let evaluationTimeoutMs = timeoutMs;
-    page.setDefaultTimeout(timeoutMs);
-    return {
-      capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() },
-      beginCleanup() { evaluationTimeoutMs = cleanupTimeoutMs; },
-      async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
-      evaluate: (expression, options) => evaluatePage(page, expression, evaluationTimeoutMs, options),
-      async openPreview(url) {
-        if (preview) await preview.close();
-        preview = await context.newPage(); page = preview;
-        await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
-      },
-      async useHost() { page = host; },
-      async usePreview() { if (!preview) throw new Error("No owned preview"); page = preview; },
-      async closePreview() { if (preview) await preview.close(); preview = undefined; page = host; },
-      async close() { await browser.close(); },
-    };
+    return createPageTransport(context, host, { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() }, timeoutMs, cleanupTimeoutMs, () => browser.close());
   } catch (error) { await browser.close(); throw error; }
+}
+
+export function createPageTransport(context: Pick<BrowserContext, "newPage">, host: Page, capabilities: Record<string, unknown>, timeoutMs: number, cleanupTimeoutMs: number, close: () => Promise<void>): Transport {
+  let preview: typeof host | undefined;
+  let page = host;
+  let evaluationTimeoutMs = timeoutMs;
+  page.setDefaultTimeout(timeoutMs);
+  return {
+    capabilities,
+    beginCleanup(admission) { admit(admission); evaluationTimeoutMs = cleanupTimeoutMs; },
+    async navigate(url, admission) {
+      admit(admission);
+      return awaitWithin((async () => { await host.goto(url, { timeout: timeoutMs }); admit(admission); page = host; })(), admission);
+    },
+    async evaluate(expression, admission, options) { admit(admission); return awaitWithin(evaluatePage(page, expression, evaluationTimeoutMs, admission, options), admission); },
+    async openPreview(url, admission) {
+      admit(admission);
+      return awaitWithin(openPreview(url, admission), admission);
+    },
+    async useHost(admission) { admit(admission); page = host; },
+    async usePreview(admission) { admit(admission); if (!preview) throw new Error("No owned preview"); page = preview; },
+    async closePreview(admission) {
+      admit(admission);
+      return awaitWithin(closePreview(admission), admission);
+    },
+    async close() { await close(); },
+  };
+  async function openPreview(url: string, admission: Admission): Promise<void> {
+    if (preview) await preview.close();
+    admit(admission);
+    preview = await context.newPage();
+    admit(admission);
+    page = preview;
+    await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
+  }
+  async function closePreview(admission: Admission): Promise<void> {
+    if (preview) await preview.close();
+    preview = undefined;
+    admit(admission);
+    page = host;
+  }
 }

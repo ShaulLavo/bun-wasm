@@ -20,6 +20,9 @@ test.each([
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
   "scripts/check-quickjs-parser-stack.ts", "scripts/fixtures/quickjs-parser-stack.c", "scripts/fixtures/quickjs-parser-stack.ts",
   "scripts/fixtures/quickjs-parser-stack.expected.txt",
+  "scripts/check-quickjs-frame-stack.ts", "scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-frame-stack.ts",
+  "scripts/fixtures/quickjs-frame-stack.expected.txt", "scripts/quickjs-native-check.ts",
+  "scripts/check-quickjs-frame-wasi.ts", "scripts/fixtures/quickjs-frame-wasi.c",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });
@@ -93,6 +96,13 @@ test("native handoff roots alone select producer and consumer engine gates", () 
   const paths = ["scripts/ci-native-handoff-paths.ts"];
   expect(needsRust(paths)).toBe(true);
   expect(needsJsc(paths)).toBe(true);
+});
+
+test("JSC artifact inventory changes select ordinary and shared consumers", () => {
+  const paths = ["scripts/ci-jsc-artifact.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
 });
 
 test.each(["src/index.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
@@ -256,6 +266,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 });
 
 for (const path of [
+  "scripts/ci-jsc-artifact.ts",
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",

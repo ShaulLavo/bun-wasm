@@ -16,9 +16,12 @@ import { withNativeDriver } from "../../scripts/goals-matrix/native.ts";
 import { foreground, ObservationTimeout, ready, stopServer, terminal } from "../../scripts/goals-matrix/playground.ts";
 import { createSafariTransport, type SafariTransport } from "../../scripts/goals-matrix/safari-transport.ts";
 import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix, stackModeSlice, type GuestStackSettings } from "../../scripts/stack-measurement.ts";
+import { Scope } from "../../scripts/goals-matrix/scope.ts";
+import { scoped, type ScopedTransport } from "../../scripts/goals-matrix/scoped-transport.ts";
 import { effectiveParserReserve } from "../src/engine-stack-budget.ts";
 
 interface Host { readonly endpoint: string; readonly url: string; readonly signal: AbortSignal }
+export interface MeasurementPage { readonly transport: SafariTransport; readonly signal: AbortSignal }
 interface Result { readonly code: number | null; readonly output: string }
 
 const args = process.argv.slice(2);
@@ -45,43 +48,54 @@ function sliceModes(slice: string | undefined): string[] | undefined {
   return Array.from({ length: last - first + 1 }, (_, offset) => stackModeSlice(first - 1 + offset, count)).flat();
 }
 
-async function withPage<T>(host: Host, engine: string, use: (page: SafariTransport) => Promise<T>): Promise<T> {
-  host.signal.throwIfAborted();
-  const page = await createSafariTransport({ endpoint: host.endpoint, browser: "safari", timeoutMs: 200_000 });
-  try {
-    await page.navigate(`${host.url}?engine=${engine}&prompt=off&mode=memory&cold=${crypto.randomUUID()}`);
-    await ready(page, engine, 120_000);
-    return await use(page);
-  } finally { await page.close(); }
+/** Each operation gets a finite scope; a warm sweep deliberately has no shared attempt deadline. */
+export async function observe<T>(page: MeasurementPage, timeoutMs: number, operation: (transport: ScopedTransport) => Promise<T>): Promise<T> {
+  const scope = Scope.open(timeoutMs, page.signal);
+  try { return await scope.run(admission => operation(scoped(page.transport, admission))); }
+  catch (error) {
+    if (error === scope.expiryReason) throw new ObservationTimeout(`Timed out after ${timeoutMs} ms`);
+    throw error;
+  } finally { scope.close(); }
 }
 
-function writeFile(page: SafariTransport, path: string, text: string): Promise<unknown> {
-  return page.evaluate(`globalThis.playground.fs.writeFile(${JSON.stringify(path)}, ${JSON.stringify(text)})`);
+export async function withPage<T>(host: Host, engine: string, use: (page: MeasurementPage) => Promise<T>): Promise<T> {
+  host.signal.throwIfAborted();
+  const transport = await createSafariTransport({ endpoint: host.endpoint, browser: "safari", timeoutMs: 200_000 });
+  const page = { transport, signal: host.signal };
+  try {
+    await observe(page, 200_000, page => page.navigate(`${host.url}?engine=${engine}&prompt=off&mode=memory&cold=${crypto.randomUUID()}`));
+    await observe(page, 120_000, page => ready(page, engine, 120_000));
+    return await use(page);
+  } finally { await transport.close(true); }
+}
+
+function writeFile(page: MeasurementPage, path: string, text: string): Promise<unknown> {
+  return observe(page, 200_000, page => page.evaluate(`globalThis.playground.fs.writeFile(${JSON.stringify(path)}, ${JSON.stringify(text)})`));
 }
 
 /** The exit code, or null when the command outlived its deadline and its foreground was stopped. */
-async function exitCode(page: SafariTransport, text: string, timeoutMs: number): Promise<number | null> {
+async function exitCode(page: MeasurementPage, text: string, timeoutMs: number): Promise<number | null> {
   try {
-    const result = await foreground(page, text, timeoutMs);
+    const result = await observe(page, timeoutMs, page => foreground(page, text, timeoutMs));
     if (result.error) throw new Error(`${text}: ${result.error}`);
     return result.code;
   } catch (error) {
     if (!(error instanceof ObservationTimeout)) throw error;
     // A cold page is discarded after this attempt, so only a reused page must come back to idle.
-    await stopServer(page, 15_000).catch((stopError: unknown) => { if (!cold) throw stopError; });
+    await observe(page, 15_000, page => stopServer(page, 15_000)).catch((stopError: unknown) => { if (!cold) throw stopError; });
     return null;
   }
 }
 
 /** One command's exit code and its own terminal lines: the prompt line before it and the prompt after it are excluded. */
-async function run(page: SafariTransport, text: string, timeoutMs: number): Promise<Result> {
-  const before = (await terminal(page)).split("\n").length;
+export async function run(page: MeasurementPage, text: string, timeoutMs: number): Promise<Result> {
+  const before = (await observe(page, 200_000, terminal)).split("\n").length;
   const code = await exitCode(page, text, timeoutMs);
-  const lines = (await terminal(page)).split("\n");
+  const lines = (await observe(page, 200_000, terminal)).split("\n");
   return { code, output: lines.slice(before, -1).join("\n") };
 }
 
-async function outcome(page: SafariTransport, mode: string, depth: number): Promise<string> {
+async function outcome(page: MeasurementPage, mode: string, depth: number): Promise<string> {
   await writeFile(page, "/home/user/depth.js", probe);
   const result = await run(page, `${settingsPrefix}bun run depth.js ${mode} ${depth}`, 180_000);
   const observation = observeStackOutcome({ result, mode, depth, requested });
@@ -89,7 +103,7 @@ async function outcome(page: SafariTransport, mode: string, depth: number): Prom
   return observation.outcome;
 }
 
-async function fixtures(page: SafariTransport, label: string, names: readonly string[]): Promise<void> {
+async function fixtures(page: MeasurementPage, label: string, names: readonly string[]): Promise<void> {
   for (const name of names) {
     const base = join("tests/fixtures", name);
     await writeFile(page, `/home/user/${name}.js`, readFileSync(join(base, "index.js"), "utf8"));
@@ -108,21 +122,21 @@ function reportSettings(label: string, engine: string): void {
 }
 
 /** The browser must fetch the JSC side this site holds, so a row names the bytes that ran. */
-async function bindSide(page: SafariTransport): Promise<void> {
+async function bindSide(page: MeasurementPage): Promise<void> {
   const served = sha256(gunzipSync(readFileSync(join(site, "jsc-engine.wasm.gz"))));
-  const fetched = await page.evaluate<string>(`(async () => {
+  const fetched = await observe(page, 200_000, page => page.evaluate<string>(`(async () => {
     const response = await fetch("./jsc-engine.wasm.gz?bind=" + Date.now());
     if (!response.ok || !response.body) throw new Error("side fetch " + response.status);
     const bytes = await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
     return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-  })()`);
+  })()`));
   assert.equal(fetched, served, "Safari fetched another JSC side");
   console.log(JSON.stringify({ jscSide: { served, fetched } }));
 }
 
-async function identify(page: SafariTransport, engine: string, label: string): Promise<void> {
-  const agent = await page.evaluate<string>("navigator.userAgent");
-  console.log(JSON.stringify({ host: label, capabilities: page.capabilities, agent, cold, measure, slice: process.env.STACK_SLICE ?? null, modes: modes ?? "all" }));
+async function identify(page: MeasurementPage, engine: string, label: string): Promise<void> {
+  const agent = await observe(page, 200_000, page => page.evaluate<string>("navigator.userAgent"));
+  console.log(JSON.stringify({ host: label, capabilities: page.transport.capabilities, agent, cold, measure, slice: process.env.STACK_SLICE ?? null, modes: modes ?? "all" }));
   if (engine === "jsc" && existsSync(join(site, "jsc-engine.wasm.gz"))) await bindSide(page);
 }
 
@@ -174,6 +188,6 @@ async function served<T>(use: (url: string) => Promise<T>): Promise<T> {
   } finally { server.kill("SIGTERM"); await server.exited; }
 }
 
-await served(url => withNativeDriver(async (endpoint, signal) => {
+if (import.meta.main) await served(url => withNativeDriver(async (endpoint, signal) => {
   for (const engine of engines) await checkEngine({ endpoint, url, signal }, engine);
 }, { desktopSafari: true, cleanupFile: process.env.SAFARI_CLEANUP_FILE }));
