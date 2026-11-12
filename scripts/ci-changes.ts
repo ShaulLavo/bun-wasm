@@ -138,6 +138,7 @@ function sharedWebGuestInput(path: string): boolean {
 }
 
 function excludedNativeInput(path: string): boolean {
+  if (path.startsWith("spidermonkey/") && path.endsWith(".md")) return true;
   return runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
     || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path);
 }

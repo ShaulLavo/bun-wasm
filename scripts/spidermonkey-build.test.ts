@@ -4,12 +4,35 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { checkMessageGeneration } from "../spidermonkey/check-message-generation.ts";
-import { archiveMembers, checkArchive, checkCommands, checkObject, checkRelocations, headerIdentity, supportObjectNames } from "../spidermonkey/check-build.ts";
+import { archiveMembers, checkArchive, checkCommands, checkObject, checkRelocations, headerIdentity, nativeObjectListIdentity, supportObjectNames } from "../spidermonkey/check-build.ts";
 
 const header = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const sdk = "/work/cache/sdk";
 const sysroot = "/work/cache/sysroot";
 const command = { file: "vm.cpp", arguments: [sdk + "/bin/clang++", "--sysroot", sysroot, "-fPIC", "-fno-exceptions", "-DBUNWASM_EMBED=1", "-c", "vm.cpp"] };
+
+test("native receipt replay retains each archive and irregexp input once and still detects changed bytes", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-receipt-replay-"));
+  try {
+    const archive = ["libjs_static_a.list", "support-backend.mk"].map(name => join(root, name));
+    const closure = ["irregexp-backend.mk", "Unified_cpp_js_src_irregexp0.cpp"].map(name => join(root, name));
+    for (const path of archive.concat(closure)) writeFileSync(path, path);
+    const cold = nativeObjectListIdentity(archive, closure);
+    const receipt = join(root, "vm-library.json");
+    writeFileSync(receipt, JSON.stringify({ objectLists: cold }));
+    const saved: { objectLists: { path: string; sha256: string }[] } = JSON.parse(readFileSync(receipt, "utf8"));
+    const replay = nativeObjectListIdentity(saved.objectLists.map(entry => entry.path), closure);
+    assert.deepEqual(replay, cold);
+    assert.equal(replay.length, archive.length + closure.length);
+    for (const path of archive.concat(closure)) {
+      writeFileSync(path, "changed bytes");
+      assert.notDeepEqual(nativeObjectListIdentity(saved.objectLists.map(entry => entry.path), closure), cold);
+      writeFileSync(path, path);
+    }
+    rmSync(closure[0]!);
+    assert.throws(() => nativeObjectListIdentity(saved.objectLists.map(entry => entry.path), closure));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 function archive(member: Buffer, name = "test.o/"): Buffer {
   const entry = name.padEnd(16) + "0".padEnd(12) + "0".padEnd(6) + "0".padEnd(6) + "644".padEnd(8) + String(member.length).padEnd(10) + "`\n";
