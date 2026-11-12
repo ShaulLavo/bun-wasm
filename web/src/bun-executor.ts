@@ -2,7 +2,7 @@ import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSo
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
 import { createMemoryReader, publishBrowserCallTrap, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
-import { memoryMaximumBytes } from "../../src/engine-kind.ts";
+import { BUN_MEMORY_GROUP_POLICY, memoryMaximumBytes } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -72,6 +72,9 @@ export type TerminalModule = typeof import("./bun-terminal.js") | Error | undefi
 /** The nested execution host as worker.ts loaded it: only for an admitted group member. */
 export type NestedModule = typeof import("./nested/host.js") | Error | undefined;
 
+// Chromium PBL exhausts its browser-native stack at 35 reentries, below the wire's 64-entry limit.
+const SPIDERMONKEY_REENTRY_LIMIT = 16;
+
 function withDefault(env: Record<string, string>, key: string, value: string | undefined): Record<string, string> {
   return value === undefined || key in env ? env : { ...env, [key]: value };
 }
@@ -112,7 +115,11 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     namespaces(context): WebAssembly.Imports {
       if (!req.memoryGroup) return {};
       if (!nestedModule || nestedModule instanceof Error) throw nestedModule ?? new TypeError("A group member needs the nested execution host");
-      nested = new nestedModule.NestedHost(context.checkActive, text => { context.post("stderr", new TextEncoder().encode(text)); });
+      nested = new nestedModule.NestedHost(
+        context.checkActive,
+        text => { context.post("stderr", new TextEncoder().encode(text)); },
+        req.engine === "spidermonkey" ? SPIDERMONKEY_REENTRY_LIMIT : undefined,
+      );
       return { runtime_nested: nested.imports };
     },
     beforeBindings({ wasi }) {
@@ -226,13 +233,17 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
   let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
   let diagnostics: EngineDiagnostics | undefined;
   let finished = false;
+  let checkStack: (() => void) | undefined;
   return {
     async instantiate(imports, context) {
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
       diagnostics = await engineDiagnostics(generation);
       const plan = await prepareLinkPlan(request.linkPlan);
-      if (req.adapter !== "preview1" && req.engine !== "browser" && programKind(plan.entryModule) !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
+      const declared = programKind(plan.entryModule);
+      const requireSelected = declared === "spidermonkey" || req.adapter !== "preview1" && req.engine !== "browser";
+      if (requireSelected && declared !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
+      if (declared === "spidermonkey" && req.memoryGroup) checkStack = spiderMonkeyGroupStack(imports, req.memoryGroup.stackBytes);
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
@@ -249,9 +260,10 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
+      checkStack?.();
       const originalImports = context.wasi.imports;
       context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
-      try { group.initialize(); }
+      try { group.initialize(); checkStack?.(); }
       finally { context.wasi.imports = originalImports; }
       reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics, group.entry.exports.memory ?? group.memory);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
@@ -271,4 +283,24 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       }
     },
   };
+}
+
+/** The side derives its bounds from a top-level initializer's stack, not linker symbols. */
+function spiderMonkeyGroupStack(imports: WebAssembly.Imports, stackBytes: number): () => void {
+  const pointer = imports.env?.__stack_pointer;
+  const low = imports["GOT.mem"]?.__stack_low;
+  const high = imports["GOT.mem"]?.__stack_high;
+  const memory = imports.env?.memory;
+  if (!(pointer instanceof WebAssembly.Global) || !(low instanceof WebAssembly.Global) || !(high instanceof WebAssembly.Global) || !(memory instanceof WebAssembly.Memory))
+    throw new TypeError("SpiderMonkey group stack requires the host's carved globals and memory");
+  const bottom = Number(low.value) >>> 0;
+  const top = Number(high.value) >>> 0;
+  if (stackBytes !== BUN_MEMORY_GROUP_POLICY.stackBytes || top - bottom !== BUN_MEMORY_GROUP_POLICY.stackBytes || top % 65536 || bottom % 65536 || top > memory.buffer.byteLength)
+    throw new RangeError("SpiderMonkey group stack must be an exact page-aligned 8 MiB carve");
+  const balanced = () => {
+    if ((Number(pointer.value) >>> 0) !== top || (Number(low.value) >>> 0) !== bottom || (Number(high.value) >>> 0) !== top)
+      throw new RangeError("SpiderMonkey group stack pointer was not restored to the carved top");
+  };
+  balanced();
+  return balanced;
 }
