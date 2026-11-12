@@ -24,3 +24,11 @@ regression one blocking owner without editing shared test commands.
 | [On-demand preview registration](#on-demand-preview-registration) | Host feature | Original page adapter registers its independent preview service-worker scope only when readiness is requested. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+The adapter also derives an internal `x-bun-preview-base` request header from its
+actual mounted service-worker scope and virtual port. It overwrites incoming
+copies without changing the root-relative guest request target. Root mode omits
+the header. This is Bun consumer metadata over Waffle 0.0.121's existing public
+`PreviewRouter.onMessage` API; no Waffle API or transport changes. The focused
+`web/tests/preview-mount-header.test.ts` checks root and nested scopes, header
+overwrite, unchanged request targets and input ownership.

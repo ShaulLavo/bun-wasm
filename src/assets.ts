@@ -1,7 +1,7 @@
 import { recordProgramMemory } from "./program-memory.ts";
-import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
+import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";
 import { engineLinkPlan } from "./quickjs-program.ts";
-import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
+import { memoryMaximumBytes, parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
 import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
 export { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
 
@@ -168,7 +168,13 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
   return bytes;
 }
 
-const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
+export interface ProgramMetadata {
+  readonly linkPlan: SharedLinkPlan | undefined;
+  readonly memoryLimitBytes: number | null;
+}
+
+const programs = new WeakMap<WebAssembly.Module, ProgramMetadata>();
+const ordinaryProgram: ProgramMetadata = Object.freeze({ linkPlan: undefined, memoryLimitBytes: null });
 
 export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
   if (files.kind === "single") {
@@ -176,12 +182,13 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     const module = await WebAssembly.compile(source);
     if (programKind(module) !== "single") throw new BunWasmAssetError("Paired core requires its matching prepared side module");
     recordProgramMemory(module, source);
+    programs.set(module, Object.freeze({ linkPlan: undefined, memoryLimitBytes: memoryMaximumBytes(source) ?? null }));
     return module;
   }
   try {
-    const plan = await prepareLinkPlan(await engineLinkPlan(files));
-    const source = plan.toSource();
-    programs.set(plan.entryModule, source);
+    const source = await engineLinkPlan(files);
+    const plan = await prepareLinkPlan(source);
+    programs.set(plan.entryModule, Object.freeze({ linkPlan: plan.shared, memoryLimitBytes: memoryMaximumBytes(source.core.source) ?? null }));
     recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;
   } catch (error) {
@@ -197,17 +204,17 @@ export function prepareQuickjsProgram(core: Uint8Array, side: Uint8Array): Promi
   return prepareProgram({ kind: "quickjs", core, side });
 }
 
-export function programLinkPlan(module: WebAssembly.Module): LinkPlanSource | undefined {
-  const plan = programs.get(module);
-  if (!plan && programKind(module) !== "single") {
+export function programMetadata(module: WebAssembly.Module): ProgramMetadata {
+  const metadata = programs.get(module);
+  if (!metadata && programKind(module) !== "single") {
     throw new BunWasmAssetError("Paired core requires its matching prepared side module");
   }
-  return plan;
+  return metadata ?? ordinaryProgram;
 }
 
 export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<WebAssembly.Module> {
   if (options.module) {
-    programLinkPlan(options.module);
+    programMetadata(options.module);
     return options.module;
   }
   const asset = options.asset ?? BUN_WASM_ASSET;

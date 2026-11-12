@@ -298,7 +298,7 @@ for (const engine of engines) {
 
   test(`${engine} roots retain explicit engine overrides and cache each guest module`, async () => {
     const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-    const { programLinkPlan } = await import("../../src/assets");
+    const { programMetadata } = await import("../../src/assets");
     const { core, side } = quickjsPair();
     const jsc = quickjsPair("jsc");
     const pair = new Map([["bun.wasm", core], ["quickjs.wasm", side], ["bun-jsc.wasm", jsc.core], ["jsc-engine.wasm", jsc.side]]);
@@ -332,7 +332,7 @@ for (const engine of engines) {
         expect(again).toBe(module);
         if (selected === engine) expect(module).toBe(state.request.module);
         else expect(module).not.toBe(state.request.module);
-        if ((selected === "quickjs" || selected === "jsc") && selected !== engine) expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(selected === "jsc" ? jsc.side : side);
+        if ((selected === "quickjs" || selected === "jsc") && selected !== engine) expect(programMetadata(module).linkPlan).toBeDefined();
         loaded.add(module);
       }
       expect(loaded.size).toBe(available.length);

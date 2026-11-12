@@ -7,6 +7,7 @@ import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
 import type { ProcessService, RuntimeSupervisor, MemoryDeclaration, SharedControlGrant } from "waffle";
 import type { RootMemoryGroupMember } from "waffle/runtime";
+import type { SharedLinkPlan } from "waffle/link";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
@@ -96,10 +97,10 @@ export class SubprocessBroker {
     if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
   }
   /** Admits the adopted root as the first member of a new memory group. */
-  async admitRootGroup(): Promise<RootMemoryGroupMember> {
+  async admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): Promise<RootMemoryGroupMember> {
     if (!this.root) throw new Error("Memory group admission needs an adopted root");
     const service = await this.processService();
-    this.rootGroup = service.admitRootMemoryGroup(this.root.pid);
+    this.rootGroup = service.admitRootMemoryGroup(this.root.pid, program);
     return this.rootGroup;
   }
   rootStopped(): void {

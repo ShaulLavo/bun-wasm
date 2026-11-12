@@ -297,3 +297,51 @@ index b26a32f2e..691424f65 100644
      break;
    }
    if (!followedByCased) {
+diff --git a/js/src/builtin/Promise.cpp b/js/src/builtin/Promise.cpp
+--- a/js/src/builtin/Promise.cpp
++++ b/js/src/builtin/Promise.cpp
+@@ -498,8 +498,12 @@
+     }
+     debugInfo->setFixedSlot(Slot_AllocationSite, ObjectOrNullValue(stack));
+     debugInfo->setFixedSlot(Slot_ResolutionSite, NullValue());
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    debugInfo->setFixedSlot(Slot_AllocationTime, NumberValue(0));
++#else
+     debugInfo->setFixedSlot(Slot_AllocationTime,
+                             DoubleValue(MillisecondsSinceStartup()));
++#endif
+     debugInfo->setFixedSlot(Slot_ResolutionTime, NumberValue(0));
+     promise->setFixedSlotTyped(PromiseObject::DEBUG_INFO_SLOT,
+                                ObjectValue(*debugInfo));
+@@ -608,11 +612,17 @@
+         return;
+       }
+     } else {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      // The embedding consumes allocation parents and captured rejection stacks,
++      // but has no resolution-site or promise timing consumer.
++      return;
++#else
+       if (!JS::CaptureCurrentStack(cx, &stack,
+                                    JS::StackCapture(JS::AllFrames()))) {
+         cx->clearPendingException();
+         return;
+       }
++#endif
+     }
+ 
+     debugInfo->setFixedSlot(Slot_ResolutionSite, ObjectOrNullValue(stack));
+diff --git a/js/src/util/DiagnosticAssertions.h b/js/src/util/DiagnosticAssertions.h
+--- a/js/src/util/DiagnosticAssertions.h
++++ b/js/src/util/DiagnosticAssertions.h
+@@ -11,7 +11,9 @@
+ #include "jstypes.h"
+ 
+ /* Crash diagnostics by default in debug and on nightly channel. */
+-#if defined(DEBUG) || defined(NIGHTLY_BUILD)
++#if defined(DEBUG) || \
++    (defined(NIGHTLY_BUILD) && \
++     !(defined(__wasi__) && defined(BUNWASM_EMBED)))
+ #  define JS_CRASH_DIAGNOSTICS 1
+ #endif
+ 

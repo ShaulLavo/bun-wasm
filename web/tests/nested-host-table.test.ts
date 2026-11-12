@@ -1,5 +1,5 @@
 // Exported funcref tables through the real NestedHost and Waffle's real group owner, on modules
-// assembled from nested-table.wat and nested-table-peer.wat. A global export stays refused.
+// assembled from nested-table.wat and nested-table-peer.wat.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { GroupOp } from "../node_modules/waffle/group/protocol.ts";
@@ -11,7 +11,6 @@ import { count, counters, errorText, group, handle, type Member, type ReplyOf } 
 function load(path: string) { return new Uint8Array(readFileSync(`${import.meta.dir}/${path}.wasm`)); }
 const tableModule = load("nested-table"), peerModule = load("nested-table-peer");
 const fixtures = "../../tests/fixtures/shared-wasm-memory";
-const GLOBAL_REFUSAL = "Nested globals are not available on the Browser host";
 const RANGE = { category: "RangeError", message: "WebAssembly table index or size out of range" };
 const BINARY = { params: ["i32", "i32"], results: ["i32"] };
 
@@ -60,14 +59,6 @@ describe("compiling a module that exports a table", () => {
     expect(Array.from(readModuleInfo(load(`${fixtures}/table-externref`)).tables)).toEqual([["table", "externref"]]);
   });
 
-  test("a global export is still refused at compile, and both global requests stay refused", () => {
-    const nested = start();
-    const { member, instance } = nested;
-    for (const name of ["global-source", "table-global"]) expect(errorText(compile(member, load(`${fixtures}/${name}`)))).toBe(GLOBAL_REFUSAL);
-    expect(member.host.snapshot().modules).toBe(1);
-    expect(failure(member.send({ GlobalGet: { instance, name: "answer" } }))).toEqual({ category: "RuntimeError", message: GLOBAL_REFUSAL });
-    expect(failure(member.send({ GlobalSet: { instance, name: "counter", value: i32(1) } }))).toEqual({ category: "RuntimeError", message: GLOBAL_REFUSAL });
-  });
 });
 
 describe("table identity", () => {

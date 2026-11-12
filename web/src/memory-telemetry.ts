@@ -1,4 +1,5 @@
-import { createMemoryChannel, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
+import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
+import { programCoreMemoryLimits, type CoreMemoryLimits } from "../../src/program-memory.ts";
 import { isPairedEngine, type Engine } from "../../src/engine-kind.js";
 export type TelemetryEngine = Engine;
 export interface FailedAllocation { bytes: number | null; category: string }
@@ -22,7 +23,7 @@ export interface MemoryCounters {
   notes: string;
 }
 export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number; commandSequence: number }
-export type MemoryTelemetryTransport = MemoryIdentity & { buffer: SharedArrayBuffer };
+export type MemoryTelemetryTransport = MemoryIdentity & { buffer: SharedArrayBuffer; coreMemoryLimits: CoreMemoryLimits };
 export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   engine: TelemetryEngine;
   time: number;
@@ -158,7 +159,7 @@ export function memoryCommandId(runtime: object, job: number): string {
   runtimes.set(runtime, identity);
   return `${identity}:${job}`;
 }
-export function beginMemorySnapshot(engine: TelemetryEngine, id: string, commandId = id): MemoryTelemetryTransport | undefined {
+export function beginMemorySnapshot(engine: TelemetryEngine, id: string, commandId = id, module?: WebAssembly.Module): MemoryTelemetryTransport | undefined {
   const commandStartedAt = commandTimes.get(commandId) ?? Date.now();
   commandTimes.set(commandId, commandStartedAt);
   const order = commandOrders.get(commandId) ?? ++commandSequence;
@@ -170,7 +171,24 @@ export function beginMemorySnapshot(engine: TelemetryEngine, id: string, command
   if (typeof SharedArrayBuffer !== "function") return;
   const channel = createMemoryChannel();
   channels.set(id, channel);
-  return { ...identity, buffer: channel };
+  const coreMemoryLimits = module ? programCoreMemoryLimits(module) : { declaredMaximumBytes: null, factoryMaximumBytes: null };
+  return { ...identity, buffer: channel, coreMemoryLimits };
+}
+
+export function publishBrowserCallTrap(instance: WebAssembly.Instance, index: number, transport: MemoryTelemetryTransport, post: (message: { type: "bun-memory"; snapshot: MemorySnapshot }) => void): void {
+  const memory = instance.exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) return;
+  const { id, commandId, commandStartedAt, commandSequence, coreMemoryLimits } = transport;
+  const snapshot: MemorySnapshot = {
+    ...emptyCounters, id, commandId, commandStartedAt, commandSequence, engine: "browser", time: Date.now(), terminal: false,
+    wasmCapacityBytes: memory.buffer.byteLength, memoryLimitBytes: coreMemoryLimits.factoryMaximumBytes,
+    allocatorFailure: null, frozenAllocatorFailure: null, engineFailure: null,
+    engineCounters: { browserCallTrapIndex: index, browserCallTrapCapacityBytes: memory.buffer.byteLength,
+      browserCoreDeclaredMaximumBytes: coreMemoryLimits.declaredMaximumBytes, browserCoreFactoryMaximumBytes: coreMemoryLimits.factoryMaximumBytes },
+    notes: "Browser bunwasm_call trap, observed before disposal. Declared maximum comes from compiled core source. Factory maximum equals the declaration only for module-defined memory; otherwise unknown. Null means unknown. Capacity does not establish the allocator growth request, remaining usable capacity, or refusal reason.",
+  };
+  createMemoryPublisher(transport.buffer, { sample: () => snapshot, finish: () => snapshot }).capture(false, true);
+  post({ type: "bun-memory", snapshot });
 }
 export function endMemorySnapshot(id: string): void {
   const channel = channels.get(id);

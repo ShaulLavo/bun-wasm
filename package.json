@@ -52,6 +52,7 @@
     "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
@@ -101,7 +102,7 @@
   "peerDependencies": {
     "waffle": "*",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.20/waffle-base-0.0.20.tgz",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.121/waffle-relay-0.0.121.tgz"
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.122/waffle-relay-0.0.122.tgz"
   },
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
@@ -110,7 +111,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.121/waffle-0.0.121.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.122/waffle-0.0.122.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "miniflare": "5.20261012.0-beta",

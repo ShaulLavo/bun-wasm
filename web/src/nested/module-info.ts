@@ -9,6 +9,11 @@ export interface FunctionType {
   readonly results: readonly ValueName[];
 }
 
+export interface GlobalType {
+  readonly value: ValueName;
+  readonly mutable: boolean;
+}
+
 export function isReference(name: ValueName): name is ReferenceName {
   return name === "funcref" || name === "externref";
 }
@@ -30,9 +35,11 @@ export interface ModuleInfo {
   readonly functions: readonly FunctionType[];
   /** Each exported table's element type, by export name. */
   readonly tables: ReadonlyMap<string, TableElement>;
+  /** Each exported global's declared type; `undefined` is a form this reader does not decode. */
+  readonly globals: ReadonlyMap<string, GlobalType | undefined>;
 }
 
-const SECTION_TYPE = 1, SECTION_IMPORT = 2, SECTION_FUNCTION = 3, SECTION_TABLE = 4, SECTION_EXPORT = 7;
+const SECTION_TYPE = 1, SECTION_IMPORT = 2, SECTION_FUNCTION = 3, SECTION_TABLE = 4, SECTION_GLOBAL = 6, SECTION_EXPORT = 7;
 const decoder = new TextDecoder();
 
 class Reader {
@@ -67,14 +74,18 @@ class Reader {
 
 function valueType(reader: Reader): ValueName {
   const byte = reader.byte();
+  const value = valueName(byte);
+  if (value) return value;
+  throw new TypeError(`Unsupported nested value type 0x${byte.toString(16)}`);
+}
+
+function valueName(byte: number): ValueName | undefined {
   if (byte === 0x7f) return "i32";
   if (byte === 0x7e) return "i64";
   if (byte === 0x7d) return "f32";
   if (byte === 0x7c) return "f64";
   if (byte === 0x7b) return "v128";
-  const reference = referenceType(byte);
-  if (reference) return reference;
-  throw new TypeError(`Unsupported nested value type 0x${byte.toString(16)}`);
+  return referenceType(byte);
 }
 
 function referenceType(byte: number): TableElement {
@@ -110,6 +121,7 @@ interface Spaces {
   types: FunctionType[];
   readonly functions: FunctionType[];
   readonly tables: TableElement[];
+  readonly globals: (GlobalType | undefined)[];
 }
 
 function readImport(reader: Reader, spaces: Spaces): ImportInfo {
@@ -121,7 +133,9 @@ function readImport(reader: Reader, spaces: Spaces): ImportInfo {
   }
   if (kind === 3) {
     const value = valueType(reader);
-    return { kind: "global", module, name, value, mutable: reader.byte() === 1 };
+    const mutable = reader.byte() === 1;
+    spaces.globals.push({ value, mutable });
+    return { kind: "global", module, name, value, mutable };
   }
   if (kind === 1) spaces.tables.push(referenceType(reader.byte()));
   if (kind !== 1 && kind !== 2) throw new TypeError("Nested module has an unsupported import form");
@@ -139,10 +153,39 @@ function readTables(reader: Reader, tables: TableElement[]): void {
   }
 }
 
-function readExports(reader: Reader, spaces: Spaces, exports: Map<string, FunctionType>, tables: Map<string, TableElement>): void {
+/** Signed i64 immediates need up to ten bytes; their value is irrelevant to traversal. */
+function skipLeb(reader: Reader): void {
+  while (reader.byte() & 0x80) { /* consume the whole immediate */ }
+}
+
+function skipInitializer(reader: Reader): boolean {
+  while (!reader.done()) {
+    const opcode = reader.byte();
+    if (opcode === 0x0b) return true;
+    if (opcode === 0x41 || opcode === 0x42 || opcode === 0x23 || opcode === 0xd0 || opcode === 0xd2) skipLeb(reader);
+    else if (opcode === 0x43) reader.at += 4;
+    else if (opcode === 0x44) reader.at += 8;
+    else if (opcode === 0xfd && reader.u32() === 12) reader.at += 16;
+    else return false;
+  }
+  return false;
+}
+
+/** Unknown declaration lengths or initializers leave every later global undecoded. */
+function readGlobals(reader: Reader, globals: (GlobalType | undefined)[]): void {
+  for (let count = reader.u32(); count > 0; count--) {
+    const value = valueName(reader.byte());
+    if (!value) return;
+    globals.push({ value, mutable: reader.byte() === 1 });
+    if (!skipInitializer(reader)) return;
+  }
+}
+
+function readExports(reader: Reader, spaces: Spaces, exports: Map<string, FunctionType>, tables: Map<string, TableElement>, globals: Map<string, GlobalType | undefined>): void {
   for (let count = reader.u32(); count > 0; count--) {
     const name = reader.name(), kind = reader.byte(), index = reader.u32();
     if (kind === 1) tables.set(name, spaces.tables[index]);
+    if (kind === 3) globals.set(name, spaces.globals[index]);
     if (kind !== 0) continue;
     const type = spaces.functions[index];
     if (!type) throw new TypeError("Nested module exports an unknown function");
@@ -153,10 +196,11 @@ function readExports(reader: Reader, spaces: Spaces, exports: Map<string, Functi
 export function readModuleInfo(bytes: Uint8Array): ModuleInfo {
   const module = new Reader(bytes);
   module.at = 8;
-  const spaces: Spaces = { types: [], functions: [], tables: [] };
+  const spaces: Spaces = { types: [], functions: [], tables: [], globals: [] };
   const imports: ImportInfo[] = [];
   const exports = new Map<string, FunctionType>();
   const tables = new Map<string, TableElement>();
+  const globals = new Map<string, GlobalType | undefined>();
   while (!module.done()) {
     const id = module.byte();
     const section = module.section(module.u32());
@@ -164,7 +208,8 @@ export function readModuleInfo(bytes: Uint8Array): ModuleInfo {
     if (id === SECTION_IMPORT) for (let count = section.u32(); count > 0; count--) imports.push(readImport(section, spaces));
     if (id === SECTION_FUNCTION) for (let count = section.u32(); count > 0; count--) spaces.functions.push(functionType(spaces.types, section.u32()));
     if (id === SECTION_TABLE) readTables(section, spaces.tables);
-    if (id === SECTION_EXPORT) readExports(section, spaces, exports, tables);
+    if (id === SECTION_GLOBAL) readGlobals(section, spaces.globals);
+    if (id === SECTION_EXPORT) readExports(section, spaces, exports, tables, globals);
   }
-  return { imports, exports, types: spaces.types, functions: spaces.functions, tables };
+  return { imports, exports, types: spaces.types, functions: spaces.functions, tables, globals };
 }

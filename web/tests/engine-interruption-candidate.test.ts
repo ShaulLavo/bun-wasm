@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
-import { programLinkPlan } from "../../src/assets";
+import { linkedFixtureValue } from "../../tests/package/linked-fixture";
+import { programMetadata } from "../../src/assets";
 import { programMemory } from "../../src/program-memory";
 import type { Engine } from "../src/bun-executor";
 
@@ -34,9 +35,9 @@ test("candidate artifact block prepares three engines from five files", async ()
     expect(requests).toEqual(Array.from(files.keys()));
     expect(artifacts.map(file => file.name)).toEqual(["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-browser.wasm"]);
     expect(artifacts.map(file => file.engine)).toEqual(["quickjs", "quickjs", "jsc", "jsc", "browser"]);
-    expect(programLinkPlan(quickjs.module)?.libraries[0]?.source).toEqual(side);
-    expect(programLinkPlan(jsc.module)?.libraries[0]?.source).toEqual(jscPair.side);
-    expect(programLinkPlan(browser.module)).toBeUndefined();
+    expect(linkedFixtureValue(programMetadata(quickjs.module).linkPlan)).toBe(42);
+    expect(linkedFixtureValue(programMetadata(jsc.module).linkPlan)).toBe(42);
+    expect(programMetadata(browser.module).linkPlan).toBeUndefined();
     expect(programMemory(browser.module)).toEqual([]);
     files.delete("/jsc-engine.wasm");
     await expect(loadCandidate("jsc", "bun-jsc.wasm")).rejects.toThrow("jsc-engine.wasm: HTTP 404");

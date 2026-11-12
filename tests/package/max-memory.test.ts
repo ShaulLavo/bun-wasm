@@ -126,12 +126,14 @@ test("no consumer keeps its own capacity number", () => {
   expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   const capacity = /536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES/;
-  const parserOracle = "scripts/fixtures/quickjs-parser-stack.c";
-  // The standalone parser oracle sets a native pthread stack, not a guest memory ceiling.
+  const nativeOracles = ["scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-parser-stack.c"];
+  // These standalone engine oracles set native pthread stacks, not guest memory ceilings.
   expect(tracked(capacity.source)
-    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([parserOracle]);
-  expect(read(parserOracle).split("\n").filter(line => capacity.test(line)))
-    .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
+    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual(nativeOracles);
+  for (const path of nativeOracles) {
+    expect(read(path).split("\n").filter(line => capacity.test(line)))
+      .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
+  }
   // The one packaged copy of the group policy, and the tests that state it.
   expect(tracked("maximumPages: (16384|32768)")).toEqual(["src/engine-kind.ts", "web/tests/group-address-space.test.ts", "web/tests/playground-memory-groups.test.ts"]);
 });
@@ -199,8 +201,6 @@ test("memory telemetry's limit is the core's declared maximum", () => {
   expect(memoryMaximumBytes(imported)).toBe(groupAddressSpaceBytes());
   expect(memoryMaximumBytes(module(section(5, [1, 0, 1])))).toBeUndefined();
   expect(memoryMaximumBytes(module())).toBeUndefined();
-  expect(read("web/src/bun-executor.ts")).toContain("memoryMaximumBytes(req.linkPlan.core.source) ?? null");
-  expect(read("web/src/memory-telemetry.ts")).toContain("memoryLimitBytes: allocator ? limitBytes : null");
 });
 
 test("root admission reads every actual memory including non-env imports", async () => {

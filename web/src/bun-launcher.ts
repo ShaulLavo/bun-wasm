@@ -1,5 +1,5 @@
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
-import { programLinkPlan } from "../../src/assets.js";
+import { programMetadata } from "../../src/assets.js";
 import { isSharedGroupCore } from "../../src/engine-kind.ts";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
@@ -117,7 +117,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     const session = helper;
     dispatch = message => dispatchBunNetwork(session, message);
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
-    const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job));
+    const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job), module);
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,
@@ -125,7 +125,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       // other process starts its own, as on the native host. Only the typed spawn request decides.
       memoryGroup: sharedGroupLaunch(module, context.request.worker),
       request: {
-        engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
+        engine, memoryTelemetry, adapter: "bun", module, ...programMetadata(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         stackHost: pageFacts(),
         trace: false, net: ring, lookupChannel: lookupChannel?.name,

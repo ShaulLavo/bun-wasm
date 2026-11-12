@@ -159,7 +159,7 @@ its parent's group, and any other spawn starts its own. Members share WebAssembl
 reference, as on the native host. The runtime that hosts it needs the `memoryGroups` policy above
 (`BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts`). Browser workers share the parent's group and
 its member cap, and each Memory's reservation is charged in full when it is created. A shared-backend module may
-export its function tables on both hosts. One that exports a global loads on the native host only.
+export its function tables and numeric globals on both hosts.
 [The Browser nested host record](bun-patches/shared-nested-browser.md) lists how it differs from
 the native host.
 
