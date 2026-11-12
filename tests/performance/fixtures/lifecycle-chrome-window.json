@@ -1,0 +1,37 @@
+{
+  "window": { "before": 100, "after": 110 },
+  "markers": { "begin": "command-begin", "end": "command-end" },
+  "targets": [
+    { "event": "born", "type": "worker", "id": "old", "at": 90 },
+    { "event": "exited", "id": "old", "at": 99 },
+    { "event": "born", "type": "worker", "id": "new", "at": 102 },
+    { "event": "exited", "id": "new", "at": 109 },
+    { "event": "born", "type": "worker", "id": "root", "at": 101 },
+    { "event": "exited", "id": "root", "at": 108 }
+  ],
+  "traceEvents": [
+    { "name": "Profile", "pid": 1, "tid": 11, "id": "old", "args": { "data": { "startTime": 900 } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "old", "args": { "data": { "cpuProfile": { "nodes": [
+      { "id": 1, "callFrame": { "functionName": "(root)" } },
+      { "id": 2, "parent": 1, "callFrame": { "functionName": "lifecycleProfileRoot", "url": "guest.ts" } }
+    ], "samples": [2, 2] }, "timeDeltas": [5, 5] } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "old", "args": { "data": { "endTime": 920 } } },
+    { "name": "TimeStamp", "pid": 1, "tid": 11, "ts": 900, "args": { "data": { "message": "lifecycle-profile-target:old" } } },
+    { "name": "Profile", "pid": 1, "tid": 11, "id": "new", "args": { "data": { "startTime": 1000 } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "new", "args": { "data": { "cpuProfile": { "nodes": [
+      { "id": 1, "callFrame": { "functionName": "(root)" } },
+      { "id": 2, "parent": 1, "callFrame": { "functionName": "lifecycleProfileChild", "url": "guest.ts" } }
+    ], "samples": [2, 2, 2, 2, 2, 2] }, "timeDeltas": [-1, 1, 1, 38, 1, 1] } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "new", "args": { "data": { "endTime": 1050 } } },
+    { "name": "TimeStamp", "pid": 1, "tid": 11, "ts": 1000, "args": { "data": { "message": "lifecycle-profile-target:new" } } },
+    { "name": "Profile", "pid": 1, "tid": 12, "id": "root", "args": { "data": { "startTime": 1001 } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "root", "args": { "data": { "cpuProfile": { "nodes": [
+      { "id": 1, "callFrame": { "functionName": "(root)" } },
+      { "id": 2, "parent": 1, "callFrame": { "functionName": "lifecycleProfileRoot", "url": "guest.ts" } }
+    ], "samples": [2, 2] }, "timeDeltas": [1, 1] } } },
+    { "name": "ProfileChunk", "pid": 1, "tid": 999, "id": "root", "args": { "data": { "endTime": 1040 } } },
+    { "name": "TimeStamp", "pid": 1, "tid": 12, "ts": 1001, "args": { "data": { "message": "lifecycle-profile-target:root" } } },
+    { "name": "TimeStamp", "pid": 1, "tid": 7, "ts": 1000, "args": { "data": { "message": "command-begin" } } },
+    { "name": "TimeStamp", "pid": 1, "tid": 7, "ts": 1040, "args": { "data": { "message": "command-end" } } }
+  ]
+}
