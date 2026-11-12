@@ -1,8 +1,8 @@
-import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
+import { adoptLinkPlan, instantiateLinkPlan, type LinkedGroup, type SharedLinkPlan } from "waffle/link";
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
 import { createMemoryReader, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
-import { BUN_MEMORY_GROUP_POLICY, memoryMaximumBytes } from "../../src/engine-kind.ts";
+import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -25,7 +25,8 @@ export interface RunRequest extends RuntimeWorkerRequest {
   /** Page observations unavailable on WorkerNavigator, also supplied for guest spawns. */
   stackHost?: StackHost;
   memoryTelemetry?: MemoryTelemetryTransport;
-  linkPlan?: LinkPlanSource;
+  linkPlan?: SharedLinkPlan;
+  memoryLimitBytes?: number | null;
   adapter?: "bun" | "preview1";
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
@@ -225,7 +226,7 @@ async function engineDiagnostics(generation: number | undefined): Promise<Engine
 function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: number | undefined, onLinked: (group: LinkedGroup) => void): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
-  const limitBytes = memoryMaximumBytes(req.linkPlan.core.source) ?? null;
+  const limitBytes = req.memoryLimitBytes ?? null;
   let group: LinkedGroup | undefined;
   let reader: ReturnType<typeof createMemoryReader> | undefined;
   let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
@@ -237,7 +238,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
       diagnostics = await engineDiagnostics(generation);
-      const plan = await prepareLinkPlan(request.linkPlan);
+      const plan = adoptLinkPlan(request.linkPlan);
       const declared = programKind(plan.entryModule);
       const requireSelected = declared === "spidermonkey" || req.adapter !== "preview1" && req.engine !== "browser";
       if (requireSelected && declared !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);

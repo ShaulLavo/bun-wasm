@@ -65,6 +65,19 @@ async function rollbackExecutables(filesystem: FilesystemClient, created: string
   }
 }
 
+function moduleLoader(options: BunAdapterOptions, engine: Engine): () => Promise<WebAssembly.Module> {
+  let loading: Promise<WebAssembly.Module> | undefined;
+  return () => loading ??= selectedModule(options, engine).catch(error => { loading = undefined; throw error; });
+}
+
+async function selectedModule(options: BunAdapterOptions, engine: Engine): Promise<WebAssembly.Module> {
+  const module = await loadBunWasm(options);
+  const expected = engine === "browser" ? "single" : engine;
+  const declared = programKind(module);
+  if (declared !== expected) throw new TypeError(`Selected ${engine} core declares ${declared}`);
+  return module;
+}
+
 /** Register Bun on a caller-owned Runtime, provisioning executable files without reserving a root. */
 export async function installBunAdapters(runtime: ProcessRuntime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
@@ -95,15 +108,9 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     const defaults: readonly Engine[] = pairedEngines;
     const adapters = defaults.concat(["browser"], engine === "spidermonkey" ? [engine] : []);
     for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
+    const loadModule = moduleLoader(options, engine);
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
-      adapter: `bun:${engine}`, cooperative: true,
-      module: async () => {
-        const module = await loadBunWasm(options);
-        const expected = engine === "browser" ? "single" : engine;
-        const declared = programKind(module);
-        if (declared !== expected) throw new TypeError(`Selected ${engine} core declares ${declared}`);
-        return module;
-      },
+      adapter: `bun:${engine}`, cooperative: true, module: loadModule,
     }));
     // Check every path before creating any files, so a conflict cannot leave a partial install.
     for (const name of names) {

@@ -97,9 +97,11 @@ test("ordinary CI installs restore product manifests and locks on success and fa
 
 test("Node bootstrap preserves major and exact version selectors", () => {
   const entry = (version: string, stable = true) => ({ version, stable, files: [{ platform: "linux", arch: "x64", download_url: `https://github.com/actions/node-versions/releases/download/${version}-1/node-${version}-linux-x64.tar.gz` }] });
-  const manifest = [entry("26.9.0"), entry("26.13.0"), entry("26.14.0", false), entry("27.0.0")];
-  expect(selectNodeRelease(manifest, "26").version).toBe("26.13.0");
+  const manifest = [entry("26.9.0"), entry("26.13.0"), entry("26.13.1"), entry("26.14.0", false), entry("27.0.0")];
+  expect(selectNodeRelease(manifest, "26").version).toBe("26.13.1");
   expect(selectNodeRelease(manifest, "26.9.0").version).toBe("26.9.0");
+  expect(selectNodeRelease(manifest, "26.13.1").version).toBe("26.13.1");
+  expect(selectNodeRelease(manifest.concat([entry("26.14.0")]), "26.13.1").version).toBe("26.13.1");
   expect(() => selectNodeRelease(manifest, "25")).toThrow("Missing Node release");
 });
 

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadNodeProgram } from "../scripts/node-linked";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
+import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -59,10 +60,10 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} Node retains disti
   const first = await loadNodeProgram(join(root, "a", profile.core));
   const second = await loadNodeProgram(join(root, "b", profile.core));
   expect(first.module).not.toBe(second.module);
-  expect((await loadNodeProgram(join(root, "a", profile.core))).module).toBe(first.module);
+  expect((await loadNodeProgram(join(root, "a", profile.core))).module).not.toBe(first.module);
   const programs = new Map([[first.module, first.linkPlan], [second.module, second.linkPlan]]);
-  expect(programs.get(first.module)?.libraries[0]?.source).toEqual(side);
-  expect(programs.get(second.module)?.libraries[0]?.source).toEqual(sideB);
+  expect(linkedFixtureValue(programs.get(first.module))).toBe(42);
+  expect(linkedFixtureValue(programs.get(second.module))).toBe(42);
   const { createNodeExecutableRegistry } = await import("../scripts/node-spawn");
   await mkdir(join(root, `opt/bun/${kind}/bin`), { recursive: true });
   await writeFile(join(root, `opt/bun/${kind}/bin/bun`), new Uint8Array());
@@ -70,7 +71,7 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} Node retains disti
   const child = await registry.resolve(`/opt/bun/${kind}/bin/bun`);
   if (child.kind !== "module") throw new Error("Selected paired engine must resolve to a Wasm module");
   expect(child.module).toBe(second.module);
-  expect(programs.get(child.module)?.libraries[0]?.source).toEqual(sideB);
+  expect(programs.get(child.module)).toBe(second.linkPlan);
   const ordinaryBytes = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]);
   await writeFile(join(root, "ordinary.wasm"), ordinaryBytes);
   const ordinary = await loadNodeProgram(join(root, "ordinary.wasm"));
