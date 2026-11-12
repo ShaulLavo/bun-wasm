@@ -1,5 +1,103 @@
 {
   "provenance": "Loss counters from next-chrome-browser-window-v1; source-only event from next-chrome-jsc-window-v1, raw SHA-256 549f5e4ec9ed0bcee2019624233b1a0f1f66744ba791d3cb0ea248c829130edc",
-  "metadata": { "trace_processor_stats": { "traced_buf": [{ "buffer_size": 209715200, "bytes_written": 209715200, "chunks_discarded": 9322, "bytes_overwritten": 0 }] } },
-  "sourceOnly": { "args": { "data": { "source": "Internal" } }, "cat": "disabled-by-default-v8.cpu_profiler", "id": "0x18", "name": "ProfileChunk", "ph": "P", "pid": 2706458, "tid": 2707058, "ts": 50403150318, "tts": 57466 }
+  "metadata": {
+    "trace_processor_stats": {
+      "traced_buf": [
+        {
+          "buffer_size": 209715200,
+          "bytes_written": 209715200,
+          "chunks_discarded": 9322,
+          "bytes_overwritten": 0
+        }
+      ]
+    }
+  },
+  "sourceOnly": {
+    "args": {
+      "data": {
+        "source": "Internal"
+      }
+    },
+    "cat": "disabled-by-default-v8.cpu_profiler",
+    "id": "0x18",
+    "name": "ProfileChunk",
+    "ph": "P",
+    "pid": 2706458,
+    "tid": 2707058,
+    "ts": 50403150318,
+    "tts": 57466
+  },
+  "retainedMetadata": {
+    "trace_processor_stats": {
+      "traced_buf": [
+        {
+          "abi_violations": 0,
+          "buffer_size": 536870912,
+          "bytes_overwritten": 0,
+          "bytes_read": 6979584,
+          "bytes_written": 7016448,
+          "chunks_committed_out_of_order": 0,
+          "chunks_discarded": 0,
+          "chunks_overwritten": 0,
+          "chunks_read": 1704,
+          "chunks_relocated": 0,
+          "chunks_rewritten": 0,
+          "chunks_written": 1713,
+          "data_loss_chunk_corrupted": 0,
+          "data_loss_orphan_continuation": 0,
+          "data_loss_overwrite": 0,
+          "data_loss_read_gap": 0,
+          "data_loss_reassembly_broken_chain": 0,
+          "data_loss_reassembly_gap": 0,
+          "data_loss_smb_full": 0,
+          "data_loss_writer_abort": 0,
+          "incremental_sequences_dropped": 0,
+          "oversized_packets_dropped": 0,
+          "padding_bytes_cleared": 0,
+          "padding_bytes_written": 0,
+          "patches_failed": 0,
+          "patches_succeeded": 0,
+          "readaheads_failed": 0,
+          "readaheads_succeeded": 1485,
+          "sequence_packet_loss": 0,
+          "trace_writer_packet_loss": 0,
+          "write_wrap_count": 0
+        },
+        {
+          "abi_violations": 0,
+          "buffer_size": 262144,
+          "bytes_overwritten": 0,
+          "bytes_read": 139264,
+          "bytes_written": 139264,
+          "chunks_committed_out_of_order": 0,
+          "chunks_discarded": 0,
+          "chunks_overwritten": 0,
+          "chunks_read": 34,
+          "chunks_relocated": 0,
+          "chunks_rewritten": 0,
+          "chunks_written": 34,
+          "data_loss_chunk_corrupted": 0,
+          "data_loss_orphan_continuation": 0,
+          "data_loss_overwrite": 0,
+          "data_loss_read_gap": 0,
+          "data_loss_reassembly_broken_chain": 0,
+          "data_loss_reassembly_gap": 0,
+          "data_loss_smb_full": 0,
+          "data_loss_writer_abort": 0,
+          "incremental_sequences_dropped": 0,
+          "oversized_packets_dropped": 0,
+          "padding_bytes_cleared": 0,
+          "padding_bytes_written": 0,
+          "patches_failed": 0,
+          "patches_succeeded": 0,
+          "readaheads_failed": 0,
+          "readaheads_succeeded": 2,
+          "sequence_packet_loss": 0,
+          "trace_writer_packet_loss": 0,
+          "write_wrap_count": 0
+        }
+      ]
+    }
+  },
+  "retainedProvenance": "Complete zero counters and unsaturated capacities from capacity-512 control-quickjs; telemetry records accepted narrow 524288 KiB request"
 }

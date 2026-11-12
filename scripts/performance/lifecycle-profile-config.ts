@@ -19,7 +19,11 @@ export function validateProfileControl(input: unknown, expected: { browser: stri
     throw new Error("Profiler control collector configuration, source or browser context differs");
   }
   if (expected.browser !== "chrome") return;
-  if (object(profile.retention).available !== true) throw new Error("Chrome control has incomplete or unverified trace retention");
+  const retention = object(profile.retention);
+  if (retention.available !== true) throw new Error("Chrome control has incomplete or unverified trace retention");
+  if (!retention.verifiedRequest || canonical(retention.verifiedRequest) !== canonical(object(control.collectorContext).collector)) {
+    throw new Error("Chrome control accepted collector request differs from its declared context");
+  }
   const markers = object(control.chromeWindowMarkers), bounds = object(profile.workloadWindow), source = object(bounds.source);
   if (bounds.available !== true || markers.begin !== source.begin || markers.end !== source.end) {
     throw new Error("Chrome control command boundaries do not match its scoped analysis");

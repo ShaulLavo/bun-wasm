@@ -8,13 +8,14 @@ import { analyzeChrome, chromeContext, chromeControl, chromeProfiles, geckoContr
 import { array, object } from "./input";
 import { splitProfile } from "./profile";
 import { collectorConfiguration, validateProfileControl } from "./lifecycle-profile-config";
-import { chromeRetention } from "./lifecycle-profile-retention";
+import { chromeRetention, chromeTraceConfig } from "./lifecycle-profile-retention";
 
 const window = { before: 100, after: 110 };
-const telemetry = { tracingComplete: { dataLossOccurred: false }, streamReadComplete: true, bufferUsage: [{ at: 1, event: { percentFull: 0.2 } }] };
+const telemetry = { requested: chromeTraceConfig, startAccepted: true,
+  tracingComplete: { dataLossOccurred: false }, streamReadComplete: true, bufferUsage: [{ at: 1, event: { percentFull: 0.2 } }] };
 function saved(name: string) {
   const value = object(JSON.parse(readFileSync(new URL(`../../tests/performance/fixtures/${name}.json`, import.meta.url), "utf8")));
-  if (name === "lifecycle-chrome-window") value.metadata = { trace_processor_stats: { traced_buf: [{ chunks_discarded: 0, bytes_overwritten: 0 }] } };
+  if (name === "lifecycle-chrome-window") value.metadata = saved("lifecycle-chrome-retention").retainedMetadata;
   return value;
 }
 test("Chrome saved exhausted buffers fail closed even when marker calls and completion succeed", () => {
@@ -27,6 +28,38 @@ test("Chrome saved exhausted buffers fail closed even when marker calls and comp
   expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, tracingComplete: { dataLossOccurred: true } }).available).toBe(false);
   expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, bufferUsage: [] }).available).toBe(false);
   expect(chromeRetention(saved("lifecycle-chrome-window"), { ...telemetry, streamReadComplete: false }).available).toBe(false);
+});
+test("Chrome retention requires complete numeric loss counters and unsaturated final buffers", () => {
+  for (const change of [
+    (buffer: Record<string, unknown>) => { delete buffer.chunks_discarded; },
+    (buffer: Record<string, unknown>) => { for (const key of Object.keys(buffer)) delete buffer[key]; },
+    (buffer: Record<string, unknown>) => { buffer.bytes_written = buffer.buffer_size; },
+    (buffer: Record<string, unknown>) => { buffer.bytes_written = Number(buffer.buffer_size) + 1; },
+    (buffer: Record<string, unknown>) => { buffer.patches_failed = "0"; },
+    (buffer: Record<string, unknown>) => { buffer.sequence_packet_loss = Number.NaN; },
+    (buffer: Record<string, unknown>) => { buffer.chunks_overwritten = -1; },
+    (buffer: Record<string, unknown>) => { buffer.data_loss_future_counter = 1; },
+  ]) {
+    const input = saved("lifecycle-chrome-window");
+    change(object(array(object(object(input.metadata).trace_processor_stats).traced_buf)[0]));
+    expect(chromeRetention(input, telemetry).available).toBe(false);
+    expect(chromeControl(input, input.targets, "browser", window, { begin: "command-begin", end: "command-end" }, telemetry).available).toBe(false);
+  }
+});
+test("Chrome retention verifies request acceptance and matches its capacity to the main buffer", () => {
+  const input = saved("lifecycle-chrome-window"), config = telemetry.requested;
+  for (const invalid of [
+    { ...telemetry, startAccepted: false }, { ...telemetry, startAccepted: undefined },
+    { ...telemetry, requested: undefined }, { ...telemetry, requested: {} },
+    { ...telemetry, requested: { ...config, traceConfig: { ...object(config.traceConfig), traceBufferSizeInKb: 204800 } } },
+    { ...telemetry, requested: { ...config, traceConfig: { ...object(config.traceConfig), recordMode: "recordContinuously" } } },
+  ]) expect(chromeRetention(input, invalid).available).toBe(false);
+  const historical = structuredClone(input);
+  object(array(object(object(historical.metadata).trace_processor_stats).traced_buf)[0]).buffer_size = 209715200;
+  const requested = { ...config, traceConfig: { ...config.traceConfig, traceBufferSizeInKb: 204800 } };
+  const retained = chromeRetention(historical, { ...telemetry, requested });
+  expect(retained.available).toBe(true);
+  expect(retained.verifiedRequest).toEqual(requested);
 });
 test("Chrome performance marks bind command and worker identities without timeline events", () => {
   const input = saved("lifecycle-chrome-window");
@@ -168,7 +201,7 @@ function controlContext() {
 function passedControl() {
   return { configuration: { browser: "chrome", engine: "quickjs", phase: "control" }, collectorContext: controlContext(),
     workloadFailure: null, observerFailure: null, chromeWindowMarkers: { begin: "unique-begin", end: "unique-end" },
-    observation: { profile: { available: true, retention: { available: true }, workloadWindow: {
+    observation: { profile: { available: true, retention: { available: true, verifiedRequest: collectorConfiguration("chrome") }, workloadWindow: {
       available: true, source: { begin: "unique-begin", end: "unique-end" },
     } } } };
 }
@@ -193,6 +226,14 @@ test("collector fixes narrow record-until-full capacity and requires the same ex
   const failed = passedControl();
   failed.observation.profile.retention.available = false;
   expect(() => validateProfileControl(failed, expected, controlContext())).toThrow("retention");
+  const contradictory = passedControl();
+  object(contradictory.observation.profile.retention).verifiedRequest = { ...collectorConfiguration("chrome"), traceConfig: {
+    ...object(object(collectorConfiguration("chrome")).traceConfig), traceBufferSizeInKb: 204800,
+  } };
+  expect(() => validateProfileControl(contradictory, expected, controlContext())).toThrow("accepted collector request");
+  const missingRequest = passedControl();
+  delete object(missingRequest.observation.profile.retention).verifiedRequest;
+  expect(() => validateProfileControl(missingRequest, expected, controlContext())).toThrow("accepted collector request");
   const mismatched = passedControl();
   mismatched.chromeWindowMarkers.end = "other-end";
   expect(() => validateProfileControl(mismatched, expected, controlContext())).toThrow("boundaries");
