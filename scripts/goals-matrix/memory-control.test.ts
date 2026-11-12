@@ -26,7 +26,8 @@ function syntheticControl(): { output: string; observation: MemoryProcessEnvelop
   fail.outcome = { kind: "observed", value: { kind: "exited", code: 70, status: 70 } };
   if (!fail.sample) throw Error("synthetic fixture requires a sample");
   fail.sample.frozenAllocatorFailure = { bytes: memoryControlBytes, category: "libc.calloc", previousUsableBytes: null,
-    allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 16777216, reason: "unknown" };
+    allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 16777216, reason: "unknown",
+    growth: { kind: "not-attempted" } };
   const children: MemoryControlResult["children"] = (["ok", "fail"] as const).map((mode, index) => ({ mode, pid: index + 2, status: mode === "ok" ? 0 : 70, signal: null,
     stdout: "SM_MEMORY_ENTRY " + JSON.stringify({ nonce, mode }) + "\n", stderr: mode === "fail" ? "SM_MEMORY_CAUGHT " + JSON.stringify({ nonce, mode }) + "\n" : "" }));
   const output = "SM_MEMORY_CONTROL " + JSON.stringify({ nonce, children });
@@ -127,6 +128,27 @@ test("invalid and unsupported observation channels cannot synthesize zero record
   expect(decodeMemoryObservation({ ...observation, sharedBuffers: true, processes: [{}] })).toMatchObject({ status: "unavailable" });
   expect(await readEngineMemory({ ...transport, async useHost() { throw Error("private unrelated error"); } })).toEqual({ status: "unavailable", reason: "host-read-failed" });
 });
+
+test("campaign growth projection preserves failed attempts and rejects malformed or missing fields", () => {
+  const { observation } = syntheticControl();
+  const frozen = failingChild(observation).sample?.frozenAllocatorFailure;
+  if (!frozen) throw Error("Missing frozen fixture");
+  frozen.growth = { kind: "attempted", successfulAttempts: 2, failedAttempts: 1,
+    lastIncrementBytes: 65536, firstFailedIncrementBytes: 1048576 };
+  expect(decodeMemoryObservation(replaceGrowth(observation, { ...frozen.growth, context: { private: "excluded" } })))
+    .toEqual({ status: "observed", observation });
+  for (const growth of [undefined, null, {}, { kind: "unknown" }, { kind: "not-attempted", failedAttempts: 1 },
+    { ...frozen.growth, failedAttempts: -1 },
+    { ...frozen.growth, firstFailedIncrementBytes: null }, { ...frozen.growth, lastIncrementBytes: 0 },
+    { ...frozen.growth, successfulAttempts: Number.MAX_SAFE_INTEGER }]) {
+    expect(decodeMemoryObservation(replaceGrowth(observation, growth))).toEqual({ status: "unavailable", reason: "invalid-observation" });
+  }
+});
+
+function replaceGrowth(observation: MemoryProcessEnvelope, growth: unknown): unknown {
+  return { ...observation, processes: observation.processes.map(row => row.sample?.frozenAllocatorFailure
+    ? { ...row, sample: { ...row.sample, frozenAllocatorFailure: { ...row.sample.frozenAllocatorFailure, growth } } } : row) };
+}
 test("campaign reader validates and projects synthetic rows without arbitrary context or error text", async () => {
   const { observation } = syntheticControl();
   Reflect.set(observation, "privateContext", { path: "/private", env: "secret" });

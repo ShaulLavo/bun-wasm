@@ -36,10 +36,12 @@ none, then malloc, calloc, realloc, aligned_alloc, and posix_memalign.
 Reading the record neither allocates nor enters a VM. A trap before an allocator
 returns cannot establish an allocation failure and must not be reported as one.
 
-`bun_memory_failure_telemetry` returns nine little-endian u64 fields, 72 bytes.
-They are ABI version 1, byte length, first failed request bytes, category,
+`bun_memory_failure_telemetry` returns thirteen little-endian u64 fields, 104 bytes.
+They are ABI version 2, byte length, first failed request bytes, category,
 previous allocation's usable bytes, allocator live bytes, allocator peak bytes,
-Wasm capacity before the call, and capacity after the failed call. It freezes
+Wasm capacity before the call, capacity after the failed call, positive `sbrk`
+success count, positive `sbrk` failure count, last positive increment in bytes,
+and first failed positive increment in bytes. It freezes
 with the same first failure as the 80-byte record. Before failure, the category
 is zero and all values after the header except category are unknown.
 Previous usable bytes are zero for calls other than realloc and for realloc
@@ -47,19 +49,47 @@ with a null pointer. Capacity before the call is recorded only for realloc.
 The getter only returns the frozen record, including after later frees or
 allocations. It never walks a heap. Live and peak retain the outer-boundary
 accounting above, so internal realloc temporary peaks remain unobserved.
-Neither capacity nor live bytes identify a largest free block, the allocator's
-growth request or result, or its rejection reason.
+Neither capacity nor live bytes identify a largest free block or a rejection reason.
+
+The link wraps `sbrk` from the actual libc allocation path. Its observer calls the
+real implementation once and records returned success or `(void *) -1` for positive
+increments during the current outer allocator call, including nested calls.
+Entry to each new outer call clears the working growth record. Zero and negative
+increments do not overwrite it. A later successful positive call updates the last
+increment and success count while preserving the first failed increment and failure
+count. Unrelated calls outside an allocator wrapper are ignored. Recording uses
+scalar stores and makes no calls of its own, so libc retains errno and return values.
+The first frozen failure remains unchanged after subsequent calls.
+
+This observes libc `sbrk`, not a browser failure reason. Ordinary unshared libc
+performs memory growth itself; shared-group libc delegates to its existing broker
+and may reserve group space differently. The hook changes neither path. A trap
+before `sbrk` returns supplies no returned growth observation.
 
 The browser host reads this cached export into the separate
 `MemorySnapshot.frozenAllocatorFailure` field. It keeps the failed request's
 `bytes` and `category`, `previousUsableBytes`, `allocatorLiveBytes`,
 `allocatorPeakBytes`, `wasmCapacityBeforeBytes`, and `wasmCapacityAfterBytes`.
+Its `growth` is `{ kind: "not-attempted" }` when both positive counts are zero.
+Otherwise it is `{ kind: "attempted", successfulAttempts, failedAttempts,
+lastIncrementBytes, firstFailedIncrementBytes }`. A nonzero failure count proves
+a returned positive `sbrk` failure during this outer request, even if another
+attempt succeeded. With only successes, it records growth followed by allocator
+rejection. `firstFailedIncrementBytes` is null when there was no failed attempt.
+Missing or invalid growth data never becomes `not-attempted`; inconsistent counts,
+unsafe integers and missing required increments invalidate the record.
+
 Its `reason` is always `"unknown"`. The field is null before a recorded failure
 or when the export is unavailable. No current counters or terminal text fill
 missing frozen values. UINT64_MAX and values above JavaScript's exact integer
-range become null. Version, exact byte length, wasm32 pointer range, alignment,
-and bounds are checked before decoding. Unknown categories keep their raw code.
+range become null for the original fields. Version, exact byte length, wasm32
+pointer range, alignment, and bounds are checked before decoding. Unknown
+categories keep their raw code.
 The reader never refreshes this record or enters an engine to read it.
+Absent exports remain unsupported, unreadable or truncated records fail the read,
+and invalid channel observations remain invalid. These states are not zero growth.
+The record identifies the first failed outer request, which need not be the terminal
+allocation or a source site inferred from a stack trace.
 
 `memoryLimitBytes` comes from the linked core's declared maximum, whose build
 input is the single authority in `crates/bunwasm-cli/max-memory.txt`. It stays
@@ -83,7 +113,7 @@ changes do not require a new archive, while changed compiler inputs do. This
 source integration supplies no new archive, stamp, composed guest, or receipt.
 
 The host reads JSC ABI 1 with exactly 24 u64 fields, QuickJS ABI 1 with
-exactly 12, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.
+exactly 16, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.
 It preserves each engine's accounting semantics. JSC's GC-accounted
 ArrayBuffer estimate is separate from the unavailable exact backing-store
 aggregate. SWC remains null until independently attributed. These values overlap
