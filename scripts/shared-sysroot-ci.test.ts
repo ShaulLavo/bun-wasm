@@ -8,11 +8,12 @@ import { needsSharedSysroot } from "./ci-changes";
 import { discoverChecks } from "./test-checks";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
+const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
+const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [quality, rust, shared-prebuild]");
+  expect(shared).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
   expect(shared).toContain("node-version: '26'");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
@@ -142,16 +143,17 @@ function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean
 }
 
 test("all shared saves require a successful uncancelled main push and an actual miss", () => {
-  const saves = sharedCacheSaves(producer).concat(sharedCacheSaves(shared));
+  const saves = sharedCacheSaves(producer).concat(sharedCacheSaves(smProducer), sharedCacheSaves(shared));
   expect(saves.map(step => step.name)).toEqual([
     "Save completed shared-sdk setup",
     "Save shared profile cache",
     "Save the shared JSC prebuild",
     "Save completed shared-sdk setup",
-    "Save completed shared-wasm-tools setup",
-    "Save completed shared-wasmtime setup",
     "Save pinned cbindgen",
     "Save the verified shared SpiderMonkey source and native work",
+    "Save completed shared-sdk setup",
+    "Save completed shared-wasm-tools setup",
+    "Save completed shared-wasmtime setup",
     "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
