@@ -18,7 +18,7 @@ import type { BrowserSession, SessionState } from "bash-web/session";
 import { errorText } from "../startup";
 import { commandChunks } from "../startup-cache";
 import { openTerminal } from "../terminal-mount";
-import { linkLocalUrls } from "../terminal-links";
+import { installPreviewLinks } from "./preview-links";
 import { Editor } from "./editor";
 import { projectTemplate, type ProjectTemplate } from "./project-templates";
 
@@ -52,6 +52,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private shellState: SessionState = "starting";
   private runPending = false;
   private message: Status = { text: "", kind: "" };
+  private disposePreviewLinks?: () => void;
 
   constructor(search: string) {
     super();
@@ -91,6 +92,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
 
   openTerminal(term: Terminal, node: HTMLElement, signal: AbortSignal): void {
     openTerminal(term, this.fit, node, signal);
+    signal.addEventListener("abort", () => this.disposePreviewLinks?.(), { once: true });
     this.terminalOpened();
   }
 
@@ -187,11 +189,12 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const previews = this.params.has("root-previews") ? new HostedPreviews(() => runtime) : new Previews();
     const term = this.term = createTerminal();
     term.loadAddon(this.fit);
+    const previewPorts = new Set<number>();
+    this.disposePreviewLinks = installPreviewLinks(term, previews, previewPorts, () => this.editor?.focus());
     const network: BunNetworkOptions = {
-      listening: (port, helper) => { previews.register(port, helper); void previews.ready.then(state => term.write(previewLine(previews, port, state))); },
-      stopped: (port, helper) => previews.unregister(port, helper),
+      listening: (port, helper) => { previews.register(port, helper); previewPorts.add(port); void previews.ready.then(state => term.write(previewLine(previews, port, state))); },
+      stopped: (port, helper) => { previews.unregister(port, helper); if (!previews.serves(port)) previewPorts.delete(port); },
     };
-    linkLocalUrls(term, previews);
     const editor = this.editor = new Editor(fs, { run: () => this.run(), report: this.report, changed: () => this.changed() });
     this.changed();
     await this.terminalOpen;
@@ -298,8 +301,6 @@ function createTerminal(): Terminal {
     fontSize: window.matchMedia("(max-width: 800px)").matches ? 13 : 14,
     scrollback: 5000,
     theme: { background: "#14151a", foreground: "#e6e6e6", cursor: "#fbf0df", selectionBackground: "#3a3d4a" },
-    // OSC 8 hyperlinks open in a new tab.
-    linkHandler: { activate: (_event, uri) => void window.open(uri, "_blank", "noopener"), allowNonHttpProtocols: false },
   });
 }
 
