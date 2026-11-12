@@ -1,3 +1,4 @@
+import { browserTrapLog } from "./browser-memory";
 import { cleanupTimeoutMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
@@ -105,14 +106,17 @@ async function captureFailure(transport: Transport, options: Execution, results:
       const page = scoped(transport, admission);
       const text = await terminal(page);
       capture.terminal = { status: "observed", text };
+      capture.diagnostic = await browserTrapLog(page, options.box.engine);
       if (options.framework.id !== "angular") return;
       const path = namedAngularDiagnostic(text);
       if (!path) return;
-      capture.diagnostic = `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
-      capture.diagnostic = await angularDiagnostic(page, path, scope.deadline);
+      const browserDiagnostic = capture.diagnostic;
+      capture.diagnostic += `\n\nGuest Angular diagnostic unavailable within failure observation: ${path}\n`;
+      capture.diagnostic = browserDiagnostic + await angularDiagnostic(page, path, scope.deadline);
     });
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
+    if (capture.terminal.status === "observed" && options.box.engine === "browser" && !capture.diagnostic) capture.diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
   } finally { scope.close(); }
   if (capture.terminal.status === "unavailable") return capture;
   const text = capture.terminal.text;
@@ -168,16 +172,25 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
 async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, parent: Admission): Promise<void> {
   const scope = Scope.open(2000, parent);
   let output: string;
-  try { output = await scope.run(guard => terminal(scoped(transport, guard))) + (failureLog?.diagnostic ?? ""); }
+  const observation: { terminal: TerminalCapture } = { terminal: { status: "unavailable", reason: "not completed" } };
+  try {
+    output = await scope.run(async guard => {
+      const page = scoped(transport, guard);
+      const text = await terminal(page);
+      observation.terminal = { status: "observed", text };
+      return text + (failureLog?.diagnostic || await browserTrapLog(page, options.box.engine));
+    });
+  }
   catch (error) {
     parent.signal.throwIfAborted();
     if (failureLog?.saved) return;
-    output = finalLogFallback(results, failureLog, error);
+    output = finalLogFallback(observation.terminal, options.box.engine, results, failureLog, error);
   } finally { scope.close(); }
   await bounded(() => options.saveLog(output), 2000, parent.signal);
 }
 
-function finalLogFallback(results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
+function finalLogFallback(terminal: TerminalCapture, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
+  if (terminal.status === "observed") return terminal.text + (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "");
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
   return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;

@@ -128,7 +128,7 @@ test("successful native-owned cleanup preserves the final terminal log", async (
   const { result, closed, logs } = await nativeLifecycle("normal");
   expect(result.status).toBe("pass");
   expect(closed).toBe(true);
-  expect(logs).toEqual([""]);
+  expect(logs).toEqual(["\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
 });
 
 test("a stalled final terminal read saves the completed transcript and still closes the native page", async () => {
@@ -149,7 +149,7 @@ test("a terminal log write failure cannot skip native resource teardown", async 
 test("a failed final observation preserves the already captured failure diagnostic", async () => {
   const { result, closed, logs } = await nativeLifecycle("failed-install");
   expect(result).toMatchObject({ status: "fail", phase: "install" });
-  expect(logs).toEqual(["Error: detailed install diagnostic"]);
+  expect(logs).toEqual(["Error: detailed install diagnostic\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
   expect(closed).toBe(true);
 });
 
