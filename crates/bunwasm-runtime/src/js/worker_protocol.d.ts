@@ -35,7 +35,7 @@ declare namespace BunWasm {
   type LaneCell = [index: number, generation: number];
   interface GroupLaneFrame { commit(): boolean; abort(): void; }
   interface GroupLaneDrain { frames: string[]; more: boolean; terminal: boolean; }
-  /** One owned end of a group lane. `reserve`, `drain` and `transferEpoch` can throw, leaving nothing unsettled; the rest cannot. */
+  /** One owned end of a group lane. `reserve`, `drain` and `transferEpoch` can throw, leaving nothing unsettled; the rest are word natives, which the native bridge cannot fail. */
   interface GroupSharedLane {
     readonly ref: GroupLaneRef;
     readonly side: 0 | 1;

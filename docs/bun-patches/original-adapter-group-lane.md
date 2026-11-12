@@ -64,8 +64,15 @@ result one signed 64-bit number, which JavaScript reads as a number.
   A call writes the operation, the session and the words into it, enters `bun_core_dispatch`
   and reads the result from it. The transport tells a word frame from a data frame by its size.
 - The core reads the frame in place, runs the native and writes the result back
-  (`ops/abi.rs`, `word`). Nothing on either side allocates, encodes or decodes, and there is no
-  resource-limit status. A wrong session or operation is a broken engine and ends the guest.
+  (`ops/abi.rs`, `word`). The transport allocates, encodes and decodes nothing on either side,
+  and there is no resource-limit status. A wrong session or operation is a broken engine and
+  ends the guest.
+- This is a statement about the transport, not about every byte an engine touches. QuickJS
+  passes and returns immediate numbers. JSC's callback wrapper still builds an argument vector
+  and protects its values, and SpiderMonkey roots a handle for the argument and the result.
+  None of those is a checked allocation, so none can come back as a catchable resource limit.
+- A word native must not call back into the engine: the one frame is in use for the length of
+  the call. The lane and pipe natives call only the core and the host.
 - A word native that can be refused returns -1 and keeps the reason, which `laneRefusal` reads.
 - The core export list and the linker inputs are unchanged. A core and an engine side still have
   to come from the same source, as before: the description the core sends now lists word natives.

@@ -28,7 +28,9 @@ fn word(value: Val) -> u32 {
     }
 }
 
-/// Adapt a word native: numbers in, one number out, with no allocation and no thrown error.
+/// Adapt a word native: numbers in, one number out, with no checked allocation and no thrown
+/// error. Reading a number and making one do not run program code on any engine. What the
+/// engine's own callback wrapper allocates around this closure is outside the transport.
 fn word_fn<E: Engine>(client: CoreClient, op: u32) -> ValueFn<E> {
     Rc::new(move |e: &E, args: &[E::Value]| {
         let mut words = [0; WORD_ARGS];

@@ -4,8 +4,9 @@
 // draining it calls no host import. See docs/worker-threads.md, "Group lanes".
 //
 // Every native here that changes group memory is a word native: numbers in, one number out, and
-// neither its call nor its return can throw. `laneReserve` and `laneDrain` carry text, so they can
-// throw after their effect; a word native (`laneAbort`, `laneDrained`) then settles what they left.
+// the native bridge cannot fail its call or its return. `laneReserve` and `laneDrain` carry text,
+// so they can throw after their effect; a word native (`laneAbort`, `laneDrained`) then settles
+// what they left.
 (function (internal: BunWasm.Internal): BunWasm.GroupLanes {
   "use strict";
   const native = internal.native.wasm;

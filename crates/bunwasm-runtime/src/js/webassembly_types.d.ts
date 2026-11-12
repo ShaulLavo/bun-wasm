@@ -30,8 +30,8 @@ declare namespace BunWasm {
     laneRefusal(): string;
     laneCensus(): GroupLaneCensus | null;
     /**
-     * Word natives from here on: numbers in, one number out, and neither the call nor the return
-     * can throw. A flag is 0 or 1; a refusable one returns -1 and `laneRefusal` says why.
+     * Word natives from here on: numbers in, one number out, and the native bridge cannot fail
+     * the call or the return. A flag is 0 or 1; a refusable one returns -1 and `laneRefusal` says why.
      */
     /** `slot * 2 ** 28 + generation`, or -1. */
     laneCreate(): number;

@@ -71,7 +71,7 @@ fn write_once_natives(t: &mut Table, write: fn(i32, &[u8]) -> i32) {
 pub struct Table {
     pub functions: Vec<(&'static str, DataFn)>,
     pub constants: Vec<(&'static str, Val)>,
-    /// Natives called through the scalar bridge, which cannot fail.
+    /// Natives called through the scalar bridge, which has no failure status.
     pub(crate) words: Vec<(&'static str, crate::data::WordFn)>,
 }
 

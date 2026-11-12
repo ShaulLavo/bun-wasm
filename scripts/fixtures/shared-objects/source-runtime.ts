@@ -62,6 +62,10 @@ export function sourceV8(sharedObjects: SharedObjects): { serialize(value: unkno
 export function sourceLanes(wasm: object): BunWasm.GroupLanes {
   return factory("worker_lane")({ native: { wasm } });
 }
+/** One guest's worker_channel module: every channel it opens shares the module's state, as in a real guest. */
+export function sourceChannels(host: object): { open(input: number, output: number): Channel } {
+  return factory("worker_channel")({ native: host, concatBytes: (arrays: Uint8Array[]) => Buffer.concat(arrays) });
+}
 export function sourceChannel(host: object): Channel {
   return factory("worker_channel")({ native: host, concatBytes: (arrays: Uint8Array[]) => Buffer.concat(arrays) }).open(3, 4);
 }
@@ -82,13 +86,12 @@ function childOverlay(source: string) {
  * Loads net.js into `internal`, which gives it the real waiter set, `addIoWaiter` and `pumpIo`.
  * Only what the module touches while loading is supplied; nothing here opens a socket.
  */
-function sourceLoop(internal: { native: object; require(name: string): unknown }, modules: Map<string, unknown>) {
+function sourceLoop(internal: { native: object; require(name: string): unknown; pumpIo?: () => boolean }, modules: Map<string, unknown>) {
   const unused = () => { throw new Error("No networking in this fixture"); };
   modules.set("http_common", { validateHeaderName: unused, validateHeaderValue: unused, validateMethod: unused, validatePath: unused, validateStatus: unused, outgoingHeaders: unused });
   modules.set("websocket", { clientClass: () => class {} });
-  const target: { pumpIo?: () => boolean } = Object.assign(internal, { web: { Request, Response, Headers } });
-  modules.set("net", factory("net", undefined, "js")(target));
-  const pumpIo = target.pumpIo;
+  modules.set("net", factory("net", undefined, "js")(Object.assign(internal, { web: { Request, Response, Headers } })));
+  const pumpIo = internal.pumpIo;
   if (!pumpIo) throw new Error("net.js installed no pumpIo");
   return { pumpIo };
 }

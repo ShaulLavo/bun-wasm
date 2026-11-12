@@ -343,13 +343,21 @@
     // Lanes first: a broker close behind lane data must not overtake it. A group lane left with
     // data past its drain quota counts as progress, so the loop steps again before sleeping.
     let lanes = false;
-    for (const port of Array.from(localPorts.values())) lanes = portOps.drainLane(port) || lanes;
+    // A lane whose drain fails has lost nothing: the core keeps what it read for the next pump.
+    // Every other port, the mailbox and the control channels are still served in this one, and
+    // the first failure is thrown once they are, so it is reported and nothing waits behind it.
+    let failed: { error: unknown } | null = null;
+    for (const port of Array.from(localPorts.values())) {
+      try { lanes = portOps.drainLane(port) || lanes; }
+      catch (error) { failed ??= { error }; }
+    }
     const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => mailboxDelivery(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
     if (drained) shared?.routes?.credit();
     for (const port of localPorts.values()) portOps.retry(port);
     let progress = Boolean(drained) || lanes;
     progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
+    if (failed) throw failed.error;
     return progress;
   }
 
@@ -524,7 +532,7 @@
      * Reserves a frame on this end's group lane. Its commit is the native publication alone and
      * reports whether the peer was idle; `postMessage` sends the wake hint after it has counted
      * the message. The transfer of each carried end and the frame's commit or abort are word
-     * natives, so no native call between detachment and the count can throw.
+     * natives, so the native bridge cannot fail a call between detachment and the count.
      */
     #groupFrame(io: BunWasm.GroupSharedLane, packet: Record<string, unknown>): BunWasm.GroupLaneFrame {
       return io.reserve(JSON.stringify(packet));
@@ -1236,9 +1244,10 @@
   const waiter: BunWasm.IoWaiter = {
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() {
-      const progress = pump();
-      laneHousekeeping();
-      return progress ? "progress" : false;
+      // The housekeeping is owed whatever the pump met: a failed drain must not hold back the
+      // sweep or the retirement of closed lanes.
+      try { return pump() ? "progress" : false; }
+      finally { laneHousekeeping(); }
     },
     // Every open control channel: the idle loop wakes for a frame from any of them.
     subscriptions() {

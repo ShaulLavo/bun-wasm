@@ -1637,17 +1637,26 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         })
     }
 
-    /// Reads up to `limit` frames from the direction end `side` reads.
+    /// Reads up to `limit` frames from the direction end `side` reads. A lane that fails
+    /// validation closes the direction and is reported once: a reader that has stopped for good
+    /// has nothing more to read, and saying so ends the port instead of failing the same check
+    /// at every later read.
     pub(crate) fn drain(&self, lane: LaneRef, side: u32, limit: usize) -> Result<Drain, Refusal> {
+        self.owned(lane, side)?;
+        if self.mem.load(self.dir_at(lane.slot, side) + READER_CLOSED) != 0 {
+            return Ok(Drain {
+                terminal: true,
+                ..Drain::default()
+            });
+        }
+        self.read(lane, side, limit)
+            .inspect_err(|_| self.close_direction(lane, side))
+    }
+
+    fn read(&self, lane: LaneRef, side: u32, limit: usize) -> Result<Drain, Refusal> {
         let view = self.view(lane, side, side)?;
         let mut out = Drain::default();
-        match self.drain_view(&view, limit, &mut out.frames) {
-            Ok(more) => out.more = more,
-            Err(error) => {
-                self.close_direction(lane, side);
-                return Err(error);
-            }
-        }
+        out.more = self.drain_view(&view, limit, &mut out.frames)?;
         if !out.more && self.writer_gone(&view) && !self.has_data(&view)? {
             out.terminal = true;
         }
@@ -2011,7 +2020,7 @@ impl Unsettled {
 /// The guest binding: this member's group memory, its `runtime_shm` imports and the natives
 /// `worker_lane.ts` wraps. Raw group addresses stay inside these natives.
 ///
-/// Every native that changes group memory is a word native, whose call and return cannot fail,
+/// Every native that changes group memory is a word native, which the bridge cannot fail,
 /// except `laneReserve` and `laneDrain`, which carry text. Those two leave their effect in
 /// [`Unsettled`] and a word native settles it.
 #[cfg(bun_wasm_shared_group)]

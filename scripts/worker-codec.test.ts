@@ -165,12 +165,12 @@ function channelFactory(Encoder: new() => { encode(text: string): Uint8Array } =
 }
 
 /**
- * One guest's core as its control channels see it: pipes that take everything, and one slot for
- * the last write attempt that ran, whichever descriptor it was on. `fault` makes the next write
- * fail once on its way to the core or back. `scope: "token"` is a core that compares the token
- * alone, the weakest slot a guest's tokens must still be safe against.
+ * One guest's core as its control channels see it: pipes that take `capacity` bytes a write, and
+ * one slot for the last write attempt that ran, whichever descriptor it was on. `fault` makes
+ * the next write fail once on its way to the core or back. `scope: "token"` is a core that
+ * compares the token alone, the weakest slot a guest's tokens must still be safe against.
  */
-function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "token" = "attempt") {
+function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "token" = "attempt", capacity = Infinity) {
   const written = new Map<number, string>();
   const tokens: number[] = [];
   let last = { fd: 0, token: 0, result: 0 };
@@ -181,10 +181,11 @@ function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "
       control.fault = null;
       tokens.push(token);
       if (failing === "before") throw new Error("core data allocation failed");
-      written.set(fd, (written.get(fd) ?? "") + new TextDecoder().decode(bytes));
-      last = { fd, token, result: bytes.length };
+      const taken = Math.min(bytes.length, capacity);
+      written.set(fd, (written.get(fd) ?? "") + new TextDecoder().decode(bytes.subarray(0, taken)));
+      last = { fd, token, result: taken };
       if (failing === "after") throw new Error("core data allocation failed");
-      return bytes.length;
+      return taken;
     },
     procWriteResult(fd: number, high: number, low: number) {
       const same = last.token === high * 2 ** 32 + low && (scope === "token" || last.fd === fd);
@@ -230,6 +231,35 @@ for (const scope of ["attempt", "token"] as const) {
     // Every attempt of the guest has its own token, on whichever channel it was made.
     expect(new Set(core.tokens).size).toBe(core.tokens.length);
     expect(core.tokens.length).toBe(3);
+  });
+}
+
+const twoChannelCases = (["before", "after"] as const).flatMap(when => (["attempt", "token"] as const).flatMap(scope =>
+  [true, false].flatMap(equal => [Infinity, 5].map(capacity => ({ when, scope, equal, capacity })))));
+for (const { when, scope, equal, capacity } of twoChannelCases) {
+  const frames = `${equal ? "equal" : "unequal"} frames, ${capacity === 5 ? "partial" : "whole"} writes`;
+  test(`two channels, a write failing ${when} it ran: each frame is written once (${frames}, core slot by ${scope})`, () => {
+    const core = guestCore(null, scope, capacity);
+    const guest = channelFactory()({ native: core.native });
+    const first = guest.open(1, 2), second = guest.open(3, 4);
+    const toFirst = { kind: "to-a" };
+    const toSecond = equal ? { kind: "to-b" } : { kind: "to-b", longer: "x".repeat(23) };
+    const settle = () => { for (let turn = 0; turn < 16 && (first.pending || second.pending); turn++) { first.pump(() => {}); second.pump(() => {}); } };
+    first.send(toFirst);
+    settle();
+    // The slot now holds the first channel's last attempt. The second channel's first write
+    // fails on its way to the core, or on its way back after the pipe took its bytes.
+    core.control.fault = when;
+    second.send(toSecond);
+    if (when === "before") expect(core.written.get(4)).toBeUndefined();
+    settle();
+    first.send(toFirst);
+    settle();
+    // Nothing dropped, repeated, skipped or reordered on either pipe.
+    expect(core.written.get(4)).toBe(JSON.stringify(toSecond) + "\n");
+    expect(core.written.get(2)).toBe((JSON.stringify(toFirst) + "\n").repeat(2));
+    expect(first.pending || second.pending).toBe(false);
+    expect(new Set(core.tokens).size).toBe(core.tokens.length);
   });
 }
 

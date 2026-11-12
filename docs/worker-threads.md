@@ -276,8 +276,9 @@ the format (`crates/bunwasm-runtime/src/wasm/lane.rs`); `worker_lane.ts` wraps i
   `Atomics.wait` and the wait provider are unchanged.
 - Failure: a `postMessage` that throws has moved nothing, and one that returns has published
   the whole message. Once buffers detach, the calls that move carried ports and publish the
-  frame go through a path that allocates nothing and cannot report an error. A receive that
-  fails while returning frames gets the same frames at the next receive.
+  frame cross the native bridge with no checked allocation and no error status. A receive that
+  fails while returning frames gets the same frames at the next receive, and the event loop
+  reports that failure as the thread's uncaught error and keeps pumping.
   [The lane's record](bun-patches/original-adapter-group-lane.md) describes that path.
 
 Observable changes on these engines:

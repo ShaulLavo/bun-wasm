@@ -1160,8 +1160,20 @@ fn a_corrupt_cursor_closes_the_direction_and_throws() {
     r.mem.put(block + D_WRITE, PERIOD + 4);
     assert!(matches!(r.drain(lane, 1, 8), Err(Refusal::Corrupt(_))));
     assert!(r.peer_closed(lane, 0));
+    // The failure is reported once. The reader has stopped for good, so every later read says
+    // the lane is over, without looking at the lane again.
     r.mem.put(r.lane_slot(lane.slot) + ADDRESS, 3);
-    assert!(matches!(r.drain(lane, 1, 8), Err(Refusal::Corrupt(_))));
+    let after = r.drain(lane, 1, 8).unwrap();
+    assert!(after.terminal && after.frames.is_empty() && !after.more);
+    assert_eq!(r.drain(lane, 1, 8).unwrap(), after);
+    // A lane whose address fails validation closes the same way, with no access through it.
+    let other = r.create_lane().unwrap();
+    r.mem.put(r.lane_slot(other.slot) + ADDRESS, 3);
+    assert!(matches!(r.drain(other, 1, 8), Err(Refusal::Corrupt(_))));
+    assert!(r.peer_closed(other, 0));
+    assert!(r.drain(other, 1, 8).unwrap().terminal);
+    // An end this member does not own is refused every time: that is not a lane failure.
+    assert_eq!(r.drain(lane, 2, 8), Err(Refusal::NotOwned));
 }
 
 #[test]

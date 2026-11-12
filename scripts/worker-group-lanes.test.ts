@@ -6,7 +6,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { PipeController, type PipeEndpoint } from "../node_modules/waffle/proc/pipes.ts";
 import { createGroupLaneModel, groupSharedObjects } from "./fixtures/shared-objects/group-lanes";
-import { sourceChannel, sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { sourceChannels, sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
 
 const AGAIN = -6;
 const cleanup = new Set<() => void>();
@@ -15,27 +15,45 @@ afterEach(() => { for (const close of cleanup) close(); cleanup.clear(); pipeFau
 type Trace = { from: string; text: string }[];
 /** Makes the next control-pipe write of any guest fail before it ran, or after it ran and before its reply. */
 const pipeFault: { next: "before" | "after" | null } = { next: null };
-function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Trace) {
-  // Each channel here is its own module instance with its own tokens, so its slot is its own too.
-  let last: [token: number, result: number] = [0, 0];
-  return {
-    procRead() {
+/**
+ * One guest's pipe natives, as its core has them: every control channel the guest opens writes
+ * through the same natives by descriptor, the channels share one worker_channel module, and the
+ * core keeps a single last write attempt for the whole guest.
+ */
+function guestPipes(trace: Trace) {
+  const ends = new Map<number, { endpoint: PipeEndpoint; from: string }>();
+  let last = { fd: 0, token: 0, result: 0 };
+  let nextFd = 3;
+  const end = (fd: number) => {
+    const found = ends.get(fd);
+    if (!found) throw new Error(`Unknown descriptor ${fd}`);
+    return found;
+  };
+  const channels = sourceChannels({
+    procRead(fd: number) {
       const buffer = new Uint8Array(65536);
-      const read = input.tryRead([buffer]);
+      const read = end(fd).endpoint.tryRead([buffer]);
       return read > 0 ? buffer.slice(0, read) : read;
     },
-    procWriteOnce(_fd: number, bytes: Uint8Array, token: number) {
+    procWriteOnce(fd: number, bytes: Uint8Array, token: number) {
       const failing = pipeFault.next;
       pipeFault.next = null;
       if (failing === "before") throw new Error("core data allocation failed");
-      trace.push({ from, text: Buffer.from(bytes).toString("utf8") });
-      last = [token, output.tryWrite([bytes])];
+      trace.push({ from: end(fd).from, text: Buffer.from(bytes).toString("utf8") });
+      last = { fd, token, result: end(fd).endpoint.tryWrite([bytes]) };
       if (failing === "after") throw new Error("core data allocation failed");
-      return last[1];
+      return last.result;
     },
-    procWriteResult: (_fd: number, high: number, low: number) => last[0] === high * 2 ** 32 + low ? last[1] : -(2 ** 63),
+    procWriteResult: (fd: number, high: number, low: number) => last.fd === fd && last.token === high * 2 ** 32 + low ? last.result : -(2 ** 63),
     procPoll: () => new Uint8Array(0),
     procClose() {},
+  });
+  /** Opens one of this guest's channels over a pipe pair; `from` labels what it writes in the trace. */
+  return function open(input: PipeEndpoint, output: PipeEndpoint, from: string) {
+    const [inputFd, outputFd] = [nextFd++, nextFd++];
+    ends.set(inputFd, { endpoint: input, from });
+    ends.set(outputFd, { endpoint: output, from });
+    return channels.open(inputFd, outputFd);
   };
 }
 
@@ -44,7 +62,7 @@ function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Tr
  * the pipe to the child relays and its relay is never serviced. `direct` keeps one reader, for
  * cases about what the parent sends the child rather than about lane visibility.
  */
-function spawnPipes(pid: number, trace: Trace, direct = false) {
+function spawnPipes(pid: number, trace: Trace, direct: boolean, parentOpen: ReturnType<typeof guestPipes>) {
   const down = new PipeController({ capacity: 65536, relay: "manual" });
   const parentWrite = down.retain(1, "write");
   const original = direct ? undefined : down.retain(1, "read");
@@ -56,8 +74,8 @@ function spawnPipes(pid: number, trace: Trace, direct = false) {
   cleanup.add(() => { for (const end of [parentWrite, childRead, childWrite, parentRead]) end.close(); down.dispose?.(); up.dispose?.(); });
   return {
     parentWrite, childRead,
-    parent: sourceChannel(host(parentRead, parentWrite, `parent to ${pid}`, trace)),
-    child: sourceChannel(host(childRead, childWrite, `child ${pid}`, trace)),
+    parent: parentOpen(parentRead, parentWrite, `parent to ${pid}`),
+    child: guestPipes(trace)(childRead, childWrite, `child ${pid}`),
   };
 }
 
@@ -69,12 +87,13 @@ function group(options: { beforeDetach?: () => void; realLoop?: boolean } = {}) 
   const rootLanes = model.member(1);
   const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), beforeDetach: options.beforeDetach, realLoop: options.realLoop });
   cleanup.add(() => root.__fixtureShutdown());
+  const rootOpen = guestPipes(trace);
   let next = 2;
   /** Starts a child whose workerData is `data`, carrying `transfer` and its parent port. */
   function spawn(data: unknown = null, transfer: unknown[] = [], direct = false) {
     const pid = next++;
     const id = pid - 2;
-    const pipes = spawnPipes(pid, trace, direct);
+    const pipes = spawnPipes(pid, trace, direct, rootOpen);
     const lanes = model.member(pid);
     const { port1, port2 } = new root.MessageChannel();
     const cell = rootLanes.cell();
@@ -282,32 +301,70 @@ for (const when of ["before", "after"] as const) {
  * its thread, so it has to come back, and the error has to leave `pumpIo` as it was thrown: the
  * engine driver gives whatever `pumpIo` throws to the thread's uncaught-error handling.
  */
-for (const thread of ["root", "worker"] as const) {
-  test(`a failed loop step on the ${thread} leaves pumpIo as the same error and the thread keeps pumping`, async () => {
+const loopCases = (["root", "worker"] as const).flatMap(thread => (["before", "after"] as const).map(when => ({ thread, when })));
+for (const { thread, when } of loopCases) {
+  test(`a drain that fails ${when} it read, in a loop step on the ${thread}, is thrown as itself and the loop goes on`, async () => {
     const { model, root, spawn } = group({ realLoop: true });
-    const { child, port, pid } = spawn();
-    const [receiver, sender, tag] = thread === "root" ? [root, child.parentPort, 1] : [child, port, pid];
+    const { child, port, pid, pipes } = spawn();
+    const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
     const got: unknown[] = [];
-    (thread === "root" ? port : child.parentPort).on("message", value => got.push(value));
+    let closed = false;
+    listening.on("message", value => got.push(value));
+    listening.on("close", () => { closed = true; });
+    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    // A pass that made progress is followed by another, as in the engine's loop. No test
+    // below calls a synchronous receive: that would read the lane without the loop.
+    const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
     sender.postMessage("first");
-    // The loop's pass reads the lane and the reply is lost on its way back.
-    model.control.fault = { native: "laneDrain", when: "after" };
+    model.control.fault = { native: "laneDrain", when };
     let caught: unknown;
     try { receiver.pumpIo(); } catch (error) { caught = error; }
     expect(model.control.thrown).toHaveLength(1);
     expect(caught).toBe(model.control.thrown[0]);
-    // Nothing but the loop runs from here on: its later passes take the frames the core kept,
-    // what was posted since, and the housekeeping.
-    const swept = () => model.control.sweeps.filter(item => item.tag === tag).length;
-    const before = swept();
+    // The housekeeping of the failed step still ran, and later ones do.
+    const swept = (full: boolean) => model.control.sweeps.filter(item => item.tag === tag && (!full || item.full)).length;
+    expect(swept(false)).toBeGreaterThan(0);
+    const before = swept(false);
+    // The frames the core kept (or never read) arrive through the loop, with what came after.
     sender.postMessage("second");
-    // The kept batch comes back first, and a pass that made progress is followed by another.
-    for (let pass = 0; pass < 4 && receiver.pumpIo(); pass++);
-    await new Promise(resolve => setTimeout(resolve, 5));
+    passes();
+    await turn();
     expect(got).toEqual(["first", "second"]);
-    expect(swept()).toBeGreaterThan(before);
+    expect(swept(false)).toBeGreaterThan(before);
+    // A death anywhere in the group still gets its full sweep on the root, from the loop.
+    if (thread === "root") {
+      const full = swept(true);
+      pipes.child.send({ kind: "up", body: { kind: "gone", path: [9] } });
+      passes();
+      expect(swept(true)).toBe(full + 1);
+    }
+    // And a later closure reaches the port through the loop alone.
+    sender.close();
+    await turn();
+    passes();
+    await turn();
+    expect(closed).toBe(true);
   });
 }
+
+test("one lane that fails to drain does not hold back the thread's other lanes and channels", async () => {
+  const { model, root, spawn } = group({ realLoop: true });
+  const first = spawn();
+  const second = spawn();
+  const got: string[] = [];
+  first.port.on("message", value => got.push(`first ${value}`));
+  second.port.on("message", value => got.push(`second ${value}`));
+  first.child.parentPort.postMessage("a");
+  second.child.parentPort.postMessage("b");
+  // The first lane with frames fails after it read them. The same pass still serves the rest.
+  model.control.fault = { native: "laneDrain", when: "after" };
+  expect(() => root.pumpIo()).toThrow("core data allocation failed");
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(got).toHaveLength(1);
+  for (let pass = 0; pass < 4 && root.pumpIo(); pass++);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(got.toSorted()).toEqual(["first a", "second b"]);
+});
 
 test("a closed peer's committed messages arrive in order and then the port closes", async () => {
   const { spawn } = group();

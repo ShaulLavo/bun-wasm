@@ -23,8 +23,8 @@ impl CoreClient {
         }
     }
 
-    /// Calls a word native through the preallocated frame. Nothing here allocates or returns an
-    /// error: the call yields its result, or the guest ends on a broken transport.
+    /// Calls a word native through the preallocated frame. This function allocates nothing and
+    /// returns no error: the call yields its result, or the guest ends on a broken transport.
     pub(crate) fn word(self, op: u32, words: [u32; WORD_ARGS]) -> i64 {
         let frame = self.word_frame as *mut u32;
         // SAFETY: core allocated WordFrame::SIZE bytes, 8-aligned, at word_frame for this
