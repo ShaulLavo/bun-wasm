@@ -45,7 +45,7 @@ function summarizeSamples(samples: Sample[], ticksPerSecond: number) {
     return { beforeMs: row.beforeMs, afterMs: row.afterMs, rssKiB: metric("Rss"), pssKiB: metric("Pss") };
   });
   return { threads, observedCpuSeconds: threads.reduce((sum, row) => sum + row.observedCpuSeconds, 0), memory,
-    coverage: "Observed deltas only. Newly observed is not newly created. Entire lifetimes, disappearing final reads and tails may be missing. No roles, blocked-parent claim, CPU/wall partition or additive profile decomposition. RSS may double count shared pages. Memory values are concurrent samples, not continuous peaks." };
+    coverage: "Observed deltas only, between readable samples wholly inside the requested window when supplied. Window edges are uncovered. Newly observed is not newly created. Entire lifetimes, disappearing final reads and tails may be missing. No roles, blocked-parent claim, CPU/wall partition or additive profile decomposition. RSS may double count shared pages. Memory values are concurrent samples, not continuous peaks." };
 }
 type TaskRow = Sample["processes"][number]["threads"][number];
 function addTask(tasks: Map<string, { first: TaskRow; last: TaskRow; observations: number }>, thread: TaskRow) {
@@ -84,9 +84,10 @@ export async function observeProcess(root: number, scope: string, intervalMs = 2
   };
   samples.push(first);
   const running = (async () => { while (!stopping) { await Bun.sleep(intervalMs); if (!stopping) await capture(); } })();
-  return { async stop() {
+  return { async stop(window?: { beforeMs: number; afterMs: number }) {
     stopping = true; await running; await capture();
-    return { kind: "proc-polling", scope, rootIdentity, intervalMs, ticksPerSecond, unit: { cpu: "seconds", queue: "seconds", memory: "KiB", clock: "controller performance.now ms" }, samples, errors,
-      summary: summarizeSamples(samples, ticksPerSecond) };
+    const included = window ? samples.filter(row => row.beforeMs >= window.beforeMs && row.afterMs <= window.afterMs) : samples;
+    return { kind: "proc-polling", scope, window: window ?? null, includedSamples: included.length, rootIdentity, intervalMs, ticksPerSecond, unit: { cpu: "seconds", queue: "seconds", memory: "KiB", clock: "controller performance.now ms" }, samples, errors,
+      summary: summarizeSamples(included, ticksPerSecond) };
   } };
 }

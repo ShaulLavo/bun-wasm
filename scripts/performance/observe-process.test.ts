@@ -1,3 +1,6 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { startObservation, finishObservation } from "./sharing-controls";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { observeProcess, parseTaskStat } from "./observe-process";
@@ -11,7 +14,7 @@ test("proc stat parser retains start identity with spaces and parentheses", () =
 });
 
 test("external observer measures an owned root and child without counting controller", async () => {
-  const root = await mkdtemp("/work/tmp/bun-wasm-observer-test-");
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-observer-test-"));
   const code = "const stop=Date.now()+1500; while(Date.now()<stop) Math.sqrt(Math.random());";
   const command = [process.execPath, "-e", `const child=Bun.spawn([process.execPath,'-e',${JSON.stringify(code)}]); ${code} await child.exited; await Bun.sleep(1000);`];
   const job = launchProcess(command, root, process.env, root);
@@ -27,3 +30,12 @@ test("external observer measures an owned root and child without counting contro
     expect(result.summary.threads.every(row => row.endpoints.includes("not guaranteed"))).toBe(true);
   } finally { await observer?.stop(); await job.close(); await rm(root, { recursive: true, force: true }); }
 }, 10000);
+
+test("missing observer root records unavailable without throwing into the workload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-observer-missing-"));
+  try {
+    const started = await startObservation(undefined, "unavailable test scope");
+    expect(started.observer).toBeNull();
+    expect(await finishObservation(started, root + "/observation.json")).toMatchObject({ kind: "unavailable" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

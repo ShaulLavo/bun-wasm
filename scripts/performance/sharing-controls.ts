@@ -11,9 +11,9 @@ export async function startObservation(root: number | undefined, scope: string):
     return { observer: await observeProcess(root, scope), unavailable: null };
   } catch (error) { return { observer: null, unavailable: String(error) }; }
 }
-export async function finishObservation(started: Awaited<ReturnType<typeof startObservation>>, output: string) {
+export async function finishObservation(started: Awaited<ReturnType<typeof startObservation>>, output: string, window?: { beforeMs: number; afterMs: number }) {
   try {
-    const result = started.observer ? await started.observer.stop() : { kind: "unavailable", reason: started.unavailable };
+    const result = started.observer ? await started.observer.stop(window) : { kind: "unavailable", reason: started.unavailable };
     await writeFile(output, JSON.stringify(result));
     return result;
   } catch (error) {
@@ -37,6 +37,7 @@ export async function startupControls(transport: Transport, output: string, time
     if (requiresPreparation && reason === null && preparations.length < (mode === "leaf" ? 1 : 5)) reason = "Per-worker preparation evidence missing";
     controls.push({ mode, status: reason ? "fail" : "pass", reason, result, observation: "kind" in observation ? observation.kind : "unknown", observerCoverage: observerCoverage(observation, reason), preparations });
   }
+  await startupLatency(transport, output, timeoutMs);
   await transport.evaluate("playground.fs.remove('/home/user/.perf-startup.ts')");
   await transport.evaluate("playground.fs.remove('/home/user/.perf-activity')");
   return controls;
@@ -63,4 +64,12 @@ export function preparationEvents(result: unknown) {
 
 function parseRecord(text: string): unknown {
   try { return JSON.parse(text); } catch { return null; }
+}
+
+async function startupLatency(transport: Transport, output: string, timeoutMs: number) {
+  try {
+    const result = await command(transport, "bun .perf-startup.ts starts", timeoutMs);
+    if (!result || typeof result !== "object" || !("output" in result) || typeof result.output !== "string" || !result.output.includes("PERF_STARTS") || !result.output.includes("PERF_TRIVIAL_NESTED")) throw new Error("Trivial child/nested output missing");
+    await writeFile(join(output, "startup-latency.json"), JSON.stringify({ status: "pass", result, preparations: preparationEvents(result), scope: "Guest child and nested latencies only; never multiplied by inferred OS thread births" }));
+  } catch (error) { await writeFile(join(output, "startup-latency.json"), JSON.stringify({ status: "unavailable", reason: String(error) })); }
 }

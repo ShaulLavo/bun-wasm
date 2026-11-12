@@ -1,3 +1,5 @@
+import { launchProcess } from "./lifecycle-process";
+import { bounded } from "../goals-matrix/bounded";
 import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ownedCommand, withSignals } from "../goals-matrix/lifetime";
@@ -11,7 +13,8 @@ async function prepare(args: string[], signal: AbortSignal) {
   await mkdir(source);
   const files = (await ownedCommand(["git", "ls-files", "-z"])).split("\0").filter(Boolean);
   for (const file of files) await cp(file, join(source, file), { recursive: true });
-  await cp(".git", join(source, ".git"));
+  const gitDirectory = (await ownedCommand(["git", "rev-parse", "--absolute-git-dir"])).trim();
+  await writeFile(join(source, ".git"), `gitdir: ${gitDirectory}\n`);
   for (const path of ["node_modules", "web/node_modules", "sandbox/node_modules"]) await symlink(resolve(path), join(source, path));
   const original = treeInventory(source, [".git", "node_modules", "web/node_modules", "sandbox/node_modules"]);
   const patch = await writeControlPatch(process.cwd(), directory);
@@ -24,7 +27,7 @@ async function prepare(args: string[], signal: AbortSignal) {
       await applyMode(mode, patch, signal);
       const output = join(directory, mode);
       await mkdir(output);
-      await ownedCommand(prepareCommand.concat([output, pair, receipt]), signal, 240000, true);
+      await runPreparation(prepareCommand.concat([output, pair, receipt]), output, signal);
       const host = join(output, "host/lifecycle-host.json");
       const metadata = JSON.parse(await readFile(host, "utf8"));
       await writeFile(host, JSON.stringify({ ...metadata, sharing: mode, controlPatch: mode === "unshared" ? sha256(await readFile(patch)) : null }));
@@ -39,4 +42,12 @@ if (import.meta.main) await withSignals(signal => prepare(process.argv.slice(2),
 
 async function applyMode(mode: string, patch: string, signal: AbortSignal) {
   if (mode === "unshared") await ownedCommand(["git", "apply", patch], signal);
+}
+
+async function runPreparation(command: string[], output: string, signal: AbortSignal) {
+  const job = launchProcess(command, process.cwd(), process.env, output);
+  try {
+    const code = await bounded(() => job.exited, 240000, signal);
+    if (code !== 0) throw new Error(`Host preparation failed (${code}); see ${output}/stderr.txt`);
+  } finally { await job.close(); }
 }

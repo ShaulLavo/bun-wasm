@@ -97,8 +97,8 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
     const completion = outcome.kind === "vite" ? outcome.counter : job.observation.exit;
     if (!completion) throw new Error("Missing process-close observation");
     timing.completion = completion;
-    if (serverObserver) { await finishObservation(serverObserver, join(output, "server-observation.json")); serverObserver = null; }
-    if (previewObserver) { await finishObservation(previewObserver, join(output, "preview-observation.json")); previewObserver = null; }
+    if (serverObserver) { await finishObservation(serverObserver, join(output, "server-observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); serverObserver = null; }
+    if (previewObserver) { await finishObservation(previewObserver, join(output, "preview-observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); previewObserver = null; }
     if (preview) await job.close();
     const after = immutableIdentity(root, cell.workload);
     return { outcome, submission, completion, wallMs: completion.afterMs - submission.beforeMs, command, env, actualProcess, executableSha256,

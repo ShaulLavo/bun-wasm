@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { preparationEvents } from "./sharing-controls";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
@@ -12,7 +14,7 @@ test("diagnostic patch matches released compiled-plan handoff and rejects memory
 });
 
 test("control patch passes git apply --check against current source", async () => {
-  const root = await mkdtemp("/work/tmp/bun-wasm-sharing-check-");
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-sharing-check-"));
   try {
     const patch = await writeControlPatch(process.cwd(), root);
     expect(await readFile(patch, "utf8")).toContain("linkPlan: undefined, diagnosticLinkSource: source");

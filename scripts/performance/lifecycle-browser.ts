@@ -69,6 +69,7 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
   const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true);
   const interrupt = () => { void transport.close().catch(() => {}); };
   signal.addEventListener("abort", interrupt, { once: true });
+  let observationAllowed = false;
   let observer: Awaited<ReturnType<typeof startObservation>> | null = null;
   let timing: { submission: Bracket; completion: Bracket | null } | null = null;
   try {
@@ -95,12 +96,13 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
     if (mode === "observation") {
       const controls = await startupControls(transport, output, timeoutMs, cell.arm.engine !== "browser" && sharing === "unshared").catch(error => [{ mode: "setup", status: "fail", reason: String(error), observerCoverage: { cpu: "unavailable" } }]);
       await writeFile(join(output, "startup-control.json"), JSON.stringify({ runtime, controls }));
-      observer = controls.every(control => control.status === "pass" && control.observerCoverage.cpu === "positive") ? await startObservation(transport.processRoot, "Browser subprocess tree, framework command through completion observation; harness and asset server excluded") : { observer: null, unavailable: "Exact-context root/child observer control did not pass; see startup-control.json" };
+      observationAllowed = controls.every(control => control.status === "pass" && control.observerCoverage.cpu === "positive");
     }
     const beforeInventory = await transport.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
     await writeFile(join(output, "guest-inputs.json"), JSON.stringify(beforeInventory));
     const inputs = sha256(canonical(beforeInventory));
     const resetEvidence = await transport.evaluate(expression(reset, mutableRoots[cell.workload]));
+    if (mode === "observation") observer = observationAllowed ? await startObservation(transport.processRoot, "Browser subprocess tree; samples wholly inside framework command observation window; harness and asset server excluded") : { observer: null, unavailable: "Exact-context root/child observer control did not pass; see startup-control.json" };
     const submission = { beforeMs: performance.now(), afterMs: 0 };
     timing = { submission, completion: null };
     const observed: { completion: Bracket | null; lastPendingMs: number } = { completion: null, lastPendingMs: submission.beforeMs };
@@ -125,7 +127,7 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
     const completion = observed.completion;
     if (!completion) throw new Error("Missing successful-exit observation");
     timing.completion = completion;
-    if (observer) { await finishObservation(observer, join(output, "observation.json")); observer = null; }
+    if (observer) { await finishObservation(observer, join(output, "observation.json"), { beforeMs: submission.beforeMs, afterMs: completion.afterMs }); observer = null; }
     if (cell.workload === "vite") await stopServer(transport, 5000);
     await transport.useHost();
     const afterInventory = await transport.evaluate<Awaited<ReturnType<typeof fingerprint>>>(expression(fingerprint, mutableRoots[cell.workload]));
