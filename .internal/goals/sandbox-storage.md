@@ -11,13 +11,14 @@ The shared producer packages the sandbox once and the guest regression harness i
 prepared. A 240 MiB live old-code control passed Vanilla's checkpoint and failed
 React's checkpoint despite its ready indicator.
 
-Production maintenance creation and pre-runtime reclamation are wired against the
-immutable Waffle development candidate at source `931a66d5`. The candidate package
-is installed locally without a committed dependency override. The inherited
-released pin does not yet export the maintenance API. No compatibility fallback
-or private Waffle database access is used. The draft must not merge before the
-actual storage API release is pinned, guest gates pass, and the bounded
-eight-template storage measurement and warm Next reinstall are recorded.
+Production maintenance creation and pre-runtime reclamation use the published
+Waffle 0.0.124 runtime and relay, host interface 2, at source `318ad8cc`. Public
+archive hashes and sizes match the delivered tuple. Candidate overlays and backups
+are removed, and all consumers use frozen released dependencies. No compatibility
+fallback or private Waffle database access is used. Final matching-source guest
+and site qualification follows the unchanged strict producer; borrowed-guest
+development evidence remains separate. The bounded eight-template measurement
+and warm Next reinstall are recorded and are not repeated for the pin change.
 
 Keep active workspaces and one eligible idle install. Before removing an idle
 workspace, preserve its complete user tree in a strict IndexedDB transaction.

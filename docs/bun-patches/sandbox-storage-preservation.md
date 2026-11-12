@@ -2,6 +2,9 @@
 
 Class **Host feature**, original sandbox adapter. No upstream source is copied.
 
+The public maintenance API is consumed from Waffle 0.0.124, source
+`318ad8cc9c0b50d2d8009214dbcfb98522273426`, with runtime and relay host interface 2.
+
 The sandbox retains complete user trees before reclaiming idle installed projects.
 Its policy, bounded reader, snapshot index, restore markers, and editor recovery
 live in `sandbox/src/workspace-*.ts`, `editor.ts`, and `sandbox.ts`. The side index
