@@ -1,4 +1,4 @@
-import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess } from "./memory-telemetry.js";
 import { programMetadata } from "../../src/assets.js";
 import { isSharedGroupCore } from "../../src/engine-kind.ts";
 import { bunEnvironment } from "../../src/executable-paths.js";
@@ -57,6 +57,7 @@ export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestL
 
 async function launchBunProcess(engine: Engine, options: BunLauncherOptions, context: Parameters<GuestLauncher>[0], service: Parameters<GuestLauncher>[1]) {
   const memoryTelemetryId = crypto.randomUUID();
+  registerMemoryProcess(engine, memoryTelemetryId, options.runtime, context, service);
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
   let relay: Awaited<ReturnType<typeof runtimeRelay>>;
@@ -70,7 +71,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   const cleanup = () => {
     if (released) return;
     released = true;
-    endMemorySnapshot(memoryTelemetryId);
+    endMemorySnapshot(memoryTelemetryId, () => readOutcome(context.outcome));
     unregister();
     const failures: unknown[] = [];
     try { helper?.dispose(); }
@@ -85,7 +86,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     if (failures.length) throw new AggregateError(failures, "Bun launch cleanup failed");
   };
   const onMessage = (message: unknown) => {
-    if (recordMemorySnapshot(message)) return;
+    if (recordMemorySnapshot(message, memoryTelemetryId)) return;
     try {
       if (!active()) sharedRoute?.close();
       if (sharedRoute?.accept(message)) return;
