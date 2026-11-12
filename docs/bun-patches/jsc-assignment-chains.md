@@ -55,7 +55,7 @@ State and ownership:
 - The builder's own assignment stack is left as upstream leaves it after a failure: nothing is
   truncated. Debug builds assert the flag and the record count at each boundary.
 
-The vector has inline room for eight records of 44 bytes, so chains of up to nine targets allocate
+The vector has inline room for eight records of 28 bytes, so chains of up to nine targets allocate
 nothing; the two vector operations are small out-of-line functions only a chain calls.
 
 Bun's transpiler parses `require`d files first, with its own unguarded recursion; that is

@@ -148,13 +148,15 @@ function chainCapacities(maximum = n) {
 // What stops each chain one level past its capacity, and whether a shallow chain of the same shape
 // still parses afterwards: a capacity alone does not say which error stopped the chain. A chain that
 // completes at the deepest depth tried has no refusal.
+function chainRefusal(attempt, capacity, maximum) {
+  if (capacity >= maximum) return null;
+  try { attempt(capacity + 1); return 'completed'; }
+  catch (error) { return error?.name ?? typeof error; }
+}
 function chainBoundaries(capacities, maximum = n) {
   const boundaries = {};
   for (const [name, attempt] of Object.entries(chainModes)) {
-    let refusal = null;
-    if (capacities[name] < maximum) {
-      try { attempt(capacities[name] + 1); refusal = 'completed'; } catch (error) { refusal = error?.name ?? typeof error; }
-    }
+    const refusal = chainRefusal(attempt, capacities[name], maximum);
     let recovered = true;
     try { attempt(1); } catch { recovered = false; }
     boundaries[name] = { refusal, recovered };

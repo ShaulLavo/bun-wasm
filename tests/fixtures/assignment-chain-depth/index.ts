@@ -65,17 +65,20 @@ function mixed(depth: number): string {
   return `${source}h.rhs()`;
 }
 
-function rows(): Row[] {
+function formRows(kind: Kind, form: Form): Row[] {
   const list: Row[] = [];
-  for (const [kind, form] of nine.concat([["global", "simple"], ["global", "compound"], ["global", "logical"]])) {
-    for (const position of ["value", "ignored", "condition"] as const) {
-      for (const wide of [false, true]) {
-        const name = `${kind} ${form} ${position}${wide ? " 16" : ""}`;
-        const sets = (depth: number) => (kind === "resolve" ? 0 : depth);
-        list.push({ name, body: depth => wrap(position, chain(kind, form, depth), kind === "resolve"), seed: seeds[form], global: kind === "global", wide, sets });
-      }
+  for (const position of ["value", "ignored", "condition"] as const) {
+    for (const wide of [false, true]) {
+      const name = `${kind} ${form} ${position}${wide ? " 16" : ""}`;
+      const sets = (depth: number) => (kind === "resolve" ? 0 : depth);
+      list.push({ name, body: depth => wrap(position, chain(kind, form, depth), kind === "resolve"), seed: seeds[form], global: kind === "global", wide, sets });
     }
   }
+  return list;
+}
+
+function rows(): Row[] {
+  const list = nine.concat([["global", "simple"], ["global", "compound"], ["global", "logical"]]).flatMap(([kind, form]) => formRows(kind, form));
   // Every level's form differs from the next. All reads come before any write, so the 0 seed
   // sends every `||=` on to its right side and each property level runs its setter.
   const mixedSets = (depth: number) => Array.from({ length: depth }, (_, index) => nine[index % nine.length]![0]).filter(kind => kind !== "resolve").length;
