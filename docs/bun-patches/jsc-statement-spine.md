@@ -48,6 +48,10 @@ emitters made it:
 | After the then branch | The jump over the else when the branch was emitted and an else exists, `beforeElse`, then the else's profile hook with the else pending, or the close |
 | Close an `if` | `afterElse`, its profile hook, pop |
 
+Opening a block and opening an `if` are out-of-line helpers (`openStatementSpineBlock`,
+`openStatementSpineIf`): they return before any child is emitted, so their locals never stay on the
+host stack under a native child. The loop itself keeps a small frame.
+
 Every entered `if` owns one record, folded or not. Its record holds `beforeElse` and `afterElse`
 until they are bound; `beforeThen` is bound before the record is pushed. A record also holds the
 caller's destination register, as the recursive frames did; the loop adds no temporary owner. No
@@ -77,6 +81,24 @@ opened, every enclosing record still closes, and `generate` returns `OutOfMemory
   (`RobinHoodHashTable::computeTableHash`); the entries are the same. Two baseline runs give
   identical dumps.
 - `tests/fixtures/statement-spine-semantics` matches native Bun on the baseline and on the change.
+- Capacities, before and after, from one guest process per attempt: blocks, `if`s, `else if`
+  chains, labels, `using` blocks, braced `for`, `while`, `do`, `try`, `switch` and `with` nests,
+  function expressions in `if` blocks and unbraced `while` nests, in function and program code. At
+  192, 208 and 800 KiB, 208 KiB with the 960 reserve, and 192 KiB with reserves 1024 and 512,
+  every row is equal except `else if` chains, which the generator refused at about 2,300 links and
+  now emits at the probe's 4,096. With the guest guard out of the way on 256 and 512 KiB Wasmtime
+  host stacks, every row traps at the same depth as before except `else if` chains, which trapped
+  at 1,225 and 2,485 links and now complete 4,096. `scripts/measure-stack.py`'s modes are equal.
+- Refusal: a development build that refuses the record past a chosen depth gives `RangeError`
+  `Out of memory` with no code run when the refused record is a `using` block, a plain block, an
+  `if`, a folded `if` or an else branch under three open `using` blocks, sync and async, and the
+  guest compiles and runs a shallow `using` block afterwards.
+- Size: `BlockNode` and `LabelNode` grow by 4 bytes each on wasm32 (112 to 116, 40 to 44).
+- Code: `BlockNode::emitBytecode` and `IfElseNode::emitBytecode` are five-instruction calls to the
+  loop, which calls neither `emitUsingBodyScope` nor `emitBodyWithUsingIfNeeded`. The loop's shadow
+  frame is 48 bytes with 34 locals; the block emitter it replaces on every native child's path was
+  32 bytes and 9 locals plus `SourceElements::emitBytecode`. The interpreter frame gate is
+  unchanged (4,896 bytes, 293 of 328 slots).
 
 ## Fixtures
 
