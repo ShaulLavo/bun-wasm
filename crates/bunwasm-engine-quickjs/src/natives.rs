@@ -44,6 +44,7 @@ fn word_fn<E: Engine>(client: CoreClient, op: u32) -> ValueFn<E> {
 pub(crate) fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value, E::Value> {
     let table = core.client.natives().map_err(|err| e.error_value(&err))?;
     let id = |index: usize| u32::try_from(index).expect("native ID");
+    let lane = crate::value_natives::LaneCommit::find(&table.words);
     let data = table
         .functions
         .into_iter()
@@ -54,5 +55,6 @@ pub(crate) fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value
         .into_iter()
         .enumerate()
         .map(|(index, name)| (name, word_fn::<E>(core.client, id(index))));
-    crate::value_natives::bootstrap(e, core, data.chain(words).collect(), table.constants)
+    let functions = data.chain(words).collect();
+    crate::value_natives::bootstrap(e, core, functions, table.constants, lane)
 }

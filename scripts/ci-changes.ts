@@ -98,7 +98,7 @@ const jscFiles = new Set([
   "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
   "scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
-  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
+  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs", "crates/bunwasm-engine-quickjs/src/transfer.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt", "scripts/build-jsc.sh",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",

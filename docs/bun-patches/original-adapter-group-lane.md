@@ -19,6 +19,8 @@ custody, and none of its code is reused.
   `crates/bunwasm-engine-quickjs/src/client.rs`, `natives.rs`, `driver.rs`: word natives, the
   call path the lane's effects use (below). The engine files are the ones every split engine
   compiles, so QuickJS, JSC, SpiderMonkey and Hermes all bind word natives the same way.
+- `crates/bunwasm-engine-quickjs/src/transfer.rs`, included by `value_natives.rs`: the
+  transfer native that commits a staged message ("Staged commit" below).
 
 ## Imports
 
@@ -108,6 +110,39 @@ buffers detach, so that write follows the same rule (`worker_channel.ts`, `nativ
 
 The host engine (`engine_host.rs`) has one bridge, so it registers word natives as ordinary
 natives. The runtime JavaScript calls them the same way on every engine.
+
+### Staged commit
+
+The core and the engine side can publish a message, its ports and its detached buffers in
+one native call. The runtime JavaScript does not use this yet: `postMessage` still runs the
+sequence under "Rules" below, and moves to this call in the change that follows.
+
+- `laneStageEnd(sender end, carried end)` adds a port end to the frame staged under the
+  sender end and returns the epoch it will have in flight. Nothing moves and nothing in group
+  memory changes. It is refused unless this member holds the end open, with no frames read
+  and not yet taken, and with epochs left for the move and its terminal transitions.
+- `laneCommitCheck(sender end, nonce high, nonce low)` checks everything the commit relies
+  on: the frame is staged, each end it names is still this member's at the epoch it was
+  added at, and the nonce is in range. It is the last call that can refuse.
+- `laneCommitStaged`, with the same words, moves each named end into the custody of the
+  frame's reader, publishes the frame, and records the nonce. It allocates nothing, calls no
+  host function and cannot refuse. A member that dies inside it leaves the message absent or
+  whole: ends that already moved wait with the frame's reader and close when it does.
+- `laneCommitted()` returns the last recorded nonce doubled, plus one when the reader was
+  due a wake, and 0 before any commit. A nonce is at most 2^52 - 1, so the word is at most
+  2^53 - 1 and reaches JavaScript as an exact number.
+- The engine side's `transferArrayBuffers(buffers, slot, generation, side, nonceHigh,
+  nonceLow, makeError)` (`crates/bunwasm-engine-quickjs/src/transfer.rs`, compiled into
+  every split engine) admits its arguments exactly, roots every buffer, makes its result,
+  runs the engine's detach predicate on every buffer and then `laneCommitCheck`. Only then
+  does it detach, call `laneCommitStaged` and return the value it already made. It keeps one
+  more reference to everything it was given until `transferSettled()` or its next call, so
+  the engine's release of its arguments on return never drops a last reference. With only a
+  buffer list it validates, detaches and returns, for the callers that have no lane.
+
+`lane/tests.rs` covers the refusals, a replaced plan, and a sender killed before each memory
+access of the commit. The engine crate's tests run the native on QuickJS with a recording
+stand-in for the core.
 
 ### Engine exceptions between detachment and return
 
