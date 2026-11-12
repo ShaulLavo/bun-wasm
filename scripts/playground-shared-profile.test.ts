@@ -14,7 +14,7 @@ test("the supplied shared pair preserves explicit playground registration and pr
   const engine = programKind(compiled);
   if (!isPairedEngine(engine)) throw new Error("Expected a paired engine");
   const side = new Uint8Array(readFileSync(join(dirname(path), programProfile(engine).side)));
-  const module = await prepareProgram({ kind: engine, core, side });
+  const module = engine === "spidermonkey" ? compiled : await prepareProgram({ kind: engine, core, side });
   const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("../web/src/fs-worker.ts", import.meta.url) }, memoryGroups: BUN_MEMORY_GROUP_POLICY });
   const adapters = spyOn(runtime, "registerAdapter"), programs = spyOn(runtime, "registerProgram");
   const launcher: GuestLauncher = () => { throw new Error("No process should start during registration"); };
