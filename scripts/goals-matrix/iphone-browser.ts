@@ -1,4 +1,4 @@
-type BrowserTask = { id: number; source: string; deadline: number };
+type BrowserTask = { id: number; source: string; deadline: number; deliverByMs: number };
 declare global { var __goalsIphoneDocument: { nonce: string; url: string; timeOrigin: number } | undefined; }
 
 // Serialized into the test page, independently of the application bundles.
@@ -18,6 +18,7 @@ export function installIphoneObserver(endpoint: string, nonce: string, readFocus
   async function execute(task: BrowserTask): Promise<void> {
     try {
       if (Date.now() >= task.deadline) throw new Error("Expired iPhone observer command");
+      if (Date.now() >= task.deliverByMs) throw new Error("iPhone observer delivery deadline expired");
       // eslint-disable-next-line no-eval -- This isolated test observer executes the runner's existing page expressions.
       const value: unknown = await (0, eval)(task.source);
       await send("reply", { id: task.id, ok: true, value: value ?? null });
@@ -34,8 +35,9 @@ export function installIphoneObserver(endpoint: string, nonce: string, readFocus
   }
   function parse(value: unknown): BrowserTask {
     if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "number"
-      || !("source" in value) || typeof value.source !== "string" || !("deadline" in value) || typeof value.deadline !== "number") throw new Error("Malformed iPhone observer command");
-    return { id: value.id, source: value.source, deadline: value.deadline };
+      || !("source" in value) || typeof value.source !== "string" || !("deadline" in value) || typeof value.deadline !== "number"
+      || !("deliverByMs" in value) || typeof value.deliverByMs !== "number" || !Number.isSafeInteger(value.deliverByMs)) throw new Error("Malformed iPhone observer command");
+    return { id: value.id, source: value.source, deadline: value.deadline, deliverByMs: value.deliverByMs };
   }
   void poll();
 }

@@ -1,4 +1,4 @@
-import type { Transport } from "./transport";
+import type { ScopedTransport } from "./transport";
 import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import type { Framework } from "./catalog";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
@@ -27,7 +27,7 @@ function readyState(): { ready: boolean; status: string; engine: string | null; 
   const observedEngine = control && "value" in control && typeof control.value === "string" ? control.value : null;
   return { observedEngine, ready: typeof playground !== "undefined", profile: typeof playground === "undefined" ? null : playground.profile, status: document.querySelector("#status")?.textContent ?? "", engine: new URL(location.href).searchParams.get("engine"), agent: navigator.userAgent };
 }
-export async function ready(transport: Transport, engine: string, timeoutMs: number, profile: PlaygroundProfile = "split"): Promise<unknown> {
+export async function ready(transport: ScopedTransport, engine: string, timeoutMs: number, profile: PlaygroundProfile = "split"): Promise<unknown> {
   if (!isEngine(engine)) throw new Error(`Engine is not registered: ${engine}`);
   const state = await until(() => transport.evaluate<ReturnType<typeof readyState>>(expression(readyState, undefined)), value => value.ready || /failed|missing/i.test(value.status), timeoutMs);
   const label = ENGINES[engine].name;
@@ -47,7 +47,7 @@ function transcript(): Promise<string> {
   }
   return new Promise(resolve => playground.term.write("", () => resolve(logicalLines())));
 }
-export async function terminal(transport: Transport): Promise<string> {
+export async function terminal(transport: ScopedTransport): Promise<string> {
   await transport.useHost();
   return transport.evaluate<string>(expression(transcript, undefined));
 }
@@ -62,7 +62,7 @@ function shellState(token: string): { done: boolean; code: number | null; error:
   if (!current || current.token !== token) throw new Error("Command token differs");
   return { done: current.done, code: current.code, error: current.error };
 }
-export async function command(transport: Transport, text: string, timeoutMs: number): Promise<unknown> {
+export async function command(transport: ScopedTransport, text: string, timeoutMs: number): Promise<unknown> {
   await transport.useHost();
   const token = await transport.evaluate<string>(expression(launch, text));
   const result = await until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
@@ -95,7 +95,7 @@ function remaining(deadline: number): number {
   if (value <= 0) throw new Error("Preview binding did not settle before the phase deadline");
   return value;
 }
-async function currentPreview(transport: Transport, deadline: number, port: number): Promise<string> {
+async function currentPreview(transport: ScopedTransport, deadline: number, port: number): Promise<string> {
   await transport.useHost();
   while (true) {
     const before = await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => value.listening || !value.running, remaining(deadline));
@@ -111,7 +111,7 @@ async function currentPreview(transport: Transport, deadline: number, port: numb
     return after.url;
   }
 }
-export async function start(transport: Transport, text: string, timeoutMs: number, port = 5173): Promise<string> {
+export async function start(transport: ScopedTransport, text: string, timeoutMs: number, port = 5173): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   await transport.useHost();
   await transport.evaluate<boolean>(expression(previewReady, true));
@@ -122,7 +122,7 @@ export async function start(transport: Transport, text: string, timeoutMs: numbe
   if (!result.url) throw new Error(`Server exited without listening: ${await terminal(transport)}`);
   return currentPreview(transport, deadline, port);
 }
-export async function openPreview(transport: Transport, timeoutMs: number, port = 5173): Promise<string> {
+export async function openPreview(transport: ScopedTransport, timeoutMs: number, port = 5173): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const url = await currentPreview(transport, deadline, port);
@@ -143,7 +143,7 @@ function stop(): void {
   if (playground.shell.running) playground.shell.input("\x03");
   if (playground.shell.running) playground.shell.input("\x03");
 }
-export async function stopServer(transport: Transport, timeoutMs: number, port = 5173): Promise<void> {
+export async function stopServer(transport: ScopedTransport, timeoutMs: number, port = 5173): Promise<void> {
   await transport.useHost();
   await transport.evaluate(expression(stop, undefined));
   await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => !value.running && !value.listening, timeoutMs);
@@ -152,7 +152,7 @@ function rendered(input: { selector: string; text: string }): { text: string; ma
   const text = document.querySelector(input.selector)?.textContent ?? "";
   return { text, matched: text.trim() === input.text };
 }
-export async function render(transport: Transport, framework: Framework, text: string, timeoutMs: number): Promise<unknown> {
+export async function render(transport: ScopedTransport, framework: Framework, text: string, timeoutMs: number): Promise<unknown> {
   return until(() => transport.evaluate<ReturnType<typeof rendered>>(expression(rendered, { selector: framework.selector, text }), { observation: true }), value => value.matched, timeoutMs);
 }
 function click(input: { button: string; clicked: string }): { before: string; clicked: boolean } {
@@ -163,7 +163,7 @@ function click(input: { button: string; clicked: string }): { before: string; cl
   button.click();
   return { before, clicked: true };
 }
-export async function checkClick(transport: Transport, framework: Framework, timeoutMs: number): Promise<unknown> {
+export async function checkClick(transport: ScopedTransport, framework: Framework, timeoutMs: number): Promise<unknown> {
   if (transport.nativeClick) return transport.nativeClick(framework.button, framework.clicked, timeoutMs);
   const before = await until(() => transport.evaluate<ReturnType<typeof click>>(expression(click, framework)), value => value.clicked, timeoutMs);
   const after = await until(() => transport.evaluate<string>(`document.querySelector(${JSON.stringify(framework.clicked)})?.textContent?.trim() ?? ''`), value => value === before.before.replace(/\b0\b/, "1"), timeoutMs);
@@ -177,7 +177,7 @@ async function saveEdit(input: { source: string; original: string; edited: strin
   view.dispatch({ changes: { from: 0, to: source.length, insert: source.replace(input.original, input.edited) } });
   await playground.editor.save();
 }
-export async function edit(transport: Transport, framework: Framework, timeoutMs: number): Promise<unknown> {
+export async function edit(transport: ScopedTransport, framework: Framework, timeoutMs: number): Promise<unknown> {
   const updated = `${framework.text} hot updated`;
   const identity = crypto.randomUUID();
   const state = await transport.evaluate<string>(`globalThis.__goalsIdentity = ${JSON.stringify(identity)}; String(document.querySelector(${JSON.stringify(framework.clicked)})?.textContent)`);

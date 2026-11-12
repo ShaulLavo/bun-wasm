@@ -1,7 +1,8 @@
 import { installIphoneObserver, iphonePreviewFocus } from "./iphone-browser";
 
 type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: ReturnType<typeof iphonePreviewFocus> | null };
-type Pending = { id: number; source: string; deadline: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+type Pending = { id: number; source: string; deadline: number; deliverByMs: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; deliveryTimer: ReturnType<typeof setTimeout> };
+export type IphoneSettlement = { settled: true; ok: true; value: unknown } | { settled: true; ok: false; error: string };
 type Role = "host" | "preview";
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected iPhone observer object");
@@ -44,21 +45,31 @@ export class IphoneBus {
   private reload(role: Role, previous: Page): Page {
     if (role !== "preview") throw new Error("Unexpected iPhone document replacement");
     const pending = this.pending.get(role);
-    if (pending?.observation) pending.delivered = false;
+    if (pending?.observation) { pending.delivered = false; this.expireDelivery(role, pending); }
     else this.cancel(role, new Error("iPhone preview document replaced"));
     const page = { url: previous.url, nonce: crypto.randomUUID(), visible: false };
     this.pages.set(role, page);
     return page;
   }
-  execute(role: Role, source: string, timeoutMs: number, observation = false): Promise<unknown> {
+  execute(role: Role, source: string, timeoutMs: number, observation: boolean, deliverByMs: number): Promise<unknown> {
+    if (!Number.isSafeInteger(deliverByMs) || deliverByMs <= Date.now()) throw new Error("iPhone observer delivery deadline expired or invalid");
     if (this.pending.has(role)) throw new Error("iPhone observer command already pending");
     const page = this.pages.get(role);
     if (!page || (page.timeOrigin === undefined && !(role === "preview" && observation))) throw new Error("iPhone observer document not ready");
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.cancel(role), timeoutMs);
-      this.pending.set(role, { id, source, deadline: Date.now() + timeoutMs, delivered: false, observation, resolve, reject, timer });
+      const deliveryTimer = setTimeout(() => {
+        const pending = this.pending.get(role);
+        if (pending) this.expireDelivery(role, pending);
+      }, deliverByMs - Date.now());
+      this.pending.set(role, { id, source, deadline: Date.now() + timeoutMs, deliverByMs, delivered: false, observation, resolve, reject, timer, deliveryTimer });
     });
+  }
+  private expireDelivery(role: Role, pending: Pending): boolean {
+    if (pending.delivered || Date.now() < pending.deliverByMs) return false;
+    this.cancel(role, new Error("iPhone observer delivery deadline expired"));
+    return true;
   }
   private accept(role: Role, value: Record<string, unknown>, origin: string | null): Page {
     const page = this.pages.get(role);
@@ -76,9 +87,10 @@ export class IphoneBus {
     if (typeof row.userAgent === "string") page.userAgent = row.userAgent;
     const pending = this.pending.get(role);
     if (!pending || pending.delivered) return null;
+    if (this.expireDelivery(role, pending)) return null;
     if (Date.now() >= pending.deadline) { this.cancel(role); return null; }
     pending.delivered = true;
-    return { id: pending.id, source: pending.source, deadline: pending.deadline };
+    return { id: pending.id, source: pending.source, deadline: pending.deadline, deliverByMs: pending.deliverByMs };
   }
   reply(role: Role, value: unknown, origin: string | null): void {
     const row = object(value);
@@ -86,14 +98,14 @@ export class IphoneBus {
     const pending = this.pending.get(role);
     if (!pending || !pending.delivered || row.id !== pending.id || Date.now() >= pending.deadline) throw new Error("Late or unordered iPhone observer reply");
     if (row.ok !== true && (row.ok !== false || typeof row.error !== "string")) throw new Error("Malformed iPhone observer reply");
-    clearTimeout(pending.timer); this.pending.delete(role);
+    clearTimeout(pending.timer); clearTimeout(pending.deliveryTimer); this.pending.delete(role);
     if (row.ok === false) { pending.reject(new Error(String(row.error))); return; }
     pending.resolve(row.value);
   }
   cancel(role: Role, reason = new Error("iPhone observer command expired or closed")): void {
     const pending = this.pending.get(role);
     if (!pending) return;
-    clearTimeout(pending.timer); this.pending.delete(role);
+    clearTimeout(pending.timer); clearTimeout(pending.deliveryTimer); this.pending.delete(role);
     pending.reject(reason);
   }
   close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); }
@@ -126,7 +138,9 @@ export class IphoneBus {
     }
     if (action === "execute" && typeof row.source === "string" && typeof row.timeoutMs === "number" && Number.isSafeInteger(row.timeoutMs) && row.timeoutMs > 0 && row.timeoutMs <= 900_000) {
       if (row.observation !== undefined && typeof row.observation !== "boolean") throw new Error("Invalid iPhone observation mode");
-      return this.execute(role, row.source, row.timeoutMs, row.observation === true);
+      if (typeof row.deliverByMs !== "number" || !Number.isSafeInteger(row.deliverByMs)) throw new Error("Invalid iPhone delivery deadline");
+      const pending = this.execute(role, row.source, row.timeoutMs, row.observation === true, row.deliverByMs);
+      return pending.then<IphoneSettlement, IphoneSettlement>(value => ({ settled: true, ok: true, value: value ?? null }), error => ({ settled: true, ok: false, error: String(error) }));
     }
     throw new Error("Unknown iPhone observer operation");
   }
