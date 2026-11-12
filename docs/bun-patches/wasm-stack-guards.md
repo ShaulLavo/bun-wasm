@@ -174,11 +174,10 @@ Original adapters, none of which retains an upstream implementation:
 - `crates/bunwasm-jsc/cpp/helpers.cpp` parses `BUN_WASM_JSC_PARSER_RESERVE` strictly and makes
   the single setter call inside the existing `JSC::initialize` callback, once per side instance,
   before that instance's only VM exists. An invalid or absent value makes no call.
-- `web/src/engine-stack-budget.ts` holds the host table and the qualified values: 960 for desktop
-  Firefox on Linux and 832 for desktop Safari 26 or later on Apple silicon, each measured on its
-  own host. Its `hostArchitecture` is original: a 42-byte wasm function divides zero by zero and
-  the worker reads the processor family from the NaN's sign bit, because Safari's user agent is
-  the same on Apple silicon and Intel Macs.
+- `web/src/engine-stack-budget.ts` holds the host table and the selected value, 960 for desktop
+  Firefox on Linux, measured on that host. Desktop Safari keeps 2048: the 832 override measured
+  on Apple silicon is not selected automatically because the browser observations used here do
+  not distinguish it from unqualified Intel hosts.
   `web/src/bun-executor.ts` adds the budget and the reserve independently, the reserve only for
   JSC. The run request's existing `stackHost` field carries the page's platform, vendor, and
   touch-point observations for both engine policies. QuickJS's desktop Safari selection is unchanged.

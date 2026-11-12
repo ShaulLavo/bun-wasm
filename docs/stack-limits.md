@@ -353,21 +353,20 @@ Both engine policies use that one field. QuickJS retains its positively observed
 | V8 (Chrome, Edge, Node) | 800 KiB | Default |
 | Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below |
 | Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured |
-| macOS Safari 26 or later on Apple silicon: `Macintosh`, `Version/` and `Safari/`, no other browser or mobile token, the page reported zero touch points, and the worker observes an ARM64 processor | 192 KiB | 832, measured below |
-| macOS Safari before 26, or on an Intel Mac | 192 KiB | Default. Not measured |
+| macOS Safari | 192 KiB | Default. The measured Apple silicon override below is not selected automatically |
 | iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one |
 | Android Firefox, a Macintosh Safari identity with no touch-point fact, anything unknown | 192 KiB | Default |
 
 A family without its own passing measurement keeps the default, and the catch-all never carries
-a reduced value. The Safari value needs at least the measured Safari version. Playwright WebKit on
-Linux and a phone device descriptor on a desktop qualify nothing.
+a reduced value. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify
+nothing.
 
-Safari sends the same user agent from an Apple silicon Mac and an Intel one, and the value was
-measured on Apple silicon only. The worker tells them apart itself: a tiny wasm function divides
-zero by zero at run time, and the resulting NaN has its sign bit set on x86 and clear on ARM64
-(`hostArchitecture` in `web/src/engine-stack-budget.ts`). Anything but the ARM64 pattern keeps the
-default. This matters: Playwright WebKit on Linux x86_64 with worker stacks cut to Darwin's
-512 KiB traps on nested blocks at 832, as recorded below.
+Safari reports the same user agent on Apple silicon and Intel Macs. The observations used here
+do not establish which processor is running, and 832 was measured only on Apple silicon.
+WebAssembly leaves the [sign of an arithmetic NaN nondeterministic](https://github.com/WebAssembly/design/blob/main/Rationale.md#support-for-nan-boxing),
+so that numerical result cannot authorize a processor-specific setting. Safari therefore keeps
+2048. The x86 control below is additional evidence against selecting 832 for every Macintosh
+Safari identity.
 
 The executor adds each key only when the request lacks it, independently of the other: an explicit
 or empty budget never suppresses the reserve default, and the reverse. Only JSC receives an
@@ -405,7 +404,7 @@ The two real files, loaded alone from an empty stack on the launcher:
 | 176 KiB (192 minus 16) | 896 through 1856 | loads | `RangeError` |
 
 So the candidate is 960 for desktop Firefox on Linux. The same rule gives 832 for the 192 KiB
-hosts. Desktop Safari on Apple silicon was then tested at 832, as recorded under "Desktop Safari"
+hosts. Desktop Safari on Apple silicon was then tested at 832, as recorded under "Desktop Safari measured override"
 below. No phone or tablet run tested it, so every other 192 KiB host keeps 2048.
 
 Firefox 157.0 on Linux at 960, through the repaired sweep: 26 recursion paths and 20 parser
@@ -454,13 +453,14 @@ transpiler first. Its recursion has no stack guard in the guest and does not rea
 chain of about 24,000 assignment targets traps the native launcher's 16 MiB host stack there,
 before and after this change.
 
-### Desktop Safari
+### Desktop Safari measured override
 
 Taken on November 11, 2026 in genuine Safari 26.4 on macOS 26.4 (25E246) on an M1 MacBook Air,
 over SafariDriver, with `web/tests/browser-stack-safari.ts`. Playwright WebKit took no part. The
-pair is the one CI built from the tree of main at `19dba71ea`, where the setting itself landed
-(`jsc-engine.wasm` sha256 `e7628017…f7436`), and in every run Safari fetched those bytes. Later
-engine changes were not measured there.
+pair is the one CI built from the tree of main at `19dba71ea`, where the setting mechanism landed
+(`jsc-engine.wasm` sha256 `e7628017…f7436`). Safari fetched the served side bytes in every run;
+this binds the fetched resource, not a hash of the instantiated module. Later engine changes
+were not measured there. The 832 value is an experimental override, not an automatic policy.
 
 On the launcher with that pair, 832 is again the largest grid value at which both real files load
 at 176 KiB. At 192 KiB the default and 832 give identical capacities for every guard outside the
@@ -474,7 +474,10 @@ that interior depths run too, at the host's 192 KiB and at 240 KiB, cold in a ne
 session per attempt and warm in a reused page. Every attempted depth completed or threw its
 expected catchable error, the guest continued, and both overflow fixtures passed in every run.
 Each sweep ran as consecutive parts that together cover every path once, so the shared Mac was
-held in short turns; a warm part reuses one page for all of its paths.
+held in short turns; a warm part reuses one page for all of its paths. Three cohorts use the
+existing explicit override. The fourth uses a candidate automatic entry that was withdrawn
+after review because its processor classifier was not reliable. These measurements do not
+enable that entry.
 
 | Deepest that completes in Safari | 192 KiB, 2048 (before) | 192 KiB, 832 | 240 KiB, 832 |
 | --- | ---: | ---: | ---: |
@@ -486,24 +489,29 @@ held in short turns; a warm part reuses one page for all of its paths.
 | Nested calls | 97, 87 | 193, 160 | 232, 192 |
 | Nested functions | 30 | 55 | 66 |
 
-Every number equals the launcher's for the same pair and setting, so Safari's host stack never
-stopped a path before the guard did. The "before" column is the policy this value replaced,
-measured in the same Safari.
+The searched capacities match the launcher's for the same pair and setting. For paths without
+a capacity search, the comparison establishes only the same outcome at the harness maximum.
+No tested path showed an earlier host-stack cutoff. The default comparison uses 44 completed
+rows retained from a timed-out attempt and two resumed rows. The original attempt did not exit
+cleanly or reach its final fixtures; the four complete 832 cohorts are separate evidence.
 
 This does not carry to x86. Playwright WebKit 27.2 on Linux x86_64 with worker threads cut to
 Darwin's 512 KiB (`ulimit -s 512`), cold, at 832: the host stack ran out before the guard on
 nested blocks (95 levels in the full parse and about 172 in the compile pass, against 175 and 179
 allowed at 192 KiB) and on nested calls in the full parse (121 against 160). Chained assignments
-and conditional chains did not trap. At 2048 on that host the same paths stop at the guard. An
-Intel Mac has those worker stacks and that processor family, and sends Safari's Macintosh user
-agent, which is why the Safari value needs the worker to observe ARM64. No Intel Mac was measured.
+and conditional chains did not trap. At 2048 on that host the same paths stop at the guard. No
+Intel Mac was measured. This Linux control is evidence against extending the value to every
+Macintosh Safari identity, not native Intel Safari qualification.
 
-What 832 does for real applications in Safari, with every phase deadline unchanged: `next dev`,
-React Router, SolidStart and TanStack Start now start their dev servers, where each stopped on the
-parser before. None of them completes its lifecycle there yet. Their first failures moved to
+In the diagnostic candidate run at 832, with every phase deadline unchanged, `next dev`, React
+Router, SolidStart and TanStack Start start their dev servers where each stopped on the parser
+before. These are not product acceptance runs: the candidate policy does not ship. None completes
+its lifecycle there. Their first failures move to
 later, different limits: page render does not finish in 90 seconds, SolidStart's server compiler
 needs 196 KiB for Babel's code generator (a chain of bound-function calls, not the parser), and
-Angular stops in Ajv's getter recursion. The budget stays 192 KiB.
+Angular stops in Ajv's getter recursion. The budget stays 192 KiB. The existing
+`BUN_WASM_JSC_PARSER_RESERVE=832` override remains available for experiments on the measured host;
+other hosts are not qualified by these results.
 
 ## Historical nested require measurements
 
@@ -732,9 +740,8 @@ differential between two values at one budget, three instances alive at once wit
 values, and the served side's hash against the bytes the browser fetched. It needs the JSC pair,
 so the same inputs select the JSC producer, and CI tells the check whether that producer was
 selected: a selected producer's missing pair fails. The WebKit leg runs the same check on
-Playwright WebKit. It selects the macOS Safari row, and receives that row's value only on an ARM64
-runner: on CI's x86_64 runners it keeps the default. Either way it tests policy transport, not
-Safari.
+Playwright WebKit. It selects the macOS Safari row and keeps the default, because no reduced
+Safari value is selected automatically. This tests policy transport, not genuine Safari.
 
 The shared-group consumer (`checks/browser-guest-shared-wasm-memory.json`) runs the
 parent-and-Worker ownership case in each memory group, beside its existing isolation checks.
