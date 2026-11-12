@@ -128,6 +128,7 @@ function dependencyFixture(directory: string): void {
     const args = process.argv.slice(2);
     require("node:fs").appendFileSync(process.env.APT_CALLS, JSON.stringify(args) + "\\n");
     if (args.includes("update") && process.env.FAIL_UPDATE === "1") process.exit(100);
+    if (args.includes("update") && process.env.FAIL_THIRD_PARTY === "1" && !args.includes("Dir::Etc::sourceparts=-")) process.exit(100);
   `, { mode: 0o755 });
 }
 
@@ -164,6 +165,17 @@ test("failed signed-index refresh stops before planning or installing any cached
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("apt-get update failed");
     expect(readFileSync(join(directory, "apt-calls"), "utf8").trim().split("\n")).toHaveLength(1);
+  });
+});
+
+test("an unrelated failing third-party feed cannot block Ubuntu browser dependencies", () => {
+  fixture(directory => {
+    dependencyFixture(directory);
+    const result = spawnSync(process.execPath, [join(directory, "scripts/ci-browser-deps.ts"), "webkit"], {
+      encoding: "utf8", env: { ...process.env, PATH: directory + ":" + process.env.PATH,
+        GITHUB_ACTIONS: "true", RUNNER_TEMP: directory, APT_CALLS: join(directory, "apt-calls"), FAIL_THIRD_PARTY: "1" },
+    });
+    expect(result.status, result.stderr).toBe(0);
   });
 });
 
