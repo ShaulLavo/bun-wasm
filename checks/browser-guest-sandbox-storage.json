@@ -19,6 +19,7 @@
     "src/shared-objects.ts",
     "web/src/browser-programs.ts",
     "web/src/bun-launcher.ts",
+    "web/src/launch-failure.ts",
     "web/src/compile-observer.ts",
     "web/src/copy-button.tsx",
     "web/src/engine-loader.ts",
