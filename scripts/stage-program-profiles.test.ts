@@ -152,7 +152,7 @@ test("shared staging rejects a valid split pair before publishing profile assets
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
-function differentMaximum(bytes: Uint8Array, maximum: 16384 | 65536): Uint8Array {
+function differentMaximum(bytes: Uint8Array, maximum: 16384 | 65536): Uint8Array<ArrayBuffer> {
   expect(importedMemory(bytes)).toEqual({ shared: true, maximum: 32768 });
   const changed = Buffer.from(bytes);
   // Exact env.memory import in the executable fixture, including its three-byte maximum.
