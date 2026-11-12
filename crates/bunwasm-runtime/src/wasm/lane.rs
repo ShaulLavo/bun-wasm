@@ -50,8 +50,9 @@ const VERSION: u32 = 1;
 const H_MAGIC: u32 = 0;
 const H_VERSION: u32 = 4;
 const H_PIN: u32 = 8;
-/// Ends closed by an exit report whose guest the host has not released yet.
-const H_AWAITING: u32 = 12;
+/// Bumped after a cascade or a release closes an end, so the root rescans its broker records.
+/// A change hint only: no guest decrements it or derives a count from it.
+const H_CLOSURES: u32 = 12;
 /// Bumped by every death declaration, so every guest runs a full sweep after one.
 const H_DEATHS: u32 = 16;
 /// Bytes in Released slots, which a sweep trims to `POOL_LIMIT`.
@@ -71,16 +72,23 @@ const CLAIM: u32 = 0;
 const PIN: u32 = 8;
 const ADDRESS: u32 = 12;
 const LENGTH: u32 = 16;
-// Lane slot, per side s at 24 + 24s: end (u64), version, custody, custody argument.
+// Lane slot, per side s at 24 + 24s: end (u64), version (u64: the Open epoch it belongs to,
+// then the port version), custody, custody argument.
 const END: u32 = 24;
 const SIDE: u32 = 24;
 const END_VERSION: u32 = 8;
-const CUSTODY: u32 = 12;
-const CUSTODY_ARG: u32 = 16;
+const CUSTODY: u32 = 16;
+const CUSTODY_ARG: u32 = 20;
+const _: () = assert!(
+    END + 2 * SIDE <= 72 && (END + END_VERSION).is_multiple_of(8) && SIDE.is_multiple_of(8)
+);
 // Lane slot, per direction d (the ring side d reads) at 72 + 16d.
 const DIRECTION: u32 = 72;
+/// Set by the reading end's owner while it still owns it. A reading end that is Closed or
+/// ClosedDead is reader-closed by its end word alone, so no write follows a terminal transition.
 const READER_CLOSED: u32 = 0;
 const WRITING: u32 = 4;
+/// The lane generation once the root severed this direction's writer; compared, never cleared.
 const SEVERED: u32 = 8;
 /// The lane generation while the reader sleeps on this direction, else 0.
 const ARMED: u32 = 12;
@@ -137,6 +145,8 @@ pub(crate) mod end {
 }
 
 pub(crate) const MAX_COUNT: u32 = (1 << 28) - 1;
+/// Epochs an adopted end may still need: a close, or an exit report and then a release.
+const TERMINAL_EPOCHS: u32 = 2;
 
 /// A claim or end word: a member tag in the high half, a 28-bit generation or epoch and a
 /// 4-bit phase or state in the low half. One atomic word publishes all three together.
@@ -152,7 +162,12 @@ impl Word {
         Word { tag, count, kind }
     }
     fn pack(self) -> u64 {
-        (u64::from(self.tag) << 32) | u64::from((self.count << 4) | self.kind)
+        // Callers reserve every epoch they need; a count past the range saturates, never wraps.
+        debug_assert!(
+            self.count <= MAX_COUNT && self.kind < 16,
+            "{self:?} does not fit"
+        );
+        (u64::from(self.tag) << 32) | u64::from((self.count.min(MAX_COUNT) << 4) | (self.kind & 15))
     }
     fn unpack(value: u64) -> Word {
         let low = value as u32;
@@ -194,6 +209,15 @@ trait Words: Memory {
     }
     fn add(&self, at: u32, delta: u32) {
         self.word(at).fetch_add(delta, SeqCst);
+    }
+    fn raise(&self, at: u32, value: u32) {
+        self.word(at).fetch_max(value, SeqCst);
+    }
+    fn load64(&self, at: u32) -> u64 {
+        self.double(at).load(SeqCst)
+    }
+    fn put64(&self, at: u32, value: u64) {
+        self.double(at).store(value, SeqCst);
     }
     fn subtract(&self, at: u32, delta: u32) {
         let _ = self
@@ -402,6 +426,14 @@ pub(crate) struct Census {
     pub pooled_bytes: u32,
     pub pins: u32,
     pub awaiting: u32,
+}
+
+/// How much a sweep does; see [`Lanes::sweep`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sweep {
+    Trim,
+    Dead,
+    Full,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -684,7 +716,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         }
         for side in 0..2 {
             let end = self.mem.get(at + END + side * SIDE);
-            self.mem.put(at + END + side * SIDE + END_VERSION, 0);
+            self.mem.put64(at + END + side * SIDE + END_VERSION, 0);
             self.mem.put(at + END + side * SIDE + CUSTODY, 0);
             self.mem.set(
                 at + END + side * SIDE,
@@ -737,10 +769,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         })
     }
 
-    /// The epoch an end will have in flight; refused before anything moves if it would wrap.
+    /// The epoch an end will have in flight; refused before anything moves unless the move, the
+    /// adoption and every terminal transition after it still fit.
     pub(crate) fn transfer_epoch(&self, lane: LaneRef, side: u32) -> Result<u32, Refusal> {
         let end = self.owned(lane, side)?;
-        if end.count + 2 > MAX_COUNT {
+        if end.count + 2 + TERMINAL_EPOCHS > MAX_COUNT {
             return Err(Refusal::Exhausted);
         }
         Ok(end.count + 1)
@@ -778,38 +811,75 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         if self.mem.get(at) != expected {
             return false;
         }
-        self.mem.put(at + END_VERSION, version);
+        // Written before the end is ours, so it names the epoch it is for: a version left by a
+        // late adopter of an earlier use never matches a later end and is ignored.
+        self.mem.put64(
+            at + END_VERSION,
+            (u64::from(epoch + 1) << 32) | u64::from(version),
+        );
         self.mem
             .swap_word(at, expected, Word::new(self.tag, epoch + 1, end::OPEN))
     }
 
-    /// The state and adoption version of an end, for the root's retire rule.
+    /// The state of an end and the port version it was adopted at, for the root's retire rule.
+    /// The version is `u32::MAX` (unknown) unless it was recorded for this exact open epoch.
     pub(crate) fn end_state(&self, lane: LaneRef, side: u32) -> (u32, u32) {
         if side > 1 || self.live(lane).is_none() {
             return (end::CLOSED, 0);
         }
         let at = self.end_at(lane.slot, side);
         let end = self.mem.get(at);
-        (end.kind, self.mem.load(at + END_VERSION))
+        let recorded = self.mem.load64(at + END_VERSION);
+        let version = if (recorded >> 32) as u32 == end.count {
+            recorded as u32
+        } else {
+            u32::MAX
+        };
+        (end.kind, version)
     }
 
     /// The root found this end's owner route gone while the end is still open: its peer stops
-    /// waiting for it. The orphan's storage is left alone.
+    /// waiting for it. The orphan's storage is left alone. The word holds the generation and
+    /// only ever rises, so a late sever of an earlier use cannot mark a later one.
     pub(crate) fn sever(&self, lane: LaneRef, side: u32) {
         if side > 1 || self.live(lane).is_none() {
             return;
         }
-        self.mem.put(self.dir_at(lane.slot, 1 - side) + SEVERED, 1);
+        self.mem
+            .raise(self.dir_at(lane.slot, 1 - side) + SEVERED, lane.generation);
     }
 
     /// Whether the peer stopped reading what this end writes.
     pub(crate) fn peer_closed(&self, lane: LaneRef, side: u32) -> bool {
-        side > 1
-            || self.live(lane).is_none()
-            || self
-                .mem
-                .load(self.dir_at(lane.slot, 1 - side) + READER_CLOSED)
-                != 0
+        side > 1 || self.live(lane).is_none() || self.reader_closed(lane.slot, 1 - side)
+    }
+
+    /// A direction's reader stopped for good: its owner said so while it still owned the end,
+    /// or the end is Closed or ClosedDead. Ledger reads only.
+    fn reader_closed(&self, slot: u32, dir: u32) -> bool {
+        let state = self.mem.get(self.end_at(slot, dir)).kind;
+        state == end::CLOSED
+            || state == end::CLOSED_DEAD
+            || self.mem.load(self.dir_at(slot, dir) + READER_CLOSED) != 0
+    }
+
+    /// The writer half of the fence for a direction whose reading end just became terminal:
+    /// release its segments unless a writer is inside a reservation. Every release is a
+    /// compare-and-swap checked against the lane generation, so this is safe to run after the
+    /// terminal transition gave the end away.
+    fn release_unfenced(&self, lane: LaneRef, dir: u32) {
+        if self.mem.load(self.dir_at(lane.slot, dir) + WRITING) == 0 {
+            self.release_direction(lane, dir);
+        }
+    }
+
+    fn closed_one(&self) {
+        self.mem.add(self.ledger + H_CLOSURES, 1);
+    }
+
+    /// The counter the root compares before rescanning its lane-backed broker records.
+    pub(crate) fn closures(&self) -> u32 {
+        self.mem.load(self.ledger + H_CLOSURES)
     }
 
     /// Begins closing this end: stop reading, dispose of what the direction holds.
@@ -888,8 +958,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     fn custody_closed(&self, custody: Custody) -> bool {
         match custody {
             Custody::Lane(lane, side) => {
-                self.live(lane).is_none()
-                    || self.mem.load(self.dir_at(lane.slot, side) + READER_CLOSED) != 0
+                self.live(lane).is_none() || self.reader_closed(lane.slot, side)
             }
             Custody::Cell(cell) => !self.cell_open(cell),
             Custody::Tag(_) => false,
@@ -942,14 +1011,15 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         {
             return false;
         }
-        self.close_direction(
-            LaneRef {
-                slot,
-                generation: claim.count,
-            },
-            side,
-        );
+        // The Closed end is reader-closed by itself. What follows touches the lane only through
+        // generation-checked swaps, so a lane that dies and is reused meanwhile is left alone.
+        let lane = LaneRef {
+            slot,
+            generation: claim.count,
+        };
+        self.release_unfenced(lane, side);
         self.lane_death(slot);
+        self.closed_one();
         true
     }
 
@@ -1026,14 +1096,10 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         if self.mem.get(self.lane_slot(slot) + CLAIM).kind != phase::LIVE {
             return;
         }
-        if !self
-            .mem
-            .swap_word(at, end, Word::new(tag, end.count + 1, end::CLOSED_DEAD))
-        {
-            return;
-        }
-        self.mem.add(self.ledger + H_AWAITING, 1);
-        self.mem.put(self.dir_at(slot, side) + READER_CLOSED, 1);
+        // The one store of a declaration: ClosedDead is reader-closed by itself, and the ends
+        // awaiting release are counted from end words, never from a shared counter.
+        self.mem
+            .swap_word(at, end, Word::new(tag, end.count + 1, end::CLOSED_DEAD));
     }
 
     // ---- Sweeps ----
@@ -1042,7 +1108,6 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     pub(crate) fn census(&self) -> Census {
         let mut census = Census {
             pins: 1,
-            awaiting: self.mem.load(self.ledger + H_AWAITING),
             ..Census::default()
         };
         for at in self.slots(true) {
@@ -1057,6 +1122,8 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         for at in self.slots(false) {
             self.count_slot(&mut census, at, self.mem.get(at + CLAIM), false);
         }
+        // Ends closed by an exit report that the host has not released yet.
+        census.awaiting = census.dead_ends;
         census
     }
 
@@ -1082,63 +1149,73 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         self.mem.load(self.ledger + H_DEATHS)
     }
 
-    /// Returns storage whose users are gone. Cheap when nothing is pending. A full sweep also
-    /// probes every tag that holds an open end or a claim, for guests nobody saw exit.
-    pub(crate) fn sweep(&self, full: bool) {
-        let awaiting = self.mem.load(self.ledger + H_AWAITING) != 0;
+    /// Returns storage whose users are gone. `Trim` only returns pooled storage above the limit.
+    /// `Dead` also releases ends whose exit-reported guest the host has released, and claims a
+    /// released guest left mid-way. `Full` also probes every tag that holds an open end or a
+    /// cell, for guests nobody saw exit. Returns whether ClosedDead ends still await release,
+    /// which the caller remembers to sweep again; no shared counter is kept for it.
+    pub(crate) fn sweep(&self, level: Sweep) -> bool {
         let trim = self.mem.load(self.ledger + H_TRIM) != 0;
-        if !full && !awaiting && !trim {
-            return;
+        if level == Sweep::Trim {
+            if trim {
+                self.trim();
+            }
+            return false;
         }
         let mut probes = Probes::default();
-        if full || awaiting {
-            self.release_dead(&mut probes, full);
-            self.recover_claims(&mut probes);
-            while self.cascade_pass(&mut |lanes, tag| probes.dead(lanes.host, lanes.tag, tag)) {}
-        }
+        let full = level == Sweep::Full;
+        let pending = self.release_dead(&mut probes, full);
+        self.recover_claims(&mut probes);
+        while self.cascade_pass(&mut |lanes, tag| probes.dead(lanes.host, lanes.tag, tag)) {}
         self.trim();
+        pending
     }
 
-    fn release_dead(&self, probes: &mut Probes, full: bool) {
+    /// Returns whether any ClosedDead end is left waiting for its guest's release.
+    fn release_dead(&self, probes: &mut Probes, full: bool) -> bool {
+        let mut pending = false;
         for slot in 0..LANE_SLOTS {
             for side in 0..2 {
-                self.release_end(slot, side, probes, full);
+                pending |= self.release_end(slot, side, probes, full);
             }
         }
         if full {
             self.release_cells(probes);
         }
+        pending
     }
 
-    fn release_end(&self, slot: u32, side: u32, probes: &mut Probes, full: bool) {
+    /// Returns true when the end is ClosedDead and its guest is not released yet.
+    fn release_end(&self, slot: u32, side: u32, probes: &mut Probes, full: bool) -> bool {
         let claim = self.mem.get(self.lane_slot(slot) + CLAIM);
         if claim.kind != phase::LIVE {
-            return;
+            return false;
         }
         let at = self.end_at(slot, side);
         let end = self.mem.get(at);
-        let candidate =
-            end.kind == end::CLOSED_DEAD || full && end.kind == end::OPEN && end.tag != self.tag;
-        if !candidate || !probes.dead(self.host, self.tag, end.tag) {
-            return;
+        let dead = end.kind == end::CLOSED_DEAD;
+        let candidate = dead || full && end.kind == end::OPEN && end.tag != self.tag;
+        if !candidate {
+            return false;
+        }
+        if !probes.dead(self.host, self.tag, end.tag) {
+            return dead;
         }
         if !self
             .mem
             .swap_word(at, end, Word::new(0, end.count + 1, end::CLOSED))
         {
-            return;
+            return false;
         }
-        if end.kind == end::CLOSED_DEAD {
-            self.mem.subtract(self.ledger + H_AWAITING, 1);
-        }
-        self.close_direction(
-            LaneRef {
-                slot,
-                generation: claim.count,
-            },
-            side,
-        );
+        // Reader-closed by the Closed end itself; only generation-checked swaps follow.
+        let lane = LaneRef {
+            slot,
+            generation: claim.count,
+        };
+        self.release_unfenced(lane, side);
         self.lane_death(slot);
+        self.closed_one();
+        false
     }
 
     fn release_cells(&self, probes: &mut Probes) {
@@ -1224,7 +1301,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         let view = self.view(lane, side, 1 - side)?;
         let fence = self.dir_at(lane.slot, view.dir);
         self.mem.put(fence + WRITING, 1);
-        if self.mem.load(fence + READER_CLOSED) != 0 {
+        if self.reader_closed(lane.slot, view.dir) {
             self.mem.put(fence + WRITING, 0);
             return Ok(Staged::Discard);
         }
@@ -1363,18 +1440,19 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     }
 
     /// The commit sequence: navigation stores, then exactly one publication store, then the
-    /// fence release and wake check. Nothing here allocates, calls the host or can fail.
-    pub(crate) fn commit_ops(&self, staged: Staged) -> Vec<Op> {
+    /// fence release and wake check, handed to `step` in order. Nothing here allocates, calls
+    /// the host or can fail; `commit` applies each step as it comes.
+    fn commit_steps(&self, staged: Staged, mut step: impl FnMut(Op)) {
         let block = |lane: LaneRef, dir: u32| {
             let address = self.mem.load(self.lane_slot(lane.slot) + ADDRESS);
             address + D_BASE + dir * D_STRIDE
         };
         match staged {
-            Staged::Discard => Vec::new(),
-            Staged::Inline { lane, dir, write } => vec![
-                Op::Store(block(lane, dir) + D_WRITE, write),
-                Op::Finish(lane, dir),
-            ],
+            Staged::Discard => {}
+            Staged::Inline { lane, dir, write } => {
+                step(Op::Store(block(lane, dir) + D_WRITE, write));
+                step(Op::Finish(lane, dir));
+            }
             Staged::FirstSpill {
                 lane,
                 dir,
@@ -1382,13 +1460,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
                 write,
             } => {
                 let at = block(lane, dir);
-                vec![
-                    Op::Link(lane, dir, segment),
-                    Op::Store(at + D_TAIL_GEN, segment.generation),
-                    Op::Store(at + D_TAIL, segment.index + 1),
-                    Op::Store(at + D_WRITE, write),
-                    Op::Finish(lane, dir),
-                ]
+                step(Op::Link(lane, dir, segment));
+                step(Op::Store(at + D_TAIL_GEN, segment.generation));
+                step(Op::Store(at + D_TAIL, segment.index + 1));
+                step(Op::Store(at + D_WRITE, write));
+                step(Op::Finish(lane, dir));
             }
             Staged::Append {
                 lane,
@@ -1396,10 +1472,8 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
                 segment,
                 committed,
             } => {
-                vec![
-                    Op::Store(segment.address + S_COMMITTED, committed),
-                    Op::Finish(lane, dir),
-                ]
+                step(Op::Store(segment.address + S_COMMITTED, committed));
+                step(Op::Finish(lane, dir));
             }
             Staged::Link {
                 lane,
@@ -1408,14 +1482,12 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
                 segment,
             } => {
                 let at = block(lane, dir);
-                vec![
-                    Op::Link(lane, dir, segment),
-                    Op::Store(at + D_TAIL_GEN, segment.generation),
-                    Op::Store(at + D_TAIL, segment.index + 1),
-                    Op::Store(old.address + S_NEXT_GEN, segment.generation),
-                    Op::Store(old.address + S_NEXT, segment.index + 1),
-                    Op::Finish(lane, dir),
-                ]
+                step(Op::Link(lane, dir, segment));
+                step(Op::Store(at + D_TAIL_GEN, segment.generation));
+                step(Op::Store(at + D_TAIL, segment.index + 1));
+                step(Op::Store(old.address + S_NEXT_GEN, segment.generation));
+                step(Op::Store(old.address + S_NEXT, segment.index + 1));
+                step(Op::Finish(lane, dir));
             }
             Staged::ReturnToRing {
                 lane,
@@ -1424,14 +1496,20 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
                 write,
             } => {
                 let at = block(lane, dir);
-                vec![
-                    Op::Store(old.address + S_SEALED, 1),
-                    Op::Store(at + D_TAIL, 0),
-                    Op::Store(at + D_WRITE, write),
-                    Op::Finish(lane, dir),
-                ]
+                step(Op::Store(old.address + S_SEALED, 1));
+                step(Op::Store(at + D_TAIL, 0));
+                step(Op::Store(at + D_WRITE, write));
+                step(Op::Finish(lane, dir));
             }
         }
+    }
+
+    /// The same sequence as a list, for tests that interleave readers between its stores.
+    #[cfg(test)]
+    pub(crate) fn commit_ops(&self, staged: Staged) -> Vec<Op> {
+        let mut ops = Vec::new();
+        self.commit_steps(staged, |op| ops.push(op));
+        ops
     }
 
     /// Applies one commit store. `Finish` returns whether the reader was armed.
@@ -1458,12 +1536,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         false
     }
 
-    /// Publishes a staged frame. True when a wake hint is due.
+    /// Publishes a staged frame with no allocation, host call or callback. True when a wake
+    /// hint is due.
     pub(crate) fn commit(&self, staged: Staged) -> bool {
         let mut wake = false;
-        for op in self.commit_ops(staged) {
-            wake |= self.apply(op);
-        }
+        self.commit_steps(staged, |op| wake |= self.apply(op));
         wake
     }
 
@@ -1492,7 +1569,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     fn end_writing(&self, lane: LaneRef, dir: u32) {
         let fence = self.dir_at(lane.slot, dir);
         self.mem.put(fence + WRITING, 0);
-        if self.mem.load(fence + READER_CLOSED) != 0 {
+        if self.reader_closed(lane.slot, dir) {
             self.release_direction(lane, dir);
         }
     }
@@ -1593,7 +1670,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
             || self
                 .mem
                 .load(self.dir_at(view.lane.slot, view.dir) + SEVERED)
-                != 0
+                == view.lane.generation
     }
 
     fn has_data(&self, view: &View) -> Result<bool, Refusal> {
@@ -1828,6 +1905,8 @@ pub(crate) mod guest {
         ledger: u32,
         tag: u32,
         deaths: u32,
+        /// This member's last sweep left ClosedDead ends waiting for their guests' release.
+        pending: bool,
         next: u32,
         staged: BTreeMap<u32, Staged>,
     }
@@ -1915,7 +1994,7 @@ pub(crate) mod guest {
     ) -> Result<T, NativeError> {
         with(|lanes| match f(lanes) {
             Err(Refusal::Ledger | Refusal::Host(_)) => {
-                lanes.sweep(true);
+                lanes.sweep(Sweep::Full);
                 f(lanes)
             }
             other => other,
@@ -1983,9 +2062,19 @@ pub(crate) mod guest {
         }
         with(|lanes| {
             let deaths = lanes.deaths();
-            let seen =
-                STATE.with(|state| std::mem::replace(&mut state.borrow_mut().deaths, deaths));
-            lanes.sweep(full || deaths != seen);
+            let (seen, pending) = STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                (std::mem::replace(&mut state.deaths, deaths), state.pending)
+            });
+            let level = if full || deaths != seen {
+                Sweep::Full
+            } else if pending {
+                Sweep::Dead
+            } else {
+                Sweep::Trim
+            };
+            let pending = lanes.sweep(level);
+            STATE.with(|state| state.borrow_mut().pending = pending);
         })
     }
 
@@ -2064,6 +2153,12 @@ pub(crate) mod guest {
             with(|lanes| lanes.exited(cell))?;
             sweep(true)?;
             Ok(Val::Undefined)
+        });
+        table.add("wasm.laneClosures", |_| {
+            if STATE.with(|state| state.borrow().ledger) == 0 {
+                return Ok(Val::from(0u32));
+            }
+            Ok(Val::from(with(|lanes| lanes.closures())?))
         });
         table.add("wasm.laneCensus", |_| {
             if STATE.with(|state| state.borrow().ledger) == 0 {
