@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
 import { instantiateLinkPlan, prepareLinkPlan, type LinkHost } from "waffle/link";
+import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { initializationPair } from "./engine-initialization-fixture.ts";
 
@@ -11,7 +12,7 @@ function host(trace: number[], shared: boolean): LinkHost {
   const wasi = new Wasi({ args: [], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {}, namespaces: { env, runtime_proc } });
   if (!shared) return { wasi, checkActive() {} };
   return { wasi, checkActive() {}, coreImports: { runtime_proc, env: {
-    ...env, memory: new WebAssembly.Memory({ initial: 1, maximum: 16384, shared: true }),
+    ...env, memory: new WebAssembly.Memory({ initial: 1, maximum: BUN_MEMORY_GROUP_POLICY.maximumPages, shared: true }),
     __indirect_function_table: new WebAssembly.Table({ element: "anyfunc", initial: 1 }),
     __stack_pointer: new WebAssembly.Global({ value: "i32", mutable: true }, 65536),
     __memory_base: new WebAssembly.Global({ value: "i32", mutable: false }, 16),

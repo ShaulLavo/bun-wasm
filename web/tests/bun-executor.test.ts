@@ -499,7 +499,10 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   }));
 }
 
-for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, controlled(async () => {
+// The side's two event-loop waits answer telemetry requests. Every other core export it imports,
+// here core_checkpoint, must stay the core's own function: a call between WebAssembly modules.
+const linkedSideImports = [["bun_core_idle", true], ["bun_core_poll", true], ["core_checkpoint", false]] as const;
+for (const [boundary, wait] of linkedSideImports) test(wait ? `linked ${boundary} keeps the refresh observer after initialization` : `linked ${boundary} stays a direct call into the core`, controlled(async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programLinkPlan } = await import("../../src/assets");
   const pair = quickjsPair("quickjs");
@@ -532,7 +535,7 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
       setup: context => setupLocalFilesystem(context, executor),
       instantiated(context) { originalImports = context.wasi.imports; },
       run(context) {
-        if (typeof observed !== "function") throw new Error("side instance did not receive its wait import");
+        if (typeof observed !== "function") throw new Error(`side instance did not receive its ${boundary} import`);
         const generation = requestMemoryChannel(channel, true);
         const before = memoryChannelReady(channel, generation, true);
         observed();
@@ -543,8 +546,8 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
     }, host);
     expect(sideInstance).toBeInstanceOf(NativeInstance);
     expect(typeof provider).toBe("function");
-    expect(observed === provider).toBe(false);
-    expect(observation).toEqual({ restored: true, before: false, after: true });
+    expect(observed === provider).toBe(!wait);
+    expect(observation).toEqual({ restored: true, before: false, after: wait });
   } finally {
     WebAssembly.Instance = NativeInstance;
     executor.beforeFinish?.();

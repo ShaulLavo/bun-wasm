@@ -1,0 +1,4 @@
+cadence 23: loaded 20000 imports with 400000 strings
+cadence 29: loaded 20000 imports with 400000 strings
+cadence 31: loaded 20000 imports with 400000 strings
+cadence 37: loaded 20000 imports with 400000 strings
