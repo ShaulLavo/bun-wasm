@@ -1442,7 +1442,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 -                return result;
 +                return finishAssignmentLevel(result, state);
          }
-@@ -4343,13 +4376,31 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+@@ -4343,14 +4376,39 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
      if (maybeAssignmentPattern && (!lhs || (match(EQUAL) && context.isObjectOrArrayLiteral(lhs))))
 -        return parseDestructuringAssignment(context, *savePoint, location, !lhs);
 +        return finishAssignmentLevel(parseDestructuringAssignment(context, *savePoint, level.location, !lhs), state);
@@ -1460,9 +1460,9 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +    return lhs;
 +}
 +
-+// Upstream's operator loop for a level whose operand is `lhs`, unchanged but for where it called
-+// itself: there it suspends the level, and a resumed level continues from that point with the
-+// right side, or 0, as `lhs`. Upstream's locals are references into the level's record.
++// Upstream's operator loop for a level whose operand is `lhs`. Where it called itself, it suspends
++// the level. A resumed level first runs what followed that call, with the right side, or 0, as
++// `lhs`. Upstream's locals are references into the level's record.
 +template <typename LexerType>
 +template <typename TreeBuilder> ALWAYS_INLINE TreeExpression Parser<LexerType>::parseAssignmentLevelOperator(TreeBuilder& context, AssignmentLevel& level, TreeExpression lhs, AssignmentLevelState& state)
 +{
@@ -1476,21 +1476,32 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +    state = AssignmentLevelState::Failed;
      Operator op;
 -    bool hadAssignment = false;
-+    if (resumed)
-+        goto resume;
      while (true) {
-@@ -4390,3 +4441,5 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
++        // What followed upstream's call, run at the top of the loop so the loop keeps one entry.
++        if (resumed) {
++            resumed = false;
++            failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
++            if (initialNonLHSCount != m_parserState.nonLHSCount) {
++                semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
++                break;
++            }
++        }
+         switch (m_token.m_type) {
+@@ -4390,10 +4448,7 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
          }
 -        lhs = parseAssignmentExpression(context);
+-        failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
+-        if (initialNonLHSCount != m_parserState.nonLHSCount) {
+-            semanticFailIfTrue(m_token.m_type >= EQUAL && m_token.m_type <= ANDEQUAL, "Left hand side of operator '", getToken(), "' must be a reference");
+-            break;
+-        }
 +        state = AssignmentLevelState::Suspended;
 +        return lhs;
-+    resume:
-         failIfFalse(lhs, "Cannot parse the right hand side of an assignment expression");
-@@ -4398,2 +4451,3 @@ template <typename TreeBuilder> TreeExpression Parser<LexerType>::parseAssignmen
+     }
  end:
 +    state = AssignmentLevelState::Completed;
      if (hadAssignment)
-@@ -4407,2 +4461,41 @@ end:
+@@ -4407,2 +4462,41 @@ end:
 
 +// The driver. Its reservation and frame are the only ones a chain uses: one per real call, as
 +// before for every other route. A suspended level's record is copied out of the vector, so no
@@ -1532,7 +1543,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 +}
 +
  template <typename LexerType>
-@@ -4446,2 +4539,4 @@
+@@ -4446,2 +4540,4 @@
  {
 +    WASM_RESERVE_STACK(2048);
 +    failIfStackOverflow();
