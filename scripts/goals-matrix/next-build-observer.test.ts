@@ -3,6 +3,8 @@ import { frameworks } from "./catalog";
 import { execute } from "./execute";
 import { options } from "./run";
 import { nativeRunnerArgs } from "./fleet";
+import { campaignDeadlines, cellDeadlines } from "./deadlines";
+import { launchFailureFixture } from "../fixtures/launch-failure";
 import { command } from "./playground";
 import { Scope } from "./scope";
 import { scoped, type Transport } from "./transport";
@@ -288,14 +290,52 @@ test("full execution cancels a pending baseline and disposes before owned cleanu
   }, 0);
 });
 
+test.each(["failure", "final"])("opt-in Next observer preserves current launch-failure facts when the %s terminal observation fails", async failedRead => {
+  await fixture(async ({ fs, transport, events }) => {
+    const snapshots = [{ engine: "quickjs", commandId: "failed-build", terminal: true, launchFailures: [launchFailureFixture().capture()] }];
+    await withScoped(transport, page => page.evaluate(`
+      const query = document.querySelector.bind(document);
+      document.querySelector = selector => selector === '#engine' ? {value:'quickjs'} : selector === '#status' ? {textContent:'QuickJS ready'} : query(selector);
+      globalThis.__bunRetainedMemorySnapshots = () => ${JSON.stringify(snapshots)};
+      const submit = playground.shell.submit.bind(playground.shell);
+      playground.shell.submit = async text => { if (text !== 'bun run build') return submit(text); commands.push(text); lines.push('Error: original native refusal'); throw Error('original native refusal'); };
+    `));
+    const evaluate = transport.evaluate.bind(transport);
+    let terminalReads = 0;
+    transport.evaluate = (expression, admission, options) => {
+      if (expression.includes("function transcript")) terminalReads++;
+      if (expression.includes("function transcript") && terminalReads === (failedRead === "failure" ? 3 : 4)) throw new Error("terminal observation unavailable");
+      return evaluate(expression, admission, options);
+    };
+    let cleaned = false;
+    const logs: string[] = [];
+    transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(fs.outstanding()).toBe(0); cleaned = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
+      nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog(text) { expect(cleaned).toBe(false); logs.push(text); },
+    });
+    expect(result).toMatchObject({ status: "fail", phase: "build", error: expect.stringContaining("original native refusal") });
+    expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+    expect(logs.at(-1)).toContain('"commandId":"failed-build"');
+    expect(logs.at(-1)).toContain('"message":"original native refusal"');
+    expect(logs.at(-1)).toContain(failedRead === "failure" ? "Cleanup-time terminal observation" : "Failure-time terminal observation");
+    expect(events.filter(value => value.kind === "baseline")).toHaveLength(1);
+    expect(events.filter(value => value.kind === "snapshot")).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ kind: "cleanup", status: "closed" }));
+    expect(cleaned).toBe(true);
+    expect(await withScoped(transport, page => page.evaluate("commands.filter(text => text === 'bun run build')"))).toEqual(["bun run build"]);
+  }, 0);
+});
+
 test("CLI is opt-in, one cell only, and forwarded with the original provenance and deadline policy", () => {
-  const args = ["--asset-source=protected-packet", "--profile=shared-group", "--frameworks=next", "--engines=quickjs", "--browsers=safari", "--mac-lane=next-observer", "--mac-thread=mcp:105b2121-52e2-452e-b4f7-d068140c0278"];
+  const args = ["--asset-source=protected-packet", "--profile=shared-group", "--frameworks=next", "--engines=quickjs", "--browsers=safari", "--timeout-ms=90000", "--mac-lane=next-observer", "--mac-thread=mcp:105b2121-52e2-452e-b4f7-d068140c0278", "--mac-expected-seconds=600", "--mac-wait-seconds=3600", "--mac-timeout-seconds=900"];
   const plain = options(args);
   expect(plain.nextBuildObservation).toBe(false);
   const config = options(args.concat(["--next-build-observation"]));
   const forwarded = options(nativeRunnerArgs(config, "/Users/fixture/next"));
   expect(forwarded).toMatchObject({ nextBuildObservation: true, profile: "shared-group", frameworks: ["next"], engines: ["quickjs"], browsers: ["safari"], assetSource: "protected-packet" });
-  expect(config.timeoutMs).toBeUndefined();
+  expect(forwarded.timeoutMs).toBe(90_000);
+  expect(forwarded.nativeAdmission).toMatchObject({ expectedSeconds: 600, waitSeconds: 3600, timeoutSeconds: 900 });
+  expect(cellDeadlines(campaignDeadlines(forwarded.timeoutMs, forwarded.installTimeouts), { framework: "next", browser: "safari", engine: "quickjs" })).toEqual({ timeoutMs: 90_000, installTimeoutMs: 90_000, buildTimeoutMs: 110_000 });
   expect(() => options(["--asset-source=unit", "--next-build-observation"])).toThrow("one Next QuickJS cell");
   expect(() => options(args.concat(["--next-build-observation=false"]))).toThrow("one Next QuickJS cell");
 });

@@ -12,6 +12,8 @@ Next 15.5.6 owns the diagnostic and trace formats (`dist/build/index.js`, `dist/
 
 Pass `--next-build-observation` to `scripts/goals-matrix/run.ts` or `fleet.ts`, with exactly one browser, `--frameworks=next` and `--engines=quickjs`. Use the existing prepared site and its actual `--asset-source`; the observer does not build or replace an asset. The runner writes a separate `logs/<cell>.next-build.jsonl` alongside its ordinary output.
 
+For the bounded Safari observation, pass `--timeout-ms=90000` and explicit Mac admission values `--mac-expected-seconds=600 --mac-wait-seconds=3600 --mac-timeout-seconds=900`. The existing Next build exception keeps the whole build phase at 110,000 ms. Launch-failure capture, final-log fallback and native cleanup policy retain the current driver's behavior alongside the optional observer.
+
 The small internal `Execution.nextBuildObservation` callback receives baseline, snapshot, milestone, end and cleanup records. `ForegroundObservation` adds a read-only expression to the existing command-state evaluation, then calls the observer only while that command is pending. There is no additional polling loop or keepalive. Without the callback, foreground polling follows its original path.
 
 The baseline runs after dev-server stop and immediately before the single stock `bun run build` dispatch. The first pending foreground poll at or after phase time 100,000 ms attempts one snapshot. Each read has at most 2,000 ms, clipped to the original phase admission deadline, with 25 ms reserved for disposal. A command that completes before capture is dispatched keeps its own result and skips the snapshot. Completion during a capture is checked again immediately afterward. No command is resubmitted.
