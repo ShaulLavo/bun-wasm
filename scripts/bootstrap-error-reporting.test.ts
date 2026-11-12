@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 test("the guest bootstrap reporter retains error properties and returns 70 before entry", () => {
-  const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-bootstrap-error-"));
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-bootstrap-error-"));
   try {
     const source = readFileSync(new URL("../crates/bunwasm-engine-quickjs/src/program.rs", import.meta.url), "utf8");
     const start = source.indexOf("fn bootstrap_error_text");
