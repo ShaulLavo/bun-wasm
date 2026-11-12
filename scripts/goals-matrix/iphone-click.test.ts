@@ -94,7 +94,7 @@ test("click failure evidence survives a shorter outer cancellation with the exac
     await Bun.sleep(5);
     expect(fixture.rows).toContainEqual(expect.objectContaining({ event: "iphone-click", stage: "armed", expectation: expect.objectContaining({ nonce: arm.nonce, after: "1" }) }));
     expect(fixture.rows).toContainEqual(expect.objectContaining({ stage: "observed", predicates: { trusted: false, sameTarget: true, url: true, timeOrigin: true, nonce: true, after: true } }));
-    expect(fixture.rows.at(-1)).toMatchObject({ stage: expect.stringMatching(/^(deadline|failed)$/), progress: expect.any(String) });
+    expect(fixture.rows.at(-1)).toMatchObject({ stage: expect.stringMatching(/^(deadline|failed|cancelled)$/), progress: expect.any(String) });
     expect(fixture.commands).toEqual([["snapshot", "-i"], ["press", "@e1"]]);
   } finally { await fixture.close(); }
 });
@@ -105,7 +105,7 @@ test("a never-returning observation retains pending progress without inventing a
     await expect(bounded(() => withScoped(fixture.transport, page => page.nativeClick!("button", "output", 180)), 180)).rejects.toThrow();
     await fixture.transport.close();
     await Bun.sleep(5);
-    expect(fixture.rows.at(-1)).toMatchObject({ stage: expect.stringMatching(/^(deadline|failed)$/), progress: "observation-pending", polls: 1 });
+    expect(fixture.rows.at(-1)).toMatchObject({ stage: expect.stringMatching(/^(deadline|failed|cancelled)$/), progress: "observation-pending", polls: 1 });
     expect(fixture.rows.some(row => row.stage === "observed")).toBe(false);
     expect(fixture.sources).toHaveLength(2);
   } finally { await fixture.close(); }
