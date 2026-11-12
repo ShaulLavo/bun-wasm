@@ -15,6 +15,9 @@ mod nested_description;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/shared_buffer.rs"]
 mod shared_buffer;
+#[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/lane.rs"]
+mod lane;
 
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
