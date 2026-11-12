@@ -18,6 +18,11 @@ test("the ordinary Shell producer, public product selection and both apps pin th
   expect(/^commit=([a-f0-9]{40})$/m.exec(producer)?.[1]).toBe(commit);
   expect(pinnedBashWeb(join(root, "sandbox"))).toBe(commit);
   expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, release.url).shellCommit).toBe(commit);
+  for (const consumer of ["web", "sandbox"]) {
+    const lock = await readFile(join(root, consumer, "bun.lock"), "utf8");
+    expect(lock).toContain(`"bash-web": "git+https://github.com/ShaulLavo/bash-web.git#${commit}"`);
+    expect(lock).toContain(`"bash-web": ["bash-web@github:ShaulLavo/bash-web#${commit.slice(0, 7)}"`);
+  }
 });
 
 test("an explicit Bash source is preserved when its revision differs from the pin", async () => {

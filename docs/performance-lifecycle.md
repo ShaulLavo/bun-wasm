@@ -4,10 +4,10 @@ The lifecycle adapters live beside the strict interpreter replay tools in
 `scripts/performance/`. They measure the exact Next and Vite React starters.
 Replay result equality remains specific to interpreter tracing.
 
-The initial implementation depends on PR 630 at
-`73986d5faae6a00130ee7b3be0dd4a22a0881705` and PR 624 at
-`c306727b894544e357284d1b6a2dc36b6b28b0c1`. The latter supplies Waffle 0.0.122.
-Both heads were integrated into the implementation branch while pending CI.
+This campaign requires Waffle 0.0.122. Main may use a newer provider; install the
+campaign's exact host and relay packages in an isolated worktree after the frozen
+installs. The override changes installed dependencies only. Keep the source locks
+unchanged and retain the prepared host's actual package version and byte inventory.
 
 Next ends at successful process completion with expected build outputs.
 Vite ends after rendering the starter and changing its counter from zero to one.
@@ -29,6 +29,9 @@ SpiderMonkey split pair, and checks the installed Waffle version.
 
 ```bash
 source env.sh
+bun add --cwd web --no-save \
+  https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.122/waffle-0.0.122.tgz \
+  https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.122/waffle-relay-0.0.122.tgz
 scratch=$(mktemp -d /work/tmp/bun-wasm-lifecycle-XXXXXX)
 export GOALS_CHROME_EXECUTABLE=/work/cache/google-chrome/opt/google/chrome/chrome
 export BASH_WEB_GUESTS_DIR=/absolute/current-receipt-backed-shell

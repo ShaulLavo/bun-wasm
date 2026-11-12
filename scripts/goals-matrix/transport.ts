@@ -16,19 +16,26 @@ export async function evaluatePage<T>(page: Page, expression: string, timeoutMs:
   }
   finally { await handle.dispose(); }
 }
-export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs): Promise<Transport> {
+export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
   if (kind === "chrome" && executablePath) {
     const version = Bun.spawn([executablePath, "--version"], { stdout: "pipe", timeout: 5000 });
     const name = await new Response(version.stdout).text();
     if (await version.exited !== 0 || !name.startsWith("Google Chrome ")) throw new Error(`Expected genuine Google Chrome, received ${name}`);
   }
-  const browser = await (kind === "chrome" ? chromium.launch({ ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs }) : firefox.launch({ headless: true, timeout: timeoutMs }));
+  const browserType = kind === "chrome" ? chromium : firefox;
+  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs } : { headless: true, timeout: timeoutMs };
+  const server = scopedProcess ? await browserType.launchServer(launch) : null;
+  const browser = server ? await browserType.connect(server.wsEndpoint()).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
+  const close = async () => { try { await browser.close(); } finally { await server?.close(); } };
   try {
     const context = await browser.newContext({ serviceWorkers: "allow" });
     const host = await context.newPage();
-    return createPageTransport(context, host, { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() }, timeoutMs, cleanupTimeoutMs, () => browser.close());
-  } catch (error) { await browser.close(); throw error; }
+    return {
+      ...createPageTransport(context, host, { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() }, timeoutMs, cleanupTimeoutMs, close),
+      processRoot: server?.process().pid,
+    };
+  } catch (error) { await close(); throw error; }
 }
 
 export function createPageTransport(context: Pick<BrowserContext, "newPage">, host: Page, capabilities: Record<string, unknown>, timeoutMs: number, cleanupTimeoutMs: number, close: () => Promise<void>): Transport {
