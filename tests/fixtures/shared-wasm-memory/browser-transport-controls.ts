@@ -9,6 +9,8 @@ for (const name of [
   'shared-buffer-slice',
   'shared-buffer-alias',
   'shared-buffer-churn',
+  'table-global',
+  'table-global-guest',
   'worker-transport',
   'membership',
 ]) {
