@@ -86,21 +86,19 @@ test("native checks share one cached target through the quality checkpoint", () 
   expect(rust).toContain("--lib modules::tests::host_");
 });
 
-test("native job budgets and ready names stay unchanged beside the lightweight update reporter", () => {
+test("native job budgets and names stay unchanged beside the lightweight update reporter", () => {
   const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "process-bundles": 10, "browser-process": 10, "update-status": 5,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "process-bundles": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
-  const readyNames = {
-    quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
+  expect(names).toEqual({
+    quality: "Source quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
     package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
-    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "update-status": "Report automated update statuses",
-  };
-  const draftPrefix = "${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'Draft / ' || '' }}";
-  expect(names).toEqual(Object.fromEntries(Object.entries(readyNames).map(([id, name]) => [id, draftPrefix + name])));
+    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
+  });
   expect(rust).not.toContain("Whole-job guard");
 });
 
