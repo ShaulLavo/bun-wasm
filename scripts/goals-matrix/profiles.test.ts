@@ -21,9 +21,14 @@ test("goals profile selection reaches both playground URLs and the remote FIFO r
   expect(url.searchParams.get("profile")).toBe("shared-group");
   expect(new URL(playgroundURL("http://test/", framework, "browser")).searchParams.get("profile")).toBe("split");
   expect(() => options(args.concat("--profile=unknown"))).toThrow("Unknown Bun program profile");
-  for (const engine of ["browser", "spidermonkey"]) {
-    expect(() => options([`--engines=${engine}`, "--asset-source=test", "--profile=shared-group"])).toThrow("does not support");
+  for (const engine of ["quickjs", "jsc", "spidermonkey"]) {
+    const selectedArgs = args.map(arg => arg.startsWith("--engines=") ? `--engines=${engine}` : arg);
+    const selected = options(selectedArgs.concat("--profile=shared-group"));
+    expect(selected.engines).toEqual([engine]);
+    expect(selected.profile).toBe("shared-group");
+    expect(options(nativeRunnerArgs(selected, "/Users/test/goals")).engines).toEqual([engine]);
   }
+  expect(() => options(["--engines=browser", "--asset-source=test", "--profile=shared-group"])).toThrow("does not support");
 });
 
 test("readiness reads the running profile instead of trusting a requested URL or engine label", () => withPlayground(framework, 0, async transport => {
