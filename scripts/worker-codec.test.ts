@@ -164,36 +164,72 @@ function channelFactory(Encoder: new() => { encode(text: string): Uint8Array } =
   return runInNewContext(readFileSync(`${scratch}/channel.js`, "utf8"), { TextEncoder: Encoder, TextDecoder });
 }
 
-/** A pipe that takes everything, whose write native fails once on the way to or from the core. */
-function flakyPipe(fault: "before" | "after" | null) {
-  const written: string[] = [];
-  let last: [token: number, result: number] = [0, 0];
+/**
+ * One guest's core as its control channels see it: pipes that take everything, and one slot for
+ * the last write attempt that ran, whichever descriptor it was on. `fault` makes the next write
+ * fail once on its way to the core or back. `scope: "token"` is a core that compares the token
+ * alone, the weakest slot a guest's tokens must still be safe against.
+ */
+function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "token" = "attempt") {
+  const written = new Map<number, string>();
+  const tokens: number[] = [];
+  let last = { fd: 0, token: 0, result: 0 };
+  const control = { fault };
   const native = {
-    procWriteOnce(_fd: number, bytes: Uint8Array, token: number) {
-      const failing = fault;
-      fault = null;
+    procWriteOnce(fd: number, bytes: Uint8Array, token: number) {
+      const failing = control.fault;
+      control.fault = null;
+      tokens.push(token);
       if (failing === "before") throw new Error("core data allocation failed");
-      written.push(new TextDecoder().decode(bytes));
-      last = [token, bytes.length];
+      written.set(fd, (written.get(fd) ?? "") + new TextDecoder().decode(bytes));
+      last = { fd, token, result: bytes.length };
       if (failing === "after") throw new Error("core data allocation failed");
       return bytes.length;
     },
-    procWriteResult: (token: number) => last[0] === token ? last[1] : -(2 ** 63),
+    procWriteResult(fd: number, high: number, low: number) {
+      const same = last.token === high * 2 ** 32 + low && (scope === "token" || last.fd === fd);
+      return same ? last.result : -(2 ** 63);
+    },
     procRead: () => -6, procClose() {},
   };
-  return { native, written };
+  return { native, written, tokens, control };
 }
 
 for (const when of ["before", "after"] as const) {
   test(`a control frame whose write fails ${when} the pipe took it is written exactly once`, () => {
-    const pipe = flakyPipe(when);
-    const channel = channelFactory()({ native: pipe.native }).open(1, 2);
+    const core = guestCore(when);
+    const channel = channelFactory()({ native: core.native }).open(1, 2);
     expect(() => channel.send({ kind: "moving", id: 1 })).not.toThrow();
-    // A write that never ran leaves the frame queued; one that ran is counted from its token.
+    // A write that never ran leaves the frame queued; one that ran is counted from its attempt.
     expect(channel.pending).toBe(when === "before");
     channel.send({ kind: "port-wake" });
     expect(channel.pending).toBe(false);
-    expect(pipe.written.join("")).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
+    expect(core.written.get(2)).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
+  });
+}
+
+for (const scope of ["attempt", "token"] as const) {
+  test(`a write that never ran on one channel is not answered by another channel's write (core slot by ${scope})`, () => {
+    // One guest: one module, two control channels, and one core slot for the last attempt.
+    const core = guestCore(null, scope);
+    const guest = channelFactory()({ native: core.native });
+    const first = guest.open(1, 2), second = guest.open(3, 4);
+    // The first channel's write runs and replies, so the slot holds its attempt and byte count.
+    first.send({ kind: "to-a" });
+    expect(core.written.get(2)).toBe('{"kind":"to-a"}\n');
+    // The second channel's first write never reaches the core. Its frame is as long as the
+    // first one's: a count read from the first attempt would drop it whole.
+    core.control.fault = "before";
+    second.send({ kind: "to-b" });
+    expect(second.pending).toBe(true);
+    expect(core.written.get(4)).toBeUndefined();
+    second.pump(() => {});
+    expect(second.pending).toBe(false);
+    expect(core.written.get(4)).toBe('{"kind":"to-b"}\n');
+    expect(core.written.get(2)).toBe('{"kind":"to-a"}\n');
+    // Every attempt of the guest has its own token, on whichever channel it was made.
+    expect(new Set(core.tokens).size).toBe(core.tokens.length);
+    expect(core.tokens.length).toBe(3);
   });
 }
 
@@ -205,13 +241,13 @@ test("a control frame that could not be encoded stays queued in order", () => {
       return new TextEncoder().encode(text);
     }
   }
-  const pipe = flakyPipe(null);
-  const channel = channelFactory(FlakyEncoder)({ native: pipe.native }).open(1, 2);
+  const core = guestCore();
+  const channel = channelFactory(FlakyEncoder)({ native: core.native }).open(1, 2);
   expect(() => channel.send({ kind: "moving", id: 1 })).not.toThrow();
   expect(channel.pending).toBe(true);
-  expect(pipe.written).toEqual([]);
+  expect(core.written.size).toBe(0);
   channel.send({ kind: "port-wake" });
-  expect(pipe.written.join("")).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
+  expect(core.written.get(2)).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
 });
 
 test("a closed worker input pipe still drains the final incoming control frame", () => {

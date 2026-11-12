@@ -33,8 +33,8 @@ const native = {
   base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
   transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
 };
-function factory(name: string, overlay?: (source: string) => string) {
-  const path = new URL(`../../../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
+function factory(name: string, overlay?: (source: string) => string, extension = "ts") {
+  const path = new URL(`../../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url);
   const input = readFileSync(path, "utf8");
   const source = overlay ? overlay(input) : input;
   const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${source}`);
@@ -78,7 +78,21 @@ function childOverlay(source: string) {
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean } = {}) {
+/**
+ * Loads net.js into `internal`, which gives it the real waiter set, `addIoWaiter` and `pumpIo`.
+ * Only what the module touches while loading is supplied; nothing here opens a socket.
+ */
+function sourceLoop(internal: { native: object; require(name: string): unknown }, modules: Map<string, unknown>) {
+  const unused = () => { throw new Error("No networking in this fixture"); };
+  modules.set("http_common", { validateHeaderName: unused, validateHeaderValue: unused, validateMethod: unused, validatePath: unused, validateStatus: unused, outgoingHeaders: unused });
+  modules.set("websocket", { clientClass: () => class {} });
+  const target: { pumpIo?: () => boolean } = Object.assign(internal, { web: { Request, Response, Headers } });
+  modules.set("net", factory("net", undefined, "js")(target));
+  const pumpIo = target.pumpIo;
+  if (!pumpIo) throw new Error("net.js installed no pumpIo");
+  return { pumpIo };
+}
+export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean; realLoop?: boolean } = {}) {
   const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
@@ -100,9 +114,13 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
     addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },
     set workerPump(callback: () => void) { pump = callback; },
   }, lifecycle);
+  // The runtime's own I/O loop (net.js): its waiter set and the pumpIo the engine driver calls.
+  const loop = options.realLoop ? sourceLoop(internal, modules) : undefined;
   const runtime: PortsRuntime = factory("worker_threads", childOverlay)(internal);
   if (!codec || !pump) throw new Error("Missing codec or pump");
   /** One ordinary event-loop step of this runtime's waiter, housekeeping included. */
   const step = () => waiter?.step();
-  return Object.assign(runtime, { codec, pump, step, internal });
+  /** One pass of the real I/O loop over every registered waiter, as the driver runs it. */
+  const pumpIo = () => { if (!loop) throw new Error("This runtime was made without the real loop"); return loop.pumpIo(); };
+  return Object.assign(runtime, { codec, pump, step, pumpIo, internal });
 }

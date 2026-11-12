@@ -26,8 +26,9 @@ export function createGroupLaneModel() {
    * `sweeps` records each sweep request by member tag, so tests can see where housekeeping runs.
    * `staged` counts frames staged and not yet committed or aborted, across all members.
    * `calls` names every lane native in the order the runtimes called them.
+   * `thrown` keeps the errors the armed fault threw, so a test can tell the same error by identity.
    */
-  const control = { refuse: false, reserved: 0, drained: 0, staged: 0, fault: null as Fault | null, calls: [] as string[], sweeps: [] as { tag: number; full: boolean }[] };
+  const control = { refuse: false, reserved: 0, drained: 0, staged: 0, fault: null as Fault | null, thrown: [] as Error[], calls: [] as string[], sweeps: [] as { tag: number; full: boolean }[] };
   function lane(ref: BunWasm.GroupLaneRef) {
     const found = lanes[ref.slot];
     if (!found || ref.generation !== 1) throw new Error("Unknown lane");
@@ -162,12 +163,18 @@ export function createGroupLaneModel() {
     let refusal = "MessagePort lanes are not initialized in this thread";
     const key = (slot: number, generation: number, side: number) => `${slot}/${generation}/${side}`;
     const end = (slot: number, generation: number, side: number) => member.open({ slot, generation }, side === 1 ? 1 : 0);
+    /** Disarms the fault and returns the bridge's error, kept in `control.thrown` to compare by identity. */
+    function failure() {
+      const error = new Error("core data allocation failed");
+      control.fault = null; control.thrown.push(error);
+      return error;
+    }
     /** A reply is only lost with something in it: `changed` says whether this call left an effect. */
     function bridged<T>(name: Fault["native"], operation: () => T, changed: (result: T) => boolean = () => true): T {
       const fault = control.fault?.native === name ? control.fault : null;
-      if (fault?.when === "before") { control.fault = null; throw new Error("core data allocation failed"); }
+      if (fault?.when === "before") throw failure();
       const result = operation();
-      if (fault?.when === "after" && changed(result)) { control.fault = null; throw new Error("core data allocation failed"); }
+      if (fault?.when === "after" && changed(result)) throw failure();
       return result;
     }
     function refusable(operation: () => number) {

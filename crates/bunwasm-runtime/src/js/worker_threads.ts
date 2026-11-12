@@ -1233,7 +1233,7 @@
   internal.require("net");
   internal.workerPump = pump;
   internal.workerEnvChange = (key, value) => { if (!applyingEnv) root({ kind: "env", source: route, group: envGroup, key, value }); };
-  internal.addIoWaiter({
+  const waiter: BunWasm.IoWaiter = {
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() {
       const progress = pump();
@@ -1246,7 +1246,14 @@
       for (const child of children.values()) list.push(child.watch());
       return internal.concatBytes(list);
     },
-    fail(error) { if (parentChannel) internal.workerError?.(error); },
-  });
+    // A failed step is this thread's uncaught error, and it is thrown on as one: the loop then
+    // runs `uncaughtException` handlers, or reports it (a worker to its parent) and exits 1.
+    // The loop has already dropped this waiter, and it must not stay dropped. It is the only
+    // thing that pumps this thread's control channels, lanes and lane housekeeping, so a thread
+    // that handles the error keeps all of them, and the next step takes up what the failed one
+    // left: a lane batch the core kept, a frame still queued.
+    fail(error) { internal.addIoWaiter(waiter); throw error; },
+  };
+  internal.addIoWaiter(waiter);
   return exports;
 })

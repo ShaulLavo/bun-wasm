@@ -3,8 +3,16 @@
   const native = internal.native;
   const encoder = new TextEncoder();
   const AGAIN = -6;
-  /** `procWriteResult` for a token no write ran under. */
+  /** `procWriteResult` for an attempt that never ran. */
   const UNWRITTEN = -(2 ** 63);
+  /** A token crosses to `procWriteResult` as two 32-bit words. */
+  const WORD = 2 ** 32;
+  /**
+   * This guest's write attempts, counted across every channel it opens. The core keeps the last
+   * attempt that ran, whichever channel made it, so a token must name one attempt of the whole
+   * guest: it is never reused, and 2 ** 53 of them outlast any guest.
+   */
+  let attempts = 0;
   const READABLE = 0;
   const WRITABLE = 1;
 
@@ -22,7 +30,6 @@
     /** Frames not yet written: text until its first write is tried, then bytes. */
     const outgoing: (Uint8Array | string)[] = [];
     let offset = 0;
-    let token = 0;
     let incoming = "";
     let ended = false;
     let writeClosed = false;
@@ -40,12 +47,13 @@
     }
     /**
      * Writes once. A call that fails on its way back from the core has still written, and the
-     * core kept its result under this call's token; `UNWRITTEN` means the call never ran.
+     * core kept its result under this attempt: this descriptor and this token. `UNWRITTEN` means
+     * the attempt never ran, whatever another channel wrote meanwhile.
      */
     function write(bytes: Uint8Array) {
-      token = token % 0xffffffff + 1;
+      const token = ++attempts;
       try { return native.procWriteOnce(output, bytes, token); }
-      catch { return native.procWriteResult(token); }
+      catch { return native.procWriteResult(output, Math.floor(token / WORD), token % WORD); }
     }
     /**
      * Writes what the pipe takes. It never throws for a call the native bridge could not carry:

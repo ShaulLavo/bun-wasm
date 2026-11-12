@@ -16,6 +16,7 @@ type Trace = { from: string; text: string }[];
 /** Makes the next control-pipe write of any guest fail before it ran, or after it ran and before its reply. */
 const pipeFault: { next: "before" | "after" | null } = { next: null };
 function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Trace) {
+  // Each channel here is its own module instance with its own tokens, so its slot is its own too.
   let last: [token: number, result: number] = [0, 0];
   return {
     procRead() {
@@ -32,7 +33,7 @@ function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Tr
       if (failing === "after") throw new Error("core data allocation failed");
       return last[1];
     },
-    procWriteResult: (token: number) => last[0] === token ? last[1] : -(2 ** 63),
+    procWriteResult: (_fd: number, high: number, low: number) => last[0] === high * 2 ** 32 + low ? last[1] : -(2 ** 63),
     procPoll: () => new Uint8Array(0),
     procClose() {},
   };
@@ -61,11 +62,12 @@ function spawnPipes(pid: number, trace: Trace, direct = false) {
 }
 
 type Runtime = ReturnType<typeof sourcePorts>;
-function group(options: { beforeDetach?: () => void } = {}) {
+/** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
+function group(options: { beforeDetach?: () => void; realLoop?: boolean } = {}) {
   const model = createGroupLaneModel();
   const trace: Trace = [];
   const rootLanes = model.member(1);
-  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), beforeDetach: options.beforeDetach });
+  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), beforeDetach: options.beforeDetach, realLoop: options.realLoop });
   cleanup.add(() => root.__fixtureShutdown());
   let next = 2;
   /** Starts a child whose workerData is `data`, carrying `transfer` and its parent port. */
@@ -79,7 +81,7 @@ function group(options: { beforeDetach?: () => void } = {}) {
     const plan = root.codec.prepare([data, [], port2], transfer.concat([port2]), [], { kind: "cell", cell });
     plan.commit();
     root.__fixtureChild(pipes.parent, plan.graph, id);
-    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell } });
+    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell }, realLoop: options.realLoop });
     cleanup.add(() => child.__fixtureShutdown());
     child.initialize();
     return { child, port: port1, pipes, cell, pid };
@@ -271,6 +273,39 @@ for (const when of ["before", "after"] as const) {
     root.step();
     message.port.postMessage("to the worker");
     expect(child.receiveMessageOnPort(extra.port1)?.message).toBe("to the worker");
+  });
+}
+
+/**
+ * The runtime's real loop (net.js `pumpIo`) drops a waiter whose step throws and hands the error
+ * to its `fail`. The worker waiter pumps every control channel, lane and the lane housekeeping of
+ * its thread, so it has to come back, and the error has to leave `pumpIo` as it was thrown: the
+ * engine driver gives whatever `pumpIo` throws to the thread's uncaught-error handling.
+ */
+for (const thread of ["root", "worker"] as const) {
+  test(`a failed loop step on the ${thread} leaves pumpIo as the same error and the thread keeps pumping`, async () => {
+    const { model, root, spawn } = group({ realLoop: true });
+    const { child, port, pid } = spawn();
+    const [receiver, sender, tag] = thread === "root" ? [root, child.parentPort, 1] : [child, port, pid];
+    const got: unknown[] = [];
+    (thread === "root" ? port : child.parentPort).on("message", value => got.push(value));
+    sender.postMessage("first");
+    // The loop's pass reads the lane and the reply is lost on its way back.
+    model.control.fault = { native: "laneDrain", when: "after" };
+    let caught: unknown;
+    try { receiver.pumpIo(); } catch (error) { caught = error; }
+    expect(model.control.thrown).toHaveLength(1);
+    expect(caught).toBe(model.control.thrown[0]);
+    // Nothing but the loop runs from here on: its later passes take the frames the core kept,
+    // what was posted since, and the housekeeping.
+    const swept = () => model.control.sweeps.filter(item => item.tag === tag).length;
+    const before = swept();
+    sender.postMessage("second");
+    // The kept batch comes back first, and a pass that made progress is followed by another.
+    for (let pass = 0; pass < 4 && receiver.pumpIo(); pass++);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(got).toEqual(["first", "second"]);
+    expect(swept()).toBeGreaterThan(before);
   });
 }
 
