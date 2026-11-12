@@ -44,7 +44,7 @@ export function parseCheck(value: unknown, file: string): Check {
   const localRuntime = "localRuntime" in value ? value.localRuntime : false;
   if (typeof localRuntime !== "boolean" || (localRuntime && owner !== "runtime" && owner !== "web")) throw new Error(`Invalid local runtime selection: ${file}`);
   const batch = "batch" in value ? value.batch : "default";
-  if (typeof batch !== "string" || (batch !== "default" && (owner !== "web" || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
+  if (typeof batch !== "string" || (batch !== "default" && ((owner !== "web" && owner !== "browser-guest") || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
   if (owner === "browser-guest") {
     const inputs = "inputs" in value ? inputFiles(value.inputs, file) : [];
     if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };
@@ -93,12 +93,22 @@ export function selectChecks(owner: string, checks: readonly Check[] = discoverC
   return paths;
 }
 
-export function checkBatches(owner: string, checks: readonly Check[] = discoverChecks(), profile: NativeProfile = "split"): string[][] {
+export function namedCheckBatches(owner: string, checks: readonly Check[] = discoverChecks(), profile: NativeProfile = "split"): { name: string; paths: string[] }[] {
   const paths = new Set(selectChecks(owner, checks, profile));
-  if (owner === "local-runtime") return [Array.from(paths)];
+  if (owner === "local-runtime") return [{ name: "default", paths: Array.from(paths) }];
   const batches = new Map<string, string[]>();
   for (const check of checks.filter(check => paths.has(check.path))) batches.set(check.batch, (batches.get(check.batch) ?? []).concat([check.path]));
-  return Array.from(batches.keys()).sort().map(batch => batches.get(batch)!);
+  return Array.from(batches.keys()).sort().map(name => ({ name, paths: batches.get(name)! }));
+}
+
+export function checkBatches(owner: string, checks: readonly Check[] = discoverChecks(), profile: NativeProfile = "split"): string[][] {
+  return namedCheckBatches(owner, checks, profile).map(batch => batch.paths);
+}
+
+export function selectCheckBatch(owner: string, name: string, checks: readonly Check[] = discoverChecks(), profile: NativeProfile = "split"): string[] {
+  const batch = namedCheckBatches(owner, checks, profile).find(batch => batch.name === name);
+  if (!batch) throw new Error(`Unknown check batch for ${owner}: ${name}`);
+  return batch.paths;
 }
 
 export function automaticChecks(directory = root): { owner: string; path: string }[] {
@@ -161,8 +171,9 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
   return results.find(result => result.status !== 0)?.status ?? 0;
 }
 
-async function runOwner(owner: string, profile: NativeProfile): Promise<void> {
-  for (const batch of checkBatches(owner, undefined, profile)) {
+async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string): Promise<void> {
+  const batches = selectedBatch === undefined ? checkBatches(owner, undefined, profile) : [selectCheckBatch(owner, selectedBatch, undefined, profile)];
+  for (const batch of batches) {
     const status = owner === "native" ? await runNative(batch, profile) : runCheck(checkCommand(owner, batch), process.env);
     if (status === 0) continue;
     process.exitCode = status;
@@ -177,13 +188,19 @@ export function checkArguments(args: readonly string[]) {
   const at = options.indexOf("--profile");
   const profile = at < 0 ? "split" : nativeProfile(options[at + 1]);
   if (at >= 0 && !hasProfile(owner)) throw new Error("Only native and browser-guest checks select a profile");
-  const rest = at < 0 ? options : options.slice(0, at).concat(options.slice(at + 2));
-  if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--list")) throw new Error("Unexpected check arguments");
-  return { owner, profile, list: rest.length === 1 };
+  const remaining = at < 0 ? options : options.slice(0, at).concat(options.slice(at + 2));
+  const batchAt = remaining.indexOf("--batch");
+  const batch = batchAt < 0 ? undefined : remaining[batchAt + 1];
+  if (batchAt >= 0 && (!batch || batch.startsWith("--"))) throw new Error("Missing check batch");
+  const rest = batchAt < 0 ? remaining : remaining.slice(0, batchAt).concat(remaining.slice(batchAt + 2));
+  if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--list" && rest[0] !== "--batches")) throw new Error("Unexpected check arguments");
+  if (batch !== undefined && rest[0] === "--batches") throw new Error("Cannot list batches while selecting one");
+  return { owner, profile, batch, list: rest[0] === "--list", batches: rest[0] === "--batches" };
 }
 
 if (import.meta.main) {
-  const { owner, profile, list } = checkArguments(process.argv.slice(2));
-  if (list) console.log(selectChecks(owner, undefined, profile).join("\n"));
-  else await runOwner(owner, profile);
+  const { owner, profile, batch, list, batches } = checkArguments(process.argv.slice(2));
+  if (batches) console.log(JSON.stringify(namedCheckBatches(owner, undefined, profile).map(batch => batch.name)));
+  else if (list) console.log((batch === undefined ? selectChecks(owner, undefined, profile) : selectCheckBatch(owner, batch, undefined, profile)).join("\n"));
+  else await runOwner(owner, profile, batch);
 }

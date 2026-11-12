@@ -1,5 +1,6 @@
 {
   "owner": "browser-guest",
+  "batch": "10-storage",
   "path": "scripts/sandbox-storage-browser.test.ts",
   "inputs": [
     "sandbox/src/editor-pane.tsx",

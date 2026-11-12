@@ -33,6 +33,7 @@ jobs:
       jsc: ${{ steps.changes.outputs.jsc }}
       shared: ${{ steps.changes.outputs.shared }}
       shared-native: ${{ steps.changes.outputs.shared_native }}
+      browser-guest-batches: ${{ steps.browser-guest-batches.outputs.batches }}
     steps:
       - name: Require a ready PR
         if: github.event_name == 'pull_request' && github.event.pull_request.draft
@@ -72,6 +73,11 @@ jobs:
           else
             bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
           fi
+      - name: Discover Browser guest batches from feature manifests
+        id: browser-guest-batches
+        run: |
+          batches=$(bun scripts/test-checks.ts browser-guest --batches)
+          echo "batches=$batches" >> "$GITHUB_OUTPUT"
       - name: Feature PRs preserve current package and workspace versions
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
         env:
@@ -2372,9 +2378,56 @@ jobs:
           if-no-files-found: error
       - uses: ./.github/actions/save-release-downloads
 
+  browser-guest:
+    needs: [quality, rust]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust.result == 'success' }}
+    name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+        batch: ${{ fromJSON(needs.quality.outputs.browser-guest-batches) }}
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --linker=isolated
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
+      - name: Install browser
+        run: bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: browser-guest-site
+          path: ${{ runner.temp }}/browser-guest-site
+      - name: Browser-guest checks on the verified site
+        env:
+          BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
+          BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
+          BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
+          bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest --batch "${{ matrix.batch }}"
+      - uses: ./.github/actions/save-release-downloads
+
   browser-process:
-    needs: [quality, rust, process-bundles]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
+    needs: [quality, rust, process-bundles, browser-guest]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
     name: Processes (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2388,6 +2441,17 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - name: Require every selected Browser guest batch
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          GUEST_RESULT: ${{ needs.browser-guest.result }}
+        run: |
+          if [[ "$RUST_RESULT" == success ]]; then
+            test "$GUEST_RESULT" = success
+          else
+            test "$RUST_RESULT" = skipped
+            test "$GUEST_RESULT" = skipped
+          fi
       - uses: ./.github/actions/release-downloads
       - uses: ./.github/actions/setup-tools
         with:
@@ -2448,32 +2512,11 @@ jobs:
         run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}
-      # Feature-owned checks (checks/browser-guest-*.json) that serve the playground site the rust
-      # job built once from its receipt-verified guest. Each check verifies the site's closed
-      # inventory, guest and receipt against this checkout before and after the browser runs.
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.rust.result == 'success' && matrix.browser != 'firefox'
-        with:
-          name: browser-guest-site
-          path: ${{ runner.temp }}/browser-guest-site
-      - name: Browser-guest checks on the verified site
-        if: needs.rust.result == 'success' && matrix.browser != 'firefox'
-        env:
-          BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
-          BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
-          # Whether the rust job built the JSC pair into that site: a JSC check fails on a
-          # selected producer's missing pair and has nothing to run for an unselected one.
-          BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
-          TMPDIR: ${{ runner.temp }}
-        run: |
-          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
-          bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest
       - uses: ./.github/actions/save-release-downloads
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-process]
+    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
