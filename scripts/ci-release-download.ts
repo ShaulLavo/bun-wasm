@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rename, rm, access } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { setTimeout } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 
 type Options = {
@@ -136,7 +135,7 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
   return fileResponse(path);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   const [url, destination, timeout] = process.argv.slice(2);
   if (!url || !destination) throw new Error("Usage: ci-release-download.ts URL DESTINATION");
   const response = await releaseDownload(url, timeout ? { timeoutMs: Number(timeout) } : {});

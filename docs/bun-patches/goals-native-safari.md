@@ -37,3 +37,9 @@ regressions; full framework acceptance remains a post-review campaign.
 The native lifecycle imports `bounded.ts` directly rather than through the matrix
 executor. It uses the same helper and timeouts, while standalone native adapters
 avoid importing the executor's unused Playwright browser factory.
+
+Commands with inherited output also forward captured stderr when its pipe closes,
+including the fleet workload's allowed exit code 1. A failure before any report
+now exposes its original diagnostic before collection or cleanup errors. The
+same captured text still reaches `CommandExitError` for disallowed exit codes.
+Signal handling, child reaping and native cleanup proof requirements are unchanged.

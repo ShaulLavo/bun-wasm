@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { releaseDownload, saveReleaseResponse } from "./ci-release-download.ts";
 
 const nodeManifest = "https://raw.githubusercontent.com/actions/node-versions/main/versions-manifest.json";
@@ -57,7 +56,7 @@ async function setupTools(root: string, bunVersion: string, nodeVersion?: string
   return paths;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   const root = process.env.RUNNER_TEMP;
   const output = process.env.GITHUB_PATH;
   if (!root || !output) throw new Error("Set RUNNER_TEMP and GITHUB_PATH");
