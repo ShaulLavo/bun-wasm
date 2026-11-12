@@ -18,10 +18,12 @@ import { preflight } from "./preparation";
 import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./platform";
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
 import { appendFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
 import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { verifyPreparedSiteInventory } from "./prepared-site";
 
 export interface Options {
+  nextBuildObservation?: boolean;
   profile?: PlaygroundProfile;
   signal?: AbortSignal;
   nativeAdmission?: NativeAdmission;
@@ -40,7 +42,7 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["profile", "root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
+    const allowed = ["next-build-observation", "profile", "root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
@@ -49,6 +51,9 @@ export function options(args: readonly string[]): Options {
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const profile = playgroundProfile(values.get("profile") ?? null);
   const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
+  const selectedFrameworks = selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id));
+  const selectedBrowsers = selected(values.get("browsers") ?? browsers.join(","), browsers);
+  if (values.has("next-build-observation") && (values.get("next-build-observation") !== "true" || selectedFrameworks.length !== 1 || selectedFrameworks[0] !== "next" || selectedEngines.length !== 1 || selectedEngines[0] !== "quickjs" || selectedBrowsers.length !== 1)) throw new Error("--next-build-observation requires one Next QuickJS cell and one browser");
   for (const engine of selectedEngines) requireProfileEngine(engine, profile);
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
@@ -58,12 +63,13 @@ export function options(args: readonly string[]): Options {
     validateIphoneControl(iphoneControlUrl, iphoneAgentCommand);
   }
   return {
+    nextBuildObservation: values.has("next-build-observation"),
     profile,
     nativeAdmission: nativeAdmissionOptions(values),
     reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
     root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
-    browsers: selected(values.get("browsers") ?? browsers.join(","), browsers), engines: selectedEngines,
-    frameworks: selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id)),
+    browsers: selectedBrowsers, engines: selectedEngines,
+    frameworks: selectedFrameworks,
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
     deviceUDID: values.get("device-udid"), assetSource, sourceFile: values.get("source-file"), iphoneControlUrl, iphoneAgentCommand,
   };
@@ -131,6 +137,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const port = framework.rootPreview ? await availablePort() : 5173;
   const limits = cellDeadlines(policy, cell);
   return execute({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
+    nextBuildObservation: config.nextBuildObservation ? value => appendFileSync(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".next-build.jsonl"), JSON.stringify(value) + "\n") : undefined,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs),
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   }, cell.attempts);

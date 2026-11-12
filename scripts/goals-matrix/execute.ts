@@ -8,6 +8,7 @@ import { admit, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
+import { NextBuildObserver, closeNextBuildObserver, retainNextBuildObservation, type NextBuildObservation } from "./next-build-observer";
 export { bounded } from "./bounded";
 export interface Execution {
   profile?: PlaygroundProfile;
@@ -21,6 +22,7 @@ export interface Execution {
   createTransport(): Promise<Transport>;
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
+  nextBuildObservation?: (value: NextBuildObservation) => void;
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type FailureLog = { terminal: TerminalCapture; diagnostic: string; saved: boolean };
@@ -38,6 +40,7 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
   } finally { scope.close(new Error(`${name} phase ended`)); }
 }
 export async function execute(options: Execution, earlier: readonly Attempt[] = []): Promise<Cell> {
+  if (options.nextBuildObservation && (options.framework.id !== "next" || options.box.engine !== "quickjs")) throw new Error("Next build observation requires the Next QuickJS cell");
   const results: PhaseResult[] = [];
   const startedAt = new Date().toISOString();
   let transport: Transport | undefined;
@@ -93,7 +96,10 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
     const page = scoped(transport, admission);
     await page.closePreview();
     await stopServer(page, Math.min(timeoutMs, 15_000), port);
-    return command(page, "bun run build", buildTimeoutMs);
+    const observer = options.nextBuildObservation ? new NextBuildObserver(page, admission, buildTimeoutMs, options.nextBuildObservation) : undefined;
+    await observer?.prepare();
+    try { return await command(page, "bun run build", buildTimeoutMs, observer); }
+    finally { observer?.end(); }
   }, options.signal);
   await check("preview", async page => {
     await start(page, framework.id === "vite-react" ? "bun run node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort" : framework.rootPreview?.start.replaceAll("{port}", String(port)) ?? "bun run start", timeoutMs, port);
@@ -143,6 +149,7 @@ async function observeFailure(transport: Transport, options: Execution, capture:
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, admission: Admission): Promise<unknown> {
   if (!transport) return { transportCreated: false };
+  if (options.nextBuildObservation) retainNextBuildObservation(options.nextBuildObservation, await closeNextBuildObserver(scoped(transport, admission)));
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup, admission);
   const errors: unknown[] = [];
