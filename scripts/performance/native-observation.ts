@@ -11,22 +11,34 @@ export async function nativeObserverControls(executable: string, root: string, e
   await writeFile(join(output, "native-observer-controls.json"), JSON.stringify(controls));
   return controls.every(control => control.reason === null);
 }
-export async function previewObserverControl(transport: Transport, output: string) {
+export async function previewObserverControl(transport: Transport, output: string, timeoutMs: number, signal: AbortSignal) {
   const observation = await startObservation(transport.processRoot, "Native preview browser subprocess tree; JavaScript page/worker CPU control; native server and controller excluded");
-  let valid = false;
+  const budgetMs = Math.min(timeoutMs, 5000);
+  const deadlineMs = performance.now() + budgetMs;
+  let reason: string | null = null;
   try {
-    await transport.evaluate(`(async () => {
+    await bounded(() => transport.evaluate(`(async () => {
       const spin = () => { const end = performance.now() + 500; while (performance.now() < end) Math.sqrt(Math.random()); };
       spin();
       const url = URL.createObjectURL(new Blob(['(' + spin.toString() + ')();postMessage("done")'], {type:'text/javascript'}));
       const worker = new Worker(url);
       try { await new Promise((resolve, reject) => { worker.onmessage = resolve; worker.onerror = reject; }); }
       finally { worker.terminate(); URL.revokeObjectURL(url); }
-    })()`);
-    valid = true;
-  } catch (error) { await writeFile(join(output, "preview-control-error.json"), JSON.stringify({ unavailable: String(error) })); valid = false; }
-  finally { valid = (await checkObservation(observation, join(output, "preview-observer-control.json"))) === null && valid; }
-  return valid;
+    })()`), budgetMs, signal);
+  } catch (error) { reason = String(error); }
+  finally {
+    const observationReason = await checkObservation(observation, join(output, "preview-observer-control.json"));
+    reason ??= observationReason;
+  }
+  if (reason === null) return true;
+  const close = await closePreviewControl(transport);
+  await writeFile(join(output, "preview-control-error.json"), JSON.stringify({ unavailable: reason, budgetMs, deadlineMs, finishedMs: performance.now(), aborted: signal.aborted, close })).catch(() => {});
+  if (!close.closed) throw new Error(`Preview control teardown failed: ${close.reason}`);
+  return false;
+}
+async function closePreviewControl(transport: Transport) {
+  try { await bounded(() => transport.close(), 10000); return { closed: true, reason: null }; }
+  catch (error) { return { closed: false, reason: String(error) }; }
 }
 
 async function nativeControl(executable: string, root: string, env: NodeJS.ProcessEnv, output: string, signal: AbortSignal, mode: string) {

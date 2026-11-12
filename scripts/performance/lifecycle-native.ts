@@ -88,11 +88,15 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
     await rm(join(root, ".perf-activity"), { force: true });
     const inputs = immutableIdentity(root, cell.workload);
     record("inputs", { before: inputs, after: null, valid: null, reason: "Post-run observation not reached" });
+    signal.throwIfAborted();
     preview = cell.arm.browser ? await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true) : null;
-    const previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
+    let previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
     record("browser", preview ? { ...preview.capabilities, headless: true, launchProcesses: previewProcesses, display: null, renderer: null } : null);
     const port = preview ? await previewPort() : null;
-    const previewControlPassed = useControls && preview ? await previewObserverControl(preview, output) : false;
+    const previewControlPassed = useControls && preview ? await previewObserverControl(preview, output, timeoutMs, signal) : false;
+    preview = await replaceFailedPreview(preview, cell.arm.browser, useControls, previewControlPassed, timeoutMs, signal);
+    previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
+    record("browser", preview ? { ...preview.capabilities, headless: true, launchProcesses: previewProcesses, display: null, renderer: null } : null);
     if (mode === "observation" && preview) previewObserver = previewControlPassed ? await startObservation(preview.processRoot, "Native preview browser subprocess tree only; server and controller excluded") : { observer: null, unavailable: "Preview CPU control failed" };
     const reset = await resetNativeCache(root, cell.workload);
     record("reset", reset);
@@ -134,4 +138,10 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
     const errors = stopped.filter(result => result.status === "rejected").map(result => String(result.reason));
     await writeFile(join(output, "cleanup.json"), JSON.stringify({ resourcesStopped: errors.length === 0, errors }));
   }
+}
+
+async function replaceFailedPreview(preview: Transport | null, browser: Extract<LifecycleCell["arm"], { kind: "native" }>["browser"], useControls: boolean, passed: boolean, timeoutMs: number, signal: AbortSignal) {
+  signal.throwIfAborted();
+  if (!useControls || !preview || passed || !browser) return preview;
+  return createPlaywrightTransport(browser, timeoutMs, 10_000, true);
 }

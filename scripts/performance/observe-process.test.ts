@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { startObservation, finishObservation } from "./sharing-controls";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { observeProcess, parseTaskStat, queueEnabled } from "./observe-process";
+import { observeProcess, parseTaskStat, schedstatsEnabled, summarizeTask } from "./observe-process";
 import { launchProcess } from "./lifecycle-process";
 
 test("proc stat parser retains start identity with spaces and parentheses", () => {
@@ -41,9 +41,9 @@ test("missing observer root records unavailable without throwing into the worklo
 });
 
 test("scheduler runtime alone does not establish enabled queue accounting", () => {
-  expect(queueEnabled([{ value: "0\n", error: null }, { value: "0\n", error: null }])).toBe(false);
-  expect(queueEnabled([{ value: "1\n", error: null }, { value: null, error: "missing" }])).toBe(false);
-  expect(queueEnabled([{ value: "1\n", error: null }, { value: "1\n", error: null }])).toBe(true);
+  expect(schedstatsEnabled([{ value: "0\n", error: null }, { value: "0\n", error: null }])).toBe(false);
+  expect(schedstatsEnabled([{ value: "1\n", error: null }, { value: null, error: "missing" }])).toBe(false);
+  expect(schedstatsEnabled([{ value: "1\n", error: null }, { value: "1\n", error: null }])).toBe(true);
 });
 
 test("a window without two readable endpoints has unavailable CPU, not zero", async () => {
@@ -52,4 +52,17 @@ test("a window without two readable endpoints has unavailable CPU, not zero", as
   const result = await observer.stop({ beforeMs, afterMs: beforeMs + 1 });
   expect(result.includedSamples).toBe(0);
   expect(result.summary.observedCpuSeconds).toBeNull();
+});
+
+test("enabled or advancing scheduler counters cannot admit queue without wait-specific control", () => {
+  const first = { pid: 1, processStartTicks: "1", tid: 2, beforeMs: 0, afterMs: 1,
+    stat: { name: "fixture", minorFaults: 0, majorFaults: 0, userTicks: 0, systemTicks: 0, startTicks: 1 },
+    schedstat: { value: "100 0 1", error: null }, allowedCPUs: "0" };
+  for (const value of ["200 0 2", "200 100 2"]) {
+    const last = { ...first, beforeMs: 100, afterMs: 101, stat: { ...first.stat, userTicks: 2 }, schedstat: { value, error: null } };
+    const result = summarizeTask("1:1:2:1", { first, last, observations: 2 }, 100);
+    expect(result.observedCpuSeconds).toBeGreaterThan(0);
+    expect(result.observedQueueSeconds).toBeNull();
+    expect(result.queueReason).toContain("No successful wait-counter positive control");
+  }
 });

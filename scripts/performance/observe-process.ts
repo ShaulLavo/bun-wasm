@@ -38,15 +38,15 @@ type Sample = Awaited<ReturnType<typeof sample>>;
 function summarizeSamples(samples: Sample[], ticksPerSecond: number) {
   const tasks = new Map<string, { first: NonNullable<Sample["processes"][number]["threads"][number]>; last: NonNullable<Sample["processes"][number]["threads"][number]>; observations: number }>();
   for (const row of samples) for (const thread of row.processes.flatMap(process => process.threads)) addTask(tasks, thread);
-  const queueAvailable = queueEnabled(samples.map(row => row.host.schedstats));
-  const threads = Array.from(tasks, ([identity, row]) => summarizeTask(identity, row, ticksPerSecond, queueAvailable));
+  const enabled = schedstatsEnabled(samples.map(row => row.host.schedstats));
+  const threads = Array.from(tasks, ([identity, row]) => summarizeTask(identity, row, ticksPerSecond));
   const memory = samples.map(row => {
     const values = row.processes.map(process => process.memory?.value ?? null);
     const metric = (name: string) => values.some(value => value === null) ? null : values.reduce<number>((sum, value) => sum + Number(new RegExp(`^${name}:\\s+(\\d+)`, "m").exec(value ?? "")?.[1] ?? NaN), 0);
     return { beforeMs: row.beforeMs, afterMs: row.afterMs, rssKiB: metric("Rss"), pssKiB: metric("Pss") };
   });
   const intervals = threads.filter(row => row.observedCpuSeconds !== null);
-  return { threads, observedCpuSeconds: intervals.length ? intervals.reduce((sum, row) => sum + (row.observedCpuSeconds ?? 0), 0) : null, memory,
+  return { threads, queueControl: { status: "unavailable", provenance: null, schedstatsEnabled: enabled, reason: "No successful wait-counter positive control; queue output disabled on all hosts" }, observedCpuSeconds: intervals.length ? intervals.reduce((sum, row) => sum + (row.observedCpuSeconds ?? 0), 0) : null, memory,
     coverage: "Observed deltas only, between readable samples wholly inside the requested window when supplied. Window edges are uncovered. Newly observed is not newly created. Entire lifetimes, disappearing final reads and tails may be missing. No roles, blocked-parent claim, CPU/wall partition or additive profile decomposition. RSS may double count shared pages. Memory values are concurrent samples, not continuous peaks." };
 }
 type TaskRow = Sample["processes"][number]["threads"][number];
@@ -56,16 +56,13 @@ function addTask(tasks: Map<string, { first: TaskRow; last: TaskRow; observation
   const previous = tasks.get(key);
   tasks.set(key, { first: previous?.first ?? thread, last: thread, observations: (previous?.observations ?? 0) + 1 });
 }
-function summarizeTask(identity: string, row: { first: TaskRow; last: TaskRow; observations: number }, ticksPerSecond: number, queueAvailable: boolean) {
+export function summarizeTask(identity: string, row: { first: TaskRow; last: TaskRow; observations: number }, ticksPerSecond: number) {
   if (!("userTicks" in row.first.stat) || !("userTicks" in row.last.stat)) throw new Error("Task summary requires stat");
-  const queue = (task: TaskRow) => task.schedstat.value?.trim().split(/\s+/).map(Number) ?? null;
-  const firstQueue = queue(row.first), lastQueue = queue(row.last);
-  const schedstatWorking = queueAvailable && firstQueue?.length === 3 && lastQueue?.length === 3 && lastQueue[0]! > firstQueue[0]!;
   return { identity, observations: row.observations, firstObservedMs: row.first.beforeMs, lastObservedMs: row.last.afterMs,
     observedMinorFaults: row.observations > 1 ? row.last.stat.minorFaults - row.first.stat.minorFaults : null, observedMajorFaults: row.observations > 1 ? row.last.stat.majorFaults - row.first.stat.majorFaults : null,
     observedCpuSeconds: row.observations > 1 ? (row.last.stat.userTicks + row.last.stat.systemTicks - row.first.stat.userTicks - row.first.stat.systemTicks) / ticksPerSecond : null,
-    observedQueueSeconds: schedstatWorking ? (lastQueue[1]! - firstQueue[1]!) / 1e9 : null,
-    queueReason: schedstatWorking ? null : "kernel.sched_schedstats disabled/unavailable, schedstat missing, or running counter did not advance; zero queue is not established",
+    observedQueueSeconds: null,
+    queueReason: "No successful wait-counter positive control; queue output disabled on all hosts",
     endpoints: "First/last readable observations only; final lifetime endpoint is not guaranteed", name: row.first.stat.name };
 }
 export async function observeProcess(root: number, scope: string, intervalMs = 250) {
@@ -94,6 +91,6 @@ export async function observeProcess(root: number, scope: string, intervalMs = 2
   } };
 }
 
-export function queueEnabled(readings: readonly Reading[]): boolean {
+export function schedstatsEnabled(readings: readonly Reading[]): boolean {
   return readings.length > 1 && readings.every(reading => reading.value?.trim() === "1");
 }
