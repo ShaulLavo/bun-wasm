@@ -1,7 +1,7 @@
 import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { createRuntime, type Runtime } from "waffle";
+import { createRuntime, openIdleWorkspace, storedWorkspaces, type Runtime } from "waffle";
 import { installBunSharedObjects } from "../../src/shared-objects";
 import { BrowserPrograms } from "../../web/src/browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
@@ -16,9 +16,10 @@ import { Editor } from "./editor";
 import { StartupOutput } from "./startup-output";
 import { loadTemplate } from "./template";
 import { defaultTemplate, selectTemplate, type Template } from "./template-catalog";
-import { isStorageFull } from "./workspace-policy";
+import { isStorageFull, workspaceName } from "./workspace-policy";
 import { PreservationRefused } from "./workspace-source";
-import type { WorkspaceStorage } from "./workspace-storage";
+import { WorkspaceStorage } from "./workspace-storage";
+import type { EvictionReport } from "./workspace-eviction";
 
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
@@ -56,6 +57,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
   failure?: Failure;
   resetting = false;
+  storageNotice = "";
   /** Project files, relative to the app directory, as of the last listing. */
   files: string[] = [];
   serverState: ServerState = { text: "starting dev server…" };
@@ -71,6 +73,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private workspace?: Workspace;
   private storage?: WorkspaceStorage;
   private storageError = "";
+  private startup?: Promise<void>;
   private frame?: HTMLIFrameElement;
   private filesRevision = 0;
   private readonly previews = new Previews();
@@ -119,6 +122,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   /** Builds the page's runtime, then starts the workspace and dev server in the background. */
   start(): void {
+    if (this.startup) return;
+    try {
+      if (getVfsDescriptor(this.params.get("mode") ?? "fast").mode === "fast") {
+        this.launchPersistent();
+        return;
+      }
+      this.startWorkspace();
+    } catch (error) { console.error(error); this.fail("construction", error); }
+  }
+
+  private startWorkspace(): void {
     let workspace: Workspace;
     try {
       workspace = this.workspace = this.construct();
@@ -129,6 +143,38 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
     this.changed();
     void this.boot(workspace).catch((error) => { this.fail("startup", error); this.report(error); });
+  }
+
+  private launchPersistent(): void {
+    const pending = this.startPersistent().catch(error => {
+      this.failure = "storage";
+      this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. Keep this page open and retry. ${errorText(error)}`;
+      this.changed();
+      this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
+    }).finally(() => { if (this.startup === pending) this.startup = undefined; });
+    this.startup = pending;
+  }
+
+  private async startPersistent(): Promise<void> {
+    const engine = this.wasm ? Promise.resolve() : this.loadEngine();
+    this.setStatus("checking stored projects…");
+    this.storage ??= await WorkspaceStorage.open({
+      stored: () => storedWorkspaces("fast"),
+      openIdle: (name, signal) => openIdleWorkspace({ mode: "fast", name }, { signal }),
+    }, this.template, report => this.storageResult(report));
+    await this.storage.prepare();
+    const workspace = this.workspace ??= this.construct();
+    this.changed();
+    await this.boot(workspace, engine);
+  }
+
+  private storageResult(report: EvictionReport): void {
+    this.storageNotice = report.kept.map(item => {
+      const label = item.template === this.project.id ? this.project.label : item.template;
+      return `${label}: ${errorText(item.error)}`;
+    }).join("; ");
+    if (this.storageNotice) this.storageNotice = `Some idle installs were kept. ${this.storageNotice}`;
+    this.changed();
   }
 
   openTerminal(term: Terminal, node: HTMLElement, signal: AbortSignal): void {
@@ -163,8 +209,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   restart(): void {
     if (this.failure === "storage") {
+      if (this.startup) return;
       this.failure = undefined;
-      void this.startDevServer().catch(this.report);
+      if (!this.started && getVfsDescriptor(this.params.get("mode") ?? "fast").mode === "fast") this.launchPersistent();
+      else if (!this.started) this.startWorkspace();
+      else void this.startDevServer().catch(this.report);
       return;
     }
     if (this.failure) { location.reload(); return; }
@@ -225,7 +274,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` } });
+    const runtime = createRuntime({ filesystem: { mode, name: workspaceName(this.template) } });
     const sharedObjects = installBunSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;
@@ -236,6 +285,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     });
     addEventListener("pagehide", (event: PageTransitionEvent) => {
       if (event.persisted) return;
+      this.storage?.close();
       void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
     });
     fs.onOwnershipLost = () => this.fail("startup", "");
@@ -255,21 +305,23 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     return { runtime, fs, browserPrograms, editor, term, moduleScope };
   }
 
-  private async boot({ fs, editor }: Workspace): Promise<void> {
+  private async boot({ fs, editor }: Workspace, engine = this.loadEngine()): Promise<void> {
     await this.terminalOpen;
     await fs.mkdirp("/tmp");
     this.setServerState("starting", "loading…");
     if (!globalThis.crossOriginIsolated) {
       this.setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
     }
-    await Promise.all([
-      loadTemplate(fs, APP, this.project.file),
-      this.loadEngine(),
-    ]);
+    const seed = () => loadTemplate(fs, APP, this.project.file).then(() => {});
+    const initialize = this.storage ? () => this.storage!.initialize(fs, seed) : seed;
+    await Promise.all([this.retryStorage(initialize), engine]);
+    this.storageError = "";
+    if (this.resetting) return;
     await this.refreshFiles();
     const startFile = this.project.editorFile;
     await editor.open(await fs.lookup(abs(startFile)) ? startFile : ((await fs.listFiles(APP)).map(rel)[0] ?? startFile));
     if (!this.failure) this.started = true;
+    this.startup = undefined;
     if (!this.wasm) return;
     this.setStatus(`starting the dev server on ${ENGINES[this.engine].name}…`);
     await this.startDevServer();

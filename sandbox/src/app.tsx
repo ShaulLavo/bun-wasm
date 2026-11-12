@@ -17,6 +17,7 @@ export function App(handle: Handle<Props>) {
   return () => (
     <>
       <Header sandbox={sandbox} />
+      {sandbox.storageNotice && <p id="storage-status" role="status">{sandbox.storageNotice}</p>}
       <main>
         <FileTree sandbox={sandbox} />
         <EditorPane sandbox={sandbox} />

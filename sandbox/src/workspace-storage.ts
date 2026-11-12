@@ -1,7 +1,7 @@
 import type { Runtime } from "waffle";
 import { evictIdle, type EvictionDependencies, type EvictionReport } from "./workspace-eviction";
 import { WorkspaceIndex } from "./workspace-index";
-import { IDLE_INSTALLS_KEPT, regenerableOutputs, StorageRecovery } from "./workspace-policy";
+import { IDLE_INSTALLS_KEPT, isStorageFull, regenerableOutputs, StorageRecovery } from "./workspace-policy";
 import { restoreSource } from "./workspace-restore";
 import { templateFiles } from "./template";
 import { templates } from "./template-catalog";
@@ -20,7 +20,7 @@ export class WorkspaceStorage {
 
   static async open(workspaces: StoredWorkspaces, template: string, report: (report: EvictionReport) => void): Promise<WorkspaceStorage> {
     if (!navigator.locks) throw new Error("Browser storage maintenance needs Web Locks. The workspace was kept.");
-    return new WorkspaceStorage(await WorkspaceIndex.open(), workspaces, template, report);
+    return new WorkspaceStorage(await openIndex(), workspaces, template, report);
   }
 
   close(): void { this.index.close(); }
@@ -56,6 +56,14 @@ export class WorkspaceStorage {
       this.report(report);
       measureStartup("storage-reclaim", started, { kept, evicted: report.evicted, protected: report.kept.length, busy: report.busy.length });
     });
+  }
+}
+
+async function openIndex(): Promise<WorkspaceIndex> {
+  try { return await WorkspaceIndex.open(); } catch (error) {
+    if (!isStorageFull(error)) throw error;
+    await caches.delete(DOWNLOAD_CACHE);
+    return WorkspaceIndex.open();
   }
 }
 
