@@ -317,6 +317,7 @@ mod runtime_proc {
         pub fn access_take(request: i32) -> i32;
         pub fn access_cancel(request: i32) -> i32;
         pub fn spawn(desc_ptr: i32, desc_len: i32) -> i32;
+        pub fn spawn_error(pid: i32, buf: i32, capacity: i32) -> i32;
         pub fn job_of(pid: i32) -> i32;
         pub fn start_status(pid: i32) -> i32;
         pub fn pipe(out_ptr: i32) -> i32;
@@ -351,6 +352,9 @@ mod runtime_proc {
         UNSUPPORTED
     }
     pub unsafe fn spawn(_: i32, _: i32) -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn spawn_error(_: i32, _: i32, _: i32) -> i32 {
         UNSUPPORTED
     }
     pub unsafe fn job_of(_: i32) -> i32 {
@@ -460,6 +464,17 @@ pub fn proc_access(path: &str, cwd: &str) -> i32 {
 
 pub fn proc_spawn(request: &[u8]) -> i32 {
     proc_call!(runtime_proc::spawn(ptr(request), request.len() as i32))
+}
+
+/// Copy the bounded diagnostic before another spawn or a consuming child wait.
+pub fn proc_spawn_error(pid: i32) -> Result<Vec<u8>, i32> {
+    let mut bytes = vec![0u8; 4096];
+    let count = proc_call!(runtime_proc::spawn_error(pid, ptr_mut(&mut bytes), 4096));
+    if count < 0 {
+        return Err(count);
+    }
+    bytes.truncate(count as usize);
+    Ok(bytes)
 }
 
 pub fn proc_job_of(pid: i32) -> i32 {

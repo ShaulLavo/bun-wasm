@@ -87,7 +87,7 @@ test("artifact transport failures release the runner within five minutes and sta
       expect(step["timeout-minutes"]).toBe(5);
       expect(step["continue-on-error"]).toBeUndefined();
       const artifact = record(step.with);
-      const retainWeek = (jobId === "web" && step.name === "Retain first C1 WebKit admission failure")
+      const retainWeek = (jobId === "web-unit" && step.name === "Retain first C1 WebKit admission failure")
         || (jobId === "rust" && artifact.name === "ordinary-spidermonkey-program");
       if (String(step.uses).startsWith("actions/upload-artifact@")) expect(artifact["retention-days"]).toBe(retainWeek ? 7 : 1);
       transfers++;
