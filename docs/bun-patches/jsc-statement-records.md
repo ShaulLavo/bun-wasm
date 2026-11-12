@@ -69,13 +69,25 @@ From a local split build against current main's side with the same core:
 - **Syntax errors:** class, message, line and column are identical to the baseline for 63 rows of
   blocks, `if` spines, `else if` chains, unclosed blocks and missing branches at depths 1, 9 and
   300, in function, script and module code and both source widths.
-- **Records:** block nests load to 9,999 levels in a function body (10,000 records with the body's
-  own block) and 10,000 in program code; 10,001 records refuse with `RangeError`, also inside an
-  arrow body, and a shallow nest parses afterwards.
-- **Fault injection** (a development-only build): refusing the record, clause or branch vector
-  deep in a nest, under open lexical scopes, a second activation, a switch block, an arrow body,
-  or an `else if` chain nested in another chain's branch, gives `RangeError` before any code runs,
-  and later scoped parses are correct.
+- **Records:** `tests/fixtures/statement-record-cap` checks the limit exactly in the JSC embedding
+  gate (below). In eval code a nest of 10,000 blocks, bare `if`s or both runs and 10,001 is
+  refused. A function or arrow body accepts 10,000 levels when it is built but refuses them on its
+  first call, which parses the body again as one more block record, and refuses 10,001 levels
+  while building.
+- **Fault injection** (a development-only build with release assertions; never shipped):
+  - Failing the actual growth of each vector at a real growth step (records past 32, `else if`
+    clauses or branches past 16) gives the parser's `RangeError` before any code runs. This holds
+    under open lexical scopes, in a second activation entered through a label, in an arrow body,
+    and in an `else if` chain whose bases sit above an outer chain's entries. Later scoped parses
+    are correct.
+  - The earlier refusal cases (record limit under scopes, a switch block, nested chains) still
+    unwind cleanly when their vector instead fails at its first growth step.
+  - The same build with the record limit removed, or moved to 9,999 or 10,001, fails the exact
+    gate on every row. At 10,000 it passes.
+- **Debug assertions:** that build turns the new assertions into release assertions: the record
+  scope's bases, records left only on an error, the token at each opener, and the generator's
+  checks (see [the code generator's loop](jsc-statement-spine.md)). Every fixture and probe above
+  ran on it without one firing.
 - **Capacities:** blocks, `if`s, `else if` chains and `using` blocks reach the probe's 4,096 at
   192, 208 and 800 KiB, at reserves 512, 960 and 1024, and on Wasmtime 256 and 512 KiB and V8
   1 MiB host stacks with the guard out of the way. Unbraced `while` and `try` nests keep the
@@ -98,6 +110,22 @@ From a local split build against current main's side with the same core:
   `else`, `else if` chains of 1 to 2,000 links, `using` placement under 300 blocks, closures at
   depth 300, list ends at `case`, `default` and end of input, syntax errors at depth, and deep
   nests to 10,000 under one outcome rule (run, or refuse with `RangeError` before any code runs).
+- `tests/fixtures/statement-record-cap`: the record limit for eval code (blocks, bare `if`s, both
+  mixed, direct eval), function bodies (blocks and bare `if`s) and an arrow body, in both source
+  widths, at the last accepted and first refused count, with a first-statement marker and a
+  shallow recovery. Every engine prints the same lines. With `BUNWASM_STATEMENT_RECORDS_EXACT=1`,
+  which `scripts/jsc-embedding.ts` sets at 192 KiB, JSC must accept and run the last counted
+  record and refuse the next one in the stated phase with "Maximum call stack size exceeded." and
+  nothing run. Nine built-in negative controls (a removed cap, a cap moved either way, an
+  uncounted body block or build pass, another error, a generator refusal, code run before the
+  refusal, no recovery) run on every engine and must all be rejected.
+- `tests/fixtures/statement-records-async-using`: nests of 300 `await using` blocks in both source
+  widths, for normal order, a throw, a return, a labelled break and every disposer rejecting,
+  each compared with the same 300 declarations in one flat block. Then a nest past the record
+  limit, which must be refused before acquiring anything (exactly so on JSC), and a shallow
+  recovery. The depth is a deliberate bound: compiling nested `await using` grows much faster
+  than linearly in JSC itself (native Bun takes about 75 seconds at 1,000 levels against 4.3 for
+  the flat equivalent). Nothing is claimed about deeper async nests.
 - `tests/stack-depth.js`, `scripts/stack-measurement.ts`, `scripts/measure-stack.py`: a `While`
   chain (`while (0) ` repeated) joins the parser chains and replaces blocks as the statement
   reserve witness. Block chains join the chains that load every depth tried.
@@ -106,5 +134,6 @@ From a local split build against current main's side with the same core:
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, statement records](#jsc-block-and-if-nests-parsed-on-records) | Port | Parse nests of blocks and `if`s in one out-of-line activation on parser-owned records, with a 10,000-record bound. |
 | `tests/fixtures/statement-records-semantics` | Original adapter | Block and `if` parsing semantics and deep nests through the guest entry point. |
+| `tests/fixtures/statement-record-cap`, `tests/fixtures/statement-records-async-using` | Original adapter | The exact record limit, and bounded deep `await using` nests against their flat equivalents. |
 
 [Ledger scope and pinned revisions](scope.md).
