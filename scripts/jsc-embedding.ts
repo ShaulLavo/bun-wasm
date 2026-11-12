@@ -73,6 +73,18 @@ export function parserChainFixture() {
 }
 
 /**
+ * Deep chains through all nine assignment forms on a small real host stack, at the smallest browser
+ * budget and at V8's: the code generator must refuse each with a RangeError that runs no setter
+ * (docs/bun-patches/jsc-assignment-chains.md).
+ */
+export function assignmentChainFixtures() {
+  const manifest = "native-assignment-chain-depth.json";
+  const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+  if (check.owner !== "native") throw new Error("JSC assignment chain fixture needs its native check owner");
+  return ["192", "800"].map(budget => ({ path: check.path, hostOptions: ["--stack-mb", "1", "--env", `BUN_WASM_STACK_KIB=${budget}`, "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] }));
+}
+
+/**
  * The array literal fixture: the core refuses the literal's 80,016-byte constant buffer during
  * bytecode generation, then the array's own storage on the first call (docs/bun-patches/jsc-array-literal-allocation.md).
  */
@@ -92,6 +104,7 @@ function testFixtures(artifact: string): void {
     runFixture(artifact, getters.path, scratch, getters.hostOptions);
     const chain = parserChainFixture();
     runFixture(artifact, chain.path, scratch, chain.hostOptions);
+    for (const assignments of assignmentChainFixtures()) runFixture(artifact, assignments.path, scratch, assignments.hostOptions);
     // The parser reserve at every host budget, its rejected forms and each shipped value (docs/stack-limits.md).
     for (const record of parserReserveControls(nodeHost(artifact))) console.log(JSON.stringify(record));
     console.log("PASS JSC parser reserve tuples");

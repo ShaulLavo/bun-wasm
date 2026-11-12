@@ -1,0 +1,84 @@
+dot =, 1: 1 | base d0, rhs, set d0=1
+bracket =, 1: 1 | base b0, key b0, rhs, set b0=1
+resolve =, 1: [1,1] | rhs
+dot =, 7: 7 | base d0, base d1, base d2, base d3, base d4, base d5, base d6, rhs, set d6=7, set d5=7, set d4=7, set d3=7, set d2=7, set d1=7, set d0=7
+bracket =, 7: 7 | base b0, key b0, base b1, key b1, base b2, key b2, base b3, key b3, base b4, key b4, base b5, key b5, base b6, key b6, rhs, set b6=7, set b5=7, set b4=7, set b3=7, set b2=7, set b1=7, set b0=7
+resolve =, 7: [7,7,7,7,7,7,7,7] | rhs
+dot =, 8: 8 | base d0, base d1, base d2, base d3, base d4, base d5, base d6, base d7, rhs, set d7=8, set d6=8, set d5=8, set d4=8, set d3=8, set d2=8, set d1=8, set d0=8
+bracket =, 8: 8 | base b0, key b0, base b1, key b1, base b2, key b2, base b3, key b3, base b4, key b4, base b5, key b5, base b6, key b6, base b7, key b7, rhs, set b7=8, set b6=8, set b5=8, set b4=8, set b3=8, set b2=8, set b1=8, set b0=8
+resolve =, 8: [8,8,8,8,8,8,8,8,8] | rhs
+dot =, 9: 9 | base d0, base d1, base d2, base d3, base d4, base d5, base d6, base d7, base d8, rhs, set d8=9, set d7=9, set d6=9, set d5=9, set d4=9, set d3=9, set d2=9, set d1=9, set d0=9
+bracket =, 9: 9 | base b0, key b0, base b1, key b1, base b2, key b2, base b3, key b3, base b4, key b4, base b5, key b5, base b6, key b6, base b7, key b7, base b8, key b8, rhs, set b8=9, set b7=9, set b6=9, set b5=9, set b4=9, set b3=9, set b2=9, set b1=9, set b0=9
+resolve =, 9: [9,9,9,9,9,9,9,9,9,9] | rhs
+dot =, 10: 10 | base d0, base d1, base d2, base d3, base d4, base d5, base d6, base d7, base d8, base d9, rhs, set d9=10, set d8=10, set d7=10, set d6=10, set d5=10, set d4=10, set d3=10, set d2=10, set d1=10, set d0=10
+bracket =, 10: 10 | base b0, key b0, base b1, key b1, base b2, key b2, base b3, key b3, base b4, key b4, base b5, key b5, base b6, key b6, base b7, key b7, base b8, key b8, base b9, key b9, rhs, set b9=10, set b8=10, set b7=10, set b6=10, set b5=10, set b4=10, set b3=10, set b2=10, set b1=10, set b0=10
+resolve =, 10: [10,10,10,10,10,10,10,10,10,10,10] | rhs
+dot =, 17: 17 | base d0, base d1, base d2, base d3, base d4, base d5, base d6, base d7, base d8, base d9, base d10, base d11, base d12, base d13, base d14, base d15, base d16, rhs, set d16=17, set d15=17, set d14=17, set d13=17, set d12=17, set d11=17, set d10=17, set d9=17, set d8=17, set d7=17, set d6=17, set d5=17, set d4=17, set d3=17, set d2=17, set d1=17, set d0=17
+bracket =, 17: 17 | base b0, key b0, base b1, key b1, base b2, key b2, base b3, key b3, base b4, key b4, base b5, key b5, base b6, key b6, base b7, key b7, base b8, key b8, base b9, key b9, base b10, key b10, base b11, key b11, base b12, key b12, base b13, key b13, base b14, key b14, base b15, key b15, base b16, key b16, rhs, set b16=17, set b15=17, set b14=17, set b13=17, set b12=17, set b11=17, set b10=17, set b9=17, set b8=17, set b7=17, set b6=17, set b5=17, set b4=17, set b3=17, set b2=17, set b1=17, set b0=17
+resolve =, 17: [17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,17] | rhs
+dot +=, 9: 57 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=13, set c7=22, set c6=30, set c5=37, set c4=43, set c3=48, set c2=52, set c1=55, set c0=57
+dot -=, 9: 3 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=7, set c7=2, set c6=6, set c5=1, set c4=5, set c3=0, set c2=4, set c1=-1, set c0=3
+dot *=, 9: 10886400 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=30, set c7=270, set c6=2160, set c5=15120, set c4=90720, set c3=453600, set c2=1814400, set c1=5443200, set c0=10886400
+dot **=, 9: null | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=1000, set c7=Infinity, set c6=Infinity, set c5=Infinity, set c4=Infinity, set c3=Infinity, set c2=Infinity, set c1=Infinity, set c0=Infinity
+dot /=, 9: 1.3544973544973546 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=3.3333333333333335, set c7=2.6999999999999997, set c6=2.9629629629629632, set c5=2.3625, set c4=2.53968253968254, set c3=1.9687499999999998, set c2=2.031746031746032, set c1=1.4765624999999998, set c0=1.3544973544973546
+dot %=, 9: null | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=1, set c7=0, set c6=NaN, set c5=NaN, set c4=NaN, set c3=NaN, set c2=NaN, set c1=NaN, set c0=NaN
+dot <<=, 9: 131072 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=80, set c7=589824, set c6=8, set c5=1792, set c4=6, set c3=320, set c2=4, set c1=48, set c0=131072
+dot >>=, 9: 0 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=1, set c7=4, set c6=0, set c5=7, set c4=0, set c3=5, set c2=0, set c1=3, set c0=0
+dot >>>=, 9: 0 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=1, set c7=4, set c6=0, set c5=7, set c4=0, set c3=5, set c2=0, set c1=3, set c0=0
+dot &=, 9: 0 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=2, set c7=0, set c6=0, set c5=0, set c4=0, set c3=0, set c2=0, set c1=0, set c0=0
+dot |=, 9: 15 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=11, set c7=11, set c6=11, set c5=15, set c4=15, set c3=15, set c2=15, set c1=15, set c0=15
+dot ^=, 9: 9 | base c0, get c0, base c1, get c1, base c2, get c2, base c3, get c3, base c4, get c4, base c5, get c5, base c6, get c6, base c7, get c7, base c8, get c8, rhs, set c8=9, set c7=0, set c6=8, set c5=15, set c4=9, set c3=12, set c2=8, set c1=11, set c0=9
+bracket +=, 9: "e0e1e2e3e4e5e6e7e8!" | base e0, key e0, get e0, base e1, key e1, get e1, base e2, key e2, get e2, base e3, key e3, get e3, base e4, key e4, get e4, base e5, key e5, get e5, base e6, key e6, get e6, base e7, key e7, get e7, base e8, key e8, get e8, rhs, set e8=e8!, set e7=e7e8!, set e6=e6e7e8!, set e5=e5e6e7e8!, set e4=e4e5e6e7e8!, set e3=e3e4e5e6e7e8!, set e2=e2e3e4e5e6e7e8!, set e1=e1e2e3e4e5e6e7e8!, set e0=e0e1e2e3e4e5e6e7e8!
+resolve +=, 9: [136,136,135,133,130,126,121,115,108,136] | rhs
+dot ??=, 9, stops at 5: "kept" | base n0, get n0, base n1, get n1, base n2, get n2, base n3, get n3, base n4, get n4, base n5, get n5, set n4=kept, set n3=kept, set n2=kept, set n1=kept, set n0=kept
+bracket ||=, 9: "y" | base o0, key o0, get o0, base o1, key o1, get o1, base o2, key o2, get o2, base o3, key o3, get o3, base o4, key o4, get o4, base o5, key o5, get o5, base o6, key o6, get o6, base o7, key o7, get o7, base o8, key o8, get o8, rhs, set o8=y, set o7=y, set o6=y, set o5=y, set o4=y, set o3=y, set o2=y, set o1=y, set o0=y
+bracket &&=, 9, stops at 0: undefined | base t0, key t0, get t0
+resolve ||=, 9: [1,1,1,1,1,0,0,0,0,1] | 
+resolve &&= and ??=: [4,4,4,4] | rhs
+mixed nine forms, 18: [20,20,20,20,0,0,0,0] | base m3, base m4, get m4, base m5, get m5, set m4=20, set m3=20
+mixed nine forms, 18, wide: 20 | base m3, base m4, get m4, base m5, get m5, set m4=20, set m3=20
+nested chain in a subscript: [3,3,3,3,"p","p"] | base outer, rhs, set outer=3
+nested chain in a call argument: [8,8,4,4] | rhs
+arrow right side: [2,true] | 
+async arrow right side: ["function",true] | 
+arrow with chained defaults: [1,1,2,2] | 
+arrow body chain: [6,6,6] | 
+yield right side: [2,5,6] | 
+yield star right side: [9,9] | 
+destructuring in a chain: [true,1,2] | 
+object pattern in a chain: [5,true] | 
+pattern then chain: [7,true] | 
+conditional right side: [2,2,2] | 
+comma after chain: [1,1,2] | 
+strict chain: [3,3,3] | 
+asi after chain: [1,1,2,2] | 
+asi before increment: [1,1,2] | 
+condition context: [0,0,1] | rhs
+unused result: [4,4] | rhs, base u, set u=4
+arrow then =: SyntaxError
+bare yield then =: SyntaxError
+literal target: SyntaxError
+operator target: SyntaxError
+new.target target: SyntaxError
+missing right side: SyntaxError
+missing right side in arrow defaults: SyntaxError
+missing right side in a subscript: SyntaxError
+compound to a literal: SyntaxError
+logical to a call: SyntaxError
+strict eval after 1: SyntaxError
+strict arguments after 1: SyntaxError
+missing right side after 1: SyntaxError
+sloppy eval after 1: accepted
+strict eval after 9: SyntaxError
+strict arguments after 9: SyntaxError
+missing right side after 9: SyntaxError
+sloppy eval after 9: accepted
+strict eval after 200: SyntaxError
+strict arguments after 200: SyntaxError
+missing right side after 200: SyntaxError
+sloppy eval after 200: accepted
+module chain: [[8,8,8],9,9]
+script chain: [2,2]
+error positions: 6 checked
+failure before reuse: SyntaxError
+reuse after failure: [40,40,40] | rhs

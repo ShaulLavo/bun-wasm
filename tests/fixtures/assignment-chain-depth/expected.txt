@@ -1,0 +1,77 @@
+resolve simple value: ok
+resolve simple value 16: ok
+resolve simple ignored: ok
+resolve simple ignored 16: ok
+resolve simple condition: ok
+resolve simple condition 16: ok
+resolve compound value: ok
+resolve compound value 16: ok
+resolve compound ignored: ok
+resolve compound ignored 16: ok
+resolve compound condition: ok
+resolve compound condition 16: ok
+resolve logical value: ok
+resolve logical value 16: ok
+resolve logical ignored: ok
+resolve logical ignored 16: ok
+resolve logical condition: ok
+resolve logical condition 16: ok
+dot simple value: ok
+dot simple value 16: ok
+dot simple ignored: ok
+dot simple ignored 16: ok
+dot simple condition: ok
+dot simple condition 16: ok
+dot compound value: ok
+dot compound value 16: ok
+dot compound ignored: ok
+dot compound ignored 16: ok
+dot compound condition: ok
+dot compound condition 16: ok
+dot logical value: ok
+dot logical value 16: ok
+dot logical ignored: ok
+dot logical ignored 16: ok
+dot logical condition: ok
+dot logical condition 16: ok
+bracket simple value: ok
+bracket simple value 16: ok
+bracket simple ignored: ok
+bracket simple ignored 16: ok
+bracket simple condition: ok
+bracket simple condition 16: ok
+bracket compound value: ok
+bracket compound value 16: ok
+bracket compound ignored: ok
+bracket compound ignored 16: ok
+bracket compound condition: ok
+bracket compound condition 16: ok
+bracket logical value: ok
+bracket logical value 16: ok
+bracket logical ignored: ok
+bracket logical ignored 16: ok
+bracket logical condition: ok
+bracket logical condition 16: ok
+global simple value: ok
+global simple value 16: ok
+global simple ignored: ok
+global simple ignored 16: ok
+global simple condition: ok
+global simple condition 16: ok
+global compound value: ok
+global compound value 16: ok
+global compound ignored: ok
+global compound ignored 16: ok
+global compound condition: ok
+global compound condition 16: ok
+global logical value: ok
+global logical value 16: ok
+global logical ignored: ok
+global logical ignored 16: ok
+global logical condition: ok
+global logical condition 16: ok
+mixed nine forms: ok
+inside nested calls: ok
+inside a conditional: ok
+inside a lazy arrow: ok
+continued

@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -99,6 +99,14 @@ test("the Node host's engine allocation fault refuses only its byte range and co
 
 test("the JSC gate requires the parser chain fixture's deeper chain to be refused", () => {
   expect(parserChainFixture()).toEqual({ path: "tests/fixtures/parser-chain-stack", hostOptions: ["--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] });
+});
+
+test("the JSC gate requires the code generator to refuse deep assignment chains on a small host stack", () => {
+  const strict = (budget: string) => ["--stack-mb", "1", "--env", `BUN_WASM_STACK_KIB=${budget}`, "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"];
+  expect(assignmentChainFixtures()).toEqual([
+    { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("192") },
+    { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("800") },
+  ]);
 });
 
 test("JSC stack controls use their discovered fixture with a small real host stack", () => {

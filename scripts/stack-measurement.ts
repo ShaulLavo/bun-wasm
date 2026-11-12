@@ -1,8 +1,18 @@
 // The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
 export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
   ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
-/** The chains that recurse through exactly one of JSC's two reserved parser functions per level: assignment and statement. */
-export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Assign|Block)/.test(mode));
+/**
+ * The chains that recurse through exactly one of JSC's two reserved parser functions per level:
+ * a conditional branch is a new assignment expression, and a block is a new statement.
+ */
+export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Conditional|Block)/.test(mode));
+/**
+ * JSC parses a chain of assignment targets without recursion (docs/bun-patches/jsc-assignment-chains.md),
+ * so the syntax-check pass loads every depth tried.
+ */
+export const iterativeChains = chainModes.filter(mode => /^chainAssignCompile/.test(mode));
+/** The full parse of an assignment chain stops in the code generator, so the parser reserve does not move it. */
+export const generatorChains = chainModes.filter(mode => /^chainAssignCall/.test(mode));
 /** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
 export const chainMaximum = 4096;
 const stackModes = [

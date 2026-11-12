@@ -7,12 +7,26 @@ import { capacitiesAt, fileThreshold, parserReserveControls, type ProbeHost, typ
 import { chainCapacities, chainMaximum, chainModes, chainOwnership, guestStackSettings, reserveSiteChains } from "./stack-measurement.ts";
 
 type ReserveRule = (value: string | undefined) => number;
+/** What one assignment level costs in a chain's full parse; `reserve` is the parser reserve in effect. */
+type AssignmentRule = (reserve: number) => number;
+/** The code generator's own 1024-byte reservation stops a fully parsed assignment chain. */
+const generatorCost: AssignmentRule = () => 1024;
 
-/** A guest whose parser stops when budget plus 64 KiB is spent, at `reserve(value)` plus a real frame per level. */
-function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object): ProbeHost {
+/**
+ * A guest whose parser stops when budget plus 64 KiB is spent, at `reserve(value)` plus a real frame
+ * per level. Assignment chains parse without recursion: the syntax-check pass loads the deepest chain
+ * tried, and the full parse stops at `assignment(reserve)` plus a frame per level.
+ */
+function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object, assignment = generatorCost, iterative = true): ProbeHost {
   return (settings, mode, depth) => {
     const room = settings.budgetKib * 1024 + 65536 - 22000;
-    const capacities = Object.fromEntries(chainModes.map((name, index) => [name, Math.floor(room / (reserve(settings.parserReserve) + 380 + index))]));
+    const bytes = reserve(settings.parserReserve);
+    const capacity = (name: string, index: number) => {
+      if (iterative && name.startsWith("chainAssignCompile")) return chainMaximum;
+      const level = name.startsWith("chainAssign") ? assignment(bytes) : bytes;
+      return Math.floor(room / (level + 380 + index));
+    };
+    const capacities = Object.fromEntries(chainModes.map((name, index) => [name, capacity(name, index)]));
     const guest = reported?.(settings) ?? { budget: String(settings.budgetKib), parserReserve: settings.parserReserve ?? null };
     return { code: 0, output: `settings ${JSON.stringify(guest)}\ncapacities ${JSON.stringify(capacities)}\ncompleted ${mode} ${depth}\ncontinued\n` };
   };
@@ -42,6 +56,11 @@ for (const { fault, reserve, message } of brokenGuests) {
     expect(() => parserReserveControls(modelHost(reserve))).toThrow(message);
   });
 }
+
+test("the tuples reject a guest whose assignment chains still recurse in the parser", () => {
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, false))).toThrow("does not reach 4096");
+  expect(() => parserReserveControls(modelHost(undefined, undefined, bytes => bytes))).toThrow("chainAssignCall8");
+});
 
 test("a capacity counts only from a guest that reports the requested settings and continues", () => {
   const requested = { budgetKib: 192, parserReserve: "1024" };
