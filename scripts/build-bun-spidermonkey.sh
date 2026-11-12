@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 source "$root/env.sh"
 cd "$root"
-: "${SPIDERMONKEY_NATIVE_DIR:?Set SPIDERMONKEY_NATIVE_DIR to a parent-admitted N1 input directory}"
+: "${SPIDERMONKEY_NATIVE_DIR:?Set SPIDERMONKEY_NATIVE_DIR to a verified native input directory}"
 : "${SPIDERMONKEY_ENGINE_BUILD_DIR:?Set SPIDERMONKEY_ENGINE_BUILD_DIR to a private output directory}"
 : "${SPIDERMONKEY_PAIR_DIR:?Set SPIDERMONKEY_PAIR_DIR to a private fresh pair directory}"
 : "${BUN_CORE_BUILD_DIR:?Set BUN_CORE_BUILD_DIR to a private output directory}"
@@ -22,4 +22,5 @@ bun scripts/spidermonkey-side-core-receipt.ts inputs "$root" "$SPIDERMONKEY_NATI
 cmp "$inputs" "$SPIDERMONKEY_PAIR_DIR/inputs.json"
 bun scripts/spidermonkey-side-core-receipt.ts tag-core "$BUN_CORE_BUILD_DIR/bun-core.wasm" "$SPIDERMONKEY_PAIR_DIR/bun-spidermonkey.wasm"
 cp "$SPIDERMONKEY_ENGINE_BUILD_DIR/engine.wasm" "$SPIDERMONKEY_PAIR_DIR/spidermonkey-engine.wasm"
+cp "$BUN_CORE_BUILD_DIR/bun-core.wasm.core.json" "$SPIDERMONKEY_PAIR_DIR/bun-core.wasm.core.json"
 bun scripts/spidermonkey-side-core-receipt.ts write-pair "$SPIDERMONKEY_PAIR_DIR/bun-spidermonkey.wasm" "$SPIDERMONKEY_PAIR_DIR/spidermonkey-engine.wasm" "$inputs"
