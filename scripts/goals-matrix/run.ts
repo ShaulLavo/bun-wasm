@@ -19,6 +19,7 @@ import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./plat
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
 import { appendFile } from "node:fs/promises";
 import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
+import { verifyPreparedSiteInventory } from "./prepared-site";
 
 export interface Options {
   profile?: PlaygroundProfile;
@@ -46,11 +47,11 @@ export function options(args: readonly string[]): Options {
   const suppliedTimeout = values.get("timeout-ms");
   const timeoutMs = suppliedTimeout === undefined ? undefined : parseTimeout(suppliedTimeout);
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
-  const assetSource = values.get("asset-source");
-  if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
   const profile = playgroundProfile(values.get("profile") ?? null);
   const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
   for (const engine of selectedEngines) requireProfileEngine(engine, profile);
+  const assetSource = values.get("asset-source");
+  if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
   const iphoneControlUrl = values.get("iphone-control-url"), iphoneAgentCommand = values.get("iphone-agent-command");
   if (iphoneControlUrl || iphoneAgentCommand) {
     if (!iphoneControlUrl || !iphoneAgentCommand || !values.get("device-udid") || values.has("iphone-endpoint")) throw new Error("Visible iPhone mode requires control URL, bound command and device UDID, without SafariDriver");
@@ -96,6 +97,7 @@ export async function initialReport(config: Options): Promise<Report> {
   if (hostSource !== null && (!hostSource || typeof hostSource !== "object" || typeof hostSource.commit !== "string" || !/^[a-f0-9]{40}$/.test(hostSource.commit) || typeof hostSource.dirty !== "boolean")) throw new Error("Invalid built host source identity");
   const files = await assetIdentity(config.root);
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
+  if (files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) await verifyPreparedSiteInventory(config.root);
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
   const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
@@ -162,7 +164,7 @@ function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): 
   }
 }
 async function runLocked(config: Options, signal: AbortSignal): Promise<Report> {
-  await preflight(config.root, config.engines);
+  await preflight(config.root, config.engines, config.profile);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);

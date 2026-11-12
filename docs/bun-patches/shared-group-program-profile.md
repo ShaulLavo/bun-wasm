@@ -28,6 +28,8 @@ exported separately.
 
 The original executable fixture in `tests/package/engine-initialization-fixture.ts` uses passive data segments and trapping relocation/constructor checks. Its package test runs the released Waffle loader for all three split engine profiles and shared QuickJS, including repeated initialization. No upstream fixture or implementation is copied.
 
+`scripts/stage-program-profiles.ts` is an original delivery adapter. It validates each original core and side receipt's input digest, scope, shared profile and artifact bytes before publishing assets or fingerprints. The core receipt covers the untagged core; staging also verifies that the supplied core is exactly that core with its selected engine tag. Staging also requires both decoded shared memory imports to declare the current authoritative group address space; old-stage pairs are refused before publication. Original component source labels and receipt text are preserved independently of the host revision. Its staging regressions reuse the original executable initialization fixture, including its untagged core, and copy no upstream source.
+
 The original page and worker adapters in `src/assets.ts`, `src/bun-adapter.ts`,
 `web/src/bun-executor.ts`, `web/src/bun-launcher.ts`, `web/src/runner.ts`,
 `web/src/subprocess-broker.ts` and `web/scripts/node-linked.ts` share Waffle's prepared

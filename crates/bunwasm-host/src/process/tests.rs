@@ -1,5 +1,70 @@
 use super::*;
 
+#[test]
+fn spawn_diagnostic_keeps_the_winning_cause_and_bounds_only_the_guest_copy() {
+    let cancel = Cancellation::default();
+    let original = format!("outer context: {}", "🦀".repeat(2048));
+    let bounded = bounded_spawn_detail(original.clone());
+    assert!(bounded.len() <= 4096);
+    assert!(bounded.capacity() <= 4096);
+    let error = anyhow::anyhow!(original.clone()).context("module startup");
+    let mut host_output = Vec::new();
+    assert_eq!(
+        startup_failure(&error, &cancel, || &mut host_output),
+        FinalOutcome::StartFailed(45)
+    );
+    assert!(String::from_utf8(host_output).unwrap().contains(&original));
+    let detail = cancel.spawn_error();
+    assert!(detail.starts_with("module startup: outer context:"));
+    assert!(detail.len() <= 4096);
+    assert_eq!(cancel.start_status(), 45);
+    cancel.select_start_failure(29, "losing cause".into());
+    assert_eq!(cancel.spawn_error(), detail);
+
+    let signaled = Cancellation::default();
+    signaled.kill(9);
+    signaled.select_start_failure(29, "losing startup failure".into());
+    assert!(signaled.spawn_error().is_empty());
+}
+
+#[test]
+fn spawn_diagnostic_is_caller_owned_and_cleared_by_the_next_spawn() {
+    let mut p = processes();
+    assert_eq!(p.spawn(b"{"), INVAL);
+    assert!(!p.spawn_error(0).unwrap().is_empty());
+    let pid = p.spawn(&request("/missing", serde_json::json!([])));
+    assert!(pid > 0);
+    assert_eq!(p.spawn_error(0).unwrap(), "");
+    assert_eq!(p.spawn_error(-1), Err(INVAL));
+    assert_eq!(p.spawn_error(pid + 1), Err(CHILD));
+    p.poll(&subscription(6, pid, 0), 5000).unwrap();
+    assert!(p.spawn_error(pid).unwrap().contains("/missing"));
+    p.runtime
+        .state
+        .lock()
+        .unwrap()
+        .processes
+        .get_mut(&pid)
+        .unwrap()
+        .parent = 99;
+    assert_eq!(p.spawn_error(pid), Err(CHILD));
+    p.runtime
+        .state
+        .lock()
+        .unwrap()
+        .processes
+        .get_mut(&pid)
+        .unwrap()
+        .parent = p.pid;
+    assert_eq!(completed(&p, pid), FinalOutcome::StartFailed(44));
+    assert_eq!(p.spawn_error(pid), Err(CHILD));
+    fake_child(&p, 900, p.pid, ROOT_JOB, None);
+    assert_eq!(p.spawn_error(900).unwrap(), "");
+    p.cancel.select(FinalOutcome::Exit(0));
+    assert_eq!(p.spawn_error(0), Err(SRCH));
+    assert_eq!(p.spawn_error(900), Err(SRCH));
+}
+
 struct Fixture(Processes);
 impl std::ops::Deref for Fixture {
     type Target = Processes;
