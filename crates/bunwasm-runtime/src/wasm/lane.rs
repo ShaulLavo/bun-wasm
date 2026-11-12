@@ -401,7 +401,6 @@ struct View {
     lane: LaneRef,
     /// The side that reads this direction.
     dir: u32,
-    slot: u32,
     block: u32,
     ring: u32,
 }
@@ -715,7 +714,6 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         Ok(View {
             lane,
             dir,
-            slot,
             block: address + D_BASE + dir * D_STRIDE,
             ring: address + RINGS + dir * RING,
         })

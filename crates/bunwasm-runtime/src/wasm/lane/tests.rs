@@ -1287,3 +1287,25 @@ fn a_writer_and_reader_on_two_threads_agree_on_every_frame() {
     root.lanes().sweep(true);
     assert_settled(&root);
 }
+
+#[test]
+fn a_severed_writer_is_terminal_for_its_peer_and_deaths_are_counted() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    post(&r, lane, 0, b"before the sever");
+    r.sever(lane, 0);
+    let drain = r.drain(lane, 1, 8).unwrap();
+    assert_eq!(drain.frames, [b"before the sever".to_vec()]);
+    assert!(drain.terminal, "the orphan's peer stops waiting");
+    assert_eq!(
+        r.end_state(lane, 0).0,
+        end::OPEN,
+        "the orphan's own end is left alone"
+    );
+    let deaths = r.deaths();
+    let cell = r.create_cell().unwrap();
+    r.exited(cell);
+    assert_eq!(r.deaths(), deaths + 1);
+}
