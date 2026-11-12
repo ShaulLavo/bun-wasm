@@ -29,7 +29,7 @@ const measure = args.includes("--measure");
 const cold = args.includes("--cold");
 const engines = (process.env.ENGINES ?? "quickjs,jsc,browser").split(",");
 const site = resolve(process.env.ROOT ?? "web/dist");
-const probe = readFileSync("tests/stack-depth.js", "utf8");
+let probe: string | undefined;
 const fixtureNames = ["stack-overflow", "stack-overflow-console"];
 // As in browser-stack.mjs: unset keys leave the executor's host policy in charge, as for a user.
 const requested: GuestStackSettings = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };
@@ -96,6 +96,7 @@ export async function run(page: MeasurementPage, text: string, timeoutMs: number
 }
 
 async function outcome(page: MeasurementPage, mode: string, depth: number): Promise<string> {
+  probe ??= readFileSync("tests/stack-depth.js", "utf8");
   await writeFile(page, "/home/user/depth.js", probe);
   const result = await run(page, `${settingsPrefix}bun run depth.js ${mode} ${depth}`, 180_000);
   const observation = observeStackOutcome({ result, mode, depth, requested });

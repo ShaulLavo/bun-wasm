@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { createContext, runInContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import { foreground, ObservationTimeout } from "./goals-matrix/playground";
 import type { Admission } from "./goals-matrix/scope";
 import type { Transport } from "./goals-matrix/transport";
 import { observe, run, withPage } from "../web/tests/browser-stack-safari";
 
 test("the standalone Safari adapter bundles without Playwright runtime dependencies", async () => {
-  const result = await Bun.build({ entrypoints: ["web/tests/browser-stack-safari.ts"], target: "bun" });
+  const result = await Bun.build({ entrypoints: [fileURLToPath(new URL("../web/tests/browser-stack-safari.ts", import.meta.url))], target: "bun" });
   expect(result.success).toBe(true);
   const code = await result.outputs[0]!.text();
   expect(code).not.toContain("chromium-bidi");
