@@ -3,14 +3,18 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { checkGroupCommands, checkGroupFeatures, checkGroupSymbols, groupFlags, groupImports, groupRegionConstructor } from "../spidermonkey/shared-group.ts";
 import { convertSideInitializers } from "./spidermonkey-side-core-receipt.ts";
+import { sharedGroupMaxPages } from "./src/program-profile.ts";
 
 const sdk = "/work/cache/sdk";
 const text = (value: string) => [value.length].concat(Array.from(value, character => character.charCodeAt(0)));
 const section = (id: number, payload: number[]) => [id, payload.length].concat(payload);
+const leb = (value: number): number[] => value < 0x80 ? [value] : [(value & 0x7f) | 0x80].concat(leb(value >>> 7));
+// A shared side declares the group address space, like its core.
+const groupMaximum = leb(sharedGroupMaxPages());
 
 /** A just-linked side: one memory import, the core table and stack, two initializers and a start. */
 function side(shared: boolean): Uint8Array {
-  const memory = text("env").concat(text("memory"), [2], shared ? [3, 1, 1] : [1, 1, 1]);
+  const memory = text("env").concat(text("memory"), [2], shared ? [3, 1].concat(groupMaximum) : [1, 1, 1]);
   const table = text("env").concat(text("__indirect_function_table"), [1, 0x70, 0, 0]);
   const stack = text("env").concat(text("__stack_pointer"), [3, 0x7f, 1]);
   const exports = text("__wasm_apply_data_relocs").concat([0, 0], text("__wasm_call_ctors"), [0, 1]);

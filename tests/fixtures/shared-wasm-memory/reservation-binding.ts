@@ -1,5 +1,5 @@
 // Runs alone in its own guest. This is the descriptor the published
-// @oxc-parser/binding-wasm32-wasi 0.94.0 loader constructs: its 4 GiB maximum cannot fit a 1 GiB
+// @oxc-parser/binding-wasm32-wasi 0.94.0 loader constructs: its 4 GiB maximum cannot fit a 2 GiB
 // group and its 250 MiB of initial bytes can. Its module imports a 65536-page shared memory, as
 // reservation.wasm does. This controls that capability only; it does not load the package.
 import { strict as assert } from 'node:assert';
@@ -36,6 +36,6 @@ Atomics.store(new Int32Array(memory.buffer), last, 95);
 assert.equal(Atomics.load(words, last), 95);
 assert.equal(exports.read((INITIAL + 1) * PAGE - 4), 0);
 
-// Initial bytes are never clamped: a 1 GiB initial size still cannot share the group.
-assert.throws(() => new WebAssembly.Memory({ initial: 16384, maximum: 65536, shared: true }), RangeError);
+// Initial bytes are never clamped: an initial size of the whole 2 GiB group cannot share it.
+assert.throws(() => new WebAssembly.Memory({ initial: 32768, maximum: 65536, shared: true }), RangeError);
 console.log('shared-wasm-memory binding descriptor: pass');
