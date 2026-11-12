@@ -14,6 +14,8 @@ import { targetFeatures, verifySharedSysroot } from "../scripts/src/program-prof
 import { archiveMembers, checkArchive, checkCommands, checkRelocations, headerIdentity, supportObjectNames } from "./check-build.ts";
 import { pin, symbolSets, verifyOverlay } from "./native-profile.ts";
 
+import { verifyDiagnosticProfile } from "./diagnostic-profile.ts";
+
 const recipe = dirname(fileURLToPath(import.meta.url));
 const fileHash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const output = (program: string, args: string[]) => execFileSync(program, args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 });
@@ -111,9 +113,10 @@ function main(): void {
   checkGroupFeatures(archiveMembers(archive));
   checkGroupSymbols(output(join(sdk, "bin/llvm-nm"), ["--format=posix", library]));
   const relocationCounts = checkRelocations(output("llvm-readobj", ["--relocs", library]));
+  const diagnostics = verifyDiagnosticProfile(root, sdk, sysroot);
   const receipt = {
     scope: "shared-group native library; experimental, not a publication input",
-    profile: "shared-group", revision: pin, flags: groupFlags, sharedSysroot,
+    profile: "shared-group", diagnostics, revision: pin, flags: groupFlags, sharedSysroot,
     patches: ["spidermonkey-wasi.patch", "spidermonkey-shared-group.patch"].map(path => ({ path, sha256: fileHash(join(recipe, path)) })),
     mozconfigSha256: fileHash(join(root, "mozconfig")),
     confdefsSha256: fileHash(join(obj, "js/src/js-confdefs.h")),
@@ -123,6 +126,9 @@ function main(): void {
   };
   writeFileSync(join(root, "receipt/shared-group-library.json"), JSON.stringify(receipt, null, 2) + "\n");
   const native = stage(root, library);
+  const stagedDiagnostics = verifyDiagnosticProfile(root, sdk, sysroot, join(native, "include"), join(native, "js-confdefs.h"));
+  assert.deepEqual(stagedDiagnostics.embedding.macros, diagnostics.embedding.macros, "staged embedding macros differ");
+  assert.equal(stagedDiagnostics.confdefsSha256, diagnostics.confdefsSha256);
   copyFileSync(join(root, "receipt/shared-group-library.json"), join(native, "shared-group-library.json"));
   process.stdout.write(JSON.stringify({ profile: receipt.profile, library: receipt.library, headers: receipt.headers, native }) + "\n");
 }

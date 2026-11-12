@@ -344,6 +344,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.read` | `(fd, buf, len) -> n` |
 | `runtime_proc.write` | `(fd, buf, len) -> n` |
 | `runtime_proc.start_status` | `(pid) -> status`, non-consuming entry observation described below |
+| `runtime_proc.spawn_error` | `(pid, buf, capacity) -> copied/required UTF-8 byte count or negative errno`, non-consuming diagnostic query |
 | `runtime_proc.wait` | `(pid, out_ptr) -> 0` (`u32 kind`, `i32 code`) |
 | `runtime_proc.wait_job` | `(job, flags, status_ptr) -> errno` |
 | `runtime_proc.kill` | `(pid, sig) -> 0` |
@@ -427,6 +428,23 @@ While children are running the event loop sleeps in `poll` on exactly what its w
 (readable output pipes, a blocked stdin pipe as writable, child exit kind 2, job-empty kind 4,
 and child startup kind 6 while pending) instead of the network `poll(timeout)` slot, so child
 output and lifecycle observations wake it directly.
+`spawn_error(0)` returns this caller's latest synchronous spawn failure. Each spawn attempt
+clears it. A positive PID reads an authorized direct child's startup detail, which expires
+when `wait` or `wait_job` collects the child. The text is at most 4096 UTF-8 bytes, has no NUL
+terminator, and is diagnostic text rather than an error schema. A short or zero-capacity
+buffer writes nothing and returns the required count; an invalid supplied span returns
+`-EFAULT`. Pending diagnostic publication returns `-EAGAIN`; unknown or collected children
+return `-ECHILD`. Waffle's `docs/host-abi.md` defines the full contract.
+
+The guest copies PID 0 synchronously before cleanup. Every child wait, including synchronous
+spawn, kill probes and teardown, first observes final startup and copies any failure detail.
+A pending startup or diagnostic defers collection, so a failure published between status
+and wait cannot lose its text. The guest caches the copy on the child and appends it to
+`Bun.spawn`, `Bun.spawnSync` and `node:child_process` error messages. Error codes, errno,
+syscall and path keep their existing meanings. Hosts keep their original full diagnostics;
+only the guest copy is bounded. The native Wasmtime launcher supplies the same import and
+retains native startup error chains until collection.
+
 `Bun.spawnSync` polls the same way until completion. Pipe capacity, the number of concurrent
 children and per-process memory belong to the process service, not to this guest contract.
 
