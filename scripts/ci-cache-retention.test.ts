@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { captureObjects } from "./ci-sccache-cache";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected YAML object");
@@ -25,7 +26,7 @@ const caches = groups.flatMap(group => group.steps.filter(step => /^actions\/cac
 const writers = caches.filter(({ step }) => step.uses !== "actions/cache/restore@v4");
 
 function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true"): boolean {
-  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "steps.budget.outputs.fits": "true" };
+  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
   const expression = String(step.if ?? "true").replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replace(/success\(\)/g, "true").replace(/cancelled\(\)/g, "false")
     .replace(/(?:github|steps|needs|inputs)\.[\w.-]+/g, name => {
@@ -74,18 +75,22 @@ test("PRs can still restore all shared caches, including compiler objects and to
   }
 });
 
-test("Rust object seeds do not create a new archive for every main commit", () => {
+test("Rust objects restore compatible generations and save only changed inventories", () => {
   const group = groups.find(group => group.file === "actions/rust-build-cache/action.yml");
   const restore = group?.steps.find(step => step.id === "objects");
   expect(restore?.uses).toBe("actions/cache/restore@v4");
   const config = record(restore?.with);
   expect(config.path).toBe("${{ runner.temp }}/sccache");
   const action = record(Bun.YAML.parse(readFileSync(resolve(github, "actions/rust-build-cache/action.yml"), "utf8")));
-  expect(record(record(action.outputs)["cache-primary-key"]).value).toBe("${{ steps.objects.outputs.cache-primary-key }}");
-  expect(record(record(action.outputs)["cache-hit"]).value).toBe("${{ steps.objects.outputs.cache-hit }}");
-  expect(config.key).toBe("rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}");
-  expect(String(config["restore-keys"])).toContain("rust-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-");
-  expect(String(config["restore-keys"])).toContain("rust-objects-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-");
+  expect(record(record(action.outputs)["cache-primary-key"]).value).toBe("${{ steps.object-key.outputs.key }}");
+  expect(record(action.outputs)).not.toHaveProperty("cache-hit");
+  expect(config.key).toBe("${{ steps.object-key.outputs.key }}-restore");
+  expect(String(config["restore-keys"])).toContain("${{ steps.object-key.outputs.key }}-");
+  expect(String(config["restore-keys"])).toContain("rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-");
+  expect(String(config["restore-keys"])).toContain("rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-");
+  const key = group?.steps.find(step => step.id === "object-key");
+  expect(String(key?.run)).toContain("rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}");
+  expect(group?.steps.findIndex(step => String(step.run).includes("ci-sccache-cache.ts\" capture"))).toBeGreaterThan(group?.steps.findIndex(step => step.id === "objects") ?? -1);
   expect(group?.steps.some(step => String(step.run).includes('echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"'))).toBe(true);
   for (const job of ["native-quality", "rust", "shared-sysroot"]) {
     const jobSteps = groups.find(group => group.job === job)?.steps ?? [];
@@ -95,7 +100,6 @@ test("Rust object seeds do not create a new archive for every main commit", () =
     expect(save).toBeGreaterThan(setup);
     expect(record(jobSteps[save]?.with)).toEqual({
       key: "${{ steps.rust-objects.outputs.cache-primary-key }}",
-      "cache-hit": "${{ steps.rust-objects.outputs.cache-hit }}",
     });
   }
 });
@@ -107,34 +111,64 @@ test("release download saves still require a changed inventory", () => {
   expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
 });
 
-test("Rust seed writes reject oversized legacy restores even when no compiler runs", () => {
+test("compiler-object rotation is main-only and waits for a successful changed snapshot", () => {
+  const group = groups.find(group => group.file === "actions/save-rust-build-cache/action.yml");
+  const cleanup = group?.steps.find(step => String(step.run).includes("ci-sccache-cache.ts\" prune"));
+  if (!cleanup) throw new Error("Missing bounded compiler-object rotation");
+  expect(String(cleanup.if)).toContain("steps.publish.outcome == 'success'");
+  expect(String(cleanup.if)).toContain("steps.budget.outputs.changed == 'true'");
+  expect(String(cleanup.if)).toContain("steps.budget.outputs.fits == 'true'");
+  expect(allows(cleanup, "push", "refs/heads/main")).toBe(true);
+  expect(allows(cleanup, "pull_request", "refs/pull/1/merge")).toBe(false);
+  expect(allows(cleanup, "workflow_dispatch", "refs/heads/main")).toBe(false);
+  expect(allows(cleanup, "push", "refs/heads/main", "true", "false")).toBe(false);
+  expect(allows({ ...cleanup, if: String(cleanup.if).replaceAll("steps.publish.outcome", "'failure'") }, "push", "refs/heads/main")).toBe(false);
+  const jobs = record(record(Bun.YAML.parse(readFileSync(resolve(github, "workflows/ci.yml"), "utf8"))).jobs);
+  const writers = Object.entries(jobs).filter(([, value]) => record(record(value).permissions ?? {}).actions === "write");
+  expect(writers.map(([id]) => id).sort()).toEqual(["native-quality", "rust", "shared-sysroot"]);
+  for (const [, job] of writers) expect(record(record(job).permissions).contents).toBe("read");
+});
+
+test("Rust snapshot plans reject oversized learned objects and suppress unchanged archives", async () => {
   const group = groups.find(group => group.file === "actions/save-rust-build-cache/action.yml");
   const budget = group?.steps.find(step => step.id === "budget");
   const save = group?.steps.find(step => step.uses === "actions/cache/save@v4");
   const command = budget?.run;
   if (typeof command !== "string" || !save) throw new Error("Missing Rust seed size gate");
   expect(String(save.if)).toContain("steps.budget.outputs.fits == 'true'");
+  expect(String(save.if)).toContain("steps.budget.outputs.changed == 'true'");
+  expect(String(save.if)).not.toContain("cache-hit");
+  expect(record(save.with).key).toBe("${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}");
+  expect(allows(save, "push", "refs/heads/main", "true")).toBe(true);
+  expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
   expect(allows({ ...save, if: String(save.if).replaceAll("steps.budget.outputs.fits", "''") }, "push", "refs/heads/main")).toBe(false);
   const root = mkdtempSync(resolve(tmpdir(), "bun-wasm-cache-retention-"));
   const cache = resolve(root, "cache");
   const output = resolve(root, "output");
+  const snapshot = resolve(root, "initial.json");
   const invoke = () => spawnSync("bash", ["-euo", "pipefail", "-c", command], {
-    encoding: "utf8", env: { ...process.env, CACHE_PATH: cache, GITHUB_OUTPUT: output },
+    encoding: "utf8", env: { ...process.env, CACHE_PATH: cache, SNAPSHOT_PATH: snapshot, GITHUB_OUTPUT: output, GITHUB_WORKSPACE: resolve(github, "..") },
   });
   try {
+    await captureObjects(cache, snapshot);
     writeFileSync(output, "");
     expect(invoke().status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("");
-    mkdirSync(cache);
-    writeFileSync(resolve(cache, "object"), "compiler object");
-    expect(invoke().status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("fits=true\n");
+    expect(readFileSync(output, "utf8")).toContain("changed=false\n");
     writeFileSync(output, "");
-    truncateSync(resolve(cache, "object"), 603979777);
+    mkdirSync(resolve(cache, "a/a"), { recursive: true });
+    const object = resolve(cache, "a/a", "a".repeat(64));
+    writeFileSync(object, "compiler object");
+    expect(invoke().status).toBe(0);
+    expect(readFileSync(output, "utf8")).toContain("changed=true\nfits=true\n");
+    await captureObjects(cache, snapshot);
+    writeFileSync(output, "");
+    expect(invoke().status).toBe(0);
+    expect(readFileSync(output, "utf8")).toContain("changed=false\n");
+    truncateSync(object, 603979777);
+    writeFileSync(output, "");
     const oversized = invoke();
     expect(oversized.status).toBe(0);
-    expect(oversized.stdout).toContain("Skip oversized Rust object seed");
-    expect(readFileSync(output, "utf8")).toBe("");
+    expect(readFileSync(output, "utf8")).toContain("changed=true\nfits=false\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

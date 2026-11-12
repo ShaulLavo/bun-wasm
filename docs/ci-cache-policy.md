@@ -8,7 +8,7 @@ This covers native source checkouts, the native quality checkpoint, native Cargo
 targets, the JSC prebuild, JSC Cargo targets and the bash-web shell build. Restore
 keys, input hashes, build commands and required checks keep their existing guards.
 Validated main checkpoints can still be saved before a later unrelated failure.
-Exact hits are not saved again. Bash-web uses separate restore/save actions so
+Exact build-archive hits are not saved again. Bash-web uses separate restore/save actions so
 its post-job action cannot create a large PR-scoped archive.
 The native Cargo restore and main-only v4 quality checkpoint belong to
 `Native quality checkpoint`. Its run artifact transfers compiled state to the
@@ -45,6 +45,25 @@ discard finished build work. These remain build caches: all consumers still bloc
 the job, and every restored profile still passes the producer's input and byte
 checks. Saving the immutable native key after only one engine would strand an
 incomplete entry, so there is one save after all three producers succeed.
+
+Compiler objects use a separate 512 MiB disk cache. Its restore captures immutable
+object paths and sizes; a main run publishes a new snapshot only when compilation
+adds or replaces objects. Access-time changes and evictions alone do not create
+archives. Each saved key includes the inventory fingerprint and run generation,
+so cycling back to an older inventory cannot freeze the latest-prefix restore.
+Compatible dependency and job prefixes remain available, including the existing
+v2 seeds during migration. Archive matches and compiler hit rates are logged
+separately.
+
+After publication, cache cleanup verifies that the new key is visible, then keeps
+it and the newest other v3 main snapshot for that OS, architecture and job. It
+deletes only older recognized v3 compiler-object IDs. Existing v2 seeds remain
+available to in-flight workflows using the old policy; GitHub's normal eviction
+removes them after they stop being used. The three
+cache-using jobs grant the workflow token Actions write access for this main-only
+step; owner credentials are unchanged. A failed cleanup warns and preserves the
+remaining entries. Build results and blocking checks are unaffected. Oversized
+snapshots retain the existing 603,979,776-byte refusal budget.
 
 ## Verify the policy
 

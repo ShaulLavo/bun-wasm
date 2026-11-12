@@ -1,31 +1,29 @@
-name: Save Rust dependency objects
-description: Seed dependency-keyed compiler objects on main without oversized snapshots
+name: Save learned Rust compiler objects
+description: Save changed bounded object inventories on main and retain two snapshots per job
 inputs:
   key:
-    description: Primary key from the Rust object restore
-    required: true
-  cache-hit:
-    description: Whether the dependency seed matched exactly
+    description: Dependency namespace from the Rust object restore
     required: true
 runs:
   using: composite
   steps:
     - id: budget
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cache-hit != 'true'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       shell: bash
       env:
         CACHE_PATH: ${{ runner.temp }}/sccache
+        SNAPSHOT_PATH: ${{ runner.temp }}/sccache-inventory.json
       run: |
-        if [[ ! -d "$CACHE_PATH" ]]; then exit 0; fi
-        bytes=$(du -sb "$CACHE_PATH" | cut -f1)
-        # A legacy restore may exceed the cap without starting sccache. Allow 12.5% directory overhead.
-        if (( bytes > 603979776 )); then
-          echo "::notice::Skip oversized Rust object seed ($bytes bytes)."
-          exit 0
-        fi
-        echo 'fits=true' >> "$GITHUB_OUTPUT"
+        bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" plan "$CACHE_PATH" "$SNAPSHOT_PATH"
     - uses: actions/cache/save@v4
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.cache-hit != 'true' && steps.budget.outputs.fits == 'true'
+      id: publish
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true'
       with:
         path: ${{ runner.temp }}/sccache
-        key: ${{ inputs.key }}
+        key: ${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - name: Retain two compiler object snapshots after replacement is visible
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true' && steps.publish.outcome == 'success'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" prune "${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}"
