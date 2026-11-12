@@ -76,6 +76,7 @@
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",
     "web/src/memory-telemetry.ts",
+    "web/src/launch-failure.ts",
     "web/src/jsc-allocation-boundary.ts",
     "web/src/memory-channel.ts"
   ],

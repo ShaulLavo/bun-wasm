@@ -2,6 +2,7 @@ import type { Transport } from "./transport";
 import { admit, awaitWithin, type Admission } from "./scope";
 import { until } from "./playground";
 import { armSafariClick, observeSafariClick } from "./safari-click";
+import { presentIphonePreview } from "./iphone-browser";
 export type SafariTransportOptions = {
   endpoint: string;
   browser: "safari" | "iphone-safari";
@@ -14,6 +15,26 @@ export type SafariTransport = Transport;
 
 type Request = (path: string, body?: unknown, method?: string) => Promise<unknown>;
 type CleanupRequests = { command: Request; session: Request; timeoutMs: number };
+type Preview = { kind: "tab"; handle: string } | { kind: "frame"; token: string };
+
+// Serialized with the existing presenter. Reserve ownership before dispatch so a late
+// creation still belongs to cleanup after its admission expires.
+function presentFrame(input: { url: string; token: string }, present: typeof presentIphonePreview): void {
+  if (document.getElementById("__goalsIphonePreview")) throw new Error("Safari preview frame is already occupied");
+  present(input.url);
+  const frame = document.getElementById("__goalsIphonePreview");
+  if (!(frame instanceof HTMLIFrameElement)) throw new Error("Missing Safari preview frame");
+  frame.dataset.goalsPresentation = input.token;
+}
+
+function ownedFrame(token: string, remove: boolean): HTMLIFrameElement | null {
+  const frame = document.getElementById("__goalsIphonePreview");
+  if (!frame && remove) return null;
+  if (!(frame instanceof HTMLIFrameElement) || frame.dataset.goalsPresentation !== token) throw new Error("Safari preview frame identity changed");
+  if (!remove) return frame;
+  frame.remove();
+  return null;
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Safari WebDriver object");
@@ -87,7 +108,7 @@ Promise.resolve().then(() => (0, eval)(expression)).then(value => {
 `;
 
 function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests, browser: SafariTransportOptions["browser"]): SafariTransport {
-  let preview: string | undefined;
+  let preview: Preview | undefined;
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
   let operationRequest = request;
@@ -97,6 +118,24 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   };
   const select = async (selected: string, admission?: Admission): Promise<void> => { await command(admission, "/window", { handle: selected }); };
   const navigate = async (url: string, admission: Admission): Promise<void> => { await command(admission, "/url", { url }); };
+
+  async function hostContext(admission?: Admission): Promise<void> {
+    await select(host, admission);
+    if (browser === "safari") await command(admission, "/frame", { id: null });
+  }
+
+  async function frameElement(token: string, remove: boolean, admission?: Admission): Promise<unknown> {
+    return command(admission, "/execute/sync", { script: `return (${ownedFrame.toString()})(arguments[0], arguments[1]);`, args: [token, remove] });
+  }
+
+  async function previewContext(admission: Admission): Promise<void> {
+    if (!preview) throw new Error("Safari transport has no preview");
+    if (preview.kind === "tab") return select(preview.handle, admission);
+    await hostContext(admission);
+    const element = object(await frameElement(preview.token, false, admission));
+    handle(element["element-6066-11e4-a52e-4f735466cecf"]);
+    await command(admission, "/frame", { id: element });
+  }
 
   function serial<T>(admission: Admission, action: () => Promise<T>): Promise<T> {
     admit(admission);
@@ -110,18 +149,24 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   async function closePreview(admission?: Admission): Promise<void> {
     if (preview === undefined) return;
     try {
-      await select(preview, admission);
-      await command(admission, "/window", undefined, "DELETE");
+      if (preview.kind === "tab") await closeTab(preview.handle, admission);
+      else { await hostContext(admission); await frameElement(preview.token, true, admission); }
       preview = undefined;
     } catch (error) {
       if (admission && (admission.signal.aborted || Date.now() >= admission.deadline)) throw error;
-      return cleanupAfterFailure(error, () => select(host));
+      return cleanupAfterFailure(error, () => hostContext());
     }
-    await select(host, admission);
+    await hostContext(admission);
+  }
+
+  async function closeTab(selected: string, admission?: Admission): Promise<void> {
+    await select(selected, admission);
+    await command(admission, "/window", undefined, "DELETE");
   }
 
   async function openPreview(url: string, admission: Admission): Promise<void> {
     try {
+      if (browser === "safari") return await openFrame(url, admission);
       const selected = await ownedPreview(admission);
       await select(selected, admission);
       await navigate(url, admission);
@@ -131,11 +176,22 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     }
   }
 
+  async function openFrame(url: string, admission: Admission): Promise<void> {
+    await closePreview(admission);
+    await hostContext(admission);
+    const token = crypto.randomUUID();
+    preview = { kind: "frame", token };
+    await command(admission, "/execute/sync", {
+      script: `(${presentFrame.toString()})(arguments[0], ${presentIphonePreview.toString()}); return null;`, args: [{ url, token }],
+    });
+    await previewContext(admission);
+  }
+
   async function ownedPreview(admission: Admission): Promise<string> {
-    if (preview !== undefined) return preview;
+    if (preview?.kind === "tab") return preview.handle;
     const created = handle(object(await command(admission, "/window/new", { type: "tab" })).handle);
     if (created === host) throw new Error("Safari returned the host handle for a new preview");
-    preview = created;
+    preview = { kind: "tab", handle: created };
     return created;
   }
 
@@ -169,11 +225,8 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     navigate: (url: string, admission: Admission) => serial(admission, () => navigate(url, admission)),
     evaluate: <T>(expression: string, admission: Admission) => serial(admission, () => evaluate<T>(expression, admission)),
     openPreview: (url: string, admission: Admission) => serial(admission, () => openPreview(url, admission)),
-    useHost: (admission: Admission) => serial(admission, () => select(host, admission)),
-    usePreview: (admission: Admission) => serial(admission, async () => {
-      if (preview === undefined) throw new Error("Safari transport has no preview");
-      await select(preview, admission);
-    }),
+    useHost: (admission: Admission) => serial(admission, () => hostContext(admission)),
+    usePreview: (admission: Admission) => serial(admission, () => previewContext(admission)),
     closePreview: (admission: Admission) => serial(admission, () => closePreview(admission)),
     close(interruptPending = false) {
       if (interruptPending) lifetime.abort(new Error("Safari session cleanup interrupted pending commands"));
