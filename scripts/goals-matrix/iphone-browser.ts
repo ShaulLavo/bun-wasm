@@ -40,7 +40,9 @@ export function installIphoneObserver(endpoint: string, nonce: string): void {
   void poll();
 }
 
-export async function presentIphonePreview(url: string | null): Promise<void> {
+// Returns at once. The frame keeps its own load-and-focus record, so a preview that never
+// loads cannot hold the owner's single observer command.
+export function presentIphonePreview(url: string | null): void {
   document.getElementById("__goalsIphonePreview")?.remove();
   if (!url) return;
   const frame = document.createElement("iframe");
@@ -48,10 +50,19 @@ export async function presentIphonePreview(url: string | null): Promise<void> {
   frame.title = "Goals framework preview";
   frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:white";
   frame.src = url;
-  await new Promise<void>(resolve => {
-    frame.addEventListener("load", () => { frame.focus(); resolve(); }, { once: true });
-    document.body.appendChild(frame);
-  });
+  frame.addEventListener("load", () => { frame.focus(); frame.dataset.goalsFocused = "true"; }, { once: true });
+  document.body.appendChild(frame);
+}
+
+// Read in the preview document: its completion is what fires the owner frame's load event.
+export function iphonePreviewLoad(): { loaded: boolean; readyState: DocumentReadyState } {
+  return { loaded: document.readyState === "complete", readyState: document.readyState };
+}
+
+// Read in the owner document: true only after the current frame's load listener focused it.
+export function iphonePreviewFocus(): { presented: boolean; focused: boolean } {
+  const frame = document.getElementById("__goalsIphonePreview");
+  return { presented: frame !== null, focused: frame?.dataset.goalsFocused === "true" };
 }
 
 type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };
