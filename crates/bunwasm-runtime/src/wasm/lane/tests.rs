@@ -1751,7 +1751,10 @@ fn a_staged_frame_whose_reply_was_lost_is_settled_under_its_end() {
     // A caller that staged twice has one frame: the earlier one is abandoned first.
     unsettled.stage(&r, lane, 0, &frame(1, 40_000)).unwrap();
     unsettled.stage(&r, lane, 0, &frame(2, 40_000)).unwrap();
-    assert!(unsettled.commit(&r, lane, 0), "the armed reader is due a wake");
+    assert!(
+        unsettled.commit(&r, lane, 0),
+        "the armed reader is due a wake"
+    );
     assert_eq!(take(&r, lane, 1), [frame(2, 40_000)]);
     assert!(!unsettled.commit(&r, lane, 0), "a frame commits once");
     // An end that moves or closes takes its staged frame with it and frees the fence.
@@ -1781,7 +1784,10 @@ fn a_drained_batch_is_handed_out_again_until_it_is_acknowledged() {
     }
     let mut unsettled = Unsettled::default();
     let first = unsettled.receive(&r, lane, 1, 2).unwrap();
-    assert_eq!((first.frames.clone(), first.more), (vec![text(0), text(1)], true));
+    assert_eq!(
+        (first.frames.clone(), first.more),
+        (vec![text(0), text(1)], true)
+    );
     // The reply carrying that batch was lost. The next call returns it again, not what follows.
     assert_eq!(unsettled.receive(&r, lane, 1, 1024).unwrap(), first);
     // Frames held here are in neither the lane nor the port, so the end may not move yet.
@@ -1791,13 +1797,392 @@ fn a_drained_batch_is_handed_out_again_until_it_is_acknowledged() {
     );
     unsettled.acknowledge(lane, 1);
     assert!(unsettled.transfer_epoch(&r, lane, 1).is_ok());
-    assert_eq!(unsettled.receive(&r, lane, 1, 1024).unwrap().frames, [text(2)]);
+    assert_eq!(
+        unsettled.receive(&r, lane, 1, 1024).unwrap().frames,
+        [text(2)]
+    );
     unsettled.acknowledge(lane, 1);
-    assert!(unsettled.receive(&r, lane, 1, 1024).unwrap().frames.is_empty());
+    assert!(
+        unsettled
+            .receive(&r, lane, 1, 1024)
+            .unwrap()
+            .frames
+            .is_empty()
+    );
     assert!(unsettled.is_empty(), "an empty batch holds nothing back");
     // A reader that closes drops what it never took.
     post(&r, lane, 0, &frame(3, 100));
     unsettled.receive(&r, lane, 1, 8).unwrap();
     unsettled.close_read(&r, lane, 1);
     assert!(unsettled.is_empty());
+}
+
+/// A root, a sender and a receiver. The carrier lane runs from the sender (side 0) to the
+/// receiver (side 1). The root keeps side 0 of each carried lane and the sender holds side 1.
+struct Relay {
+    group: Arc<Group>,
+    root: Peer,
+    sender: Peer,
+    receiver: Peer,
+    carrier: LaneRef,
+    carried: Vec<LaneRef>,
+}
+
+fn relay(ports: usize) -> Relay {
+    let group = Group::new(128);
+    let root = Peer::root(&group);
+    let sender = root.child();
+    let receiver = root.child();
+    let (r, s, d) = (root.lanes(), sender.lanes(), receiver.lanes());
+    let hand = |lane: LaneRef, side: u32, to: &Lanes<'_, Buffer, Guest>| {
+        let epoch = r.transfer_epoch(lane, side).unwrap();
+        r.transfer(lane, side, Custody::Tag(root.tag));
+        assert!(to.adopt(lane, side, epoch, 1));
+    };
+    let carrier = r.create_lane().unwrap();
+    hand(carrier, 0, &s);
+    hand(carrier, 1, &d);
+    let carried: Vec<LaneRef> = (0..ports).map(|_| r.create_lane().unwrap()).collect();
+    for lane in &carried {
+        hand(*lane, 1, &s);
+    }
+    Relay {
+        group,
+        root,
+        sender,
+        receiver,
+        carrier,
+        carried,
+    }
+}
+
+#[test]
+fn a_staged_message_moves_its_ports_and_publishes_in_one_commit() {
+    let relay = relay(2);
+    let (r, s, d) = (
+        relay.root.lanes(),
+        relay.sender.lanes(),
+        relay.receiver.lanes(),
+    );
+    let (carrier, first, second) = (relay.carrier, relay.carried[0], relay.carried[1]);
+    let mut unsettled = Unsettled::default();
+    assert_eq!(unsettled.committed(), 0, "no commit yet");
+    unsettled.stage(&s, carrier, 0, b"two ports").unwrap();
+    let epochs = [first, second].map(|lane| unsettled.stage_end(&s, carrier, 0, lane, 1).unwrap());
+    // Naming an end moves nothing and shows nothing.
+    assert_eq!(s.end_state(first, 1).0, end::OPEN);
+    assert!(take(&d, carrier, 1).is_empty());
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    unsettled.commit_staged(&s, carrier, 0, 7);
+    assert_eq!(
+        unsettled.committed(),
+        7 * 2 + 1,
+        "the armed reader is due a wake"
+    );
+    for lane in [first, second] {
+        let at = s.end_at(lane.slot, 1);
+        assert_eq!(s.mem.get(at).kind, end::IN_FLIGHT);
+        let custody = decode_custody(s.mem.load(at + CUSTODY), s.mem.load(at + CUSTODY_ARG));
+        assert_eq!(
+            custody,
+            Some(Custody::Lane(carrier, 1)),
+            "the frame's reader holds it"
+        );
+    }
+    assert_eq!(take(&d, carrier, 1), [b"two ports".to_vec()]);
+    for (lane, epoch) in [first, second].into_iter().zip(epochs) {
+        assert!(d.adopt(lane, 1, epoch, 2));
+        post(&d, lane, 1, b"from the adopter");
+        assert_eq!(take(&r, lane, 0), [b"from the adopter".to_vec()]);
+    }
+    // A commit happens once, and a later one without a wake clears the bit.
+    unsettled.commit_staged(&s, carrier, 0, 8);
+    assert_eq!(
+        unsettled.committed(),
+        7 * 2 + 1,
+        "nothing staged: nothing recorded"
+    );
+    for (nonce, word) in [(9, 9 * 2 + 1), (10, 10 * 2)] {
+        unsettled.stage(&s, carrier, 0, b"no ports").unwrap();
+        assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+        unsettled.commit_staged(&s, carrier, 0, nonce);
+        assert_eq!(
+            unsettled.committed(),
+            word,
+            "only a reader that drained is armed"
+        );
+    }
+    assert!(unsettled.is_empty());
+}
+
+#[test]
+fn an_end_is_refused_while_the_message_can_still_be_refused() {
+    let relay = relay(2);
+    let (r, s) = (relay.root.lanes(), relay.sender.lanes());
+    let (carrier, first, second) = (relay.carrier, relay.carried[0], relay.carried[1]);
+    let mut unsettled = Unsettled::default();
+    let stage_end =
+        |unsettled: &mut Unsettled, lane, side| unsettled.stage_end(&s, carrier, 0, lane, side);
+    assert_eq!(
+        stage_end(&mut unsettled, first, 1),
+        Err(Refusal::Stale),
+        "no frame staged"
+    );
+    unsettled.stage(&s, carrier, 0, b"frame").unwrap();
+    assert_eq!(
+        stage_end(&mut unsettled, carrier, 1),
+        Err(Refusal::Stale),
+        "its own lane"
+    );
+    assert_eq!(
+        stage_end(&mut unsettled, first, 0),
+        Err(Refusal::NotOwned),
+        "the root's end"
+    );
+    assert_eq!(
+        stage_end(&mut unsettled, first, 2),
+        Err(Refusal::NotOwned),
+        "no such side"
+    );
+    let missing = LaneRef {
+        slot: LANE_SLOTS,
+        generation: 1,
+    };
+    assert_eq!(
+        stage_end(&mut unsettled, missing, 0),
+        Err(Refusal::NotOwned)
+    );
+    // Frames read for this thread and not yet taken would be lost to the next owner.
+    post(&r, second, 0, b"unread");
+    unsettled.receive(&s, second, 1, 8).unwrap();
+    assert_eq!(
+        stage_end(&mut unsettled, second, 1),
+        Err(Refusal::Undelivered)
+    );
+    unsettled.acknowledge(second, 1);
+    // An end whose epochs would not last through the move and its terminal transitions.
+    let at = s.end_at(second.slot, 1);
+    let open = s.mem.get(at);
+    s.mem.set(at, Word::new(open.tag, MAX_COUNT - 1, end::OPEN));
+    assert_eq!(
+        stage_end(&mut unsettled, second, 1),
+        Err(Refusal::Exhausted)
+    );
+    s.mem.set(at, open);
+    assert!(stage_end(&mut unsettled, first, 1).is_ok());
+    assert_eq!(
+        stage_end(&mut unsettled, first, 1),
+        Err(Refusal::Stale),
+        "an end travels once"
+    );
+    // Every refusal left the frame staged with the one end it accepted.
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    unsettled.abort(&s, carrier, 0);
+    unsettled.abort(&s, carrier, 0);
+    assert!(unsettled.is_empty());
+    assert_eq!(
+        s.end_state(first, 1).0,
+        end::OPEN,
+        "an abort has nothing to undo"
+    );
+}
+
+#[test]
+fn a_stale_plan_is_refused_before_anything_moves() {
+    let relay = relay(2);
+    let (r, s, d) = (
+        relay.root.lanes(),
+        relay.sender.lanes(),
+        relay.receiver.lanes(),
+    );
+    let (carrier, first, second) = (relay.carrier, relay.carried[0], relay.carried[1]);
+    let mut unsettled = Unsettled::default();
+    let untouched = |unsettled: &Unsettled, why: &str| {
+        assert_eq!(unsettled.committed(), 0, "{why}");
+        assert!(take(&d, carrier, 1).is_empty(), "{why}");
+        assert_eq!(s.end_state(first, 1).0, end::OPEN, "{why}");
+    };
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 0),
+        Err(Refusal::Stale),
+        "nothing staged"
+    );
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 2),
+        Err(Refusal::NotOwned)
+    );
+    // A carried end that received frames after it was named.
+    unsettled.stage(&s, carrier, 0, b"frame").unwrap();
+    unsettled.stage_end(&s, carrier, 0, first, 1).unwrap();
+    unsettled.stage_end(&s, carrier, 0, second, 1).unwrap();
+    post(&r, second, 0, b"late");
+    unsettled.receive(&s, second, 1, 8).unwrap();
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 0),
+        Err(Refusal::Undelivered)
+    );
+    unsettled.acknowledge(second, 1);
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    // A carried end that left and came back is open again, at another epoch.
+    let epoch = unsettled.transfer_epoch(&s, second, 1).unwrap();
+    unsettled.transfer(&s, second, 1, Custody::Tag(relay.sender.tag));
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 0),
+        Err(Refusal::NotOwned)
+    );
+    assert!(s.adopt(second, 1, epoch, 2));
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Err(Refusal::Stale));
+    untouched(&unsettled, "a moved end");
+    // Staging again replaces the whole plan: the ends named before are forgotten.
+    unsettled.stage(&s, carrier, 0, b"again").unwrap();
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    unsettled.stage_end(&s, carrier, 0, second, 1).unwrap();
+    // A carried end that closed.
+    unsettled.close_end(&s, second, 1);
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 0),
+        Err(Refusal::NotOwned)
+    );
+    untouched(&unsettled, "a closed end");
+    // The plain commit never publishes a frame that names ends: they would not have moved.
+    assert!(!unsettled.commit(&s, carrier, 0));
+    untouched(&unsettled, "a plain commit");
+    assert!(unsettled.is_empty());
+    // The sender end closing takes the plan with it.
+    unsettled.stage(&s, carrier, 0, b"last").unwrap();
+    unsettled.stage_end(&s, carrier, 0, first, 1).unwrap();
+    unsettled.close_end(&s, carrier, 0);
+    assert_eq!(
+        unsettled.commit_check(&s, carrier, 0),
+        Err(Refusal::NotOwned)
+    );
+    assert!(unsettled.is_empty());
+    assert_eq!(s.end_state(first, 1).0, end::OPEN);
+}
+
+#[test]
+fn a_carried_end_takes_its_own_abandoned_frame_with_it() {
+    let relay = relay(1);
+    let s = relay.sender.lanes();
+    let (carrier, carried) = (relay.carrier, relay.carried[0]);
+    let fence = s.dir_at(carried.slot, 0) + WRITING;
+    let mut unsettled = Unsettled::default();
+    unsettled.stage(&s, carried, 1, &frame(0, 40_000)).unwrap();
+    assert_eq!(s.mem.load(fence), 1);
+    unsettled.stage(&s, carrier, 0, b"frame").unwrap();
+    unsettled.stage_end(&s, carrier, 0, carried, 1).unwrap();
+    assert_eq!(
+        s.mem.load(fence),
+        0,
+        "naming the end abandoned what it had staged"
+    );
+    // One staged after it was named goes when the end does.
+    unsettled.stage(&s, carried, 1, &frame(1, 40_000)).unwrap();
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    unsettled.commit_staged(&s, carrier, 0, 1);
+    assert_eq!(s.mem.load(fence), 0);
+    assert!(unsettled.is_empty());
+}
+
+#[test]
+fn a_nonce_and_its_wake_bit_fit_one_exact_number() {
+    assert_eq!(nonce(0, 0), Err(Refusal::Range), "zero means no commit");
+    assert_eq!(nonce(0, 1), Ok(1));
+    assert_eq!(nonce(1, 0), Ok(1 << 32));
+    assert_eq!(nonce((1 << 20) - 1, u32::MAX), Ok(MAX_NONCE));
+    assert_eq!(nonce(1 << 20, 0), Err(Refusal::Range));
+    assert_eq!(nonce(u32::MAX, u32::MAX), Err(Refusal::Range));
+    let relay = relay(0);
+    let s = relay.sender.lanes();
+    let mut unsettled = Unsettled::default();
+    for (value, wake) in [
+        (1, true),
+        (1 << 32, false),
+        (MAX_NONCE, false),
+        (MAX_NONCE, true),
+    ] {
+        if wake {
+            // A reader that drained to empty asks for a wake at the next commit.
+            take(&relay.receiver.lanes(), relay.carrier, 1);
+        }
+        unsettled.stage(&s, relay.carrier, 0, b"frame").unwrap();
+        unsettled.commit_staged(&s, relay.carrier, 0, value);
+        let word = unsettled.committed();
+        assert_eq!(word >> 1, value);
+        assert_eq!(word & 1 == 1, wake, "nonce {value}");
+        // The word adapter hands the result to JavaScript as a double.
+        let number = word as i64 as f64;
+        assert_eq!(number as u64, word, "nonce {value} survives the number");
+        assert_eq!(((number - number % 2.0) / 2.0) as u64, value);
+    }
+    assert_eq!(MAX_NONCE * 2 + 1, (1 << 53) - 1);
+}
+
+#[test]
+fn a_sender_killed_at_any_access_of_the_commit_leaves_the_message_absent_or_whole() {
+    for len in [64, 300_000] {
+        let (mut absent, mut whole_after_death) = (0, 0);
+        for stop in 0.. {
+            let relay = relay(2);
+            let (r, s, d) = (
+                relay.root.lanes(),
+                relay.sender.lanes(),
+                relay.receiver.lanes(),
+            );
+            let (carrier, carried) = (relay.carrier, &relay.carried);
+            let mut unsettled = Unsettled::default();
+            unsettled.stage(&s, carrier, 0, &frame(stop, len)).unwrap();
+            let epochs: Vec<u32> = carried
+                .iter()
+                .map(|lane| unsettled.stage_end(&s, carrier, 0, *lane, 1).unwrap())
+                .collect();
+            unsettled.commit_check(&s, carrier, 0).unwrap();
+            let killed = Killed {
+                inner: &relay.group.mem,
+                stop,
+                seen: Cell::new(0),
+            };
+            let dying = Lanes {
+                mem: &killed,
+                host: &relay.sender.guest,
+                ledger: relay.root.ledger,
+                tag: relay.sender.tag,
+            };
+            let commit = || unsettled.commit_staged(&dying, carrier, 0, 1);
+            let survived = catch_unwind(AssertUnwindSafe(commit)).is_ok();
+            relay.sender.release();
+            r.sweep(Sweep::Full);
+            let got = take(&d, carrier, 1);
+            if got.is_empty() {
+                // No frame names the ports. Whichever of them already moved wait with the
+                // frame's reader and close when it does; the others died with the sender.
+                assert!(!survived, "stop {stop}: a finished commit shows its frame");
+                absent += 1;
+                d.close_end(carrier, 1);
+                r.sweep(Sweep::Full);
+                for lane in carried {
+                    assert_eq!(r.end_state(*lane, 1).0, end::CLOSED, "stop {stop}");
+                    assert!(r.drain(*lane, 0, 8).unwrap().terminal, "stop {stop}");
+                }
+            } else {
+                // The publication store is the last one that matters: every port it names is
+                // already in the reader's custody.
+                assert_eq!(got, [frame(stop, len)], "stop {stop}");
+                whole_after_death += usize::from(!survived);
+                for (lane, epoch) in carried.iter().zip(&epochs) {
+                    assert!(d.adopt(*lane, 1, *epoch, 2), "stop {stop}");
+                    post(&d, *lane, 1, b"from the adopter");
+                    assert_eq!(take(&r, *lane, 0), [b"from the adopter".to_vec()]);
+                }
+            }
+            if survived {
+                break;
+            }
+        }
+        assert!(
+            absent > 0,
+            "length {len}: no stop fell before the publication store"
+        );
+        assert!(whole_after_death > 0, "length {len}: no stop fell after it");
+    }
 }

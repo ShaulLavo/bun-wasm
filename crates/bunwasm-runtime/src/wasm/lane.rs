@@ -284,6 +284,10 @@ pub(crate) enum Refusal {
     Undelivered,
     /// The lane failed validation; its reading direction is now closed.
     Corrupt(&'static str),
+    /// The staged message is gone, or an end it carries changed since it was staged.
+    Stale,
+    /// A commit word is outside its range.
+    Range,
 }
 
 impl std::fmt::Display for Refusal {
@@ -301,6 +305,8 @@ impl std::fmt::Display for Refusal {
                 "MessagePort lane holds received messages this thread has not taken"
             ),
             Refusal::Corrupt(what) => write!(f, "MessagePort lane is corrupt: {what}"),
+            Refusal::Stale => write!(f, "MessagePort changed during transfer"),
+            Refusal::Range => write!(f, "MessagePort lane commit is out of range"),
         }
     }
 }
@@ -1898,13 +1904,36 @@ impl TryFrom<Drain> for Received {
 /// moves takes its entries with it.
 #[derive(Default)]
 pub(crate) struct Unsettled {
-    staged: BTreeMap<(LaneRef, u32), Staged>,
+    staged: BTreeMap<(LaneRef, u32), Plan>,
     received: BTreeMap<(LaneRef, u32), Received>,
+    /// The last [`Unsettled::commit_staged`]: its nonce doubled, plus one when a wake is due.
+    outcome: u64,
+}
+
+/// A frame staged under its sender end, and the port ends it carries. The ends are only named
+/// here until the commit: nothing in group memory says they are about to move.
+struct Plan {
+    frame: Staged,
+    /// Each carried end and the epoch it was open at when it was added.
+    ends: Vec<(LaneRef, u32, u32)>,
+}
+
+/// The largest commit nonce. Doubled and with the wake bit it is 2^53 - 1, the largest whole
+/// number a word result carries exactly.
+pub(crate) const MAX_NONCE: u64 = (1 << 52) - 1;
+
+/// A commit nonce from its two words. Zero means "no commit" and is never a nonce.
+pub(crate) fn nonce(high: u32, low: u32) -> Result<u64, Refusal> {
+    let nonce = (u64::from(high) << 32) | u64::from(low);
+    if nonce == 0 || nonce > MAX_NONCE {
+        return Err(Refusal::Range);
+    }
+    Ok(nonce)
 }
 
 impl Unsettled {
     /// Stages `text` for the peer of this end. A frame staged earlier and never settled is
-    /// abandoned first, so an end has at most one.
+    /// abandoned first with the ends it named, so an end has at most one.
     pub(crate) fn stage<M: Memory + ?Sized, H: Host + ?Sized>(
         &mut self,
         lanes: &Lanes<'_, M, H>,
@@ -1913,21 +1942,31 @@ impl Unsettled {
         text: &[u8],
     ) -> Result<(), Refusal> {
         self.abort(lanes, lane, side);
-        let staged = lanes.retrying(|lanes| lanes.reserve(lane, side, text))?;
-        self.staged.insert((lane, side), staged);
+        let frame = lanes.retrying(|lanes| lanes.reserve(lane, side, text))?;
+        let plan = Plan {
+            frame,
+            ends: Vec::new(),
+        };
+        self.staged.insert((lane, side), plan);
         Ok(())
     }
 
-    /// Publishes this end's staged frame. True when a wake hint is due.
+    /// Publishes this end's staged frame. True when a wake hint is due. A frame that names
+    /// carried ends is published only by [`Unsettled::commit_staged`]; here it is abandoned.
     pub(crate) fn commit<M: Memory + ?Sized, H: Host + ?Sized>(
         &mut self,
         lanes: &Lanes<'_, M, H>,
         lane: LaneRef,
         side: u32,
     ) -> bool {
-        self.staged
-            .remove(&(lane, side))
-            .is_some_and(|staged| lanes.commit(staged))
+        let Some(plan) = self.staged.remove(&(lane, side)) else {
+            return false;
+        };
+        if !plan.ends.is_empty() {
+            lanes.abort(plan.frame);
+            return false;
+        }
+        lanes.commit(plan.frame)
     }
 
     pub(crate) fn abort<M: Memory + ?Sized, H: Host + ?Sized>(
@@ -1936,9 +1975,91 @@ impl Unsettled {
         lane: LaneRef,
         side: u32,
     ) {
-        if let Some(staged) = self.staged.remove(&(lane, side)) {
-            lanes.abort(staged);
+        if let Some(plan) = self.staged.remove(&(lane, side)) {
+            lanes.abort(plan.frame);
         }
+    }
+
+    /// Adds a port end to the frame staged under `lane`, `side`, and returns the epoch the
+    /// end will have in flight. Nothing moves: the end is checked and named. Refused unless
+    /// this member holds it open with no frames read and not yet taken, and its epochs last.
+    pub(crate) fn stage_end<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+        end: LaneRef,
+        end_side: u32,
+    ) -> Result<u32, Refusal> {
+        // A lane cannot carry its own ends.
+        if end == lane {
+            return Err(Refusal::Stale);
+        }
+        let epoch = self.transfer_epoch(lanes, end, end_side)?;
+        // A frame the carried end staged itself was never committed, so nobody waits for it.
+        self.abort(lanes, end, end_side);
+        let plan = self.staged.get_mut(&(lane, side)).ok_or(Refusal::Stale)?;
+        // An end travels once.
+        if plan
+            .ends
+            .iter()
+            .any(|item| (item.0, item.1) == (end, end_side))
+        {
+            return Err(Refusal::Stale);
+        }
+        plan.ends.push((end, end_side, epoch - 1));
+        Ok(epoch)
+    }
+
+    /// Everything [`Unsettled::commit_staged`] relies on, checked while the caller can still
+    /// refuse: the frame is staged, and each end it names is still this member's, open at
+    /// the epoch it was added at, with nothing read and not yet taken.
+    pub(crate) fn commit_check<M: Memory + ?Sized, H: Host + ?Sized>(
+        &self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+    ) -> Result<(), Refusal> {
+        lanes.owned(lane, side)?;
+        let plan = self.staged.get(&(lane, side)).ok_or(Refusal::Stale)?;
+        for &(end, end_side, count) in &plan.ends {
+            if self.received.contains_key(&(end, end_side)) {
+                return Err(Refusal::Undelivered);
+            }
+            if lanes.owned(end, end_side)?.count != count {
+                return Err(Refusal::Stale);
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves every end the staged frame names into the custody of the frame's reader, then
+    /// publishes the frame, and records `nonce` with whether a wake is due. No allocation, host
+    /// call or refusal: [`Unsettled::commit_check`] with the same end comes first.
+    pub(crate) fn commit_staged<M: Memory + ?Sized, H: Host + ?Sized>(
+        &mut self,
+        lanes: &Lanes<'_, M, H>,
+        lane: LaneRef,
+        side: u32,
+        nonce: u64,
+    ) {
+        let Some(plan) = self.staged.remove(&(lane, side)) else {
+            return;
+        };
+        let custody = Custody::Lane(lane, side ^ 1);
+        for &(end, end_side, _) in &plan.ends {
+            // An end that moves takes its own staged frame with it; removing one frees only.
+            self.abort(lanes, end, end_side);
+            lanes.transfer(end, end_side, custody);
+        }
+        let wake = lanes.commit(plan.frame);
+        self.outcome = (nonce << 1) | u64::from(wake);
+    }
+
+    /// The nonce of the last [`Unsettled::commit_staged`] doubled, plus one when its reader
+    /// was due a wake. Zero before any.
+    pub(crate) fn committed(&self) -> u64 {
+        self.outcome
     }
 
     /// Reads up to `limit` frames, or hands out again the batch nobody acknowledged. The copy
@@ -2335,6 +2456,41 @@ pub(crate) mod guest {
         0
     }
 
+    /// The carried end is words three to five, after the sender end that staged the frame.
+    fn stage_end(words: &Words) -> i64 {
+        let end = LaneRef {
+            slot: words[3],
+            generation: words[4],
+        };
+        refusable(on_end(words, |lanes, unsettled, lane, side| {
+            unsettled
+                .stage_end(lanes, lane, side, end, words[5])
+                .map(i64::from)
+        }))
+    }
+
+    /// The sender end, then the nonce as two words. The same words go to `laneCommitStaged`.
+    fn commit_check(words: &Words) -> i64 {
+        refusable(on_end(words, |lanes, unsettled, lane, side| {
+            nonce(words[3], words[4])?;
+            unsettled.commit_check(lanes, lane, side).map(|()| 0)
+        }))
+    }
+
+    fn commit_staged(words: &Words) -> i64 {
+        let Ok(nonce) = nonce(words[3], words[4]) else {
+            return 0;
+        };
+        on_end(words, |lanes, unsettled, lane, side| {
+            unsettled.commit_staged(lanes, lane, side, nonce)
+        });
+        0
+    }
+
+    fn committed(_: &Words) -> i64 {
+        lanes(|_, unsettled| unsettled.committed() as i64).unwrap_or(0)
+    }
+
     fn drained(words: &Words) -> i64 {
         on_end(words, |_, unsettled, lane, side| {
             unsettled.acknowledge(lane, side)
@@ -2419,7 +2575,7 @@ pub(crate) mod guest {
         table.add("wasm.laneDrain", drain);
         table.add("wasm.laneRefusal", |_| refusal());
         table.add("wasm.laneCensus", |_| census());
-        let words: [(&str, crate::data::WordFn); 16] = [
+        let words: [(&str, crate::data::WordFn); 20] = [
             ("wasm.laneCreate", create),
             ("wasm.laneCell", cell),
             ("wasm.laneTransferEpoch", transfer_epoch),
@@ -2427,6 +2583,10 @@ pub(crate) mod guest {
             ("wasm.laneAdopt", adopt),
             ("wasm.laneCommit", commit),
             ("wasm.laneAbort", abort),
+            ("wasm.laneStageEnd", stage_end),
+            ("wasm.laneCommitCheck", commit_check),
+            ("wasm.laneCommitStaged", commit_staged),
+            ("wasm.laneCommitted", committed),
             ("wasm.laneDrained", drained),
             ("wasm.laneCloseRead", close_read),
             ("wasm.laneCloseEnd", close_end),
