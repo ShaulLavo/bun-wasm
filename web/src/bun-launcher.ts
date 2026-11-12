@@ -1,4 +1,4 @@
-import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, recordLaunchFailure } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess, observeMemoryOutcome, recordLaunchFailure } from "./memory-telemetry.js";
 import { errorFact, launchFailureFact, type LaunchFailureFact } from "./launch-failure.js";
 import { programMetadata } from "../../src/assets.js";
 import { isSharedGroupCore } from "../../src/engine-kind.ts";
@@ -59,6 +59,7 @@ let launchAttempt = 0;
 
 async function launchBunProcess(engine: Engine, options: BunLauncherOptions, context: Parameters<GuestLauncher>[0], service: Parameters<GuestLauncher>[1]) {
   const memoryTelemetryId = crypto.randomUUID();
+  registerMemoryProcess(engine, memoryTelemetryId, options.runtime, context, service);
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
   let relay: Awaited<ReturnType<typeof runtimeRelay>>;
@@ -67,12 +68,16 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let disposeLookup: (() => void) | undefined;
   let released = false;
   let sharedRoute: SharedObjectRoute | undefined;
-  const unregister = context.registerRevocation(() => { revoked = true; sharedRoute?.close(); });
+  const unregister = context.registerRevocation(() => {
+    revoked = true;
+    observeMemoryOutcome(memoryTelemetryId, () => readOutcome(context.outcome));
+    sharedRoute?.close();
+  });
   const active = () => !released && !revoked && !options.runtime.disposed && !readOutcome(context.outcome);
   const cleanup = () => {
     if (released) return;
     released = true;
-    endMemorySnapshot(memoryTelemetryId);
+    endMemorySnapshot(memoryTelemetryId, () => readOutcome(context.outcome));
     unregister();
     const failures: unknown[] = [];
     try { helper?.dispose(); }
@@ -87,7 +92,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     if (failures.length) throw new AggregateError(failures, "Bun launch cleanup failed");
   };
   const onMessage = (message: unknown) => {
-    if (recordMemorySnapshot(message)) return;
+    if (recordMemorySnapshot(message, memoryTelemetryId)) return;
     try {
       if (!active()) sharedRoute?.close();
       if (sharedRoute?.accept(message)) return;
