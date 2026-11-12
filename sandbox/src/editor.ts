@@ -14,6 +14,7 @@ export type EditorHost = {
   app: string;
   /** Persists one save and tells the dev server; `revision` identifies the edit being saved. */
   save(path: string, text: string, revision: number): Promise<void>;
+  checkpoint(): Promise<void>;
   /** The open file or the save state changed. */
   changed(): void;
 };
@@ -34,7 +35,8 @@ export class Editor {
   saveState: SaveState = { text: "", kind: "" };
   private states = new Map<string, EditorState>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private revisions = new Map<string, number>();
+  private pending = new Map<string, number>();
+  private saves?: Promise<void>;
   private openRevision = 0;
   private editRevision = 0;
 
@@ -73,16 +75,17 @@ export class Editor {
   }
 
   /** Shows a save's outcome only while it is still the newest edit. */
-  settle(revision: number, state: SaveState): void {
-    if (revision !== this.editRevision) return;
+  settle(revision: number, state: SaveState): boolean {
+    if (revision !== this.editRevision) return false;
     this.saveState = state;
     this.host.changed();
+    return true;
   }
 
   /** Debounced save: typing a word is one update, not one per key. */
   private schedule(path: string): void {
     clearTimeout(this.timers.get(path));
-    this.revisions.set(path, ++this.editRevision);
+    this.pending.set(path, ++this.editRevision);
     this.saveState = { text: "editing…", kind: "" };
     this.host.changed();
     this.timers.set(
@@ -99,9 +102,15 @@ export class Editor {
   async flush(path: string): Promise<void> {
     clearTimeout(this.timers.get(path));
     this.timers.delete(path);
-    const revision = this.revisions.get(path) ?? this.editRevision;
+    const revision = this.pending.get(path) ?? this.editRevision;
+    this.pending.set(path, revision);
+    const text = this.text(path);
+    const save = this.saves ? this.saves.then(() => this.host.save(path, text, revision)) : this.host.save(path, text, revision);
+    const settled = save.catch(() => {}).finally(() => { if (this.saves === settled) this.saves = undefined; });
+    this.saves = settled;
     try {
-      await this.host.save(path, this.text(path), revision);
+      await save;
+      if (this.pending.get(path) === revision) this.pending.delete(path);
     } catch (error) {
       this.settle(revision, { text: `not saved: ${String(error)}`, kind: "error" });
       throw error;
@@ -109,9 +118,14 @@ export class Editor {
   }
 
   async flushAll(): Promise<void> {
-    await Promise.all(Array.from(this.timers.keys(), (path) => this.flush(path)));
-    await this.fs.flush();
+    while (this.pending.size) await Promise.all(Array.from(this.pending.keys(), path => this.flush(path)));
+    await this.saves;
+    await this.host.checkpoint();
   }
+
+  get hasPending(): boolean { return this.pending.size !== 0; }
+
+  async waitForSaves(): Promise<void> { await this.saves; }
 
   async open(path: string): Promise<void> {
     const revision = ++this.openRevision;
@@ -128,7 +142,7 @@ export class Editor {
   discard(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
-    this.revisions.clear();
+    this.pending.clear();
     this.states.clear();
     this.openRevision++;
     this.editRevision++;

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { MemoryBackend } from "waffle/fs";
 import { templates } from "../sandbox/src/template-catalog";
 import { templateFiles } from "../sandbox/template-files";
 import { evictIdle, type EvictionDependencies } from "../sandbox/src/workspace-eviction";
 import { evictionOrder, IDLE_INSTALLS_KEPT, isStorageFull, regenerableOutputs, StorageRecovery, workspaceName } from "../sandbox/src/workspace-policy";
-import { APP, excludedRoots, parseSnapshot, PreservationRefused, readSource, retainedPath, SOURCE_LIMIT_BYTES, SOURCE_LIMIT_ENTRIES, type SourceMetadata, type SourceReader, type SourceSnapshot } from "../sandbox/src/workspace-source";
+import { restoreSource } from "../sandbox/src/workspace-restore";
+import { APP, excludedRoots, parseSnapshot, PreservationRefused, readSource, retainedPath, RESTORE_MARKER, SEED_MARKER, SOURCE_LIMIT_BYTES, SOURCE_LIMIT_ENTRIES, type SourceMetadata, type SourceReader, type SourceSnapshot } from "../sandbox/src/workspace-source";
 
 const encode = (text: string) => new TextEncoder().encode(text);
 function metadata(path: string, kind: SourceMetadata["kind"] = "file", size = 0): SourceMetadata {
@@ -14,7 +16,7 @@ function reader(entries: readonly SourceMetadata[], files: ReadonlyMap<string, U
   const reads: string[] = [];
   let closed = false;
   const source: SourceReader = {
-    walk: () => ({ next: async () => ({ entries, done: true }), close: async () => { closed = true; } }),
+    walk: () => ({ next: async () => ({ entries: entries.concat([metadata(SEED_MARKER, "dir")]), done: true }), close: async () => { closed = true; } }),
     readFile: async (path, options) => { options.signal.throwIfAborted(); reads.push(path); return files.get(path); },
   };
   return { source, reads, closed: () => closed };
@@ -155,4 +157,64 @@ test("concurrent reports share one reclaim, retry exited operations, and bound r
   finish();
   expect(await retried).toBe("installed");
   expect(installs).toBe(2);
+});
+
+function restoreFixture() {
+  const memory = new MemoryBackend().fs;
+  const events: string[] = [];
+  const control = { failWrite: "", failFlush: false };
+  const fs: Parameters<typeof restoreSource>[0] = {
+    lookup: async path => memory.lookup(path), readFile: async path => memory.readFile(path),
+    mkdirp: async path => { memory.mkdirp(path); }, remove: async path => memory.remove(path),
+    writeFile: async (path, data) => {
+      if (path === control.failWrite) throw new Error("interrupted restore");
+      memory.writeFile(path, typeof data === "string" ? encode(data) : data);
+      events.push(`write:${path}`);
+    },
+    flush: async () => { events.push("flush"); if (control.failFlush) throw new Error("errno 51"); },
+  };
+  return { memory, fs, events, control };
+}
+
+test("whole-tree restore retries interruption without resurrecting deleted template files", async () => {
+  const fixture = reader([metadata("/", "dir"), metadata("/home", "dir"), metadata("/home/user", "dir"), metadata(APP, "dir"), metadata(`${APP}/empty`, "dir"), metadata(`${APP}/.env`, "file", 3), metadata("/outside", "file", 2)], new Map([[`${APP}/.env`, encode("env")], ["/outside", new Uint8Array([0, 255])]]));
+  const source = await readSource(fixture.source, "vanilla", []);
+  const { deps, snapshots } = evictionFixture();
+  snapshots.set("vanilla", source);
+  const { memory, fs, events, control } = restoreFixture();
+  memory.mkdirp(APP);
+  memory.writeFile(`${APP}/old-deleted.ts`, encode("old template"));
+  control.failWrite = "/outside";
+  await expect(restoreSource(fs, deps.index, "vanilla")).rejects.toThrow("interrupted restore");
+  expect(memory.lookup(SEED_MARKER)).toBeUndefined();
+  expect(snapshots.get("vanilla")).toBe(source);
+  control.failWrite = "";
+  let acknowledged = false;
+  deps.index.restored = async (_, id) => { expect(id).toBe(source.id); expect(events.at(-1)).toBe("flush"); acknowledged = true; snapshots.delete("vanilla"); return true; };
+  await restoreSource(fs, deps.index, "vanilla");
+  expect(acknowledged).toBe(true);
+  expect(memory.lookup(`${APP}/old-deleted.ts`)).toBeUndefined();
+  expect(memory.lookup(`${APP}/empty`)?.kind).toBe("dir");
+  expect(memory.readFile("/outside")).toEqual(new Uint8Array([0, 255]));
+  expect(memory.readFile(`${APP}/.env`)).toEqual(encode("env"));
+});
+
+test("marker must name the snapshot; failed flush retains source and a later matching ack is safe", async () => {
+  const source = await readSource(reader([metadata("/", "dir")]).source, "vanilla", []);
+  const { deps, snapshots } = evictionFixture();
+  snapshots.set("vanilla", source);
+  const { memory, fs, control } = restoreFixture();
+  control.failFlush = true;
+  let acks = 0;
+  deps.index.restored = async () => { acks++; return true; };
+  await expect(restoreSource(fs, deps.index, "vanilla")).rejects.toThrow("errno 51");
+  expect(acks).toBe(0);
+  expect(memory.lookup(SEED_MARKER)).toBeDefined();
+  memory.writeFile(RESTORE_MARKER, encode("another snapshot"));
+  await restoreSource(fs, deps.index, "vanilla");
+  expect(acks).toBe(0);
+  memory.writeFile(RESTORE_MARKER, encode(source.id));
+  control.failFlush = false;
+  await restoreSource(fs, deps.index, "vanilla");
+  expect(acks).toBe(1);
 });

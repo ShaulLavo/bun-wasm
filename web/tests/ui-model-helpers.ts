@@ -10,6 +10,7 @@ import { getVfsDescriptor } from "../src/shared-fs";
 import * as engineLoader from "../src/engine-loader";
 import type { Playground } from "../src/playground/playground";
 import type { Sandbox } from "../../sandbox/src/sandbox";
+import type { RunHooks } from "../src/runner";
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -97,7 +98,7 @@ let identity = 0;
 export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }) {
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
-  const runs: { args: string[]; env: Record<string, string>; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
+  const runs: { args: string[]; env: Record<string, string>; hooks: RunHooks; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
   const promptCreates: PromptOptions[] = [];
   const sessionCreates: SessionOptions[] = [];
   let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
@@ -123,7 +124,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
         return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} };
       }
     },
-    startRun: (options: { args: string[]; env: Record<string, string> }) => { const run = { args: options.args, env: options.env, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
+    startRun: (options: { args: string[]; env: Record<string, string> }, hooks: RunHooks) => { const run = { args: options.args, env: options.env, hooks, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
     location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign(_url: string | URL) {} },
     requestIdleCallback: () => 0,

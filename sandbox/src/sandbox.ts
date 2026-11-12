@@ -7,7 +7,7 @@ import { BrowserPrograms } from "../../web/src/browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
-import type { Run } from "../../web/src/runner";
+import type { Run, RunHooks, RunOptions, RunResult } from "../../web/src/runner";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../../web/src/shared-fs";
 import { errorText, measureStartup } from "../../web/src/startup";
 import { openTerminal } from "../../web/src/terminal-mount";
@@ -16,13 +16,16 @@ import { Editor } from "./editor";
 import { StartupOutput } from "./startup-output";
 import { loadTemplate } from "./template";
 import { defaultTemplate, selectTemplate, type Template } from "./template-catalog";
+import { isStorageFull } from "./workspace-policy";
+import { PreservationRefused } from "./workspace-source";
+import type { WorkspaceStorage } from "./workspace-storage";
 
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
 /** No state until startup reaches the dev server. */
 export type ServerState = { state?: "starting" | "up" | "down"; text: string; url?: string };
 /** Why Restart became Reload; any failure locks the workspace controls. */
-export type Failure = "construction" | "startup";
+export type Failure = "construction" | "startup" | "storage";
 
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
@@ -66,6 +69,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private message: Status = { text: "", kind: "" };
   private started = false;
   private workspace?: Workspace;
+  private storage?: WorkspaceStorage;
+  private storageError = "";
   private frame?: HTMLIFrameElement;
   private filesRevision = 0;
   private readonly previews = new Previews();
@@ -108,6 +113,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   get status(): Status {
     if (this.workspace?.fs.ownershipLost) return { text: `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`, kind: "error" };
+    if (this.storageError) return { text: this.storageError, kind: "error" };
     return this.message;
   }
 
@@ -156,6 +162,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   restart(): void {
+    if (this.failure === "storage") {
+      this.failure = undefined;
+      void this.startDevServer().catch(this.report);
+      return;
+    }
     if (this.failure) { location.reload(); return; }
     if (!this.started) return;
     this.term?.write("\r\n");
@@ -172,7 +183,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       const current = this.run;
       this.stopDevServer();
       await current?.done;
-      await loadTemplate(workspace.fs, APP, this.project.file, true);
+      await workspace.editor.waitForSaves();
+      const replace = () => loadTemplate(workspace.fs, APP, this.project.file, true).then(() => {});
+      if (this.storage) await this.storage.reset(replace);
+      else await replace();
       location.reload();
     } catch (error) {
       this.resetting = false;
@@ -181,6 +195,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   readonly report = (error: unknown): void => {
+    if (isStorageFull(error) || error instanceof PreservationRefused) {
+      this.failure = "storage";
+      this.storageError = `Browser storage could not be saved. Keep this page open and copy any unsaved text. No active project was removed. ${errorText(error)}`;
+    }
     this.setStatus(errorText(error), "error");
     this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
   };
@@ -228,6 +246,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const editor = new Editor(fs, {
       app: APP,
       save: (path, text, revision) => this.save(fs, path, text, revision),
+      checkpoint: () => this.retryStorage(() => fs.flush()),
       changed: () => this.changed(),
     });
     Object.assign(globalThis, {
@@ -280,7 +299,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.setStatus("waiting for module service worker…");
     const scoped = await workspace.moduleScope;
     if (revision !== this.serverRevision) return;
-    await fs.flush();
+    await this.retryStorage(() => fs.flush());
     if (revision !== this.serverRevision) return;
     const programs = await browserPrograms.ready();
     if (revision !== this.serverRevision) return;
@@ -299,30 +318,51 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       // Output-only stdin is EOF. Vite must not treat it as a request to close the server.
       CI: "true",
     };
-    const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
+    await runtime.processes();
     if (revision !== this.serverRevision) return;
-    const output = new StartupOutput((text) => term.write(text), startupRecord);
-    const hooks = { stdout: (data: Uint8Array) => output.write(data), stderr: (data: Uint8Array) => output.write(data) };
-    for (const script of ["install", "dev"] as const) {
-      if (revision !== this.serverRevision) return;
-      const args = script === "install" ? ["install"] : ["run", "dev"];
-      const message = script === "install" ? "installing dependencies…" : "starting dev server…";
-      this.setStatus(message);
-      this.setServerState("starting", message);
-      term.write(`\x1b[2m$\x1b[0m bun ${args.join(" ")} \x1b[2m(${ENGINES[this.engine].name})\x1b[0m\r\n`);
-      this.serverTiming = { started: performance.now(), visibleStart };
-      const current = startRun({ engine: this.engine, module: wasm.module, args, env, runtime, moduleScope: scoped, network: this.network }, hooks);
-      this.run = current;
-      const result = await current.done;
-      output.flush();
-      if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
-      if (this.run !== current) return;
-      this.run = null;
-      if (script === "install" && result.code === 0 && !result.error) continue;
-      term.write(`\x1b[2m[${script} exited with code ${result.code}]\x1b[0m\r\n`);
-      this.setServerState("down", `${script} stopped (exit ${result.code}) · press Restart`);
-      return;
-    }
+    const options = { engine: this.engine, module: wasm.module, env, runtime, moduleScope: scoped, network: this.network };
+    const result = await this.retryStorage(() => this.command("install", options, visibleStart, revision));
+    if (!result || result.code !== 0 || result.error || revision !== this.serverRevision) return;
+    await this.retryStorage(() => fs.flush());
+    this.storageError = "";
+    if (revision !== this.serverRevision) return;
+    await this.command("dev", options, visibleStart, revision);
+  }
+
+  private async command(script: "install" | "dev", options: Omit<RunOptions, "args">, visibleStart: number, revision: number): Promise<RunResult | undefined> {
+    const { startRun } = await import("../../web/src/runner");
+    if (revision !== this.serverRevision) return;
+    const term = this.workspace!.term;
+    const args = script === "install" ? ["install"] : ["run", "dev"];
+    const message = script === "install" ? "installing dependencies…" : "starting dev server…";
+    this.setStatus(message);
+    this.setServerState("starting", message);
+    term.write(`\x1b[2m$\x1b[0m bun ${args.join(" ")} \x1b[2m(${ENGINES[this.engine].name})\x1b[0m\r\n`);
+    this.serverTiming = { started: performance.now(), visibleStart };
+    let diagnostic = "";
+    let storageFailed = false;
+    const output = new StartupOutput(text => {
+      diagnostic = (diagnostic + text).slice(-8192);
+      storageFailed ||= isStorageFull(diagnostic);
+      term.write(text);
+    }, startupRecord);
+    const hooks: RunHooks = { stdout: data => output.write(data), stderr: data => output.write(data) };
+    const current = startRun({ ...options, args }, hooks);
+    this.run = current;
+    const result = await current.done;
+    output.flush();
+    if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
+    if (this.run !== current) return;
+    this.run = null;
+    if (script === "install" && (storageFailed || isStorageFull(result.error))) throw new Error("Dependency installation ran out of storage", { cause: `ENOSPC\n${result.error ?? ""}\n${diagnostic}` });
+    if (script === "install" && result.code === 0 && !result.error) return result;
+    term.write(`\x1b[2m[${script} exited with code ${result.code}]\x1b[0m\r\n`);
+    this.setServerState("down", `${script} stopped (exit ${result.code}) · press Restart`);
+    return result;
+  }
+
+  private retryStorage<T>(operation: () => Promise<T>): Promise<T> {
+    return this.storage ? this.storage.recovery.retry(operation) : operation();
   }
 
   private stopDevServer(): void {
@@ -358,9 +398,15 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   private async save(fs: Filesystem, path: string, text: string, revision: number): Promise<void> {
-    await fs.writeFile(abs(path), text);
-    await fs.flush(abs(path));
-    this.editor?.settle(revision, { text: "saved", kind: "ok" });
+    try {
+      await this.retryStorage(async () => { await fs.writeFile(abs(path), text); await fs.flush(abs(path)); });
+    } catch (error) { this.report(error); throw error; }
+    if (this.editor?.settle(revision, { text: "saved", kind: "ok" })) {
+      const wasStorageFailure = this.storageError !== "" || this.failure === "storage";
+      this.storageError = "";
+      if (this.failure === "storage") this.failure = undefined;
+      if (wasStorageFailure) this.changed();
+    }
   }
 
 }

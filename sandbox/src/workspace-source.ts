@@ -72,17 +72,21 @@ function supported(entry: SourceMetadata): void {
 export async function readSource(reader: SourceReader, template: string, ignoreRoots: readonly string[], signal?: AbortSignal): Promise<SourceSnapshot> {
   const deadline = AbortSignal.timeout(SOURCE_TIMEOUT_MS);
   const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  const cursor = reader.walk("/", { signal: bounded, ignoreRoots });
+  const ignored = ignoreRoots.concat([SEED_MARKER, RESTORE_MARKER]);
+  const cursor = reader.walk("/", { signal: bounded, ignoreRoots: ignored.filter(root => root !== SEED_MARKER) });
   const metadata: SourceMetadata[] = [];
   try {
     let done = false;
+    let initialized = false;
     while (!done) {
       bounded.throwIfAborted();
       const page = await cursor.next();
       done = page.done;
-      metadata.push(...page.entries.filter(entry => retainedPath(entry.path, ignoreRoots)));
+      initialized ||= page.entries.some(entry => entry.path === SEED_MARKER && entry.kind === "dir");
+      metadata.push(...page.entries.filter(entry => retainedPath(entry.path, ignored)));
       if (metadata.length > SOURCE_LIMIT_ENTRIES) throw new PreservationRefused(`more than ${SOURCE_LIMIT_ENTRIES} retained entries`);
     }
+    if (!initialized) throw new PreservationRefused("template initialization is incomplete");
     return await readEntries(reader, template, metadata, bounded);
   } finally { await cursor.close(); }
 }
