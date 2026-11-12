@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page, Worker as PlaywrightWorker } from "playwright";
 import type { Runtime } from "waffle";
 import type { Editor } from "../src/editor";
 import type { Terminal } from "@xterm/xterm";
@@ -13,6 +13,7 @@ async function openTemplate(page: Page, base: string, template: string): Promise
   const url = new URL(base);
   url.searchParams.set("template", template);
   url.searchParams.set("engine", "browser");
+  await page.bringToFront();
   await page.goto(url.href);
   await ready(page, template);
 }
@@ -112,7 +113,8 @@ async function diagnostic(page: Page): Promise<unknown> {
   return page.evaluate(() => {
     const buffer = sandbox.term?.buffer.active;
     const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
-    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal };
+    const frames = Array.from(document.querySelectorAll("iframe"), frame => ({ src: frame.src, body: frame.contentDocument?.body?.innerText.slice(0, 2000) }));
+    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames };
   }).catch(error => String(error));
 }
 
@@ -141,6 +143,66 @@ async function unsupportedData(page: Page, base: string): Promise<void> {
   assert.match(await page.locator("#storage-status").textContent() ?? "", /symlink.*cannot be restored/i);
 }
 
+export async function quotaRefusalScenario(browser: Browser, base: string): Promise<void> {
+  const context = await browser.newContext();
+  traceStorage(context);
+  try {
+    const page = await context.newPage();
+    await page.goto(new URL("engine-builds.json", base).href);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize: 512 * 1024 * 1024 });
+    await openTemplate(page, base, "hono");
+    await openTemplate(page, base, "vanilla");
+    const saved = await page.evaluate(() => sandbox.editor.view.state.doc.toString());
+    await edit(page, "src/main.ts", saved.replace("Hello from vanilla TypeScript", "Saved before quota"));
+    const control = `sandbox-quota-control-${Date.now()}`;
+    await createQuotaControl(page, control);
+    await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize: 1024 });
+    // Chromium retains an earlier bucket space grant for up to 30 seconds.
+    await page.waitForTimeout(31_000);
+    assert.equal(await refusedControlWrite(page, control), "QuotaExceededError", "control write did not prove full-origin refusal");
+    const before = page.url();
+    const result = await page.evaluate(async () => {
+      const editor = sandbox.editor;
+      editor.setText(editor.view.state.doc.toString().replace("Saved before quota", "Unsaved after quota"));
+      let error = "";
+      try { await editor.flushAll(); } catch (failure) { error = String(failure); }
+      return { error, pending: editor.hasPending, state: editor.saveState, text: editor.view.state.doc.toString() };
+    });
+    assert.ok(result.error, "full-origin save unexpectedly succeeded");
+    assert.equal(result.pending, true, "failed edit was forgotten");
+    assert.equal(result.state.kind, "error");
+    assert.match(result.text, /Unsaved after quota/);
+    assert.equal(page.url(), before, "storage failure navigated away");
+    assert.equal(await stored(page, "hono"), true, "failed snapshot preservation deleted the idle workspace");
+    assert.equal(await stored(page, "vanilla"), true, "active workspace was removed");
+    assert.match(await page.locator("#status").textContent() ?? "", /Keep this page open/);
+    assert.match(await page.locator("#storage-status").textContent() ?? "", /installs were kept/);
+    assert.equal(await page.locator("#restart").textContent(), "Retry");
+  } finally { await context.close(); }
+}
+
+async function createQuotaControl(page: Page, name: string): Promise<void> {
+  await page.evaluate(async name => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("data");
+    request.onsuccess = () => { Reflect.set(globalThis, name, request.result); resolve(); };
+    request.onerror = () => reject(request.error);
+  }), name);
+}
+
+async function refusedControlWrite(page: Page, name: string): Promise<string> {
+  return page.evaluate(async name => new Promise<string>((resolve, reject) => {
+    const database: unknown = Reflect.get(globalThis, name);
+    if (!(database instanceof IDBDatabase)) { reject(new Error("Missing quota control database")); return; }
+    const transaction = database.transaction("data", "readwrite", { durability: "strict" });
+    transaction.objectStore("data").put(new Uint8Array(1024 * 1024), "refused");
+    transaction.oncomplete = () => resolve("accepted");
+    transaction.onabort = () => resolve(transaction.error?.name ?? "aborted");
+    transaction.onerror = () => {};
+  }), name);
+}
+
 export interface StorageRun {
   readonly template: string;
   readonly elapsedMs: number;
@@ -151,6 +213,7 @@ export interface StorageRun {
 }
 
 export async function accumulation(context: BrowserContext, base: string, templates: readonly string[]): Promise<StorageRun[]> {
+  traceStorage(context);
   const page = await context.newPage();
   const rows: StorageRun[] = [];
   try {
@@ -166,4 +229,28 @@ export async function accumulation(context: BrowserContext, base: string, templa
     }
   } finally { await page.close(); }
   return rows;
+}
+
+function traceStorage(context: BrowserContext): void {
+  if (process.env.BUN_WASM_STORAGE_TRACE !== "1") return;
+  context.on("console", message => { if (message.text().startsWith("__storage_trace__")) console.error(message.text()); });
+  context.on("page", page => { page.on("worker", worker => { void traceWorker(worker); }); });
+}
+
+async function traceWorker(worker: PlaywrightWorker): Promise<void> {
+  try { await worker.evaluate(installStorageTrace); }
+  catch (error) { console.error(`Storage trace attachment failed: ${String(error)}`); }
+}
+
+function installStorageTrace(): void {
+  const original = IDBDatabase.prototype.transaction;
+  IDBDatabase.prototype.transaction = function (...args: Parameters<IDBDatabase["transaction"]>) {
+    const transaction = original.apply(this, args);
+    transaction.addEventListener("error", event => {
+      const request = event.target;
+      console.error("__storage_trace__", JSON.stringify({ database: this.name, stores: args[0], event: "error", name: request instanceof IDBRequest ? request.error?.name : transaction.error?.name, message: request instanceof IDBRequest ? request.error?.message : transaction.error?.message }));
+    });
+    transaction.addEventListener("abort", () => console.error("__storage_trace__", JSON.stringify({ database: this.name, stores: args[0], event: "abort", name: transaction.error?.name, message: transaction.error?.message })));
+    return transaction;
+  };
 }
