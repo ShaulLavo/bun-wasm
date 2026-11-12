@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadNodeProgram } from "../scripts/node-linked";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
+import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -24,10 +25,11 @@ async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox"
   const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json")'));
   if (!writeManifest) throw new Error(`${project} engine manifest writer missing`);
   const body = new Bun.Transpiler({ loader: "ts" }).transformSync(`${engineBlock}\n${writeManifest}`);
-  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", `return (async () => { ${body} })();`);
+  const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", "stageSharedPrograms", `return (async () => { ${body} })();`);
   const here = join(root, project), out = join(root, "output");
   await mkdir(out, { recursive: true });
-  await run(Bun, existsSync, statSync, dirname, join, resolve, here, out, { env }, join(root, "dist/bun.wasm"));
+  await run(Bun, existsSync, statSync, dirname, join, resolve, here, out, { env }, join(root, "dist/bun.wasm"),
+    (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }));
   return out;
 }
 
