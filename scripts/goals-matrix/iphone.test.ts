@@ -1,7 +1,6 @@
-import type { Admission } from "./scope";
+import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
 import { test, expect, spyOn } from "bun:test";
-import { Scope } from "./scope";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -168,6 +167,7 @@ async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancell
   const budgets: number[] = [];
   let settled = false;
   function runCleanup(transport: Transport) {
+    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
     transport.beginCleanup = () => { now += 1200; };
     transport.cleanup = async timeoutMs => {
       budgets.push(timeoutMs);

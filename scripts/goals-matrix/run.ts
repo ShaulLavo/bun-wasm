@@ -89,7 +89,7 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
 async function nativeTransport(box: Cell, config: Options, timeoutMs: number, report: Report): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
     control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
-    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000),
+    cleanupTimeoutMs: report.deadlines.cleanupTimeoutMs,
     saveNative: text => appendFile(join(config.output, "logs", boxId(box).replaceAll("/", "-") + ".native.jsonl"), text),
   });
   if (box.browser !== "safari" && box.browser !== "iphone-safari") throw new Error("Not a native Safari box");

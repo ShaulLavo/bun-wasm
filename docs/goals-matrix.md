@@ -168,6 +168,10 @@ bound command in `logs/*.native.jsonl`. A unique accessibility button reference,
 trusted DOM event, unchanged document, and counter increment must agree. A device
 command failure stops the campaign and leaves its exact error in the report.
 All existing phase deadlines apply, including the 20-second cleanup limit.
+The visible iPhone transport uses the report's cleanup policy for observations.
+Owned tab cleanup receives only the time left in that cleanup phase after
+handoff and logging. Expiry prevents new cleanup input and cannot turn a late
+close result into a pass. The existing shorter logging and fallback bounds remain.
 
 Stop the wrapper and owned port forward after the campaign, copy its cleanup
 receipt, and verify the recorded server PID and listeners are absent. Check the
