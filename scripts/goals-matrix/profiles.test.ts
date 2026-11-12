@@ -2,7 +2,7 @@ import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { initialReport, options, playgroundURL } from "./run";
 import { nativeRunnerArgs } from "./fleet";
-import { frameworks } from "./catalog";
+import { frameworks, type Engine } from "./catalog";
 import { ready } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
@@ -12,6 +12,7 @@ import { join } from "node:path";
 const framework = frameworks.find(item => item.id === "vite-react");
 if (!framework) throw new Error("Vite React template is missing");
 const args = ["--asset-source=profile-test", "--engines=quickjs,jsc", "--browsers=safari", "--mac-lane=profile-test", "--mac-thread=profile-test"];
+const sharedEngines: readonly Engine[] = ["quickjs", "jsc", "spidermonkey"];
 
 test("goals profile selection reaches both playground URLs and the remote FIFO runner", () => {
   expect(options(args).profile).toBe("split");
@@ -22,9 +23,14 @@ test("goals profile selection reaches both playground URLs and the remote FIFO r
   expect(url.searchParams.get("profile")).toBe("shared-group");
   expect(new URL(playgroundURL("http://test/", framework, "browser")).searchParams.get("profile")).toBe("split");
   expect(() => options(args.concat("--profile=unknown"))).toThrow("Unknown Bun program profile");
-  for (const engine of ["browser", "spidermonkey"]) {
-    expect(() => options([`--engines=${engine}`, "--asset-source=test", "--profile=shared-group"])).toThrow("does not support");
+  for (const engine of sharedEngines) {
+    const selectedArgs = args.map(arg => arg.startsWith("--engines=") ? `--engines=${engine}` : arg);
+    const selected = options(selectedArgs.concat("--profile=shared-group"));
+    expect(selected.engines).toEqual([engine]);
+    expect(selected.profile).toBe("shared-group");
+    expect(options(nativeRunnerArgs(selected, "/Users/test/goals")).engines).toEqual([engine]);
   }
+  expect(() => options(["--engines=browser", "--asset-source=test", "--profile=shared-group"])).toThrow("does not support");
 });
 
 test("readiness reads the running profile instead of trusting a requested URL or engine label", () => withPlayground(framework, 0, async transport => {

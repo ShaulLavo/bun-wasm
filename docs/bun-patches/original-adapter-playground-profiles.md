@@ -6,7 +6,8 @@ Classification: original host integration. No upstream implementation was copied
 adapter and executable aliases only after checking the requested `split` or
 `shared-group` profile against the prepared core with `isSharedGroupCore`.
 `scripts/goals-matrix/` forwards that selection and checks the observed profile
-at startup. Browser remains split; shared-group is restricted to QuickJS and JSC.
+at startup. Browser remains split; shared-group supports QuickJS, JSC and
+SpiderMonkey when their matching profile pair is staged.
 
 This makes the opt-in contract in `docs/shared-group-profile.md` explicit for
 framework consumers. It uses existing module preparation, matched core and
@@ -17,3 +18,8 @@ The profile tests cover real split-pair preparation, actual executable registrat
 and both mismatches. The shared-profile check consumes the real CI-provided
 paired program through the same preparation and registration path. Registration
 alone establishes neither Rolldown capacity nor framework acceptance.
+
+SpiderMonkey staging validates the original pair, core and native receipt
+identities before publishing assets. Library bytes and header counts must be
+positive safe integers, with valid SHA-256 digests in both native metadata
+records. Equal missing or malformed identities cannot establish a match.

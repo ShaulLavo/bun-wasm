@@ -402,8 +402,9 @@ struct GroupState {
     /// Pages in every member's `chunks`, kept equal to their sum under this lock.
     member_pages: u32,
     next_incarnation: u64,
-    next_handle: u32,
-    next_pin: u32,
+    // These identities never repeat within the group; u32::MAX + 1 means exhausted.
+    next_handle: u64,
+    next_pin: u64,
     next_watch: u32,
     next_waiter: u64,
     watch_sequence: u64,
@@ -443,7 +444,13 @@ struct Region {
 
 struct Pin {
     region: RegionHandle,
-    owner: MemberId,
+    owner: PinOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PinOwner {
+    Member(MemberId),
+    Group,
 }
 
 struct Watch {
@@ -729,7 +736,7 @@ impl GroupInner {
         let pins = state
             .pins
             .iter()
-            .filter(|(_, pin)| pin.owner == id)
+            .filter(|(_, pin)| pin.owner == PinOwner::Member(id))
             .map(|(pin, _)| *pin)
             .collect::<Vec<_>>();
         for pin in pins {
@@ -759,8 +766,14 @@ impl GroupInner {
             return;
         }
         state.ended = true;
+        let pins = state.pins.keys().copied().collect::<Vec<_>>();
+        for pin in pins {
+            self.drop_pin_locked(&mut state, pin);
+        }
         // The last member's stop retires every publication; compiled code unmaps off the lock.
         let retired = nested::retire_directory(&mut state);
+        assert!(state.pins.is_empty());
+        assert!(state.regions.is_empty());
         drop(state);
         drop(retired);
     }
@@ -819,8 +832,9 @@ impl GroupInner {
         if state.regions.len() >= self.policy.regions {
             return Err(Errno::Again);
         }
+        let handle = RegionHandle(u32::try_from(state.next_handle).map_err(|_| Errno::Again)?);
         let chunk = self.take_reservation_locked(&mut state, required, desired)?;
-        let handle = fresh_region(&mut state);
+        state.next_handle += 1;
         let backing = SharedBacking {
             handle,
             addr: chunk.page * PAGE_BYTES,
@@ -933,12 +947,13 @@ impl GroupInner {
         if state.pins.len() >= self.policy.pins {
             return Err(Errno::Again);
         }
-        let id = fresh_pin(&mut state);
+        let id = PinId(u32::try_from(state.next_pin).map_err(|_| Errno::Again)?);
+        state.next_pin += 1;
         state.pins.insert(
             id,
             Pin {
                 region: handle,
-                owner: member,
+                owner: PinOwner::Member(member),
             },
         );
         state.regions.get_mut(&handle).ok_or(Errno::BadF)?.pins += 1;
@@ -949,7 +964,7 @@ impl GroupInner {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let current = state.pins.get(&pin).ok_or(Errno::BadF)?;
-        if current.owner != member {
+        if current.owner != PinOwner::Member(member) {
             return Err(Errno::BadF);
         }
         let target = state
@@ -958,7 +973,18 @@ impl GroupInner {
             .flatten()
             .find(|candidate| candidate.pid == pid && candidate.phase != MemberPhase::Retained);
         let target = target.ok_or(Errno::Search)?.id;
-        state.pins.get_mut(&pin).ok_or(Errno::BadF)?.owner = target;
+        state.pins.get_mut(&pin).ok_or(Errno::BadF)?.owner = PinOwner::Member(target);
+        Ok(())
+    }
+
+    fn route_group(&self, member: MemberId, pin: PinId) -> Result<(), Errno> {
+        let mut state = self.lock();
+        Self::receives(&state, member)?;
+        let current = state.pins.get_mut(&pin).ok_or(Errno::BadF)?;
+        if current.owner != PinOwner::Member(member) {
+            return Err(Errno::BadF);
+        }
+        current.owner = PinOwner::Group;
         Ok(())
     }
 
@@ -966,7 +992,7 @@ impl GroupInner {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let current = state.pins.get(&pin).ok_or(Errno::BadF)?;
-        if current.owner != member {
+        if current.owner != PinOwner::Member(member) {
             return Err(Errno::BadF);
         }
         let handle = current.region;
@@ -979,7 +1005,8 @@ impl GroupInner {
     fn unpin(&self, member: MemberId, pin: PinId) -> Result<(), Errno> {
         let mut state = self.lock();
         Self::receives(&state, member)?;
-        if state.pins.get(&pin).ok_or(Errno::BadF)?.owner != member {
+        let owner = state.pins.get(&pin).ok_or(Errno::BadF)?.owner;
+        if owner != PinOwner::Member(member) && owner != PinOwner::Group {
             return Err(Errno::BadF);
         }
         self.drop_pin_locked(&mut state, pin);
@@ -1535,26 +1562,6 @@ fn valid_alignment(align: u32) -> bool {
     align.is_power_of_two() && align <= PAGE_BYTES
 }
 
-fn fresh_region(state: &mut GroupState) -> RegionHandle {
-    loop {
-        let id = RegionHandle(state.next_handle);
-        state.next_handle = state.next_handle.wrapping_add(1).max(1);
-        if id.0 != 0 && !state.regions.contains_key(&id) {
-            return id;
-        }
-    }
-}
-
-fn fresh_pin(state: &mut GroupState) -> PinId {
-    loop {
-        let id = PinId(state.next_pin);
-        state.next_pin = state.next_pin.wrapping_add(1).max(1);
-        if id.0 != 0 && !state.pins.contains_key(&id) {
-            return id;
-        }
-    }
-}
-
 fn fresh_watch(state: &mut GroupState) -> WatchId {
     loop {
         let id = WatchId(state.next_watch);
@@ -1786,6 +1793,13 @@ pub fn shm_route(member: &MemberLease, pin: u32, pid: u32) -> i32 {
         .map_or_else(Errno::result, |()| 0)
 }
 
+pub fn shm_route_group(member: &MemberLease, pin: u32) -> i32 {
+    member
+        .group
+        .route_group(member.member, PinId(pin))
+        .map_or_else(Errno::result, |()| 0)
+}
+
 pub fn shm_accept(member: &MemberLease, pin: u32, out: u32) -> i32 {
     if let Err(error) = output_span(member, out, 3) {
         return error.result();
@@ -1952,6 +1966,14 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
         |caller: Caller<'_, Host>, pin: u32, pid: u32| {
             host_member(caller.data())
                 .map_or_else(|error| error, |member| shm_route(member, pin, pid))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_shm",
+        "shm_route_group",
+        |caller: Caller<'_, Host>, pin: u32| {
+            host_member(caller.data())
+                .map_or_else(|error| error, |member| shm_route_group(member, pin))
         },
     )?;
     linker.func_wrap(

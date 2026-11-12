@@ -15,7 +15,7 @@ const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open th
 function engineOption(engine: Engine, label: string, profile: PlaygroundProfile) {
   try { requireProfileEngine(engine, profile); }
   catch (error) { return { label: `${label} (unsupported profile)`, unavailable: String(error) }; }
-  const unavailable = engineUnavailable(engine);
+  const unavailable = engineUnavailable(engine, profile);
   return { label: unavailable ? "SpiderMonkey (not in this build)" : label, unavailable };
 }
 
