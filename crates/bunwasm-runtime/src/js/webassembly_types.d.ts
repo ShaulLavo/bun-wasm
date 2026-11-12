@@ -41,6 +41,7 @@ declare namespace BunWasm {
     laneExited(cell: number, generation: number): void;
     laneSweep(full: boolean): void;
     laneCensus(): GroupLaneCensus | null;
+    laneClosures(): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;
     instantiate(id: number, bindings: (number | bigint | null | WasmReference | { kind: 'callback'; id: number })[], invocation?: number): number;

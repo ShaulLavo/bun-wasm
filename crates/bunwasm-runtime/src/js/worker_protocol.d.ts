@@ -62,6 +62,8 @@ declare namespace BunWasm {
     sweep(full: boolean): void;
     end(ref: GroupLaneRef, side: 0 | 1): [state: number, version: number];
     sever(ref: GroupLaneRef, side: 0 | 1): void;
+    /** Bumped by each end a cascade or a release closes; the root rescans its records on a change. */
+    closures(): number;
     /** Ledger counts for tests (`internal/bunwasm/group-lanes`); null before this member has a ledger. */
     census(): GroupLaneCensus | null;
   }

@@ -93,5 +93,6 @@
     end(ref, side) { return ledger ? native.laneEnd(ref.slot, ref.generation, side) : [CLOSED, 0]; },
     sever(ref, side) { if (ledger) native.laneSever(ref.slot, ref.generation, side); },
     census() { return native.laneCensus(); },
+    closures() { return ledger ? native.laneClosures() : 0; },
   };
 })

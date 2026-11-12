@@ -30,10 +30,15 @@
   let parentPort: MessagePort | null = null;
   let parentChannel: BunWasm.WorkerChannel | null = null;
   let orphaned = false;
+  /** A full lane sweep is owed to the next event-loop step (after a `gone` or a parent EOF). */
+  let fullSweepDue = false;
+  /** The ledger's closure counter at the root's last broker rescan. */
+  let seenClosures = 0;
   // Shared-group engines carry port messages in group memory (worker_lane.ts); others use pipes.
   const groupLanes = internal.sharedObjects?.groupLanes;
   /** lane.rs end states. */
   const LANE_OPEN = 1;
+  const LANE_CLOSED = 3;
   const LANE_DRAIN = 1024;
   const config = workerConfig(process.env.BUNWASM_WORKER_INIT);
   const controlFds = process.env.BUNWASM_WORKER_CONTROL;
@@ -234,7 +239,8 @@
           if (endpoint.peer) routePacket({ kind: "port-close", id: endpoint.peer, sequence: endpoint.sent });
           owners.delete(id); pending.delete(id);
         }
-        groupLanes?.sweep(true);
+        // A broker command can arrive inside a synchronous receive; the sweep waits for a step.
+        fullSweepDue = true;
         return;
       }
       default: throw new Error("Unknown worker broker command");
@@ -250,6 +256,37 @@
     const ref = { slot: endpoint.lane[0], generation: endpoint.lane[1] };
     const [state, version] = groupLanes.end(ref, endpoint.lane[2]);
     if (state === LANE_OPEN && version <= endpoint.version) groupLanes.sever(ref, endpoint.lane[2]);
+  }
+  /**
+   * Group lane housekeeping, on ordinary event-loop steps only: a sweep may call the group owner,
+   * which on the Browser host is the page, so it never runs inside `receiveMessageOnPort`.
+   */
+  function laneHousekeeping() {
+    if (!groupLanes) return;
+    // A worker learns its parent is gone when the parent's channel ends.
+    if (parentChannel?.ended && !orphaned) { orphaned = true; fullSweepDue = true; }
+    const full = fullSweepDue;
+    fullSweepDue = false;
+    groupLanes.sweep(full);
+    if (!route.length) retireClosedLanes();
+  }
+  /**
+   * At the root, after the sweep: a cascade or a release can close an end whose owner sends no
+   * frame, such as a port carried in a frame its dead receiver never read. Retire those records
+   * and close their peers, which also wakes an idle peer's loop. Ends in flight, open or closed
+   * by an exit report keep their records.
+   */
+  function retireClosedLanes() {
+    const closures = groupLanes!.closures();
+    if (closures === seenClosures) return;
+    seenClosures = closures;
+    for (const [id, endpoint] of owners) {
+      if (!endpoint.lane) continue;
+      const [state] = groupLanes!.end({ slot: endpoint.lane[0], generation: endpoint.lane[1] }, endpoint.lane[2]);
+      if (state !== LANE_CLOSED) continue;
+      if (endpoint.peer) routePacket({ kind: "port-close", id: endpoint.peer, sequence: endpoint.sent });
+      owners.delete(id); pending.delete(id);
+    }
   }
   function direct(body: Record<string, unknown>) {
     if (body.kind === "port-wake") {
@@ -308,8 +345,6 @@
     const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => mailboxDelivery(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
     if (drained) shared?.routes?.credit();
     for (const port of localPorts.values()) portOps.retry(port);
-    // A worker learns its parent is gone when the parent's channel ends.
-    if (parentChannel?.ended && !orphaned) { orphaned = true; groupLanes?.sweep(true); }
     let progress = Boolean(drained) || lanes;
     progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
@@ -483,14 +518,13 @@
       catch { return; }
       if (frame.commit() && this.#value().peer) root({ kind: "port-wake", id: this.#value().peer });
     }
-    /** Reserves a frame on this end's group lane; the commit sends a wake hint to an idle peer. */
-    #groupFrame(io: BunWasm.GroupSharedLane, packet: Record<string, unknown>) {
-      const frame = io.reserve(JSON.stringify(packet));
-      const peer = this.#value().peer;
-      return {
-        commit() { if (frame.commit() && peer) root({ kind: "port-wake", id: peer }); },
-        abort() { frame.abort(); },
-      };
+    /**
+     * Reserves a frame on this end's group lane. Its commit is the native publication alone and
+     * reports whether the peer was idle; `postMessage` sends the wake hint after it has counted
+     * the message, so nothing but stores runs between detachment and publication.
+     */
+    #groupFrame(io: BunWasm.GroupSharedLane, packet: Record<string, unknown>): BunWasm.GroupLaneFrame {
+      return io.reserve(JSON.stringify(packet));
     }
     /**
      * Stages a message inside the codec transaction. A lane frame must be reserved here, before
@@ -669,11 +703,13 @@
       const sequence = state.sent;
       // The lane frame becomes visible only after transfers and detachment commit. Ports it
       // carries stay in the custody of the lane's destination port until restored.
-      const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };
+      const staged: { frame: { commit(): boolean | void; abort(): void } | null } = { frame: null };
       try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined, group !== null); }
       catch (error) { staged.frame?.abort(); throw error; }
-      staged.frame?.commit();
+      const wake = staged.frame?.commit();
       state.sent++;
+      // A group lane's peer slept on an empty lane: the hint only wakes its loop sooner.
+      if (wake === true) root({ kind: "port-wake", id: state.peer });
       if (!other) return;
       restoringLocally = Boolean(internal.sharedObjects?.routes?.enabled);
       try { portOps.receivePacket(other, "port-data", sequence, plan.graph); }
@@ -1187,7 +1223,11 @@
   internal.workerEnvChange = (key, value) => { if (!applyingEnv) root({ kind: "env", source: route, group: envGroup, key, value }); };
   internal.addIoWaiter({
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
-    step() { groupLanes?.sweep(false); return pump() ? "progress" : false; },
+    step() {
+      const progress = pump();
+      laneHousekeeping();
+      return progress ? "progress" : false;
+    },
     // Every open control channel: the idle loop wakes for a frame from any of them.
     subscriptions() {
       const list = parentChannel ? [parentChannel.subscriptions()] : [];
