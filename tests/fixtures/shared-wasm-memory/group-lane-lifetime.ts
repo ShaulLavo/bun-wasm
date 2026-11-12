@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort, type WorkerOptions } from 'node:worker_threads';
+import { MessageChannel, receiveMessageOnPort, Worker, type WorkerOptions } from 'node:worker_threads';
 import { ownerSnapshot, type OwnerSnapshot } from './page-control.ts';
 
 type Census = {
@@ -52,10 +52,6 @@ async function opened(word: Int32Array, index: number) {
 }
 function text(bytes: number, seed: number) {
   return String.fromCharCode(97 + seed % 26).repeat(bytes);
-}
-/** Closes a port and waits until it has: its lane end closes on a later turn of the loop. */
-function closePort(port: MessagePort) {
-  return new Promise<void>(resolve => { port.once('close', () => resolve()); port.close(); });
 }
 function settledCensus(census: Census) {
   return census.awaiting === 0 && census.deadEnds === 0 && census.busy === 0 && census.inFlight === 0
@@ -113,7 +109,7 @@ async function killedSender() {
   assert.ok(received, 'a killed sender\'s confirmed message is readable');
   assert.equal((received.message as { task: string }).task, text(300_000, 7));
   assert.equal(receiveMessageOnPort(port1), undefined);
-  await closePort(port1);
+  port1.close();
   await baseline('killed sender');
 }
 
@@ -139,7 +135,7 @@ async function unrestoredCarriedPort() {
   const closed = new Promise<void>(resolve => carried.port1.once('close', resolve));
   await receiver.worker.terminate();
   await closed;
-  await closePort(port1);
+  port1.close();
   await baseline('unrestored carried port');
 }
 

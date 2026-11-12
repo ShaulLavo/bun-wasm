@@ -84,6 +84,20 @@ the close and retire paths call. Two natives carry text and stay data natives:
 `laneLedger` and `laneJoin` are data natives too; a repeated `laneLedger` returns what the first
 stored, and a failed `laneJoin` ends the starting worker.
 
+The broker's record that a port is moving, and the wake hint, go to the control pipe after
+buffers detach, so that write follows the same rule (`worker_channel.ts`, `natives.rs`):
+
+- A frame is queued as text and encoded when its first write is tried. A failed encode leaves it
+  queued.
+- `procWriteOnce` writes like `procWrite` and keeps its result under a token the caller chose.
+  If the call throws on its way back, the word native `procWriteResult` returns that result, or
+  says no write ran under that token. A frame is therefore written once, whole and in order.
+- A flush never throws for a call the bridge could not carry. The frame stays queued and the
+  pipe's writable subscription brings the next attempt.
+
+The host engine (`engine_host.rs`) has one bridge, so it registers word natives as ordinary
+natives. The runtime JavaScript calls them the same way on every engine.
+
 What this does not cover: an engine-level exception inside the runtime's own JavaScript between
 detachment and return, such as a stack overflow. That is the same exposure as any builtin
 written in JavaScript and is not specific to the lane.
@@ -106,7 +120,8 @@ written in JavaScript and is not specific to the lane.
   changed. An end's epoch rises in the store that changes its state, so a closure needs no
   second write to be noticed, and a member that dies right after closing an end has still
   announced it. A full sweep also returns a lane whose finalizer died between its terminal swap
-  and the lane's release.
+  and the lane's release. A worker's exit runs this housekeeping on its own turn of the loop,
+  which is not inside a receive: an otherwise idle root takes no later step.
 - Receiving is atomic loads, stores and copies on group memory. It validates every cursor, length,
   slot and address before use and closes the direction on corruption, never writing through an
   address that failed validation.
@@ -132,4 +147,9 @@ nothing, beside a data call that fails there, and measure that it allocates noth
 `scripts/worker-group-lanes.test.ts` runs the real runtime JavaScript, `worker_lane.ts`
 included, over relay-mode Waffle pipes with a small model of the native contract, as a codec
 and topology control. Its model can fail a data native before or after it ran, and names the
-natives called after detachment.
+natives called after detachment. `scripts/worker-codec.test.ts` fails the control pipe's write
+and its encoding the same way.
+
+`tests/fixtures/shared-wasm-memory/group-lane.ts` and `group-lane-lifetime.ts` run on a real
+shared-group guest. The lifetime fixture starts 200 workers in turn, which takes about 100
+seconds on the native launcher at roughly half a second per worker start.
