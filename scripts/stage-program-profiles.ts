@@ -29,6 +29,13 @@ function verifyIdentity(bytes: Uint8Array, value: unknown): void {
   assert.equal(value.sha256, new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), "Shared SpiderMonkey artifact hash mismatch");
 }
 
+function requireNativeIdentity(value: unknown, field: "bytes" | "count", label: string): void {
+  assert(record(value), `Missing shared SpiderMonkey ${label} identity`);
+  assert(typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256), `Invalid shared SpiderMonkey ${label} identity digest`);
+  const size = value[field];
+  assert(typeof size === "number" && Number.isSafeInteger(size) && size > 0, `Invalid shared SpiderMonkey ${label} identity ${field}`);
+}
+
 async function spiderMonkeyReceipts(source: string, core: Uint8Array, side: Uint8Array, coreFile: Awaited<ReturnType<typeof receiptFile>>) {
   const files = await Promise.all(["spidermonkey-shared.json", "shared-group-library.json"].map(async name => ({ name, text: await Bun.file(join(source, name)).text() })));
   const pair: unknown = JSON.parse(files[0]!.text), library: unknown = JSON.parse(files[1]!.text);
@@ -42,6 +49,10 @@ async function spiderMonkeyReceipts(source: string, core: Uint8Array, side: Uint
   verifyIdentity(core.subarray(0, coreFile.receipt.artifact.artifactBytes), pair.inputs.core);
   verifyIdentity(new TextEncoder().encode(files[1]!.text), pair.inputs.native.receipt);
   assert(record(library) && library.profile === "shared-group", "Invalid shared SpiderMonkey library receipt");
+  for (const native of [library, pair.inputs.native]) {
+    requireNativeIdentity(native.library, "bytes", "library");
+    requireNativeIdentity(native.headers, "count", "header");
+  }
   assert.deepEqual(library.library && record(library.library) ? { sha256: library.library.sha256, bytes: library.library.bytes } : null, pair.inputs.native.library, "Shared SpiderMonkey library identity mismatch");
   assert.deepEqual(library.headers, pair.inputs.native.headers, "Shared SpiderMonkey header identity mismatch");
   return files;

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +20,9 @@ function receipt(bytes: Uint8Array, scope: "core" | SupportedPairedEngine): Prog
   };
 }
 
-async function writeSpiderMonkeyReceipts(source: string, pair: ReturnType<typeof initializationPair>) {
+async function writeSpiderMonkeyReceipts(source: string, pair: ReturnType<typeof initializationPair>, overrides: Partial<Record<"library" | "headers", unknown>> = {}) {
   const identity = (bytes: Uint8Array | string) => ({ sha256: hash(bytes), bytes: typeof bytes === "string" ? Buffer.byteLength(bytes) : bytes.byteLength });
-  const library = { profile: "shared-group", library: { sha256: "d".repeat(64), bytes: 123 }, headers: { count: 1, sha256: "e".repeat(64) } };
+  const library = { profile: "shared-group", library: { sha256: "d".repeat(64), bytes: 123 }, headers: { count: 1, sha256: "e".repeat(64) }, ...overrides };
   const text = JSON.stringify(library) + "\n";
   await Bun.write(join(source, "shared-group-library.json"), text);
   const coreReceipt = receipt(pair.untaggedCore, "core");
@@ -29,6 +30,37 @@ async function writeSpiderMonkeyReceipts(source: string, pair: ReturnType<typeof
   await Bun.write(join(source, "spidermonkey-shared.json"), JSON.stringify({ schema: 1, experimental: true, profile: "shared-group",
     program: identity(pair.core), side: identity(pair.side), inputs: { source: coreReceipt.inputs.source, core: identity(pair.untaggedCore), coreReceipt,
       native: { receipt: identity(text), library: library.library, headers: library.headers } } }));
+}
+
+function invalidNativeIdentities(field: "bytes" | "count") {
+  const valid = { sha256: "d".repeat(64), [field]: 1 };
+  return [
+    { defect: "missing", value: undefined },
+    { defect: "null", value: null },
+    { defect: "missing digest", value: { [field]: 1 } },
+    { defect: "invalid digest", value: { ...valid, sha256: "not-a-digest" } },
+    { defect: "missing size", value: { sha256: valid.sha256 } },
+    { defect: "zero size", value: { ...valid, [field]: 0 } },
+    { defect: "negative size", value: { ...valid, [field]: -1 } },
+    { defect: "fractional size", value: { ...valid, [field]: 1.5 } },
+    { defect: "unsafe size", value: { ...valid, [field]: Number.MAX_SAFE_INTEGER + 1 } },
+    { defect: "string size", value: { ...valid, [field]: "1" } },
+  ];
+}
+
+for (const identity of [{ name: "library", field: "bytes" }, { name: "headers", field: "count" }] as const) {
+  test.each(invalidNativeIdentities(identity.field))(`SpiderMonkey staging rejects matching ${identity.name} identities with $defect before publishing`, async ({ value }) => {
+    await withSharedProgram(async source => {
+      const pair = initializationPair("spidermonkey", true);
+      await Bun.write(join(source, "bun.wasm"), pair.core);
+      await Bun.write(join(source, "spidermonkey-engine.wasm"), pair.side);
+      await writeSpiderMonkeyReceipts(source, pair, { [identity.name]: value });
+      const builds = { existing: "preserved" }, out = join(source, "out");
+      await expect(stageSharedPrograms(out, builds, { spidermonkey: source })).rejects.toThrow("identity");
+      expect(builds).toEqual({ existing: "preserved" });
+      expect(existsSync(out)).toBe(false);
+    });
+  });
 }
 
 for (const engine of ["jsc", "spidermonkey"] as const) {
