@@ -327,3 +327,32 @@ not OS window IDs or WebContent PIDs. No such PID witness is available here.
 The receipt excludes URLs, page contents, scripts, cookies and request bodies.
 Capture is off by default. A synchronous sink failure does not interrupt mandatory
 cleanup; it makes session cleanup fail after deletion has been attempted.
+
+### Safari causal capture
+
+To find out what ended a desktop Safari page, add `--safari-causal-capture` to
+`run.ts` or `fleet.ts` for exactly one desktop Safari cell with the automatic owned
+driver, for example `--browsers=safari --engines=spidermonkey --frameworks=nuxt`.
+It implies `--safari-ownership` and rejects resume, retry and external endpoints.
+Phase, install, build and cleanup deadlines do not change.
+
+Before the cell, a task-owned launchd job with a unique label checks the CPU and
+start-time reader and the launchd log parser: `launchctl kill` must produce a
+record naming the job's PID, the `launchctl` caller and signal 9. The job and its
+plist are removed. After the playground is ready, still inside startup, one
+1.5 s busy, idle, busy main-thread challenge must match exactly one desktop
+WebContent PID with a stable kernel start time. If the control or the match fails,
+startup fails with the reason and install never runs. After arming, only that PID
+and start time are read; a change ends attribution.
+
+Each WebDriver request records a number, lane, finite command name, status,
+media type, JSON kinds, allowlisted WebDriver error code and UTC and monotonic
+times in `logs/<cell>.causal-<uuid>.protocol.jsonl`. An HTTP 200 reply with a
+null evaluation value is a `contract-failure` under its own request number. At the
+end, one `log show` query reads only launchd records whose subject is the pinned
+PID. `logs/<cell>.causal-<uuid>.native.jsonl` keeps normalized fields: event time,
+target, caller name and PID, and signal or exit code. `logs/causal-capture-settlement.json`
+names the first invalid response, any identity loss and the first initiating
+event, or `unknown`. Capture failures after arming are recorded there and never
+change the cell or cleanup result. Fleet keeps the staging directory unless that
+receipt is settled.

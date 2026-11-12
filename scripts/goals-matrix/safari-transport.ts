@@ -4,8 +4,10 @@ import { until } from "./playground";
 import { armSafariClick, observeSafariClick } from "./safari-click";
 import { presentIphonePreview } from "./iphone-browser";
 import { SafariOwnershipWitness, ownershipRequest, type SafariOwnershipSink, type SafariOwnershipOperation } from "./safari-ownership";
+import { jsonKind, mediaKind, networkKind, newTrace, openFact, webDriverError, type ProtocolLane, type ProtocolObserver, type ProtocolTrace, type SafariProtocolSink } from "./safari-protocol";
 export type SafariTransportOptions = {
   ownershipSink?: SafariOwnershipSink;
+  protocolSink?: SafariProtocolSink;
   endpoint: string;
   browser: "safari" | "iphone-safari";
   deviceUDID?: string;
@@ -15,7 +17,10 @@ export type SafariTransportOptions = {
 
 export type SafariTransport = Transport;
 
-type Request = (path: string, body?: unknown, method?: string) => Promise<unknown>;
+// The optional decoder runs inside the request, so the request's protocol fact records a
+// contract failure (for example HTTP 200 with a null evaluation value) under its own number.
+type Request = <T>(path: string, body: unknown, method: string | undefined, decode: (value: unknown) => T) => Promise<T>;
+const accept = (value: unknown): unknown => value;
 type CleanupRequests = { command: Request; session: Request; timeoutMs: number };
 type Preview = { kind: "tab"; handle: string } | { kind: "frame"; token: string };
 
@@ -82,17 +87,53 @@ function verifyCapabilities(capabilities: Readonly<Record<string, unknown>>, opt
   }
 }
 
-function createRequest(endpoint: string, timeoutMs: number, signal?: AbortSignal): Request {
-  return async (path, body, method = body === undefined ? "GET" : "POST") => {
-    const response = await fetch(endpoint + path, { method, headers: { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
-    const envelope = object(await response.json());
-    if (!("value" in envelope)) throw new Error(`Safari WebDriver ${method} ${path} returned no value`);
-    const value = envelope.value;
-    if (!response.ok) throw new Error(`Safari WebDriver ${method} ${path} (${response.status}): ${JSON.stringify(value)}`);
-    if (value !== null && typeof value === "object" && "error" in value) throw new Error(`Safari WebDriver ${method} ${path}: ${JSON.stringify(value)}`);
-    return value;
+function createRequest(endpoint: string, timeoutMs: number, signal?: AbortSignal, observer?: ProtocolObserver): Request {
+  return async <T>(path: string, body: unknown, requested: string | undefined, decode: (value: unknown) => T): Promise<T> => {
+    const method = requested ?? (body === undefined ? "GET" : "POST");
+    const trace = newTrace();
+    const emit = observer ? openFact(observer, path, method) : undefined;
+    try {
+      const value = await exchange(endpoint + path, { method, timeoutMs, signal, body, path }, trace);
+      trace.stage = "contract";
+      const decoded = decode(value);
+      trace.stage = "valid";
+      return decoded;
+    } catch (error) {
+      if (trace.stage === "fetch") trace.network = networkKind(error);
+      throw error;
+    } finally { emit?.(trace); }
   };
+}
+
+type Exchange = { method: string; timeoutMs: number; signal?: AbortSignal; body: unknown; path: string };
+async function exchange(url: string, { method, timeoutMs, signal, body, path }: Exchange, trace: ProtocolTrace): Promise<unknown> {
+  const response = await fetch(url, { method, headers: { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
+  trace.status = response.status;
+  trace.media = mediaKind(response.headers.get("content-type"));
+  trace.stage = "decode-json";
+  const decoded: unknown = await response.json();
+  trace.envelope = jsonKind(decoded);
+  trace.stage = "envelope";
+  const envelope = object(decoded);
+  if (!("value" in envelope)) throw new Error(`Safari WebDriver ${method} ${path} returned no value`);
+  const value = envelope.value;
+  trace.value = jsonKind(value);
+  trace.error = webDriverError(value);
+  trace.stage = "status";
+  if (!response.ok) throw new Error(`Safari WebDriver ${method} ${path} (${response.status}): ${JSON.stringify(value)}`);
+  trace.stage = "webdriver";
+  if (value !== null && typeof value === "object" && "error" in value) throw new Error(`Safari WebDriver ${method} ${path}: ${JSON.stringify(value)}`);
+  return value;
+}
+
+type EvaluationReply = { ok: true; json: string } | { ok: false; message: unknown; stack: unknown };
+// The evaluation contract. A guest error is a valid reply; a non-object or a success without JSON is not.
+function evaluationReply(value: unknown): EvaluationReply {
+  const result = object(value);
+  if (result.ok !== true) return { ok: false, message: result.message, stack: result.stack };
+  if (typeof result.json !== "string") throw new Error("Safari evaluation returned no JSON value");
+  return { ok: true, json: result.json };
 }
 
 async function cleanupAfterFailure(error: unknown, cleanup: () => Promise<void>): Promise<never> {
@@ -114,10 +155,11 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
   let operationRequest = request;
-  const command = (admission: Admission | undefined, path: string, body?: unknown, method?: string): Promise<unknown> => {
+  const decodedCommand = <T>(admission: Admission | undefined, path: string, body: unknown, method: string | undefined, decode: (value: unknown) => T): Promise<T> => {
     if (admission) admit(admission);
-    return operationRequest(sessionPath + path, body, method);
+    return operationRequest(sessionPath + path, body, method, decode);
   };
+  const command = (admission: Admission | undefined, path: string, body?: unknown, method?: string): Promise<unknown> => decodedCommand(admission, path, body, method, accept);
   const ownedCommand = (operation: SafariOwnershipOperation, admission: Admission | undefined, path: string, body?: unknown, method?: string) => {
     if (admission) admit(admission);
     return ownershipRequest(witness, operation, () => command(admission, path, body, method), admission);
@@ -202,9 +244,8 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   }
 
   async function evaluate<T>(expression: string, admission: Admission): Promise<T> {
-    const result = object(await command(admission, "/execute/async", { script: evaluateScript, args: [expression] }));
-    if (result.ok !== true) throw new Error(`Safari evaluation failed: ${String(result.message)}\n${String(result.stack ?? "")}`);
-    if (typeof result.json !== "string") throw new Error("Safari evaluation returned no JSON value");
+    const result = await decodedCommand(admission, "/execute/async", { script: evaluateScript, args: [expression] }, undefined, evaluationReply);
+    if (!result.ok) throw new Error(`Safari evaluation failed: ${String(result.message)}\n${String(result.stack ?? "")}`);
     return JSON.parse(result.json);
   }
 
@@ -242,7 +283,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 }
 
 async function finishSession(witness: SafariOwnershipWitness | undefined, cleanup: CleanupRequests, sessionPath: string): Promise<void> {
-  const remove = async () => { await ownershipRequest(witness, { kind: "session-delete" }, () => cleanup.session(sessionPath, undefined, "DELETE")); };
+  const remove = async () => { await ownershipRequest(witness, { kind: "session-delete" }, () => cleanup.session(sessionPath, undefined, "DELETE", accept)); };
   if (witness) await witness.finish(remove);
   else await remove();
 }
@@ -256,20 +297,22 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const requested = requestedCapabilities(options);
   const lifetime = new AbortController();
   const address = endpoint.href.replace(/\/$/, "");
-  const request = createRequest(address, options.timeoutMs, lifetime.signal);
-  const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal), session: createRequest(address, cleanupTimeoutMs), timeoutMs: cleanupTimeoutMs };
+  const counter = { value: 0 };
+  const observe = (lane: ProtocolLane): ProtocolObserver | undefined => options.protocolSink ? { sink: options.protocolSink, lane, counter } : undefined;
+  const request = createRequest(address, options.timeoutMs, lifetime.signal, observe("command"));
+  const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal, observe("cleanup-command")), session: createRequest(address, cleanupTimeoutMs, undefined, observe("session")), timeoutMs: cleanupTimeoutMs };
   const witness = options.ownershipSink ? new SafariOwnershipWitness(options.ownershipSink) : undefined;
   let sessionPath: string;
   let opened: Record<string, unknown>;
   try {
-    opened = object(await ownershipRequest(witness, { kind: "session-create" }, () => request("/session", { capabilities: { alwaysMatch: requested } })));
+    opened = object(await ownershipRequest(witness, { kind: "session-create" }, () => request("/session", { capabilities: { alwaysMatch: requested } }, undefined, accept)));
     sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
   } catch (error) { return cleanupAfterFailure(error, () => witness ? witness.finish(async () => {}) : Promise.resolve()); }
   try {
     const capabilities = freezeCapabilities(opened.capabilities);
     verifyCapabilities(capabilities, options);
-    await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
-    const host = handle(await ownershipRequest(witness, { kind: "host-handle" }, () => request(`${sessionPath}/window`)));
+    await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 }, undefined, accept);
+    const host = handle(await ownershipRequest(witness, { kind: "host-handle" }, () => request(`${sessionPath}/window`, undefined, undefined, accept)));
     return transport(request, sessionPath, host, capabilities, lifetime, cleanup, options.browser, witness);
   } catch (error) { return cleanupAfterFailure(error, () => finishSession(witness, cleanup, sessionPath)); }
 }
