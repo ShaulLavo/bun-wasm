@@ -389,6 +389,8 @@ test("CLI is opt-in, one cell only, and forwarded with the original provenance a
   expect(forwarded).toMatchObject({ nextBuildObservation: true, profile: "shared-group", frameworks: ["next"], engines: ["quickjs"], browsers: ["safari"], assetSource: "protected-packet" });
   expect(forwarded.timeoutMs).toBe(90_000);
   expect(forwarded.nativeAdmission).toMatchObject({ expectedSeconds: 600, waitSeconds: 3600, timeoutSeconds: 900 });
+  const witnessed = options(nativeRunnerArgs(options(args.concat(["--next-build-observation", "--safari-ownership"])), "/Users/fixture/next"));
+  expect(witnessed).toMatchObject({ nextBuildObservation: true, safariOwnership: true });
   expect(cellDeadlines(campaignDeadlines(forwarded.timeoutMs, forwarded.installTimeouts), { framework: "next", browser: "safari", engine: "quickjs" })).toEqual({ timeoutMs: 90_000, installTimeoutMs: 90_000, buildTimeoutMs: 110_000 });
   expect(() => options(["--asset-source=unit", "--next-build-observation"])).toThrow("one Next QuickJS cell");
   expect(() => options(args.concat(["--next-build-observation=false"]))).toThrow("one Next QuickJS cell");
