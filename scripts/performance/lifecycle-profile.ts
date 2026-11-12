@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { loadavg } from "node:os";
 import { gzipSync } from "node:zlib";
@@ -112,6 +112,7 @@ async function analysis(config: Config, window: { before: number; after: number 
   const path = join(config.output, config.browser === "chrome" ? "chrome-trace.json" : "gecko.json");
   const bytes = await readFile(path);
   await writeFile(path + ".gz", gzipSync(bytes));
+  await unlink(path);
   const input = JSON.parse(bytes.toString());
   const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase) : analyzeGecko(input, window);
   await save(join(config.output, "analysis.json"), rows);
