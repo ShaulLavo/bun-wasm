@@ -183,6 +183,10 @@ declare namespace BunWasm {
     /** Bytes, 0 at end of file, or a negative errno. */
     procRead(fd: number, capacity?: number): Uint8Array | number;
     procWrite(fd: number, bytes: Uint8Array): number;
+    /** As `procWrite`, with its result kept under `token` for `procWriteResult`. */
+    procWriteOnce(fd: number, bytes: Uint8Array, token: number): number;
+    /** A word native: the result of the write made under `token`, or -(2 ** 63) when none ran. */
+    procWriteResult(token: number): number;
     /** 0 entered, -6 pending, positive WASI startup errno, -11 canceled, -12 unknown/collected. Non-consuming. */
     procStartStatus(pid: number): number;
     /** [kind, value]: 0 exit, 1 signal, 2 positive WASI startup errno; or a negative errno. */

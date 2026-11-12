@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { MessageChannel, receiveMessageOnPort, Worker, type WorkerOptions } from 'node:worker_threads';
+import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort, type WorkerOptions } from 'node:worker_threads';
 import { ownerSnapshot, type OwnerSnapshot } from './page-control.ts';
 
 type Census = {
@@ -53,6 +53,10 @@ async function opened(word: Int32Array, index: number) {
 function text(bytes: number, seed: number) {
   return String.fromCharCode(97 + seed % 26).repeat(bytes);
 }
+/** Closes a port and waits until it has: its lane end closes on a later turn of the loop. */
+function closePort(port: MessagePort) {
+  return new Promise<void>(resolve => { port.once('close', () => resolve()); port.close(); });
+}
 function settledCensus(census: Census) {
   return census.awaiting === 0 && census.deadEnds === 0 && census.busy === 0 && census.inFlight === 0
     && census.cells === 0 && census.pooledBytes <= POOL_LIMIT;
@@ -77,20 +81,22 @@ function ownerAgrees(label: string, census: Census) {
 }
 
 /**
- * Turns the event loop, whose steps sweep, until the host has released every stopped worker,
- * then checks the baseline. `liveLanes` counts the lanes the case leaves open on purpose.
+ * Turns the event loop, whose steps sweep, until the host has released every stopped worker
+ * and this guest's own closing ports have closed, then checks the baseline. A port closes over
+ * later turns of the loop, so the lane count is waited for, within the deadline, not sampled
+ * once. `liveLanes` counts the lanes the case leaves open on purpose.
  */
 async function baseline(label: string, liveLanes = 0) {
   if (!lanes) return;
   const deadline = Date.now() + DEADLINE_MS;
   let census = lanes.census();
   assert.ok(census, `${label}: this guest has a ledger`);
-  while (!settledCensus(census)) {
+  while (!settledCensus(census) || census.liveLanes !== liveLanes) {
     if (Date.now() > deadline) throw new Error(`${label}: the ledger never settled: ${JSON.stringify(census)}`);
     await Bun.sleep(5);
     census = lanes.census()!;
   }
-  assert.equal(census.liveLanes, liveLanes, `${label}: lanes left open`);
+  assert.equal(census.liveLanes, liveLanes, `${label}: lanes left open: ${JSON.stringify(census)}`);
   assert.equal(census.linkedSegments, 0, `${label}: spill segments left linked`);
   assert.equal(census.pins, 1 + census.liveLanes + census.pooled, `${label}: the ledger names only its own, live and pooled pins`);
   ownerAgrees(label, census);
@@ -107,7 +113,7 @@ async function killedSender() {
   assert.ok(received, 'a killed sender\'s confirmed message is readable');
   assert.equal((received.message as { task: string }).task, text(300_000, 7));
   assert.equal(receiveMessageOnPort(port1), undefined);
-  port1.close();
+  await closePort(port1);
   await baseline('killed sender');
 }
 
@@ -133,7 +139,7 @@ async function unrestoredCarriedPort() {
   const closed = new Promise<void>(resolve => carried.port1.once('close', resolve));
   await receiver.worker.terminate();
   await closed;
-  port1.close();
+  await closePort(port1);
   await baseline('unrestored carried port');
 }
 

@@ -162,10 +162,20 @@ thread_local! {
 /// Set the program up for the host to run; `_start` then returns.
 pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
     let mut table = crate::natives::table(&state);
-    assert!(
-        table.words.is_empty(),
-        "word natives need a split engine"
-    );
+    // The host engine has one bridge, so a word native is an ordinary native here.
+    for (name, function) in std::mem::take(&mut table.words) {
+        table.add(name, move |args| {
+            let mut words = [0; crate::data::WORD_ARGS];
+            for (word, value) in words.iter_mut().zip(args.0) {
+                *word = match value {
+                    Val::Num(number) => *number as u32,
+                    Val::Bool(flag) => u32::from(*flag),
+                    _ => 0,
+                };
+            }
+            Ok(Val::Num(function(&words) as f64))
+        });
+    }
     install_host_natives(&mut table, &state);
     let entry = match &entry {
         Entry::File(_) => Record::new().set("kind", "file").set("main", main_path),

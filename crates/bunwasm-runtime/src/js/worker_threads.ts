@@ -1104,6 +1104,10 @@
       // The host reported the exit: the child's lane ends close now, its storage once the host releases it.
       if (this.#cell) groupLanes?.exited(this.#cell);
       root({ kind: "gone", path: this.#path });
+      // This runs on its own turn of the loop, never inside a synchronous receive, and it may
+      // be the loop's last: the sweep and the retirement the exit owes happen here, not at a
+      // later step that an otherwise idle guest would never take.
+      laneHousekeeping();
       const code = this.#termination ? 1 : this.#code ?? 1;
       if (code !== 0 && this.#child.signalCode === null && !this.#termination && !this.#error && !this.#graceful) this.emit("error", new Error(`Worker exited with code ${code}`));
       this.emit("exit", code);

@@ -10,20 +10,29 @@ import { sourceChannel, sourcePorts, type SourcePort } from "./fixtures/shared-o
 
 const AGAIN = -6;
 const cleanup = new Set<() => void>();
-afterEach(() => { for (const close of cleanup) close(); cleanup.clear(); });
+afterEach(() => { for (const close of cleanup) close(); cleanup.clear(); pipeFault.next = null; });
 
 type Trace = { from: string; text: string }[];
+/** Makes the next control-pipe write of any guest fail before it ran, or after it ran and before its reply. */
+const pipeFault: { next: "before" | "after" | null } = { next: null };
 function host(input: PipeEndpoint, output: PipeEndpoint, from: string, trace: Trace) {
+  let last: [token: number, result: number] = [0, 0];
   return {
     procRead() {
       const buffer = new Uint8Array(65536);
       const read = input.tryRead([buffer]);
       return read > 0 ? buffer.slice(0, read) : read;
     },
-    procWrite(_fd: number, bytes: Uint8Array) {
+    procWriteOnce(_fd: number, bytes: Uint8Array, token: number) {
+      const failing = pipeFault.next;
+      pipeFault.next = null;
+      if (failing === "before") throw new Error("core data allocation failed");
       trace.push({ from, text: Buffer.from(bytes).toString("utf8") });
-      return output.tryWrite([bytes]);
+      last = [token, output.tryWrite([bytes])];
+      if (failing === "after") throw new Error("core data allocation failed");
+      return last[1];
     },
+    procWriteResult: (token: number) => last[0] === token ? last[1] : -(2 ** 63),
     procPoll: () => new Uint8Array(0),
     procClose() {},
   };
@@ -241,6 +250,29 @@ test("between detachment and its return, postMessage calls only natives that can
   expect(after).toEqual(["laneTransfer", "laneCommit"]);
   expect(child.receiveMessageOnPort(child.parentPort)?.message).toMatchObject({ buffer: new ArrayBuffer(32) });
 });
+
+for (const when of ["before", "after"] as const) {
+  test(`a worker's post is whole and returns when its control pipe write fails ${when} it ran`, () => {
+    const { root, trace, spawn } = group();
+    const { child, port, pid } = spawn();
+    const extra = new child.MessageChannel();
+    const buffer = new ArrayBuffer(32);
+    // The first write after detachment carries the broker's record that the port is moving.
+    pipeFault.next = when;
+    expect(() => child.parentPort.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).not.toThrow();
+    expect(pipeFault.next).toBeNull();
+    expect(buffer.byteLength).toBe(0);
+    const message = root.receiveMessageOnPort(port)?.message as { buffer: ArrayBuffer; port: SourcePort };
+    expect(message.buffer).toEqual(new ArrayBuffer(32));
+    // The record goes out once: with the post, or at the child's next step if that write never ran.
+    child.step();
+    const records = trace.filter(item => item.from === `child ${pid}`).map(item => item.text.split('"moving"').length - 1);
+    expect(records.reduce((sum, count) => sum + count, 0)).toBe(1);
+    root.step();
+    message.port.postMessage("to the worker");
+    expect(child.receiveMessageOnPort(extra.port1)?.message).toBe("to the worker");
+  });
+}
 
 test("a closed peer's committed messages arrive in order and then the port closes", async () => {
   const { spawn } = group();

@@ -157,18 +157,68 @@ test("malformed queued port graphs fail before creating receiver endpoints", () 
   }
 });
 
-function channelFactory() {
+function channelFactory(Encoder: new() => { encode(text: string): Uint8Array } = TextEncoder) {
   const emitted = Bun.spawnSync(["node", new URL("./transpile-runtime.ts", import.meta.url).pathname,
     new URL("../crates/bunwasm-runtime/src/js/worker_channel.ts", import.meta.url).pathname, `${scratch}/channel.js`]);
   expect(emitted.exitCode).toBe(0);
-  return runInNewContext(readFileSync(`${scratch}/channel.js`, "utf8"), { TextEncoder, TextDecoder });
+  return runInNewContext(readFileSync(`${scratch}/channel.js`, "utf8"), { TextEncoder: Encoder, TextDecoder });
 }
+
+/** A pipe that takes everything, whose write native fails once on the way to or from the core. */
+function flakyPipe(fault: "before" | "after" | null) {
+  const written: string[] = [];
+  let last: [token: number, result: number] = [0, 0];
+  const native = {
+    procWriteOnce(_fd: number, bytes: Uint8Array, token: number) {
+      const failing = fault;
+      fault = null;
+      if (failing === "before") throw new Error("core data allocation failed");
+      written.push(new TextDecoder().decode(bytes));
+      last = [token, bytes.length];
+      if (failing === "after") throw new Error("core data allocation failed");
+      return bytes.length;
+    },
+    procWriteResult: (token: number) => last[0] === token ? last[1] : -(2 ** 63),
+    procRead: () => -6, procClose() {},
+  };
+  return { native, written };
+}
+
+for (const when of ["before", "after"] as const) {
+  test(`a control frame whose write fails ${when} the pipe took it is written exactly once`, () => {
+    const pipe = flakyPipe(when);
+    const channel = channelFactory()({ native: pipe.native }).open(1, 2);
+    expect(() => channel.send({ kind: "moving", id: 1 })).not.toThrow();
+    // A write that never ran leaves the frame queued; one that ran is counted from its token.
+    expect(channel.pending).toBe(when === "before");
+    channel.send({ kind: "port-wake" });
+    expect(channel.pending).toBe(false);
+    expect(pipe.written.join("")).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
+  });
+}
+
+test("a control frame that could not be encoded stays queued in order", () => {
+  let failing = true;
+  class FlakyEncoder {
+    encode(text: string) {
+      if (failing) { failing = false; throw new Error("core data allocation failed"); }
+      return new TextEncoder().encode(text);
+    }
+  }
+  const pipe = flakyPipe(null);
+  const channel = channelFactory(FlakyEncoder)({ native: pipe.native }).open(1, 2);
+  expect(() => channel.send({ kind: "moving", id: 1 })).not.toThrow();
+  expect(channel.pending).toBe(true);
+  expect(pipe.written).toEqual([]);
+  channel.send({ kind: "port-wake" });
+  expect(pipe.written.join("")).toBe('{"kind":"moving","id":1}\n{"kind":"port-wake"}\n');
+});
 
 test("a closed worker input pipe still drains the final incoming control frame", () => {
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":"exiting"}\n'), 0];
   const channel = factory({ native: {
-    procWrite: () => -64, procRead: () => incoming.shift() ?? 0, procClose() {},
+    procWriteOnce: () => -64, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   const frames: unknown[] = [];
   expect(() => channel.send({ kind: "late-message" })).not.toThrow();
@@ -182,7 +232,7 @@ test("truncated worker framing fails once", () => {
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":'), 0];
   const channel = factory({ native: {
-    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
+    procWriteOnce: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow("Incomplete worker message");
   expect(() => channel.pump(() => {})).not.toThrow();
@@ -192,7 +242,7 @@ test("closing a failed worker channel discards a partial trailing frame", () => 
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{bad}\npartial'), 0];
   const channel = factory({ native: {
-    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
+    procWriteOnce: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow();
   channel.close();

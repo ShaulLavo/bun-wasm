@@ -3,6 +3,8 @@
   const native = internal.native;
   const encoder = new TextEncoder();
   const AGAIN = -6;
+  /** `procWriteResult` for a token no write ran under. */
+  const UNWRITTEN = -(2 ** 63);
   const READABLE = 0;
   const WRITABLE = 1;
 
@@ -17,8 +19,10 @@
 
   function open(input: number, output: number): BunWasm.WorkerChannel {
     const decoder = new TextDecoder();
-    const outgoing: Uint8Array[] = [];
+    /** Frames not yet written: text until its first write is tried, then bytes. */
+    const outgoing: (Uint8Array | string)[] = [];
     let offset = 0;
+    let token = 0;
     let incoming = "";
     let ended = false;
     let writeClosed = false;
@@ -27,20 +31,43 @@
       ended = true;
       throw new Error(message);
     }
+    /** The head frame as bytes, or null when it could not be encoded this time. */
+    function head() {
+      const first = outgoing[0];
+      if (typeof first !== "string") return first;
+      try { return outgoing[0] = encoder.encode(first); }
+      catch { return null; }
+    }
+    /**
+     * Writes once. A call that fails on its way back from the core has still written, and the
+     * core kept its result under this call's token; `UNWRITTEN` means the call never ran.
+     */
+    function write(bytes: Uint8Array) {
+      token = token % 0xffffffff + 1;
+      try { return native.procWriteOnce(output, bytes, token); }
+      catch { return native.procWriteResult(token); }
+    }
+    /**
+     * Writes what the pipe takes. It never throws for a call the native bridge could not carry:
+     * the frame stays queued, whole and in order, and the next flush tries again. A sender may
+     * therefore queue a frame at a point where it can no longer report a failure.
+     */
     function flush() {
       let progress = false;
       for (let i = 0; i < 32 && outgoing.length; i++) {
-        const written = native.procWrite(output, outgoing[0].subarray(offset));
-        if (written === AGAIN) break;
+        const bytes = head();
+        if (!bytes) break;
+        const written = write(bytes.subarray(offset));
+        if (written === AGAIN || written === UNWRITTEN) break;
         if (written < 0) { writeClosed = true; outgoing.length = 0; offset = 0; break; }
         offset += written;
-        if (offset === outgoing[0].length) { outgoing.shift(); offset = 0; }
+        if (offset === bytes.length) { outgoing.shift(); offset = 0; }
         progress = progress || written > 0;
       }
       return progress;
     }
     return {
-      send(frame) { if (!writeClosed) outgoing.push(encoder.encode(JSON.stringify(frame) + "\n")); flush(); },
+      send(frame) { if (!writeClosed) outgoing.push(JSON.stringify(frame) + "\n"); flush(); },
       drain() {
         // Sleep until the pipe can take more, never longer than the poll bound.
         while (outgoing.length) if (!flush()) native.procPoll(subscription(WRITABLE, output), 100);

@@ -44,10 +44,14 @@ impl Table {
         self.functions.push((name, Rc::new(f)));
     }
 
-    #[cfg(bun_wasm_shared_group)]
     pub(crate) fn add_word(&mut self, name: &'static str, f: WordFn) {
         self.words.push((name, f));
     }
+}
+
+thread_local! {
+    /// The token and result of this thread's last `procWriteOnce`.
+    static WRITE_ONCE: std::cell::Cell<(u32, i64)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// Node's (code, negative Linux errno, description) for an I/O error.
@@ -1599,6 +1603,22 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     });
     t.add("procWrite", |a| {
         Ok(host::proc_write(a.i32(0)?, a.bytes(1)?).into())
+    });
+    // The worker control channel's write. Its result stays under the caller's token, so a
+    // caller whose reply was lost after the bytes went out still learns how many did.
+    t.add("procWriteOnce", |a| {
+        let (fd, bytes, token) = (a.i32(0)?, a.bytes(1)?, a.u32(2)?);
+        let result = host::proc_write(fd, bytes);
+        WRITE_ONCE.with(|last| last.set((token, i64::from(result))));
+        Ok(result.into())
+    });
+    t.add_word("procWriteResult", |words| {
+        let (token, result) = WRITE_ONCE.with(std::cell::Cell::get);
+        if token != 0 && token == words[0] {
+            result
+        } else {
+            i64::MIN
+        }
     });
     t.add("procWait", |a| {
         Ok(match host::proc_wait(a.i32(0)?) {

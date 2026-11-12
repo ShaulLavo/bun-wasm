@@ -15,7 +15,7 @@ const channel = sourceChannel({
     const bytes = new Uint8Array(65536), count = input.tryRead([bytes]);
     return count > 0 ? bytes.subarray(0, count) : count;
   },
-  procWrite(_fd: number, bytes: Uint8Array) { return output.tryWrite([bytes]); },
+  procWriteOnce(_fd: number, bytes: Uint8Array) { return output.tryWrite([bytes]); },
   procClose(fd: number) { (fd === 3 ? input : output).close(); },
   procPoll() { return 0; },
 });
