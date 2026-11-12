@@ -1,5 +1,5 @@
 import { browsers } from "./catalog";
-import { cleanupTimeoutMs, parseTimeout, type RecordedDeadlinePolicy } from "./deadlines";
+import { cleanupTimeoutMs, parseTimeout, validateDeadlines, type RecordedDeadlinePolicy } from "./deadlines";
 import { object, text } from "./evidence";
 import { finish, phases, validateCellEvidence, type Cell, type RecordedBox, type Report } from "./model";
 
@@ -38,6 +38,7 @@ function validateHistory(cell: Cell<RecordedBox>): void {
 }
 function archivedDeadlines(value: unknown, frameworks: readonly string[]): RecordedDeadlinePolicy {
   const data = object(value);
+  if (data.cellTimeouts !== undefined || data.calibration !== undefined || data.overrides !== undefined) return validateDeadlines(value);
   if (typeof data.timeoutMs !== "number" || data.cleanupTimeoutMs !== cleanupTimeoutMs) throw new Error("Invalid archived deadline policy");
   parseTimeout(String(data.timeoutMs));
   const installTimeouts = timeoutMap(data.installTimeouts, frameworks);

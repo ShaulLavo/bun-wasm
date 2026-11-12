@@ -144,12 +144,25 @@ test("read errors fail instead of waiting for another notification", () => fixtu
   f.cleaned();
 }));
 
-test("the CLI returns existing JSON and exits without keeping its deadline alive", () => fixture(async f => {
-  writeFileSync(f.options.logFile, record);
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, "native-ready.ts"), "--log-file", f.options.logFile, "--exit-file", f.options.exitFile, "--timeout-ms", "60000"], { stdout: "pipe", stderr: "pipe" });
+async function runCli(f: ReturnType<typeof files>, timeout: string) {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "native-ready.ts"), "--log-file", f.options.logFile, "--exit-file", f.options.exitFile, "--timeout-ms", timeout], { stdout: "pipe", stderr: "pipe" });
   try {
     const [code, output, errors] = await bounded(() => Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]), 2000);
-    expect({ code, output, errors }).toEqual({ code: 0, output: record + "\n", errors: "" });
-    expect(readFileSync(f.options.logFile, "utf8")).toBe(record);
+    return { code, output, errors };
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-}));
+}
+
+for (const timeout of ["1", "3600000", "7200000", "2147483647"]) {
+  test(`the CLI accepts ${timeout} ms and exits promptly with an existing ready record`, () => fixture(async f => {
+    writeFileSync(f.options.logFile, record);
+    expect(await runCli(f, timeout)).toEqual({ code: 0, output: record + "\n", errors: "" });
+    expect(readFileSync(f.options.logFile, "utf8")).toBe(record);
+  }));
+}
+
+for (const timeout of ["0", "-1", "1.5", "NaN", "Infinity", "2147483648", "9007199254740992"]) {
+  test(`the CLI rejects invalid observation timeout ${timeout}`, () => fixture(async f => {
+    writeFileSync(f.options.logFile, record);
+    expect(await runCli(f, timeout)).toEqual({ code: 1, output: "", errors: "timeout-ms must be an integer from 1 through 2147483647\n" });
+  }));
+}
