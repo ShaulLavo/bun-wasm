@@ -42,4 +42,6 @@ Commands with inherited output also forward captured stderr when its pipe closes
 including the fleet workload's allowed exit code 1. A failure before any report
 now exposes its original diagnostic before collection or cleanup errors. The
 same captured text still reaches `CommandExitError` for disallowed exit codes.
+The lifetime quality check covers both inherited and captured command failures,
+including their error type, exit code, diagnostic text and forwarding behavior.
 Signal handling, child reaping and native cleanup proof requirements are unchanged.
