@@ -7,7 +7,7 @@ import { withPlayground } from "./test-fixture";
 
 const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;
-type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean };
+type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean };
 
 async function runFixture(config: Fixture = {}) {
   const framework = frameworks.find(item => item.id === (config.framework ?? "angular"));
@@ -27,6 +27,9 @@ async function runFixture(config: Fixture = {}) {
     transport.evaluate = async <T>(expression: string): Promise<T> => {
       if (expression.includes("const read = globalThis.__goalsReadAngularDiagnostic")) events.push("diagnostic");
       if (expression.includes("function transcript")) transcripts++;
+      if (config.changingTerminal && expression.includes("function transcript") && transcripts >= 3) {
+        return evaluate<T>(JSON.stringify(transcripts === 3 ? "Error: failure-time detail\r\nraw" : "cleanup-time output\r\nraw"));
+      }
       const delay = config.slowTerminal && transcripts === 3 && expression.includes("function transcript");
       const operation = (async () => { if (delay) await Bun.sleep(2050); return evaluate<T>(expression); })();
       if (delay) pending.push(operation);
@@ -47,6 +50,17 @@ async function runFixture(config: Fixture = {}) {
   }, 0, filesystem.filesystem); }
   finally { await filesystem.close(); }
 }
+
+test.each([false, true])("retains distinct failure and cleanup observations for owned cleanup = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true });
+  const log = observed.logs.at(-1) ?? "";
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("failure-time detail") });
+  expect(log).toContain("Error: failure-time detail\r\nraw");
+  expect(log).toContain("cleanup-time output\r\nraw");
+  expect(log.indexOf("failure-time detail")).toBeLessThan(log.indexOf("cleanup-time output"));
+  expect(log).toContain("Failure-time terminal observation");
+  expect(log).toContain(owned ? "Cleanup-time terminal observation (before owned transport cleanup)" : "Cleanup-time terminal observation (after server stop)");
+});
 
 test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
   const observed = await runFixture({ owned });
