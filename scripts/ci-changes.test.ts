@@ -4,6 +4,27 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
+
+test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
+  const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
+    "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
+    .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
+  for (const path of paths) expect(needsRust([path])).toBe(true);
+  expect(needsRust(["docs/bun-patches/spidermonkey-side-core-qualification.md", "spidermonkey/README.md"])).toBe(false);
+});
+
+test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
+});
+
+test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
+});
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -446,13 +467,3 @@ for (const path of [
     expect(output).toEndWith("shared_native=true");
   });
 }
-
-test.each(["spidermonkey/README.md", "docs/bun-patches/spidermonkey-side-core-qualification.md"])("SpiderMonkey documentation %s selects no native producer", path => {
-  expect(needsRust([path])).toBe(false);
-  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(false);
-});
-
-test.each(["spidermonkey/mozconfig.in", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/unresolved-symbols.json", "spidermonkey/irregexp-icu/allocator.cpp"])("SpiderMonkey native input %s retains ordinary and shared gates", path => {
-  expect(needsRust([path])).toBe(true);
-  expect(needsSharedNative([path], ["tests/fixtures/shared-wasm-memory"])).toBe(true);
-});

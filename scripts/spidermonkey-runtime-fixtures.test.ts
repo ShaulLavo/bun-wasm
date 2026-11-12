@@ -281,6 +281,20 @@ async function waitForLaunch(box: Sandbox) {
   throw new Error("Synthetic launcher never started");
 }
 
+async function waitForProcessExit(pid: number) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { process.kill(pid, 0); }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
+      throw error;
+    }
+    // timeout can exit before init reaps the killed launcher. This waits only
+    // for host teardown, without changing the guest's TERM/KILL deadlines.
+    await Bun.sleep(10);
+  }
+  throw new Error(`Synthetic fixture process ${pid} was not reaped`);
+}
+
 test("SIGTERM stops the active fixture child before removing its scratch", async () => {
   const box = sandbox();
   const child = Bun.spawn(["bash", join(box.root, "scripts/test.sh")].concat(selection(box), ["hello"]), {
@@ -291,6 +305,7 @@ test("SIGTERM stops the active fixture child before removing its scratch", async
     const record = await waitForLaunch(box);
     child.kill("SIGTERM");
     expect(await child.exited).toBe(143);
+    await waitForProcessExit(record.pid);
     expect(() => process.kill(record.pid, 0)).toThrow();
     expect(readdirSync(join(box.root, "tmp"))).toEqual([]);
   } finally {
@@ -309,12 +324,13 @@ test("the default experimental selection counts every discovered fixture", () =>
   expect(records(box)).toHaveLength(4);
 });
 
-test("a fixture ignoring TERM is killed at the escalation deadline and still counts as failed", () => {
+test("a fixture ignoring TERM is killed at the escalation deadline and still counts as failed", async () => {
   const box = sandbox();
   const result = invoke(box, selection(box).concat(["hello"]), { HANG: "1", IGNORE_TERM: "1", SHORT_TIMEOUT: "1" });
   expect(result.code).toBe(1);
   expect(result.output).toContain("expected 0");
   expect(result.output).toContain("0 passed, 1 failed");
+  await waitForProcessExit(records(box)[0]!.pid);
   expect(() => process.kill(records(box)[0]!.pid, 0)).toThrow();
 });
 

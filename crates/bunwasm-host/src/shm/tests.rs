@@ -5,6 +5,9 @@ use std::sync::{Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use wasmtime::{Instance, Module, Store, StoreLimitsBuilder};
 
+#[path = "group_pin_tests.rs"]
+mod group_pins;
+
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn group() -> MemoryGroup {

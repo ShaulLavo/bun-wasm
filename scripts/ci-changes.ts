@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
@@ -147,9 +148,16 @@ function excludedNativeInput(path: string): boolean {
 
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
   if (excludedNativeInput(path)) return false;
-  return path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
+  return ordinarySpiderMonkeyInput(path) || path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
     || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
+}
+
+function ordinarySpiderMonkeyInput(path: string): boolean {
+  if (path.endsWith(".md")) return false;
+  return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
+    || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
 export function needsJsc(paths: readonly string[]): boolean {
