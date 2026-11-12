@@ -98,8 +98,9 @@ successful cleanup. It does not reload the page to make the edit appear.
 
 Use `--browsers=chrome,firefox`, `--engines=browser`, or
 `--frameworks=vite-react,next` for bounded selections. Unselected boxes remain
-pending, never pass. `--timeout-ms=180000` bounds campaign phases, except cleanup
-with its shorter fixed bounds. `--resume` continues
+pending, never pass. Omit timeout flags for the fixed per-cell campaign policy.
+An explicit `--timeout-ms=180000` overrides phase, install and build limits,
+retaining the Next build minimum and fixed cleanup bounds. `--resume` continues
 an unchanged clean source and asset identity. Failed attempts remain in the JSON;
 add `--retry-failures` to append a new attempt rather than erase the old one.
 Use a different `--output=/absolute/path` for independent shards or controls.
@@ -155,7 +156,7 @@ forward. Pass the forwarded URL, with the unchanged token path, to the runner:
 source env.sh
 bun scripts/goals-matrix/run.ts --browsers=iphone-safari \
   --root=/absolute/prepared-site --asset-source=/absolute/asset-sources.json \
-  --output=/absolute/new-iphone-campaign --timeout-ms=90000 \
+  --output=/absolute/new-iphone-campaign \
   --device-udid=CLAIMED_SIMULATOR_UDID \
   --iphone-control-url=http://127.0.0.1:FORWARDED_PORT/__goals_iphone/TOKEN \
   --iphone-agent-command=/exact/path/returned/by/device_open/agent-device
@@ -183,8 +184,9 @@ in `fleet-cleanup.json` instead of deleting files under a live process.
 
 ## Choose an install deadline
 
-The default is 90,000 ms for campaign phases, with the measured Next build bound
-described below. An explicit
+The default policy is fixed per framework, browser and engine. Reports record
+its provenance and effective limits. Campaigns never learn new budgets while
+running. An explicit
 `--timeout-ms=90000` still gives every framework install 90,000 ms unless you
 also set an install override. Cleanup keeps its existing 20,000 ms outer bound
 and shorter inner bounds. No install override changes startup, dev, render,
@@ -216,13 +218,13 @@ behavior or other frameworks, and no Nuxt override is enabled implicitly.
 For a read-only summary of independent historical runs, use the
 [framework evidence view](goals-report-view.md). It never creates a resumable campaign.
 
-Reports use schema 2. `TABLE.json` records the effective install deadline for
-every framework, the campaign deadline, and the fixed cleanup deadline in
+Reports use schema 2. `TABLE.json` records effective phase, install and build
+deadlines for every cell, calibration provenance, explicit CLI overrides and the fixed cleanup deadline in
 `deadlines`. Each phase records its own `timeoutMs`, checked against that policy
 when the report is read. `TABLE.md` shows the command and effective deadlines.
 Continuation and shard combination reject different effective policies, even
-when source and asset identities match. An explicit override equal to the
-campaign deadline has the same effective policy as no override.
+when source and asset identities match. Explicit overrides are part of the
+recorded policy, including an override equal to a default.
 Source and artifact identity checks still apply. Schema 1 reports stay historical
 files, not continuation inputs. Start a new output directory rather than copying
 old rows into a campaign with a changed policy. Failed attempts within an
@@ -253,12 +255,11 @@ Those runs used source `c55a206ed38e8cc0737bfea5f8eec1a357015cf6` and guest SHA-
 
 ## Measured Next build bound
 
-The default campaign bound is 90 seconds. Next's production build alone has
-a 110 second bound, based on successful uninstrumented Chrome builds of
-96,483 ms on QuickJS and 93,268 ms on JSC. Install, development, rendering,
-interaction, hot reload, preview, and other frameworks retain 90 seconds.
+Cells without a complete pass retain the original 90 second defaults and
+110 second Next build bound. Measured cells use the fixed reviewed calibration;
+Next on SpiderMonkey retains its lane's existing limits and explicit overrides.
 Cleanup retains its separate 20 second limit and shorter inner bounds.
-Reports include effective install and build bounds for every framework. Historical
+Reports include effective phase, install and build bounds for every cell. Historical
 90 second failures are not rewritten or resumed with a different policy.
 
 The Pages starter excludes only the pinned unused Turbopack and experimental
