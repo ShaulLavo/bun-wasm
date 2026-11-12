@@ -5,7 +5,7 @@ import type { Editor } from "../src/editor";
 import type { Terminal } from "@xterm/xterm";
 import { workspaceName } from "../src/workspace-policy";
 
-declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor; term?: Terminal };
+declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean };
 const APP = "/home/user/app";
 const STARTUP_MS = 180_000;
 
@@ -70,6 +70,11 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     const active = await context.newPage();
     const page = await context.newPage();
     await openTemplate(active, base, "hono");
+    const server = await active.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/server.ts")));
+    assert.match(server, /port: 5173/);
+    await edit(active, "server.ts", server.replace("port: 5173", "port: 5174"));
+    await restart(active);
+    assert.match(await active.locator("#preview").getAttribute("src") ?? "", /\/5174\//);
     await active.frameLocator("#preview").locator("#increment:not([disabled])").click();
     await openTemplate(page, base, "vanilla");
     const original = await page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts")));
@@ -84,6 +89,7 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     assert.equal(await stored(page, "vanilla"), false, "oldest eligible install was not evicted");
     assert.equal(await stored(page, "vite-react"), true, "newest idle install was not retained");
     assert.equal(await stored(page, "hono"), true, "active workspace was evicted");
+    assert.equal(await active.locator("#server-dot").getAttribute("data-state"), "up", "active Hono server was stopped");
     assert.equal(await active.frameLocator("#preview").locator("#count").textContent(), "1");
     await openTemplate(page, base, "vanilla");
     await retainedUserTree(page);
@@ -111,10 +117,12 @@ export async function preservationScenario(browser: Browser, base: string): Prom
 async function diagnostic(page: Page): Promise<unknown> {
   if (page.isClosed()) return "closed";
   return page.evaluate(() => {
-    const buffer = sandbox.term?.buffer.active;
+    const api = typeof sandbox === "undefined" ? null : sandbox;
+    const buffer = api?.term?.buffer.active;
     const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
     const frames = Array.from(document.querySelectorAll("iframe"), frame => ({ src: frame.src, body: frame.contentDocument?.body?.innerText.slice(0, 2000) }));
-    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames };
+    const runtime = api ? { filesystem: { ...api.fs.state, error: api.fs.state.error?.message }, started: api.started?.() ?? null, editorPath: api.editor.path, pending: api.editor.hasPending } : null;
+    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames, runtime };
   }).catch(error => String(error));
 }
 
@@ -179,6 +187,10 @@ export async function quotaRefusalScenario(browser: Browser, base: string): Prom
     assert.match(await page.locator("#status").textContent() ?? "", /Keep this page open/);
     assert.match(await page.locator("#storage-status").textContent() ?? "", /installs were kept/);
     assert.equal(await page.locator("#restart").textContent(), "Retry");
+  } catch (error) {
+    const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
+    console.error(JSON.stringify({ error: String(error), pages }, null, 2));
+    throw error;
   } finally { await context.close(); }
 }
 
@@ -210,6 +222,7 @@ export interface StorageRun {
   readonly error?: string;
   readonly storage: StorageEstimate & { readonly databases: readonly (string | undefined)[] };
   readonly eviction: unknown;
+  readonly runtime: unknown;
 }
 
 export async function accumulation(context: BrowserContext, base: string, templates: readonly string[]): Promise<StorageRun[]> {
@@ -224,7 +237,8 @@ export async function accumulation(context: BrowserContext, base: string, templa
       const status = await page.locator("#status").textContent() ?? "";
       const storage = await page.evaluate(async () => ({ ...await navigator.storage.estimate(), databases: (await indexedDB.databases()).map(database => database.name) }));
       const eviction = await page.evaluate(() => performance.getEntriesByName("bunwasm:storage-reclaim").map(entry => entry.toJSON()));
-      rows.push({ template, elapsedMs: Math.round(performance.now() - started), status, error, storage, eviction });
+      const runtime = await page.evaluate(() => typeof sandbox === "undefined" ? null : { filesystem: { ...sandbox.fs.state, error: sandbox.fs.state.error?.message }, started: sandbox.started?.() ?? null, editorPath: sandbox.editor.path, pending: sandbox.editor.hasPending });
+      rows.push({ template, elapsedMs: Math.round(performance.now() - started), status, error, storage, eviction, runtime });
       if (error) break;
     }
   } finally { await page.close(); }

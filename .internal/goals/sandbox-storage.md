@@ -48,7 +48,7 @@ acknowledgement. Real sandbox tests belong to Browser guest and consume its shar
 producer artifact, extended once to include the sandbox. No Waffle matrix is
 duplicated here. Parent owns review, CI, and merge.
 
-## Adjacent finding
+## Adjacent findings
 
 The guest `node:fs` adapter implements `chmodSync(path)` as `void statSync(path)`
 at `crates/bunwasm-runtime/src/js/node_fs.js:697`; `lchmodSync` and `fchmodSync`
@@ -62,3 +62,16 @@ with actual supported mode mutation and all-engine tests; do not silently report
 success for unavailable chmod. The storage integration fixture uses a real guest
 symlink for unsupported-data refusal instead. Pure preservation tests still reject
 nondefault modes. No chmod fix or additional guest build belongs to this branch.
+
+WebKit also exposes an existing ambiguous preview owner when two runtimes serve
+the same virtual port. With Hono active and Vanilla opened in another page, both
+iframes at `/__preview/5173/` render Hono while the Vanilla terminal reports Vite
+ready. Chromium and Firefox passed the corresponding scenario. Explicit
+bringToFront did not fix WebKit in a second bounded diagnosis. Waffle's public
+`browser/service-worker.ts:158` forwards to the first accepting non-preview window
+from `clients.matchAll`; `routeSocket` does the same near line 195. The URL has no
+owning-runtime identity. Raw reproductions are retained in the storage report's
+`webkit-diagnosis-one.log` and `webkit-diagnosis-two.log`. A general fix belongs to
+preview ownership, including HTTP and socket routing, with two distinct apps on
+the same port and foreground/background permutations. This branch does not edit
+the preview protocol or claim to fix that routing bug.
