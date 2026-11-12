@@ -179,6 +179,8 @@ async function withDriver(transport: Transport, action: (endpoint: string, timeo
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
     if (path.endsWith("/window/new")) return Response.json({ value: { handle: "preview" } });
+    if (path.endsWith("/element")) return Response.json({ value: { "element-6066-11e4-a52e-4f735466cecf": "fixture-counter" } });
+    if (path.endsWith("/element/fixture-counter/click")) await withScoped(transport, page => page.evaluate("globalThis.__goalsFixtureNativeClick()"));
     if (path.endsWith("/url")) await withScoped(transport, page => page.navigate(String(body.url)));
     if (path.endsWith("/execute/async")) return evaluation(body);
     return Response.json({ value: null });

@@ -5,6 +5,7 @@ import { createContext, runInContext, type Context } from "node:vm";
 import { createSafariTransport, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
 import { Scope } from "./scope";
+import { armSafariClick, observeSafariClick } from "./safari-click";
 
 type Call = { method: string; path: string; body: Record<string, unknown> };
 type FixtureOptions = {
@@ -481,4 +482,179 @@ test("a queued Safari command withdraws on expiry while the dispatched command r
     await transport.close();
     expect(driver.calls.filter(call => call.path.endsWith("/url"))).toEqual([]);
   } finally { release.resolve(); scope.close(); queuedScope.close(); await transport.close(true); }
+});
+
+function counterDriver(options: { trusted?: boolean; before?: string; intercept?: FixtureOptions["intercept"] } = {}) {
+  const driver = fixture({ intercept: async call => {
+    const intercepted = await options.intercept?.(call);
+    if (intercepted) return intercepted;
+    if (call.path.endsWith("/element")) return reply({ "element-6066-11e4-a52e-4f735466cecf": "counter/id" });
+    if (!call.path.endsWith("/element/counter%2Fid/click")) return;
+    const context = driver.windows.get(driver.selected);
+    assert.ok(context);
+    runInContext(`counter.textContent = '1'; listener({ isTrusted: ${options.trusted ?? true}, currentTarget: target });`, context);
+    return reply(null);
+  } });
+  function install(): void {
+    const context = driver.windows.get(driver.selected);
+    assert.ok(context);
+    runInContext(`
+      globalThis.performance = { timeOrigin: 123 };
+      globalThis.listener = undefined;
+      globalThis.counter = { textContent: ${JSON.stringify(options.before ?? "0")} };
+      globalThis.target = { disabled: false, isConnected: true,
+        addEventListener(type, callback) { if (type !== 'click') throw Error(type); listener = callback; },
+        click() { throw Error('DOM click is forbidden'); } };
+      globalThis.document = { querySelector(selector) { return selector === 'button' ? target : counter; } };
+    `, context);
+  }
+  return { driver, install };
+}
+
+test("desktop click sends one WebDriver element click and requires observed trusted counter evidence", async () => {
+  const { driver, install } = counterDriver();
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.openPreview("http://fixture.test/counter"));
+    install();
+    const result = await withScoped(transport, page => page.nativeClick!("button", "output", 1000));
+    expect(result).toEqual({ before: "0", after: "1", trusted: true, inputMethod: "Safari WebDriver element click" });
+    const requests = driver.calls.filter(call => call.path.includes("/element"));
+    expect(requests).toEqual([
+      { method: "POST", path: "/session/owned/element", body: { using: "css selector", value: "button" } },
+      { method: "POST", path: "/session/owned/element/counter%2Fid/click", body: {} },
+    ]);
+    expect(driver.selected).toBe("preview-1");
+  } finally { await transport.close(); }
+  expect(driver.deleted).toBe(true);
+});
+
+test("an untrusted fixture event cannot pass despite the expected counter value", async () => {
+  const { driver, install } = counterDriver({ trusted: false });
+  const transport = await driver.connect();
+  try {
+    install();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 1000))).rejects.toThrow("trusted event");
+    expect(driver.calls.filter(call => call.path.endsWith("/click"))).toHaveLength(1);
+  } finally { await transport.close(); }
+});
+
+test("a nonzero counter refuses native input and simulator transport retains its existing path", async () => {
+  const { driver, install } = counterDriver({ before: "1" });
+  const transport = await driver.connect();
+  try {
+    install();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 1000))).rejects.toThrow("start at zero");
+    expect(driver.calls.filter(call => call.path.includes("/element"))).toEqual([]);
+  } finally { await transport.close(); }
+  const simulator = await fixture({ capabilities: iphone }).connect({ browser: "iphone-safari", deviceUDID: "owned-iphone" });
+  try { expect(simulator.nativeClick).toBeUndefined(); }
+  finally { await simulator.close(); }
+});
+
+test.each(["/element", "/click"])("native click protocol failure at %s propagates without retry", async suffix => {
+  const { driver, install } = counterDriver({ intercept: call => call.path.endsWith(suffix) ? failure("native input refused") : undefined });
+  const transport = await driver.connect();
+  try {
+    install();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 1000))).rejects.toThrow("native input refused");
+    expect(driver.calls.filter(call => call.path.endsWith(suffix))).toHaveLength(1);
+  } finally { await transport.close(); }
+  expect(driver.deleted).toBe(true);
+});
+
+test("expired element lookup cannot dispatch a late native click, and cleanup retains the pending lookup", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const { driver, install } = counterDriver({ intercept: async call => {
+    if (!call.path.endsWith("/element")) return;
+    entered.resolve(); await release.promise;
+    return reply({ "element-6066-11e4-a52e-4f735466cecf": "counter/id" });
+  } });
+  const transport = await driver.connect();
+  const scope = Scope.open(1000);
+  try {
+    install();
+    const clicking = transport.nativeClick!("button", "output", scope);
+    await entered.promise;
+    scope.close(new Error("click phase ended"));
+    await expect(clicking).rejects.toThrow("click phase ended");
+    const closing = transport.close();
+    release.resolve(); await closing;
+    expect(driver.calls.filter(call => call.path.endsWith("/click"))).toEqual([]);
+    expect(driver.deleted).toBe(true);
+  } finally { release.resolve(); scope.close(); await transport.close(true); }
+});
+
+test("a queued native click expires before sending its arming script or input", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const { driver, install } = counterDriver({ intercept: async call => {
+    if (!call.path.endsWith("/url")) return;
+    entered.resolve(); await release.promise;
+    return reply(null);
+  } });
+  const transport = await driver.connect();
+  const active = Scope.open(1000), queued = Scope.open(1000);
+  try {
+    install();
+    const navigating = transport.navigate("http://fixture.test/blocked", active);
+    await entered.promise;
+    const clicking = transport.nativeClick!("button", "output", queued);
+    queued.close(new Error("queued click ended"));
+    await expect(clicking).rejects.toThrow("queued click ended");
+    release.resolve(); await navigating;
+    await transport.close();
+    expect(driver.calls.filter(call => /\/element|\/execute/.test(call.path))).toEqual([]);
+  } finally { release.resolve(); active.close(); queued.close(); await transport.close(true); }
+});
+
+test("click observation rejects replacement targets and document identity changes", async () => {
+  const { driver, install } = counterDriver();
+  const transport = await driver.connect();
+  try {
+    install();
+    const input = { button: "button", clicked: "output", token: "fixture" };
+    const arm = `(${armSafariClick.toString()})(${JSON.stringify(input)})`;
+    const observe = `(${observeSafariClick.toString()})(${JSON.stringify(input)})`;
+    await withScoped(transport, page => page.evaluate(arm));
+    await withScoped(transport, page => page.evaluate("target = { ...target }"));
+    await expect(withScoped(transport, page => page.evaluate(observe))).rejects.toThrow("target changed");
+    await withScoped(transport, page => page.evaluate(arm));
+    await withScoped(transport, page => page.evaluate("location.href = 'http://fixture.test/other'"));
+    await expect(withScoped(transport, page => page.evaluate(observe))).rejects.toThrow("document changed");
+  } finally { await transport.close(); }
+});
+
+test("a dispatched click stays owned past its deadline without starting an observation", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const { driver, install } = counterDriver({ intercept: async call => {
+    if (!call.path.endsWith("/click")) return;
+    entered.resolve(); await release.promise;
+    return reply(null);
+  } });
+  const transport = await driver.connect();
+  const scope = Scope.open(100);
+  try {
+    install();
+    const clicking = transport.nativeClick!("button", "output", scope);
+    await entered.promise;
+    await expect(clicking).rejects.toThrow("100 ms");
+    const calls = driver.calls.length;
+    const closing = transport.close();
+    release.resolve(); await closing;
+    expect(driver.calls.slice(calls).map(call => call.method + " " + call.path)).toEqual(["DELETE /session/owned"]);
+    expect(driver.calls.filter(call => call.path.endsWith("/click"))).toHaveLength(1);
+  } finally { release.resolve(); scope.close(); await transport.close(true); }
+});
+
+test("a malformed element reference refuses input and a missing counter expires without input", async () => {
+  const { driver, install } = counterDriver({ intercept: call => call.path.endsWith("/element") ? reply({}) : undefined });
+  const transport = await driver.connect();
+  try {
+    install();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 1000))).rejects.toThrow("handle");
+    await withScoped(transport, page => page.evaluate("target.disabled = true"));
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 20))).rejects.toThrow("20 ms");
+    await transport.close();
+    expect(driver.calls.filter(call => call.path.endsWith("/click"))).toEqual([]);
+  } finally { await transport.close(true); }
 });

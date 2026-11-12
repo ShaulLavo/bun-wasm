@@ -1,5 +1,7 @@
 import type { Transport } from "./transport";
 import { admit, awaitWithin, type Admission } from "./scope";
+import { until } from "./playground";
+import { armSafariClick, observeSafariClick } from "./safari-click";
 export type SafariTransportOptions = {
   endpoint: string;
   browser: "safari" | "iphone-safari";
@@ -84,7 +86,7 @@ Promise.resolve().then(() => (0, eval)(expression)).then(value => {
 }).catch(error => done({ ok: false, message: String(error), stack: error && error.stack ? String(error.stack) : "" }));
 `;
 
-function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests): SafariTransport {
+function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests, browser: SafariTransportOptions["browser"]): SafariTransport {
   let preview: string | undefined;
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
@@ -144,7 +146,22 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     return JSON.parse(result.json);
   }
 
+  async function nativeClick(button: string, clicked: string, admission: Admission): Promise<unknown> {
+    const input = { button, clicked, token: crypto.randomUUID() };
+    const arm = `(${armSafariClick.toString()})(${JSON.stringify(input)})`;
+    const before = await until(() => evaluate<ReturnType<typeof armSafariClick>>(arm, admission), value => value.ready, admit(admission));
+    if (!before.ready) throw new Error("Safari counter is not ready");
+    const element = object(await command(admission, "/element", { using: "css selector", value: button }));
+    const id = handle(element["element-6066-11e4-a52e-4f735466cecf"]);
+    await command(admission, `/element/${encodeURIComponent(id)}/click`, {});
+    const observation = `(${observeSafariClick.toString()})(${JSON.stringify(input)})`;
+    const expected = before.before.replace(/\b0\b/, "1");
+    const after = await until(() => evaluate<ReturnType<typeof observeSafariClick>>(observation, admission), value => value.trusted && value.after === expected, admit(admission));
+    return { before: before.before, after: after.after, trusted: true, inputMethod: "Safari WebDriver element click" };
+  }
+
   return Object.freeze({ capabilities,
+    ...(browser === "safari" ? { nativeClick: (button: string, clicked: string, admission: Admission) => serial(admission, () => nativeClick(button, clicked, admission)) } : {}),
     beginCleanup: (admission: Admission) => serial(admission, async () => {
       operationRequest = cleanup.command;
       await command(admission, "/timeouts", { script: cleanup.timeoutMs, pageLoad: cleanup.timeoutMs, implicit: 0 });
@@ -183,6 +200,6 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
     verifyCapabilities(capabilities, options);
     await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
     const host = handle(await request(`${sessionPath}/window`));
-    return transport(request, sessionPath, host, capabilities, lifetime, cleanup);
+    return transport(request, sessionPath, host, capabilities, lifetime, cleanup, options.browser);
   } catch (error) { return cleanupAfterFailure(error, async () => { await cleanup.session(sessionPath, undefined, "DELETE"); }); }
 }
