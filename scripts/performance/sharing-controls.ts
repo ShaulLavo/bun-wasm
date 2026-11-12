@@ -18,7 +18,7 @@ export async function finishObservation(started: Awaited<ReturnType<typeof start
     return result;
   } catch (error) {
     const result = { kind: "unavailable", reason: String(error) };
-    await writeFile(output, JSON.stringify(result));
+    await writeFile(output, JSON.stringify(result)).catch(() => {});
     return result;
   }
 }

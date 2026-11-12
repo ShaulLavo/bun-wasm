@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { startObservation, finishObservation } from "./sharing-controls";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { observeProcess, parseTaskStat } from "./observe-process";
+import { observeProcess, parseTaskStat, queueEnabled } from "./observe-process";
 import { launchProcess } from "./lifecycle-process";
 
 test("proc stat parser retains start identity with spaces and parentheses", () => {
@@ -38,4 +38,10 @@ test("missing observer root records unavailable without throwing into the worklo
     expect(started.observer).toBeNull();
     expect(await finishObservation(started, root + "/observation.json")).toMatchObject({ kind: "unavailable" });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("scheduler runtime alone does not establish enabled queue accounting", () => {
+  expect(queueEnabled([{ value: "0\n", error: null }, { value: "0\n", error: null }])).toBe(false);
+  expect(queueEnabled([{ value: "1\n", error: null }, { value: null, error: "missing" }])).toBe(false);
+  expect(queueEnabled([{ value: "1\n", error: null }, { value: "1\n", error: null }])).toBe(true);
 });

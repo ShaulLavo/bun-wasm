@@ -29,16 +29,17 @@ async function processSample(identity: Awaited<ReturnType<typeof processTree>>["
 async function sample(root: number) {
   const beforeMs = performance.now();
   const tree = await processTree(root);
-  const [processes, memoryPressure, cpuPressure, meminfo] = await Promise.all([
-    Promise.all(tree.processes.map(processSample)), read("/proc/pressure/memory"), read("/proc/pressure/cpu"), read("/proc/meminfo"),
+  const [processes, memoryPressure, cpuPressure, meminfo, schedstats] = await Promise.all([
+    Promise.all(tree.processes.map(processSample)), read("/proc/pressure/memory"), read("/proc/pressure/cpu"), read("/proc/meminfo"), read("/proc/sys/kernel/sched_schedstats"),
   ]);
-  return { beforeMs, afterMs: performance.now(), utc: new Date().toISOString(), processes, host: { memoryPressure, cpuPressure, meminfo } };
+  return { beforeMs, afterMs: performance.now(), utc: new Date().toISOString(), processes, host: { memoryPressure, cpuPressure, meminfo, schedstats } };
 }
 type Sample = Awaited<ReturnType<typeof sample>>;
 function summarizeSamples(samples: Sample[], ticksPerSecond: number) {
   const tasks = new Map<string, { first: NonNullable<Sample["processes"][number]["threads"][number]>; last: NonNullable<Sample["processes"][number]["threads"][number]>; observations: number }>();
   for (const row of samples) for (const thread of row.processes.flatMap(process => process.threads)) addTask(tasks, thread);
-  const threads = Array.from(tasks, ([identity, row]) => summarizeTask(identity, row, ticksPerSecond));
+  const queueAvailable = queueEnabled(samples.map(row => row.host.schedstats));
+  const threads = Array.from(tasks, ([identity, row]) => summarizeTask(identity, row, ticksPerSecond, queueAvailable));
   const memory = samples.map(row => {
     const values = row.processes.map(process => process.memory?.value ?? null);
     const metric = (name: string) => values.some(value => value === null) ? null : values.reduce<number>((sum, value) => sum + Number(new RegExp(`^${name}:\\s+(\\d+)`, "m").exec(value ?? "")?.[1] ?? NaN), 0);
@@ -54,16 +55,16 @@ function addTask(tasks: Map<string, { first: TaskRow; last: TaskRow; observation
   const previous = tasks.get(key);
   tasks.set(key, { first: previous?.first ?? thread, last: thread, observations: (previous?.observations ?? 0) + 1 });
 }
-function summarizeTask(identity: string, row: { first: TaskRow; last: TaskRow; observations: number }, ticksPerSecond: number) {
+function summarizeTask(identity: string, row: { first: TaskRow; last: TaskRow; observations: number }, ticksPerSecond: number, queueAvailable: boolean) {
   if (!("userTicks" in row.first.stat) || !("userTicks" in row.last.stat)) throw new Error("Task summary requires stat");
   const queue = (task: TaskRow) => task.schedstat.value?.trim().split(/\s+/).map(Number) ?? null;
   const firstQueue = queue(row.first), lastQueue = queue(row.last);
-  const schedstatWorking = firstQueue?.length === 3 && lastQueue?.length === 3 && lastQueue[0]! > firstQueue[0]!;
+  const schedstatWorking = queueAvailable && firstQueue?.length === 3 && lastQueue?.length === 3 && lastQueue[0]! > firstQueue[0]!;
   return { identity, observations: row.observations, firstObservedMs: row.first.beforeMs, lastObservedMs: row.last.afterMs,
     observedMinorFaults: row.last.stat.minorFaults - row.first.stat.minorFaults, observedMajorFaults: row.last.stat.majorFaults - row.first.stat.majorFaults,
     observedCpuSeconds: (row.last.stat.userTicks + row.last.stat.systemTicks - row.first.stat.userTicks - row.first.stat.systemTicks) / ticksPerSecond,
     observedQueueSeconds: schedstatWorking ? (lastQueue[1]! - firstQueue[1]!) / 1e9 : null,
-    queueReason: schedstatWorking ? null : "schedstat missing or running counter did not advance; zero queue is not established",
+    queueReason: schedstatWorking ? null : "kernel.sched_schedstats disabled/unavailable, schedstat missing, or running counter did not advance; zero queue is not established",
     endpoints: "First/last readable observations only; final lifetime endpoint is not guaranteed", name: row.first.stat.name };
 }
 export async function observeProcess(root: number, scope: string, intervalMs = 250) {
@@ -90,4 +91,8 @@ export async function observeProcess(root: number, scope: string, intervalMs = 2
     return { kind: "proc-polling", scope, window: window ?? null, includedSamples: included.length, rootIdentity, intervalMs, ticksPerSecond, unit: { cpu: "seconds", queue: "seconds", memory: "KiB", clock: "controller performance.now ms" }, samples, errors,
       summary: summarizeSamples(included, ticksPerSecond) };
   } };
+}
+
+export function queueEnabled(readings: readonly Reading[]): boolean {
+  return readings.length > 1 && readings.every(reading => reading.value?.trim() === "1");
 }
