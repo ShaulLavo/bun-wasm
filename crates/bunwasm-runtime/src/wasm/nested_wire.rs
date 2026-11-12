@@ -5,6 +5,15 @@ pub const BACKEND: u32 = 1 << 31;
 pub const MAX_RESOURCES: usize = 4096;
 pub const MAX_REQUEST_BYTES: u32 = 1 << 20;
 
+/// The `Count` a `Withdraw` request is answered with. The publication is gone after the first
+/// two. The caller may be told nothing at all about a withdrawal that happened (a lost reply),
+/// so it asks again: tokens are never reused, and the second answer is `WITHDRAW_ABSENT`.
+pub const WITHDRAWN: u32 = 0;
+/// The token names no publication of this member: withdrawn before, or never its own.
+pub const WITHDRAW_ABSENT: u32 = 1;
+/// The group owner refused for good, for example because the member is no longer running.
+pub const WITHDRAW_REFUSED: u32 = 2;
+
 pub fn request_length(length: usize) -> Option<u32> {
     let length = u32::try_from(length).ok()?;
     (length <= MAX_REQUEST_BYTES).then_some(length)

@@ -166,6 +166,14 @@ receiver. Only the last abort of an undelivered token removes its directory entr
 The codec commits publication when direct delivery succeeds, before later transfer
 finalization can fail. Broker routing commits only after its transaction succeeds.
 
+A `Withdraw` request is answered with a count, never with an error for a status: 0 the
+publication was withdrawn, 1 the token names no publication (`BadF`: it is gone already),
+2 the group refused for good, as for a member it no longer runs (`Search`). The reply to a
+withdrawal that happened can be lost on its way back to JavaScript, so the caller may ask
+again. That is safe because a token is issued once (`Directory::insert`): the second
+request is answered 1 and touches no other publication. The constants are in
+`nested_wire.rs`, and the browser host answers the same way.
+
 The core checks serialized request size against the same 1 MiB limit as the native
 host before crossing the import boundary, including checked conversion to its
 32-bit wire length. A valid module with an oversized publication description is

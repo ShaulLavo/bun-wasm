@@ -64,6 +64,12 @@ copy through the same path as `Compile`. A publication survives its sender's sto
 withdrawn or when the group ends. Only the publishing incarnation can withdraw it. Publication
 tokens are full u32 values and leave the owner only through an output pointer.
 
+`Withdraw` is answered with a count for every owner status, as on the native host: 0
+withdrawn, 1 for Waffle's `BADF` (no such publication of this member), 2 for any other
+refusal. Waffle's owner issues a token once (`IdentityCounter`) and answers `BADF` without
+changing anything, so a withdrawal asked again after a lost reply is answered 1 and cannot
+reach a later publication.
+
 Nested waits and notifies, and QuickJS `Atomics`, use the same `runtime_shm` futex calls on the
 same group address. A blocked member is cancelled by Waffle's hard stop. An exit or trap out of
 a reentered core entry ends the member. A trap becomes status 134 with a bounded diagnostic at

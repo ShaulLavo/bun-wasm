@@ -7,6 +7,7 @@ import { FunctionTypes, type WasmFunction } from "./function-type.js";
 import { isReference, readModuleInfo, type FunctionType, type GlobalType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
 import {
   BACKEND, BAD_FRAME, FRAME_ALIGN, FRAME_BYTES, MAX_DEPTH, MAX_RESOURCES, MAX_VALUES, OK, PENDING_EXCEPTION,
+  WITHDRAWN, WITHDRAW_ABSENT, WITHDRAW_REFUSED,
   decodeRequest, encodeReply, type Binding, type Reply, type Request, type WasmNumber,
 } from "./wire.js";
 import {
@@ -23,7 +24,8 @@ const PREFERRED_FALLBACK_HEADROOM_PAGES = 1024;
 const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const NO_MEMORY = 48;
-const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
+const BAD_HANDLE = 8;
+const SHM_ERRORS = new Map([[6, "Again"], [BAD_HANDLE, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
 const MODULE_ALIGN = 16;
 const encoder = new TextEncoder();
 
@@ -577,10 +579,11 @@ export class NestedHost {
     return { AttachedModule: { id: pushResource(this.modules, compileRegionized(code)), description } };
   }
 
+  /** Every status is an answer, not an error: the guest retries only a call that got none. */
   private withdraw(token: number): Reply {
     const status = this.region().shm_withdraw(token);
-    if (status < 0) throw new Error(`shared publication withdrawal: ${shmError(status)}`);
-    return { Count: 0 };
+    if (status >= 0) return { Count: WITHDRAWN };
+    return { Count: status === -BAD_HANDLE ? WITHDRAW_ABSENT : WITHDRAW_REFUSED };
   }
 
   private span(id: number): Reply {

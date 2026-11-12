@@ -171,6 +171,16 @@ fn index(id: u32) -> Result<usize> {
     ensure!(id & BACKEND != 0, "mixed-backend WebAssembly resource");
     Ok((id & !BACKEND) as usize)
 }
+/// What the group owner answered to a withdrawal, as `wire::Request::Withdraw` documents it.
+/// Every status is an answer, not an error: the guest retries only a call that got none.
+fn withdrawal(result: Result<(), shm::Errno>) -> u32 {
+    match result {
+        Ok(()) => wire::WITHDRAWN,
+        Err(shm::Errno::BadF) => wire::WITHDRAW_ABSENT,
+        Err(_) => wire::WITHDRAW_REFUSED,
+    }
+}
+
 fn insert<T>(items: &mut Vec<T>, value: T) -> Result<u32> {
     ensure!(items.len() < MAX_RESOURCES, "nested resource limit");
     let id = items.len() as u32 | BACKEND;
@@ -414,11 +424,10 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 description: description.to_string(),
             })
         }
-        Request::Withdraw { token } => {
-            shm::nested::withdraw(member(caller)?, token)
-                .map_err(|error| anyhow!("shared publication withdrawal: {error:?}"))?;
-            Ok(Reply::Count(0))
-        }
+        Request::Withdraw { token } => Ok(Reply::Count(withdrawal(shm::nested::withdraw(
+            member(caller)?,
+            token,
+        )))),
         Request::TableExport { instance, name } => table_export(caller, instance, &name),
         Request::TableLength { table } => Ok(Reply::Count(u32::try_from(
             nested_table(caller, table)?.size(&*caller),
