@@ -15,7 +15,7 @@ const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
   expect(shared).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
-  expect(shared).toContain("node-version: '26'");
+  expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic\n");
