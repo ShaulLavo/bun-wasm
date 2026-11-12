@@ -5,6 +5,7 @@ import type { StorageBackend, PersistenceBatch } from "waffle/fs/storage";
 import corpus from "./fixtures/persistence-corpus.json";
 import { runStorageTests, storageTests } from "waffle/testing/storage-browser";
 import { runOpfsStorageTests, opfsStorageTests } from "waffle/testing/opfs-storage-browser";
+import { requestQuota } from "./persistence-quota";
 
 let backend: PersistentBackend | undefined;
 let reads = 0, readBytes = 0, commits = 0;
@@ -247,6 +248,33 @@ async function stringKeyPayloadControl() {
   }
 }
 const commands: Record<string, (args: any) => Promise<unknown>> = {
+  async quotaControl(action: "cap" | "reset") { return requestQuota(action); },
+  async quotaOpen(name: string) {
+    const opening = indexedDB.open(name);
+    opening.onupgradeneeded = () => opening.result.createObjectStore("data");
+    (await requestResult(opening)).close();
+  },
+  async quotaWrite(name: string) {
+    const database = await requestResult(indexedDB.open(name));
+    try {
+      const payload = new Uint8Array(16 * 1024 * 1024);
+      for (let offset = 0; offset < payload.length; offset += 65536)
+        crypto.getRandomValues(payload.subarray(offset, offset + 65536));
+      const transaction = database.transaction("data", "readwrite");
+      transaction.objectStore("data").put(payload, "payload");
+      return await new Promise<string>(resolve => {
+        transaction.oncomplete = () => resolve("committed");
+        transaction.onabort = () => resolve(transaction.error?.name ?? "unknown abort");
+      });
+    } finally { database.close(); }
+  },
+  async storageTest({ storage, label }: { storage: "indexeddb" | "opfs"; label: string }) {
+    const registered = storage === "opfs" ? opfsStorageTests() : storageTests();
+    const selected = registered.find(test => test.label === label);
+    if (!selected) throw new Error(`Unknown ${storage} storage case ${label}`);
+    await selected.run();
+    return selected.label;
+  },
   async storageTestNames({ storage = "indexeddb", filter }: { storage?: "indexeddb" | "opfs"; filter?: string } = {}) {
     const registered = storage === "opfs" ? opfsStorageTests() : storageTests();
     return registered.filter(test => !filter || test.label.includes(filter)).map(test => test.label);
@@ -446,7 +474,7 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
   },
 };
 self.onmessage = async ({ data }) => {
-  if (data.kind === "idle-quota-result") return;
+  if (data?.kind === "idle-quota-result") return;
   try {
     const operation = commands[data.command];
     if (!operation) throw new Error(`Unknown persistence test command ${data.command}`);
