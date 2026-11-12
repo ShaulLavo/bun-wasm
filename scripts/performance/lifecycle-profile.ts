@@ -132,6 +132,8 @@ async function analysis(config: Config, window: { before: number; after: number 
   const targets = config.browser === "chrome" ? await json(join(config.output, "chrome-targets.json")) : null;
   const telemetry = config.browser === "chrome" ? await json(join(config.output, "chrome-retention.json")) : null;
   const retention = config.browser === "chrome" ? chromeRetention(input, telemetry) : null;
+  if (retention && !retention.available) return { available: false, retention, reason: retention.reasons.join("; "),
+    raw: path + ".gz", sourceSha256: sha256(bytes), scope: "Incomplete trace retention; exact command attribution unavailable" };
   const rows = config.browser === "chrome" ? analyzeChrome(input, config.engine, config.phase, chromeContext(markers, window, targets, telemetry)) : analyzeGecko(input, window);
   await save(join(config.output, "analysis.json"), rows);
   if (!rows.some(row => "analysis" in row ? row.analysis.samples > 0 : row.samples > 0)) throw new Error("No scoped samples retained");
