@@ -172,6 +172,16 @@ prerelease. The published `@napi-rs/wasm-runtime@1.2.5` peer range
 emnapi 1.11.3, while numeric maximum selection had chosen 2.0.0-beta.2. No
 upstream implementation, package pin or loader workaround is copied or added.
 
+The original selector parses a requested range once for each version selection,
+then shares the immutable Bun query while scanning registry version keys. The
+query and its borrowed range bytes stay within that call. Public single-version
+matching, skipped-token rejection, exact-version equality, iteration-order ties
+and release preference retain their previous behavior. The discovered native
+`install-selection` control compares the production selector with the previous
+scan using Bun's pinned Rust parser and the existing portable Highway glue.
+Its synthetic measurements establish repeated parsing cost, not a Nuxt install
+outcome or an explanation of a browser timeout. No upstream source is changed.
+
 The original resolver visits required transitive dependencies before choosing
 missing peer dependencies. A broad peer can reuse a compatible version required
 elsewhere instead of selecting a newer root version first and forcing the
