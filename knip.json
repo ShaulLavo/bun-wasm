@@ -15,6 +15,7 @@
         "scripts/performance/lifecycle.ts",
         "scripts/performance/prepare-lifecycle.ts",
         "scripts/performance/lifecycle-selection.ts",
+        "scripts/performance/lifecycle-profile.ts",
         "scripts/performance/fixtures/lifecycle-process.ts",
         "scripts/goals-matrix/calibrate-deadlines.ts",
         "scripts/goals-matrix/policy-metadata.ts",
