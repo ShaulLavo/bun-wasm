@@ -253,7 +253,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   }
 
   private async loadEngine(): Promise<Awaited<ReturnType<typeof loadWasm>> | Error> {
-    const unavailable = engineUnavailable(this.engine);
+    const unavailable = engineUnavailable(this.engine, this.profile);
     if (unavailable) return new Error(unavailable);
     try {
       return await loadEngineProgram(this.engine, this.profile, (text) => this.setStatus(text), this.params.get("wasm") ?? undefined);

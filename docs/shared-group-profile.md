@@ -38,15 +38,21 @@ under `--shared-memory`.
 ## Explicit page selection and assets
 
 The playground and sandbox accept `?engine=quickjs&profile=shared-group` and
-`?engine=jsc&profile=shared-group`. Omitted `profile` means `split`. Engine kind and memory
+`?engine=jsc&profile=shared-group` and `?engine=spidermonkey&profile=shared-group`. Omitted `profile` means `split`. Engine kind and memory
 profile are separate selections. Invalid profiles, unavailable engine/profile combinations,
 missing assets and mixed pairs fail before the program executes. An execution failure never
-changes the selected profile. Browser and experimental SpiderMonkey shared programs are not
-available through this selector in this host revision.
+changes the selected profile. The Browser engine has no shared program profile.
+SpiderMonkey requires both fingerprints under the selected profile before its choice is enabled
+or its bootstrap starts. Split fingerprints cannot enable a shared choice.
 
 Both page builds consume existing complete shared producer directories through
-`SHARED_QUICKJS_PROGRAM` and `SHARED_JSC_PROGRAM`. Each directory contains `bun.wasm`, its
+`SHARED_QUICKJS_PROGRAM`, `SHARED_JSC_PROGRAM` and `SHARED_SPIDERMONKEY_PROGRAM`. Each directory contains `bun.wasm`, its
 named engine side, `bun-core.wasm.core.json`, the side's `.engine.json` and `source.txt`.
+SpiderMonkey uses its original `spidermonkey-shared.json` and `shared-group-library.json`
+in place of a side `.engine.json`. Staging verifies the tagged core and side hashes, original
+core receipt, source label and included library receipt identity. It preserves those receipts
+without claiming native library input verification or producer replay. Its assets are
+`profiles/shared-group/bun-spidermonkey.wasm.gz` and `spidermonkey-engine.wasm.gz`.
 These are inputs from `scripts/build-native-profile.ts`, not another build. Staging uses
 the production program validator and preserves original receipt bytes. A JSC producer's
 `bun.wasm` is served as `profiles/shared-group/bun-jsc.wasm.gz`; its side remains
@@ -68,7 +74,7 @@ receipts under `delivery/web/profiles/shared-group/`. Also set `BASH_WEB_GUESTS_
 current pinned shell's original complete producer directory. Preparation verifies that shell's
 receipt and bytes independently of the Bun guest source, and does not overwrite it with a donor's
 older shell after building. Run with
-`--profile=shared-group --engines=quickjs,jsc`. The runner records the profile in result
+`--profile=shared-group --engines=quickjs,jsc,spidermonkey`. The runner records the profile in result
 asset identity, verifies the running page's profile, and passes it to fleet runners. Resume
 requires the same source, profile and asset identity. Split remains the default for both commands.
 Preparation records the independent host, Bun guest and shell sources and writes

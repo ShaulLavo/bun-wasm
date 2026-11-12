@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/stack-safari-admission.test.ts",
+  "batch": "10-web",
+  "localRuntime": true
+}

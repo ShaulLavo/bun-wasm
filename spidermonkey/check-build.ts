@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, renameSync, statSy
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkIrregexpClosure, type ArchiveMember } from "./native-source-closure.ts";
-import { checkUnicodeCommands, commands, nativeSymbols, record, requireEmbedProfile, verifyOriginalProfile, verifyOverlay, verifyOverlayFiles } from "./native-profile.ts";
+import { baselineHash, checkSymbolDelta, checkUnicodeCommands, commands, nativeSymbols, record, requireEmbedProfile, verifyOriginalProfile, verifyOverlay, verifyOverlayFiles } from "./native-profile.ts";
 
 import { verifyDiagnosticProfile } from "./diagnostic-profile.ts";
 
@@ -425,14 +425,14 @@ function main(): void {
     irregexpBackendSha256: fileHash(join(obj, "js/src/irregexp/backend.mk")),
     toolchain: [join(sdk, "bin/clang++"), join(sdk, "bin/clang++.cfg"), join(sdk, "bin/llvm-ar"), join(sdk, "bin/llvm-nm"), join(sysroot, "bun-wasm-sysroot.json")].map((path) => ({ path, sha256: fileHash(path) })),
     commandInputs: { sdk, sysroot, cargoHome: process.env.CARGO_HOME },
-    symbols: nativeSymbols(packed.library, requiredBaseline(), sdk),
+    symbols: freshNativeSymbols(output(join(sdk, "bin/llvm-nm"), ["--format=posix", packed.library])),
     target, compiler: output(join(sdk, "bin/clang++"), ["--version"]).trim(),
     cbindgen: output(join(process.env.CARGO_HOME ?? "", "bin/cbindgen"), ["--version"]).trim(),
     cbindgenSha256: fileHash(join(process.env.CARGO_HOME ?? "", "bin/cbindgen")),
     library: packed.library, bytes: archive.length, sha256: hash(archive), ...objects,
     compileCommandsSha256: fileHash(compileCommands), targetCommandsWithPic: targetCommands,
     headers: headerIdentity(root, process.argv.includes("--verify") ? "verify" : "write"), confdefsSha256: fileHash(confdefs), configureStatusSha256: fileHash(join(obj, "config.status")),
-    recipeInputs: ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in"].map((path) => ({ path, sha256: fileHash(join(recipe, path)) })),
+    recipeInputs: ["common.sh", "fetch-spidermonkey.sh", "build.sh", "check-build.ts", "native-profile.ts", "native-source-closure.ts", "check-message-generation.ts", "mozconfig.in", "unresolved-symbols.json"].map((path) => ({ path, sha256: fileHash(join(recipe, path)) })),
     patchSha256: fileHash(join(recipe, "spidermonkey-wasi.patch")), mozconfigSha256: fileHash(join(root, "mozconfig")),
     cargoManifestSha256: fileHash(join(root, "firefox/Cargo.toml")),
     objectLists: nativeObjectListIdentity(packed.inputs, irregexpClosure.inputs),
@@ -450,6 +450,18 @@ function requiredBaseline(): string {
   const path = process.env.SPIDERMONKEY_BASELINE_LIB;
   assert(path, "set SPIDERMONKEY_BASELINE_LIB to the immutable G2 native archive");
   return path;
+}
+
+// The historical artifact-only replay still checks the immutable archive. Fresh
+// production needs only its unresolved names, with all delta/embed/ICU checks intact.
+export function freshNativeSymbols(text: string) {
+  const path = join(recipe, "unresolved-symbols.json");
+  const baseline: unknown = JSON.parse(readFileSync(path, "utf8"));
+  assert(record(baseline) && baseline.schema === 1 && baseline.mozillaRevision === pin && baseline.archiveSha256 === baselineHash);
+  assert(Array.isArray(baseline.unresolved) && baseline.unresolved.every((name: unknown) => typeof name === "string" && /^\S+$/.test(name)));
+  assert.deepEqual(baseline.unresolved, Array.from(new Set(baseline.unresolved)).sort(), "baseline names must be sorted and unique");
+  const symbols = baseline.unresolved.map(name => `${name} U`).join("\n");
+  return { baseline: { path: "spidermonkey/unresolved-symbols.json", sha256: fileHash(path), archiveSha256: baselineHash }, ...checkSymbolDelta(text, symbols) };
 }
 function retainedPack(root: string) {
   const saved: unknown = JSON.parse(readFileSync(join(root, "receipt/vm-library.json"), "utf8"));
@@ -470,14 +482,27 @@ function sourceIdentity(root: string) {
   if (process.argv.includes("--verify")) assert.equal(readFileSync(sourcePath, "utf8"), sourceManifest);
   else writeFileSync(sourcePath, sourceManifest);
   const repo = dirname(recipe);
-  return {
+  const producer = process.argv.includes("--verify") ? retainedProducerSource(root) : {
     commit: output("git", ["-C", repo, "rev-parse", "HEAD"]).trim(),
     tree: output("git", ["-C", repo, "rev-parse", "HEAD^{tree}"]).trim(),
     diffSha256: hash(output("git", ["-C", repo, "diff", "HEAD", "--binary"])),
+  };
+  return {
+    ...producer,
     mozillaSourceManifest: { path: sourcePath, count: paths.length, sha256: hash(sourceManifest) },
     mozillaDiffSha256: hash(output("git", ["-C", firefox, "diff", "--binary"])),
     mozillaLockSha256: fileHash(join(firefox, "Cargo.lock")),
   };
+}
+
+function retainedProducerSource(root: string) {
+  const receipt: unknown = JSON.parse(readFileSync(join(root, "receipt/vm-library.json"), "utf8"));
+  assert(record(receipt) && record(receipt.source));
+  const source = receipt.source;
+  assert(typeof source.commit === "string" && /^[0-9a-f]{40}$/.test(source.commit));
+  assert(typeof source.tree === "string" && /^[0-9a-f]{40}$/.test(source.tree));
+  assert(typeof source.diffSha256 === "string" && /^[0-9a-f]{64}$/.test(source.diffSha256));
+  return { commit: source.commit, tree: source.tree, diffSha256: source.diffSha256 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
