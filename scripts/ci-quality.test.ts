@@ -19,10 +19,14 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
-test("CI uses a Node host that preserves direct spread eval scope", () => {
-  const versions = Array.from(workflow.matchAll(/^\s+node-version: '([^']+)'$/gm), match => match[1]);
+test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
+  const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
+  expect(pin).toMatch(/^26\.\d+\.\d+$/);
+  const versions = Array.from(workflow.matchAll(/^\s+node-version: (.+)$/gm), match => match[1]);
   expect(versions.length).toBeGreaterThan(0);
-  expect(versions.every(version => version === "26")).toBe(true);
+  expect(versions.every(version => version === "${{ env.CI_NODE_VERSION }}")).toBe(true);
+  const { checkpoint, consumer } = nativePipeline(workflow);
+  for (const job of [checkpoint, consumer]) expect(job).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   const reference = spawnSync("node", ["-e", 'process.stdout.write(String(Function("values", "storage", "return eval(...values)")(["storage"], 17)))'], { encoding: "utf8" });
   expect(reference.status, reference.stderr).toBe(0);
   expect(reference.stdout).toBe("17");
