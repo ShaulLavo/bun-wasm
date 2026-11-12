@@ -1,6 +1,9 @@
 // Conformance-only implementation override, never exposed by either product page.
 import { withVfsImplementation } from "../node_modules/waffle/fs/vfs-internal.ts";
 import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../src/shared-fs";
+import { forwardQuotaRequest, type QuotaControl } from "./persistence-quota";
+
+declare global { var storageQuota: QuotaControl; }
 
 let fs: SharedFilesystem | undefined;
 let worker: Worker | undefined;
@@ -10,7 +13,9 @@ const state = { commitStarted: false, boundary: undefined as string | undefined,
 function direct(command: string, args?: unknown): Promise<any> {
   if (!worker) {
     worker = new Worker("./persistence-browser-worker.js", { type: "module" });
+    const providerWorker = worker;
     worker.onmessage = ({ data }) => {
+      if (forwardQuotaRequest(data, action => globalThis.storageQuota(action), reply => providerWorker.postMessage(reply))) return;
       if (data.event === "persist-started") { state.commitStarted = true; state.boundary = data.boundary; state.partialWrite = data.partialWrite === true; return; }
       if (data.event === "progress") { state.progress = data.value; return; }
       const request = pending.get(data.id);
