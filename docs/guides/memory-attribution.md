@@ -1,5 +1,10 @@
 # Memory attribution requires a caller root
 
+The bounded launcher observation work adds runtime and guest process identity,
+retained allocator samples, and adapter-cleanup worker censuses. It does not
+implement the supervisor-complete envelope described below. Missing observations
+remain unknown, and a libc failure alone does not establish its cause.
+
 The corrected memory hook preserves every raw process observation. It never
 selects scope from command sequence, timestamps, job identity, or activity.
 A later finished helper can coexist with an earlier active build.
