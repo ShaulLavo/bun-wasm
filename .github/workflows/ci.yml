@@ -11,6 +11,8 @@ permissions:
   contents: read
 
 env:
+  # TLS producer/consumer receipts bind the exact Node executable, not only its major.
+  CI_NODE_VERSION: '26.13.1'
   GITHUB_TOKEN: ${{ github.token }}
   BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
 
@@ -44,7 +46,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - name: Resolve immutable comparison refs
         id: refs
         env:
@@ -402,7 +404,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
       - uses: actions/cache/restore@v4
@@ -855,7 +857,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
       - uses: actions/cache/restore@v4
@@ -1368,7 +1370,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1411,7 +1413,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1580,7 +1582,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -1822,7 +1824,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
@@ -2161,7 +2163,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-          node-version: '26'
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
