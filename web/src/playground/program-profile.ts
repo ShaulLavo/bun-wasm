@@ -11,7 +11,7 @@ export function playgroundProfile(value: string | null): PlaygroundProfile {
 }
 
 export function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void {
-  if (profile === "shared-group" && engine !== "quickjs" && engine !== "jsc") {
+  if (profile === "shared-group" && engine === "browser") {
     throw new TypeError(`The ${engine} engine does not support the shared-group playground profile`);
   }
 }

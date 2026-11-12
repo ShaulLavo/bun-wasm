@@ -9,7 +9,7 @@ export function parseMemoryProfile(value: unknown): ProgramMemoryProfile {
 }
 
 export function requireProfileEngine(engine: Engine, profile: ProgramMemoryProfile): void {
-  if (profile === "shared-group" && engine !== "quickjs" && engine !== "jsc") {
+  if (profile === "shared-group" && engine === "browser") {
     throw new TypeError(`Bun ${engine} shared-group profile is unavailable in this host`);
   }
 }
