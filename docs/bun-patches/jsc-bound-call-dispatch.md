@@ -126,8 +126,18 @@ launcher `37982e24…`. The baseline side `3eb741c2…` is main at `e12e307e`; t
 | The same, nested calls | 31 | 2,048 |
 | At 800 KiB, nested JSX | 146 | 2,048 |
 
+| `bound`, a chain of binds, 2,000 tried | 72 | completes |
+| `boundcall`, recursion through a bound copy | 36 | 35,493, then the frame stack's own `RangeError` |
+
+The other 48 paths of the sweep gave identical results at 192, 208, 208 with reserve 960,
+and 800 KiB, with no trap or timeout on either pair. With the guard out of the way and the
+host stack cut to 256 and 512 KiB on Wasmtime and 1 MiB on V8, the other 16 reentry paths
+ran out at the same depth on both pairs, so no path spends more host stack per level
+([Stack overflow in wasm](../stack-limits.md#bound-functions-called-in-the-loop)).
+
 `CLoop::execute` has one more call (684, was 683) and holds 4,896 guarded bytes at every
-call, with 293 wasm parameters and locals, before and after.
+call, with 293 wasm parameters and locals, before and after. These are split-side numbers;
+CI's frame check reads the shared-group side.
 
 ## Tests
 

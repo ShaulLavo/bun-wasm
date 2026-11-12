@@ -453,6 +453,17 @@ bound to each other, no longer measures reentry on JSC, and `boundcall`, a funct
 recursing through a bound copy of itself with two bound arguments, measures the new path.
 A bound function called from C++, used as a getter or constructed with `new` still reenters.
 
+Measured on November 12, 2026 on the native launcher: the READY split core `13b54255…` with
+main's side at `e12e307e` and with a side built from this change. The other 48 paths of the
+sweep, the 20 parser chains among them, gave identical results at 192, 208, 208 with reserve
+960, and 800 KiB, and no attempt trapped or timed out on either pair.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bound`, 2,000 tried | 72 | completes | 78 | completes | 304 | completes |
+| `boundcall` | 36 | 35,493 | 39 | 35,493 | 152 | 35,493 |
+| Real Babel printer, nested JSX, 2,048 tried | 30 | completes | not run | not run | 146 | completes |
+
 With the host stack cut to 256 and 512 KiB on Wasmtime and to 1 MiB on V8, the guard out
 of the way, the other 16 reentry paths reached the same depth on both pairs:
 
@@ -461,8 +472,8 @@ of the way, the other 16 reentry paths reached the same depth on both pairs:
 | `bound`, 2,000 tried | 396, trap | completes | 806, trap | completes | 1,558 | completes |
 | `boundcall` | 202, trap | 35,493 | 406, trap | 35,493 | 779 | 35,493 |
 
-From 35,493 on, `boundcall` stops at the C-loop frame stack's own check with a catchable
-`RangeError`, on every host.
+One level past 35,493, `boundcall` stops at the C-loop frame stack's own check with a
+catchable `RangeError`, at every budget and on every host.
 
 ### The interpreter frame floor
 
