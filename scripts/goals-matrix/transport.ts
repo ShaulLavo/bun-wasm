@@ -4,6 +4,7 @@ type EvaluationOptions = { observation: true };
 interface CleanupEvidence { browserClosed: true; foregroundStopped: true; previewClosed: true }
 export interface Transport {
   readonly capabilities: Record<string, unknown>;
+  beginCleanup?(): void | Promise<void>;
   nativeClick?(button: string, clicked: string, timeoutMs: number): Promise<unknown>;
   cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
   navigate(url: string): Promise<void>;
@@ -24,7 +25,7 @@ export async function evaluatePage<T>(page: Page, expression: string, timeoutMs:
   }
   finally { await handle.dispose(); }
 }
-export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number): Promise<Transport> {
+export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
   if (kind === "chrome" && executablePath) {
     const version = Bun.spawn([executablePath, "--version"], { stdout: "pipe", timeout: 5000 });
@@ -37,11 +38,13 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     const host = await context.newPage();
     let preview: typeof host | undefined;
     let page = host;
+    let evaluationTimeoutMs = timeoutMs;
     page.setDefaultTimeout(timeoutMs);
     return {
       capabilities: { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() },
+      beginCleanup() { evaluationTimeoutMs = cleanupTimeoutMs; },
       async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
-      evaluate: (expression, options) => evaluatePage(page, expression, timeoutMs, options),
+      evaluate: (expression, options) => evaluatePage(page, expression, evaluationTimeoutMs, options),
       async openPreview(url) {
         if (preview) await preview.close();
         preview = await context.newPage(); page = preview;

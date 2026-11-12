@@ -7,7 +7,7 @@ import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
-type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; saveNative?(text: string): Promise<void> };
+type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
 export function validateIphoneControl(control: string, agent: string): void {
   const url = new URL(control);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !/^\/__goals_iphone\/[a-f0-9]{64}$/.test(url.pathname) || url.search || url.hash || url.username || url.password) throw new Error("Expected forwarded loopback iPhone control URL");
@@ -25,10 +25,11 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let deviceFailed = false;
   let title = "";
   let closing: Promise<void> | undefined;
+  let observationTimeoutMs = config.timeoutMs;
   const lifetime = new AbortController();
   const active = new Set<Promise<string>>();
   const capabilities: Record<string, unknown> = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": config.deviceUDID, transport: "visible-safari-xctest", safariDriverSession: false };
-  async function request(action: string, value?: object, timeoutMs = config.timeoutMs): Promise<unknown> {
+  async function request(action: string, value?: object, timeoutMs = observationTimeoutMs): Promise<unknown> {
     const response = await fetch(config.control + "/" + action, { method: value ? "POST" : "GET", headers: value ? { "content-type": "application/json" } : {},
       body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeoutMs)]) });
     const answer: unknown = await response.json();
@@ -49,7 +50,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
   }
-  async function evaluate<T>(source: string, timeoutMs = config.timeoutMs, observation = false): Promise<T> {
+  async function evaluate<T>(source: string, timeoutMs = observationTimeoutMs, observation = false): Promise<T> {
     return await request(role + "/execute", { source, timeoutMs, observation }, timeoutMs) as T;
   }
   async function ready(selected: "host" | "preview"): Promise<Record<string, unknown>> {
@@ -70,6 +71,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   }
   return {
     capabilities,
+    beginCleanup() { observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs; },
     async navigate(url) {
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
@@ -80,7 +82,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
       title = "Goals " + state.nonce;
     },
-    evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => evaluate<T>(source, config.timeoutMs, options?.observation === true),
+    evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => evaluate<T>(source, observationTimeoutMs, options?.observation === true),
     async openPreview(url) {
       await request("preview/configure", { url });
       await present(url);

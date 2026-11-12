@@ -1,0 +1,86 @@
+--- a/merge-tables.ts
++++ b/merge-tables.ts
+@@ -1,3 +1,4 @@
++import { assertNoPublication, withCanonicalWriter } from "./canonical-write";
+ import { readFile, writeFile, stat } from "node:fs/promises";
+ import { resolve, dirname, join } from "node:path";
+ import { browsers, browserLabels, engines, frameworks } from "/work/reports/goals/quickjs-safari-stack/policy-framework-replay/merged/selected-source/scripts/goals-matrix/catalog";
+@@ -69,7 +70,7 @@
+     return [`## ${browserLabels[browser]}`, "", `| Framework | ${engines.join(" | ")} |`, "| --- | --- | --- | --- | --- |", ...rows, ""].join("\n");
+   }).join("\n");
+   const errors = report.cells.filter(cell => cell.status === "fail" || cell.status === "not runnable yet").map(cell => `- ${key(cell)}. ${String(cell.status === "fail" ? cell.error : cell.reason).replace(/\s+/g, " ")}`).join("\n");
+-  return [`# Framework matrix`, "", "```sh", command, "```", "", `Run ${report.run}. Generated ${report.createdAt}. ${report.cells.length} boxes.`, "", "Each cell links to its source report in TABLE.json; source reports retain their own deadlines and source metadata. The deadlines below are the original canonical policy.", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", "", deadlines, sections, "## Errors and prerequisites", "", errors, "", provenance].join("\n");
++  return [`# Framework matrix`, "", "```sh", command, "```", "", `Run ${report.run}. Generated ${report.createdAt}. ${report.cells.length} boxes.`, "", "Each cell links to its source report in TABLE.json; source reports retain their own deadlines and source metadata. The deadline section records the current campaign policy; historical attempts retain their executed timeouts.", "", "PASS requires every phase, including cleanup. Pending is not a result. Native Safari is never Playwright WebKit.", "", deadlines, sections, "## Errors and prerequisites", "", errors, "", provenance].join("\n");
+ }
+ function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
+ async function load(path: string): Promise<Input> {
+@@ -87,33 +88,40 @@
+     map.set(key(cell), insert(map.get(key(cell)), { ...cell, sourceReport: existingSource, sourceCreatedAt }));
+   }
+ }
+-const paths = process.argv.slice(2).map(path => resolve(path));
+-if (paths.length < 1) throw new Error("Usage: bun merge-tables.ts BASE_TABLE.json [RUN_TABLE.json ...]");
+-const base = await load(paths[0]);
+-const accepted: Input[] = [];
+-const skipped: { path: string; reason: string }[] = [];
+-const identities = new Set(base.report.cells.map(key));
+-if (identities.size !== base.report.cells.length) throw new Error("Duplicate base cell");
+-for (const path of Array.from(new Set(paths.slice(1)))) {
+-  try {
+-    const input = await load(path);
+-    const ids = input.report.cells.map(key);
+-    if (new Set(ids).size !== ids.length || ids.some(id => !identities.has(id))) throw new Error("unknown or duplicate cell identity");
+-    accepted.push(input);
+-  } catch (error) { skipped.push({ path, reason: error instanceof Error ? error.message : String(error) }); }
++async function mergeTables(): Promise<void> {
++  const paths = process.argv.slice(2).map(path => resolve(path));
++  if (paths.length < 1) throw new Error("Usage: bun merge-tables.ts BASE_TABLE.json [RUN_TABLE.json ...]");
++  const base = await load(paths[0]);
++  const accepted: Input[] = [];
++  const skipped: { path: string; reason: string }[] = [];
++  const identities = new Set(base.report.cells.map(key));
++  if (identities.size !== base.report.cells.length) throw new Error("Duplicate base cell");
++  for (const path of Array.from(new Set(paths.slice(1)))) {
++    try {
++      const input = await load(path);
++      const ids = input.report.cells.map(key);
++      if (new Set(ids).size !== ids.length || ids.some(id => !identities.has(id))) throw new Error("unknown or duplicate cell identity");
++      accepted.push(input);
++    } catch (error) { skipped.push({ path, reason: error instanceof Error ? error.message : String(error) }); }
++  }
++  accepted.sort((a, b) => a.time - b.time || a.path.localeCompare(b.path));
++  const cells = new Map<string, Cell>();
++  addReport(cells, base, true);
++  for (const input of accepted) addReport(cells, input, false);
++  const command = ["bun", "/work/reports/goals/merge-tables.ts"].concat(paths).map(shellQuote).join(" ");
++  const campaignPolicy: unknown = JSON.parse(await readFile("/work/reports/goals/CAMPAIGN-POLICY.json", "utf8"));
++  if (!object(campaignPolicy) || campaignPolicy.schema !== 1 || !Array.isArray(campaignPolicy.ownerDecisions)) throw new Error("Invalid campaign policy metadata");
++  const combined: Report = { ...base.report, campaignPolicy, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command, cells: Array.from(cells.values()) };
++  const template = await readFile(join(dirname(paths[0]), "TABLE.md"), "utf8");
++  const root = "/work/reports/goals";
++  const json = JSON.stringify(combined, null, 2) + "\n";
++  await writeFile(join(root, "TABLE.json"), json);
++  await writeFile(join(root, "VIEW.json"), json);
++  await writeFile(join(root, "TABLE.md"), render(combined, command, template));
++  console.log(JSON.stringify({ before: counts(base.report.cells), after: counts(combined.cells), included: accepted.map(input => input.path), skipped }, null, 2));
+ }
+-accepted.sort((a, b) => a.time - b.time || a.path.localeCompare(b.path));
+-const cells = new Map<string, Cell>();
+-addReport(cells, base, true);
+-for (const input of accepted) addReport(cells, input, false);
+-const command = ["bun", "/work/reports/goals/merge-tables.ts"].concat(paths).map(shellQuote).join(" ");
+-const campaignPolicy: unknown = JSON.parse(await readFile("/work/reports/goals/CAMPAIGN-POLICY.json", "utf8"));
+-if (!object(campaignPolicy) || campaignPolicy.schema !== 1 || !Array.isArray(campaignPolicy.ownerDecisions)) throw new Error("Invalid campaign policy metadata");
+-const combined: Report = { ...base.report, campaignPolicy, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command, cells: Array.from(cells.values()) };
+-const template = await readFile(join(dirname(paths[0]), "TABLE.md"), "utf8");
+-const root = "/work/reports/goals";
+-const json = JSON.stringify(combined, null, 2) + "\n";
+-await writeFile(join(root, "TABLE.json"), json);
+-await writeFile(join(root, "VIEW.json"), json);
+-await writeFile(join(root, "TABLE.md"), render(combined, command, template));
+-console.log(JSON.stringify({ before: counts(base.report.cells), after: counts(combined.cells), included: accepted.map(input => input.path), skipped }, null, 2));
++
++await withCanonicalWriter("/work/reports/goals", async () => {
++  await assertNoPublication("/work/reports/goals");
++  await mergeTables();
++});
