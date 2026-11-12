@@ -73,6 +73,8 @@
     job: number;
     /** wait consumes the host record; every observer shares this one cached outcome. */
     outcome: Exit | null;
+    /** null until startup and its diagnostic publication are final. */
+    startupDetail: string | null;
     /** Parent ends, -1 when absent. Outputs are stdout then stderr. */
     stdinFd: number;
     outputFds: number[];
@@ -131,10 +133,10 @@
   }
 
   // A negative runtime_proc result becomes the Node error for its errno.
-  function processError(result: number, syscall: string, path?: string) {
+  function processError(result: number, syscall: string, path?: string, detail = "") {
     const code = errnoNames[-result] || `E${-result}`;
     const error: Error & { code: string; errno?: number; syscall: string; path?: string } = Object.assign(
-      new Error(path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`),
+      new Error((path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`) + (detail ? `: ${detail}` : "")),
       { code, errno: nodeErrnos[code], syscall });
     if (path !== undefined) error.path = path;
     return error;
@@ -333,12 +335,15 @@
       const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited, fds: bindings };
       if (spec.meta.worker) request.worker = spec.meta.worker;
       const pid = native.procSpawn(JSON.stringify(request));
-      if (pid < 0) throw processError(pid, "spawn", argv[0]);
+      if (pid < 0) {
+        const detail = native.procSpawnError(0);
+        throw processError(pid, "spawn", argv[0], typeof detail === "string" ? detail : "");
+      }
       for (const fd of childEnds) release(fd);
       held.clear();
       // Only a job this child owns is ours to reap or kill; an inherited group belongs to its owner.
       const job = detached ? native.procJobOf(pid) : 0;
-      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, stdinFd, outputFds, discard, worker, ipc });
+      return Object.assign(spec, { pid, job: job > 0 ? job : 0, outcome: null, startupDetail: null, stdinFd, outputFds, discard, worker, ipc });
     } catch (error) {
       for (const fd of Array.from(held)) release(fd);
       throw error;
@@ -349,10 +354,22 @@
   // all retain that winner on the launch record instead of waiting on the same pid again.
   function waitChild(child: Started): Exit | null {
     if (child.outcome) return child.outcome;
+    if (!captureStartup(child)) return null;
     const result = native.procWait(child.pid);
     if (result === AGAIN) return null;
     if (typeof result === "number") throw processError(result, "wait");
     return child.outcome = { kind: result[0], code: result[1] };
+  }
+
+  function captureStartup(child: Started): boolean {
+    if (child.startupDetail !== null) return true;
+    const status = native.procStartStatus(child.pid);
+    // Never consume across pending startup: a failure may publish between these imports.
+    if (status === AGAIN) return false;
+    const detail = status > 0 ? native.procSpawnError(child.pid) : "";
+    if (detail === AGAIN) return false;
+    child.startupDetail = typeof detail === "string" ? detail : "";
+    return true;
   }
 
   // Reaps the child's job once every member has quiesced. A job already gone is reaped.
@@ -688,7 +705,7 @@
         // The wait has already consumed the child. Do not signal or wait it a second time.
         settled = true;
         clearExitHooks();
-        const error = processError(-status.code, "spawn", spec.meta.executable);
+        const error = processError(-status.code, "spawn", spec.meta.executable, spec.startupDetail || "");
         rejectExit(error);
         if (typeof spec.options.onExit === "function") frame.run(spec.options.onExit, spec.options, [child, null, null, error]);
         return;
@@ -872,7 +889,7 @@
         checkTimeout();
         if (!status || states.some((state) => state.fd >= 0)) wait();
       }
-      const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable) : undefined;
+      const error = status.kind === 2 ? processError(-status.code, "spawn", spec.meta.executable, spec.startupDetail || "") : undefined;
       result = outcome({ success: status.kind === 0 && status.code === 0, exitedDueToTimeout: timedOut, ...(error ? { error } : {}) });
     } catch (error) {
       if (!status) terminate(spec.pid, spec.job);
@@ -883,7 +900,7 @@
       for (const fd of [spec.stdinFd].concat(spec.outputFds)) if (fd >= 0) native.procClose(fd);
       if (!reapJob(spec.job)) reapLater(spec.job);
     }
-    if (status!.kind === 2) throw processError(-status!.code, "spawn", spec.meta.executable);
+    if (status!.kind === 2) throw processError(-status!.code, "spawn", spec.meta.executable, spec.startupDetail || "");
     return result;
   }
 

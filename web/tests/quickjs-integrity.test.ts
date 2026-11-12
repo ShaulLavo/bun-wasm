@@ -1,8 +1,9 @@
 import { programProfile, type PairedEngine } from "../../src/engine-kind";
 import { expect, test } from "bun:test";
 import { loadWasm } from "../src/engine-loader";
-import { programLinkPlan } from "../../src/assets";
+import { programMetadata } from "../../src/assets";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
+import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
@@ -39,24 +40,22 @@ async function customPair(filename: string, manifest: Record<string, string> | u
     } });
     const result = await loadWasm(`https://cdn.test/build/${filename}`, () => {});
     expect(result.build).toBeNull();
-    expect(programLinkPlan(result.module)?.libraries[0]?.source).toEqual(side);
+    expect(linkedFixtureValue(programMetadata(result.module).linkPlan)).toBe(42);
     expect(requested).toEqual([`https://cdn.test/build/${filename.replace(/\.gz$/, "")}.gz`, `https://cdn.test/build/${profile.side}.gz`]);
   } finally {
     restoreGlobals(originals);
   }
 }
 
-test("downloaded and cached pairs preserve both exact program inputs", async () => {
+test("downloaded and cached pairs preserve executable plans without retaining inputs", async () => {
   await withPair("download", undefined, async ({ core, side, downloads }) => {
     const first = await loadWasm("bun.wasm", () => {});
     expect(first.size).toBe(core.length + side.length);
-    const plan = programLinkPlan(first.module);
-    expect(plan?.core.source.slice(0, core.length)).toEqual(core);
-    expect(plan?.core.source.length).toBeGreaterThan(core.length);
-    expect(plan?.libraries[0]?.source).toEqual(side);
+    const plan = programMetadata(first.module).linkPlan;
+    expect(linkedFixtureValue(plan)).toBe(42);
     expect(downloads()).toBe(2);
     const cached = await loadWasm("bun.wasm", () => {});
-    expect(cached.module).toBe(first.module);
+    expect(linkedFixtureValue(programMetadata(cached.module).linkPlan)).toBe(42);
     expect(downloads()).toBe(2);
   });
 });
@@ -126,7 +125,7 @@ test("cached generic custom URL still prepares the declared JSC side", async () 
       requested.push(input); return new Response(Bun.gzipSync(side));
     } });
     const loaded = await loadWasm(url, () => {});
-    expect(programLinkPlan(loaded.module)?.libraries[0]?.source).toEqual(side);
+    expect(linkedFixtureValue(programMetadata(loaded.module).linkPlan)).toBe(42);
     expect(loaded.size).toBe(core.length + side.length);
     expect(requested).toEqual(["https://cdn.test/jsc-engine.wasm.gz"]);
   } finally { restoreGlobals(originals); }

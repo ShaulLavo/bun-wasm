@@ -24,6 +24,7 @@ export interface Execution {
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type FailureLog = { terminal: TerminalCapture; diagnostic: string; saved: boolean };
+type ObservationTiming = "after server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: (admission: Admission) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
@@ -118,7 +119,7 @@ async function captureFailure(transport: Transport, options: Execution, results:
   const failed = results.find(result => result.status === "fail");
   if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
   try {
-    await bounded(() => options.saveLog(text + capture.diagnostic), 2000);
+    await bounded(() => options.saveLog(failureObservation(capture)), 2000);
     capture.saved = true;
   } catch { /* Final logging retains the observed terminal when a local save fails. */ }
   return capture;
@@ -152,7 +153,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
       await transport.beginCleanup?.(guard);
       await page.closePreview();
       await stopServer(page, 5000, options.port);
-      await saveFinalLog(transport, options, results, failureLog, guard);
+      await saveFinalLog(transport, options, results, failureLog, guard, "after server stop");
     });
   } catch (error) { errors.push(error); }
   finally { work.close(); }
@@ -179,7 +180,7 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   return evidence;
 }
 
-async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, parent: Admission): Promise<void> {
+async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, parent: Admission, timing: ObservationTiming = "before owned transport cleanup"): Promise<void> {
   const scope = Scope.open(2000, parent);
   let output: string;
   const observation: { terminal: TerminalCapture } = { terminal: { status: "unavailable", reason: "not completed" } };
@@ -197,6 +198,8 @@ async function saveFinalLog(transport: Transport, options: Execution, results: r
     if (failureLog?.saved) return;
     output = finalLogFallback(observation.terminal, options.box.engine, results, failureLog, error);
   } finally { scope.close(); }
+  if (observation.terminal.status === "unavailable" && failureLog?.terminal.status === "observed") output = failureObservation(failureLog);
+  else output = finalObservation(output, results, failureLog, timing);
   await bounded(() => options.saveLog(output), 2000, parent.signal);
 }
 
@@ -205,6 +208,17 @@ function finalLogFallback(terminal: TerminalCapture, engine: string, results: re
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
   return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;
+}
+
+function failureObservation(capture: FailureLog | undefined): string {
+  if (!capture) return "--- Failure-time terminal observation unavailable ---\n";
+  if (capture.terminal.status === "unavailable") return `--- Failure-time terminal observation unavailable ---\n${capture.terminal.reason}\n`;
+  return `--- Failure-time terminal observation ---\n${capture.terminal.text}${capture.diagnostic}\n--- End failure-time terminal observation ---\n`;
+}
+
+function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: ObservationTiming): string {
+  if (!results.some(result => result.status === "fail")) return text;
+  return `${failureObservation(failureLog)}\n--- Cleanup-time terminal observation (${timing}) ---\n${text}\n--- End cleanup-time terminal observation ---\n`;
 }
 
 function completedTranscript(results: readonly PhaseResult[]): string | undefined {

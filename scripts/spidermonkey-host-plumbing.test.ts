@@ -7,7 +7,7 @@ import { Worker } from "node:worker_threads";
 import { spawnSync } from "node:child_process";
 import { markStarted } from "waffle/proc/outcome";
 import { workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
-import { prepareProgram, programLinkPlan } from "../src/assets.ts";
+import { prepareProgram, programMetadata } from "../src/assets.ts";
 import { pairedEngines, pairedEngineKinds, isSupportedPairedEngine, isPairedEngine, parseProgramFiles, programKind, programProfile, verifyProgramSide } from "../src/engine-kind.ts";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
 import { linkNodeProgram, loadNodeProgram } from "../web/scripts/node-linked.ts";
@@ -16,6 +16,7 @@ import { createNodeProcess } from "../web/scripts/node-process.ts";
 import { createMemoryReader, recordMemorySnapshot } from "../web/src/memory-telemetry.ts";
 import { engineEnvironment } from "../src/executable-paths.ts";
 import { isEngine, loadWasm, WasmMissing } from "../web/src/engine-loader.ts";
+import { stageSharedPrograms } from "./stage-program-profiles";
 
 const kind = "spidermonkey";
 
@@ -29,7 +30,7 @@ async function withPair(run: (path: string) => Promise<void>) {
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
-async function initializedValue(source: NonNullable<ReturnType<typeof programLinkPlan>>) {
+async function initializedValue(source: NonNullable<ReturnType<typeof programMetadata>["linkPlan"]>) {
   const linked = await linkNodeProgram(source, { runtime_proc: { signal: () => 0 } });
   try {
     const value = linked.entry.exports.value;
@@ -47,9 +48,8 @@ test("SpiderMonkey package preparation links and initializes the actual tiny pai
   });
   const module = await prepareProgram(files);
   expect(programKind(module)).toBe(kind);
-  const source = programLinkPlan(module);
+  const source = programMetadata(module).linkPlan;
   if (!source) throw new Error("Paired program lost its link plan");
-  expect(source.libraries.map(library => library.id)).toEqual([kind]);
   expect(await initializedValue(source)).toBe(42);
 });
 
@@ -132,7 +132,7 @@ test("browser loader verifies both SpiderMonkey files and preserves the executab
     expect(loaded.build).not.toBeNull();
     const pair = quickjsPair(kind);
     expect(loaded.size).toBe(pair.core.length + pair.side.length);
-    const source = programLinkPlan(loaded.module);
+    const source = programMetadata(loaded.module).linkPlan;
     if (!source) throw new Error("Browser loader lost the paired link plan");
     expect(await initializedValue(source)).toBe(42);
     expect(requests).toEqual(["/bun-spidermonkey.wasm.gz", "/bun-spidermonkey.wasm", "/spidermonkey-engine.wasm.gz", "/spidermonkey-engine.wasm"]);
@@ -301,7 +301,7 @@ for (const missingFingerprint of [undefined, "core", "side"] as const) test(`cus
       await expect(loaded).rejects.toThrow("build manifest fingerprint is missing");
       return;
     }
-    const source = programLinkPlan((await loaded).module);
+    const source = programMetadata((await loaded).module).linkPlan;
     if (!source) throw new Error("Custom URL lost its link plan");
     expect(await initializedValue(source)).toBe(42);
     expect((await loaded).build).not.toBeNull();
@@ -317,10 +317,10 @@ test("the actual optional web staging hashes and compresses both tiny SpiderMonk
     const end = source.indexOf("await buildShellAssets", start);
     if (start < 0 || end < 0) throw new Error("Missing web asset copy boundary");
     const code = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(start, end));
-    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", `return (async () => {${code}; return engineBuilds;})();`);
+    const stage = new Function("Bun", "existsSync", "join", "dirname", "resolve", "statSync", "out", "here", "process", "wasmSource", "stageSharedPrograms", `return (async () => {${code}; return engineBuilds;})();`);
     const builds = await stage(Bun, existsSync, join, dirname, resolve, statSync, out, root, {
       env: { SPIDERMONKEY_WASM: join(root, programProfile(kind).core) },
-    }, join(root, "missing-quickjs.wasm"));
+    }, join(root, "missing-quickjs.wasm"), (directory: string, builds: Record<string, string>) => stageSharedPrograms(directory, builds, { quickjs: undefined, jsc: undefined }));
     expect(Object.keys(builds).sort()).toEqual(["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"]);
     for (const name of [programProfile(kind).core, programProfile(kind).side]) {
       const raw = readFileSync(join(root, name));

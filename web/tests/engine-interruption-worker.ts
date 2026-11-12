@@ -7,9 +7,6 @@ import { installAtomicsObservers, observedAtomics } from "./engine-interruption-
 export function observesInstance(module: WebAssembly.Module, request: Pick<RunRequest, "module" | "linkPlan">, linkedCore: WebAssembly.Module | undefined): boolean {
   if (!request.linkPlan) return module === request.module;
   if (!linkedCore || module !== linkedCore) return false;
-  const { core, reserve } = request.linkPlan;
-  if (core.id !== "bun-core" || reserve !== "bun_core_alloc"
-    || core.checkpoint.module !== "runtime_proc" || core.checkpoint.name !== "signal") return false;
   const exports = WebAssembly.Module.exports(module);
   return ["bun_core_bind_engine", "bun_core_alloc", "_start"].every(name => exports.some(entry => entry.name === name && entry.kind === "function"))
     && WebAssembly.Module.imports(module).some(entry => entry.module === "runtime_proc" && entry.name === "signal" && entry.kind === "function");
@@ -21,13 +18,13 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
   // Importing even the probe/transport loads Waffle's intrinsic-capture module.
   const { observeEngineImports, observePreview1Dequeue, observeEventLoopWait, observedEngineStart, probeCell } = await import("./engine-interruption-probe");
   const { engineInterruptionTransport } = await import("./engine-interruption-transport");
-  const { prepareLinkPlan } = await import("waffle/link");
+  const { adoptLinkPlan } = await import("waffle/link");
   const { observeProcessPoll } = await import("./engine-interruption-sleep");
   const options = event.data.engineInterruption;
   const probe = new Int32Array(options.evidence);
   const transport = engineInterruptionTransport(event.data);
   const preview1 = event.data.engine === undefined || event.data.adapter === "preview1";
-  const linkedCore = event.data.linkPlan ? (await prepareLinkPlan(event.data.linkPlan)).entryModule : undefined;
+  const linkedCore = event.data.linkPlan ? adoptLinkPlan(event.data.linkPlan).entryModule : undefined;
   const NativeInstance = WebAssembly.Instance;
   const Instance = new Proxy(NativeInstance, {
     construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {

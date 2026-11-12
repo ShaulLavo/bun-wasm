@@ -182,7 +182,7 @@ export function convertSideInitializers(bytes: Uint8Array, profile: "split" | "s
       { name: "spidermonkey_initialize_memory", kind: 0, index: startIndex }, { name: "__stack_pointer", kind: 3, index: stackIndex },
     ], profile === "split" ? [{ name: "memory", kind: 2, index: 0 }] : []);
   const payload = Uint8Array.from(u32(renamed.length).concat(...renamed.map(encodeExport)));
-  const changed = before.filter(section => section.id !== 8).map(section => section.id === 7 ? makeSection(7, payload) : section.raw);
+  const changed = before.filter(section => section.id !== 8 && !(section.id === 0 && name({ bytes: section.payload, offset: 0 }).startsWith(".debug_"))).map(section => section.id === 7 ? makeSection(7, payload) : section.raw);
   const result = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...changed.map(section => Array.from(section))));
   assert(WebAssembly.validate(result), "Converted SpiderMonkey side is invalid Wasm");
   rejectExceptionTags(result);

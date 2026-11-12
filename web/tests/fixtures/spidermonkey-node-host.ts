@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { loadBunWasm, programLinkPlan } from "../../../src/assets.ts";
+import { loadBunWasm, programMetadata } from "../../../src/assets.ts";
 import { ENGINE_BIN, engineEnvironment } from "../../../src/executable-paths.ts";
 import { markStarted } from "waffle/proc/outcome";
 import { workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
@@ -29,7 +29,7 @@ if (files.kind !== kind) throw new Error("Wrong fixture kind");
 const module = await loadBunWasm({ asset: { kind,
   core: descriptor(files.core, programProfile(kind).core), side: descriptor(files.side, programProfile(kind).side),
 }, fetch: async url => new Response(readFileSync(new URL(url))) });
-const source = programLinkPlan(module);
+const source = programMetadata(module).linkPlan;
 if (!source) throw new Error("Host lost its link plan");
 const linked = await linkNodeProgram(source, { runtime_proc: { signal: () => 0 } });
 let hostValue: unknown;
