@@ -439,6 +439,31 @@ change and is not fixed here.
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.
 
+### Bound functions called in the loop
+
+Until November 12, 2026 a bound function called from JavaScript entered the interpreter
+again from C++, and the `bound` row measured that. Babel's code printer calls
+`printMethod.bind(this, node, parent)` once per nesting level, and the real
+`@babel/generator` 7.29.14 printed 30 nested JSX elements at 192 KiB and 146 at 800 KiB.
+
+A bound function whose target is a `JSFunction` now calls its target from the running loop
+when bytecode calls it ([record](bun-patches/jsc-bound-call-dispatch.md)). The same printer
+prints 2,048 levels, the deepest tried, at both budgets. `bound`, a chain of functions
+bound to each other, no longer measures reentry on JSC, and `boundcall`, a function
+recursing through a bound copy of itself with two bound arguments, measures the new path.
+A bound function called from C++, used as a getter or constructed with `new` still reenters.
+
+With the host stack cut to 256 and 512 KiB on Wasmtime and to 1 MiB on V8, the guard out
+of the way, the other 16 reentry paths reached the same depth on both pairs:
+
+| Path | Wasmtime 256 KiB before | After | 512 KiB before | After | V8 1 MiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bound`, 2,000 tried | 396, trap | completes | 806, trap | completes | 1,558 | completes |
+| `boundcall` | 202, trap | 35,493 | 406, trap | 35,493 | 779 | 35,493 |
+
+From 35,493 on, `boundcall` stops at the C-loop frame stack's own check with a catchable
+`RangeError`, on every host.
+
 ### The interpreter frame floor
 
 The guard counts shadow bytes, and `CLoop::execute` supplies 4,896 of the roughly 5.8 KB
@@ -462,7 +487,7 @@ through a local that was overwritten on some path, a tail call, an unknown instr
 a missing stack pointer export, or more than one such function.
 
 The two builds differ, which is why the check follows paths and does not match a fixed
-prologue. The split side allocates once at entry and releases once at its end: 683 calls,
+prologue. The split side allocates once at entry and releases once at its end: 684 calls,
 all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
 own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
 function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
