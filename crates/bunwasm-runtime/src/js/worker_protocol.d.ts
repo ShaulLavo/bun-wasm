@@ -118,6 +118,8 @@ declare namespace BunWasm {
     /** Live executable-access query; the native bridge consumes/cancels its request. */
     procAccess(path: string, cwd: string): number;
     procSpawn(request: string): number;
+    /** Copied diagnostic text (at most 4096 UTF-8 bytes), or a negative errno. */
+    procSpawnError(pid: number): string | number;
     procJobOf(pid: number): number;
     procPipe(): [read: number, write: number] | number;
     /** WASI fd_close on a runtime descriptor. */

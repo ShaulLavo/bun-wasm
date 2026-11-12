@@ -8,6 +8,8 @@ import * as viewModule from "@codemirror/view";
 import { declareModuleMemory, pages, type Runtime } from "waffle";
 import { getVfsDescriptor } from "../src/shared-fs";
 import * as engineLoader from "../src/engine-loader";
+import { profileAsset } from "../src/program-profile";
+import { appendCustomSection } from "../../src/engine-kind";
 import type { Playground } from "../src/playground/playground";
 import type { Sandbox } from "../../sandbox/src/sandbox";
 import type { RunHooks } from "../src/runner";
@@ -96,8 +98,9 @@ class TerminalFixture {
 }
 
 let identity = 0;
-function fixtureWasm() {
-  return { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), size: 8, build: null };
+function fixtureWasm(url = "") {
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  return { module: new WebAssembly.Module(url.startsWith("profiles/shared-group/") ? appendCustomSection(bytes, "dylink.0", new Uint8Array()) : bytes), size: 8, build: null };
 }
 
 export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }, engine?: () => Promise<ReturnType<typeof fixtureWasm>>) {
@@ -125,7 +128,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     },
     BrowserPrograms: class { ready() { return Promise.resolve({ path: "/bin" }); } dispose() { return Promise.resolve(); } },
     registerModuleScope: async () => true,
-    loadWasm: async (url: string) => { loads.push(url); return engine ? engine() : fixtureWasm(); },
+    loadWasm: async (url: string) => { loads.push(url); return engine ? engine() : fixtureWasm(url); },
+    loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], _progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile)),
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
@@ -156,7 +160,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
     waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace"], "browser-programs": ["BrowserPrograms"],
     "workspace-storage": ["WorkspaceStorage"],
-    "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadWasm", "mb", "registerModuleScope"],
+    "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],

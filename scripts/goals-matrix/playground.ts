@@ -13,12 +13,14 @@ declare const playground: Playground;
 type PreviewState = { status: "pending" | "ready" } | { status: "failed"; error: unknown };
 declare global { var __goalsPreview: PreviewState | undefined; var __goalsCommand: { token: string; done: boolean; code: number | null; error: string | null } | undefined; }
 function expression<A, R>(operation: (input: A) => R, input: A): string { return `(${operation.toString()})(${JSON.stringify(input)})`; }
+/** An observation that was never accepted before its deadline, as distinct from one that failed. */
+export class ObservationTimeout extends Error {}
 export async function until<T>(operation: () => Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
   while (true) {
     const value = await operation();
     if (accept(value)) return value;
-    if (Date.now() >= end) throw new Error(`Timed out after ${timeoutMs} ms; last observation: ${JSON.stringify(value)}`);
+    if (Date.now() >= end) throw new ObservationTimeout(`Timed out after ${timeoutMs} ms; last observation: ${JSON.stringify(value)}`);
     await Bun.sleep(Math.min(100, end - Date.now()));
   }
 }
@@ -62,10 +64,14 @@ function shellState(token: string): { done: boolean; code: number | null; error:
   if (!current || current.token !== token) throw new Error("Command token differs");
   return { done: current.done, code: current.code, error: current.error };
 }
-export async function command(transport: ScopedTransport, text: string, timeoutMs: number): Promise<unknown> {
+/** Runs one foreground command to its exit, whatever its code. Throws ObservationTimeout when it is still running at the deadline. */
+export async function foreground(transport: ScopedTransport, text: string, timeoutMs: number): Promise<ReturnType<typeof shellState>> {
   await transport.useHost();
   const token = await transport.evaluate<string>(expression(launch, text));
-  const result = await until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
+  return until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
+}
+export async function command(transport: ScopedTransport, text: string, timeoutMs: number): Promise<unknown> {
+  const result = await foreground(transport, text, timeoutMs);
   const output = await terminal(transport);
   if (result.code !== 0 || result.error) throw new Error(`${text} exited ${result.code}: ${result.error ?? output.slice(-6000)}`);
   return { ...result, output };

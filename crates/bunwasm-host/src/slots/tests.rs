@@ -1225,6 +1225,48 @@ fn engine_files_are_visible_to_wasi_metadata_open_and_readdir() {
 }
 
 #[test]
+fn spawn_error_validates_the_entire_span_and_preserves_short_buffers() {
+    for mut f in Fixture::both() {
+        f.write(1024, b"sentinel");
+        assert_eq!(
+            f.call("runtime_proc", "spawn_error", (0, 65536, 1)),
+            process::FAULT
+        );
+        assert_eq!(
+            f.call("runtime_proc", "spawn_error", (-1, 1024, 0)),
+            process::INVAL
+        );
+        assert_eq!(
+            f.call("runtime_proc", "spawn_error", (123, 1024, 0)),
+            process::CHILD
+        );
+        assert_eq!(f.call("runtime_proc", "spawn_error", (0, 1024, 8)), 0);
+        assert_eq!(f.bytes(1024, 8), b"sentinel");
+        f.write(512, b"{");
+        assert_eq!(f.call("runtime_proc", "spawn", (512, 1)), process::INVAL);
+        let length = f.call("runtime_proc", "spawn_error", (0, 1024, 0));
+        assert!(length > 8);
+        assert_eq!(f.call("runtime_proc", "spawn_error", (0, 1024, 8)), length);
+        assert_eq!(f.bytes(1024, 8), b"sentinel");
+        assert_eq!(
+            f.call("runtime_proc", "spawn_error", (0, 1024, 4096)),
+            length
+        );
+        assert!(
+            std::str::from_utf8(&f.bytes(1024, length as usize))
+                .unwrap()
+                .contains("28")
+        );
+        assert_eq!(f.call("runtime_proc", "spawn", (65536, 1)), process::FAULT);
+        let length = f.call("runtime_proc", "spawn_error", (0, 1024, 4096));
+        assert_eq!(
+            f.bytes(1024, length as usize),
+            b"Invalid spawn descriptor memory"
+        );
+    }
+}
+
+#[test]
 fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_fault() {
     for by_job in [false, true] {
         for mut f in Fixture::both() {
@@ -1243,6 +1285,13 @@ fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_
             assert_eq!(f.word(88), 6);
             assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
             assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
+            let length = f.call("runtime_proc", "spawn_error", (pid, 2048, 4096));
+            assert!(length > 0);
+            assert!(
+                std::str::from_utf8(&f.bytes(2048, length as usize))
+                    .unwrap()
+                    .contains("/missing")
+            );
             if by_job {
                 assert_eq!(
                     f.call("runtime_proc", "wait_job", (job, 1, 65532)),
@@ -1265,6 +1314,10 @@ fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_
             assert_eq!(f.word(80), 2);
             assert_eq!(f.word(84), 44);
             assert_eq!(f.call("runtime_proc", "start_status", pid), process::CHILD);
+            assert_eq!(
+                f.call("runtime_proc", "spawn_error", (pid, 2048, 4096)),
+                process::CHILD
+            );
             assert_eq!(
                 f.call("runtime_proc", "poll", (256, 1, 0, 80)),
                 process::CHILD

@@ -2,7 +2,7 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import { withScoped, withAdmission } from "./scope-fixture";
 import { test, expect } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { command, start, terminal } from "./playground";
+import { command, foreground, start, terminal } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
@@ -19,6 +19,11 @@ function page(submit: (shell: { running: boolean; lastExit: number }, listen: ()
 test("a previous idle zero exit cannot mask a new asynchronous nonzero command", async () => {
   const transport = page(async shell => { await Bun.sleep(30); shell.running = true; await Bun.sleep(30); shell.lastExit = 17; shell.running = false; });
   await expect(withScoped(transport, page => command(page, "fails later", 1000))).rejects.toThrow("exited 17");
+});
+test("foreground returns its own nonzero exit while command still rejects it", async () => {
+  const transport = page(async shell => { shell.lastExit = 17; });
+  expect(await withScoped(transport, page => foreground(page, "measurement", 1000))).toEqual({ done: true, code: 17, error: null });
+  await expect(withScoped(transport, page => command(page, "normal caller", 1000))).rejects.toThrow("exited 17");
 });
 test("a server start waits for its own asynchronous listener instead of previous idle state", async () => {
   let listened = false;

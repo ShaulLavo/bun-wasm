@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
+import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
@@ -66,6 +67,8 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
   "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
   "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
+  "web/src/program-profile.ts", "web/src/playground/playground.ts", "sandbox/src/sandbox.ts",
+  "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
   "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
@@ -138,15 +141,23 @@ function sharedWebGuestInput(path: string): boolean {
 }
 
 function excludedNativeInput(path: string): boolean {
+  if (path.startsWith("spidermonkey/") && path.endsWith(".md")) return true;
   return runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
     || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path);
 }
 
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
   if (excludedNativeInput(path)) return false;
-  return path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
+  return ordinarySpiderMonkeyInput(path) || path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
     || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
+}
+
+function ordinarySpiderMonkeyInput(path: string): boolean {
+  if (path.endsWith(".md")) return false;
+  return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
+    || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
 export function needsJsc(paths: readonly string[]): boolean {

@@ -7,7 +7,7 @@ cd "$root"
 jobs=${CARGO_BUILD_JOBS:-4}
 [[ "$jobs" =~ ^[1-4]$ ]] || { echo "SpiderMonkey qualification allows one to four compiler jobs" >&2; exit 1; }
 [[ "${BUN_WASM_PROGRAM_PROFILE:-split}" == split ]] || { echo "SpiderMonkey is split-only" >&2; exit 1; }
-: "${SPIDERMONKEY_NATIVE_DIR:?Set SPIDERMONKEY_NATIVE_DIR to a parent-admitted N1 input directory}"
+: "${SPIDERMONKEY_NATIVE_DIR:?Set SPIDERMONKEY_NATIVE_DIR to a verified native input directory}"
 : "${SPIDERMONKEY_ENGINE_BUILD_DIR:?Set SPIDERMONKEY_ENGINE_BUILD_DIR to a private output directory}"
 bun scripts/spidermonkey-side-core-receipt.ts verify-native "$SPIDERMONKEY_NATIVE_DIR"
 guest_environment=$(bun scripts/guest-build-receipt.ts environment)
@@ -17,7 +17,7 @@ export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C relocation-model=pic -C panic=ab
 export CFLAGS_wasm32_wasip1="--sysroot=$sysroot -fPIC"
 export CXXFLAGS_wasm32_wasip1="--sysroot=$sysroot -fPIC -fno-exceptions"
 out=$(mkdir -p "$SPIDERMONKEY_ENGINE_BUILD_DIR" && cd "$SPIDERMONKEY_ENGINE_BUILD_DIR" && pwd)
-export CARGO_TARGET_DIR="$out/target"
+export CARGO_TARGET_DIR="${SPIDERMONKEY_CARGO_TARGET_DIR:-$out/target}"
 export SPIDERMONKEY_NATIVE_DIR
 # The Rust build script still has a legacy static-library basename. This private link name
 # points at the admitted bytes and creates no receipt or historical G2 identity.

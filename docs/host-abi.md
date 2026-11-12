@@ -344,6 +344,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.read` | `(fd, buf, len) -> n` |
 | `runtime_proc.write` | `(fd, buf, len) -> n` |
 | `runtime_proc.start_status` | `(pid) -> status`, non-consuming entry observation described below |
+| `runtime_proc.spawn_error` | `(pid, buf, capacity) -> copied/required UTF-8 byte count or negative errno`, non-consuming diagnostic query |
 | `runtime_proc.wait` | `(pid, out_ptr) -> 0` (`u32 kind`, `i32 code`) |
 | `runtime_proc.wait_job` | `(job, flags, status_ptr) -> errno` |
 | `runtime_proc.kill` | `(pid, sig) -> 0` |
@@ -427,6 +428,23 @@ While children are running the event loop sleeps in `poll` on exactly what its w
 (readable output pipes, a blocked stdin pipe as writable, child exit kind 2, job-empty kind 4,
 and child startup kind 6 while pending) instead of the network `poll(timeout)` slot, so child
 output and lifecycle observations wake it directly.
+`spawn_error(0)` returns this caller's latest synchronous spawn failure. Each spawn attempt
+clears it. A positive PID reads an authorized direct child's startup detail, which expires
+when `wait` or `wait_job` collects the child. The text is at most 4096 UTF-8 bytes, has no NUL
+terminator, and is diagnostic text rather than an error schema. A short or zero-capacity
+buffer writes nothing and returns the required count; an invalid supplied span returns
+`-EFAULT`. Pending diagnostic publication returns `-EAGAIN`; unknown or collected children
+return `-ECHILD`. Waffle's `docs/host-abi.md` defines the full contract.
+
+The guest copies PID 0 synchronously before cleanup. Every child wait, including synchronous
+spawn, kill probes and teardown, first observes final startup and copies any failure detail.
+A pending startup or diagnostic defers collection, so a failure published between status
+and wait cannot lose its text. The guest caches the copy on the child and appends it to
+`Bun.spawn`, `Bun.spawnSync` and `node:child_process` error messages. Error codes, errno,
+syscall and path keep their existing meanings. Hosts keep their original full diagnostics;
+only the guest copy is bounded. The native Wasmtime launcher supplies the same import and
+retains native startup error chains until collection.
+
 `Bun.spawnSync` polls the same way until completion. Pipe capacity, the number of concurrent
 children and per-process memory belong to the process service, not to this guest contract.
 
@@ -462,6 +480,41 @@ share their offsets across WASI and direct `runtime_proc.read`/`write`; their sy
 is immediately ready in process polls. This local interop does not enable filesystem handle
 transfer through spawn. Mixed filesystem, clock and stream polls preserve guest subscriptions;
 handled signals interrupt a blocked poll without consuming the signal.
+
+## Shared memory imports (`runtime_shm`)
+
+The native shared-memory host binds these imports to the caller's memory group.
+They return 0 on success or a negative WASI errno. A host without an admitted
+shared-memory member returns `-ENOTSUP` (`-58`). Requests require the current
+launched member incarnation; reserved, retained, released or replaced callers
+return `-ESRCH` (`-71`) without changing ownership.
+
+`shm_route_group(pin: u32) -> i32` atomically converts a pin owned by the caller
+to a pin owned by its containing group. An unknown pin, another member's pin,
+or an already group-owned pin returns `-EBADF` (`-8`) without mutation. Conversion
+allocates no ID and changes no pin quota, region reference count or member hold.
+
+Any launched member of that same group may release a group pin through
+`shm_unpin(pin: u32) -> i32`. Competing or repeated unpins have one success and
+then `-EBADF`, with one reference removed. IDs are scoped to the caller's group.
+Ordinary `shm_route(pin: u32, pid: u32) -> i32` and
+`shm_accept(pin: u32, out: u32) -> i32` reject group pins with `-EBADF` before
+changing routing or holds. Their existing member-pin behavior is unchanged.
+Publication ownership and withdrawal are unchanged.
+
+Group pins count against the existing total pin limit and survive individual
+member release, including release of the first member. A region remains live
+while any hold, pin or publication names it. When the last member is released,
+including an aborted last reservation, the native host removes outstanding pins
+through the normal region refcount path before retiring the publication directory,
+under the state lock. Retired entries are destroyed outside that lock. Regions
+and pins are then empty; the backing budget returns only after its actual leases
+have dropped. A retained member prevents this final cleanup.
+
+Native pin IDs and region handles are nonzero u32 values that never repeat during
+the group's life. Exhaustion returns `-EAGAIN` (`-6`) without mutation, even if
+earlier IDs have been freed. Region exhaustion is checked before reserving a
+chunk or charging backing growth.
 
 ## Hosts
 

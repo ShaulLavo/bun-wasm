@@ -1,6 +1,6 @@
 import { setTimeout } from "node:timers/promises";
 import { ownedCommand } from "./lifetime";
-import { bounded } from "./execute";
+import { bounded } from "./bounded";
 
 export type SafariApplication = { pid: number; started: number };
 type SafariProcess = Pick<ReturnType<typeof Bun.spawn>, "pid" | "exitCode" | "signalCode" | "exited" | "kill">;
