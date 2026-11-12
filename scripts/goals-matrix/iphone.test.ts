@@ -147,7 +147,7 @@ test("a terminal log write failure cannot skip native resource teardown", async 
 test("a failed final observation preserves the already captured failure diagnostic", async () => {
   const { result, closed, logs } = await nativeLifecycle("failed-install");
   expect(result).toMatchObject({ status: "fail", phase: "install" });
-  expect(logs).toEqual(["Error: detailed install diagnostic"]);
+  expect(logs).toEqual(["--- Failure-time terminal observation ---\nError: detailed install diagnostic\n--- End failure-time terminal observation ---\n"]);
   expect(closed).toBe(true);
 });
 

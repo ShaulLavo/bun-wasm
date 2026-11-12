@@ -20,7 +20,7 @@ export interface Execution {
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
 }
-type FailureLog = { text: string; diagnostic: string; saved: boolean };
+type FailureLog = { text: string; saved: boolean };
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: () => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
@@ -111,9 +111,9 @@ async function captureFailure(transport: Transport, options: Execution, results:
   if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
   text += diagnostic;
   try {
-    await bounded(() => options.saveLog(text), 2000);
-    return { text, diagnostic, saved: true };
-  } catch { return { text, diagnostic, saved: false }; }
+    await bounded(() => options.saveLog(failureObservation(text)), 2000);
+    return { text, saved: true };
+  } catch { return { text, saved: false }; }
 }
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<unknown> {
@@ -121,7 +121,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup);
   const errors: unknown[] = [];
-  try { await bounded(async () => { await transport.beginCleanup?.(); await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(await terminal(transport) + (failureLog?.diagnostic ?? "")); }, 8_000); }
+  try { await bounded(async () => { await transport.beginCleanup?.(); await transport.closePreview(); await stopServer(transport, 5_000, options.port); await options.saveLog(finalObservation(await terminal(transport), results, failureLog, "after server stop")); }, 8_000); }
   catch (error) { errors.push(error); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
@@ -142,13 +142,24 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
 
 async function saveFinalLog(transport: Transport, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined): Promise<void> {
   let output: string;
-  try { output = await bounded(() => terminal(transport), 2_000) + (failureLog?.diagnostic ?? ""); }
+  try { output = finalObservation(await bounded(() => terminal(transport), 2_000), results, failureLog, "before owned transport cleanup"); }
   catch (error) {
     if (failureLog?.saved) return;
     const transcript = completedTranscript(results);
-    output = failureLog?.text ?? `Final terminal observation unavailable: ${String(error)}\n\n${transcript ?? "No completed command transcript was available."}`;
+    output = failureLog ? failureObservation(failureLog.text) : `Final terminal observation unavailable: ${String(error)}\n\n${transcript ?? "No completed command transcript was available."}`;
+    if (!failureLog && results.some(result => result.status === "fail")) output = `--- Failure-time terminal observation unavailable ---\n\n${output}`;
   }
   await bounded(() => options.saveLog(output), 2_000);
+}
+
+function failureObservation(text: string): string {
+  return `--- Failure-time terminal observation ---\n${text}\n--- End failure-time terminal observation ---\n`;
+}
+
+function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: string): string {
+  if (!results.some(result => result.status === "fail")) return text;
+  const failure = failureLog ? failureObservation(failureLog.text) : "--- Failure-time terminal observation unavailable ---\n";
+  return `${failure}\n--- Cleanup-time terminal observation (${timing}) ---\n${text}\n--- End cleanup-time terminal observation ---\n`;
 }
 
 function completedTranscript(results: readonly PhaseResult[]): string | undefined {

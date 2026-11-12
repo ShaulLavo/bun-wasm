@@ -19,3 +19,10 @@ The focused regression holds a real HTTP command open with a 90-second deadline,
 requests interrupted cleanup, and verifies that deletion and a second session
 finish without waiting for that command. It also checks the queued operations
 reject rather than execute against a deleted session.
+
+The campaign executor also preserves failure-time terminal output alongside its
+later cleanup observation in the same log. Generic cleanup observes after the
+server stop; owned cleanup observes before transport cleanup. A missing
+failure-time observation is labelled as unavailable. Successful logs retain
+their existing format. The Angular diagnostic and iPhone executor fixtures
+cover both cleanup paths and unavailable observations.

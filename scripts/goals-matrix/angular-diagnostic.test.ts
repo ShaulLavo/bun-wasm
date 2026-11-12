@@ -7,7 +7,7 @@ import { withPlayground } from "./test-fixture";
 
 const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;
-type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean };
+type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean; failedRead?: "failure" | "final" | "both" };
 
 async function runFixture(config: Fixture = {}) {
   const framework = frameworks.find(item => item.id === (config.framework ?? "angular"));
@@ -27,6 +27,8 @@ async function runFixture(config: Fixture = {}) {
     transport.evaluate = async <T>(expression: string): Promise<T> => {
       if (expression.includes("const read = globalThis.__goalsReadAngularDiagnostic")) events.push("diagnostic");
       if (expression.includes("function transcript")) transcripts++;
+      const failedRead = config.failedRead === "both" || (transcripts === 3 && config.failedRead === "failure") || (transcripts === 4 && config.failedRead === "final");
+      if (expression.includes("function transcript") && transcripts >= 3 && failedRead) throw new Error("terminal read failed");
       if (config.changingTerminal && expression.includes("function transcript") && transcripts >= 3) {
         return evaluate<T>(JSON.stringify(transcripts === 3 ? "Error: failure-time detail\r\nraw" : "cleanup-time output\r\nraw"));
       }
@@ -60,6 +62,38 @@ test.each([false, true])("retains distinct failure and cleanup observations for 
   expect(log.indexOf("failure-time detail")).toBeLessThan(log.indexOf("cleanup-time output"));
   expect(log).toContain("Failure-time terminal observation");
   expect(log).toContain(owned ? "Cleanup-time terminal observation (before owned transport cleanup)" : "Cleanup-time terminal observation (after server stop)");
+});
+
+test.each([false, true])("labels unavailable failure observation without attributing later output, owned = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true, failedRead: "failure" });
+  const log = observed.logs.at(-1) ?? "";
+  if (observed.result.status !== "fail") throw new Error("Expected a failed cell");
+  expect(observed.result.phase).toBe("dev");
+  expect(observed.result.error).toContain("without listening");
+  expect(observed.result.error).not.toContain("cleanup-time output");
+  expect(log).toContain("Failure-time terminal observation unavailable");
+  expect(log).toContain("cleanup-time output\r\nraw");
+});
+
+test.each([false, true])("retains saved failure observation when final read fails, owned = %s", async owned => {
+  const observed = await runFixture({ owned, changingTerminal: true, failedRead: "final" });
+  expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("failure-time detail") });
+  expect(observed.logs.at(-1)).toContain("Failure-time terminal observation");
+  expect(observed.logs.at(-1)).toContain("Error: failure-time detail\r\nraw");
+  expect(observed.result.attempts[0]?.phases.at(-1)?.status).toBe(owned ? "pass" : "fail");
+});
+
+test("owned fallback labels both unavailable observations", async () => {
+  const observed = await runFixture({ owned: true, failedRead: "both" });
+  expect(observed.result.status).toBe("fail");
+  expect(observed.logs.at(-1)).toContain("Failure-time terminal observation unavailable");
+  expect(observed.logs.at(-1)).toContain("Final terminal observation unavailable");
+});
+
+test.each([false, true])("successful terminal output remains unchanged, owned = %s", async owned => {
+  const observed = await runFixture({ owned, fail: false });
+  expect(observed.result.status).toBe("pass");
+  expect(observed.logs).toEqual([reference]);
 });
 
 test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
