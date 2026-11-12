@@ -19,7 +19,8 @@ function show(label: string, run: () => unknown): void {
   try {
     console.log(`${label}: ${JSON.stringify(run())}`);
   } catch (error) {
-    console.log(`${label}: ${errorName(error)}`);
+    // Engines word their syntax errors differently; the class is what must match.
+    console.log(`${label}: ${error instanceof Error ? error.name : `thrown ${String(error)}`}`);
   }
 }
 
