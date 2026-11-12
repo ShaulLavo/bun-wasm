@@ -1,5 +1,9 @@
 # Common memory telemetry
 
+The allocator growth hook records positive libc `sbrk` results within the outer
+allocator request that freezes the first failure. These results do not identify
+why growth failed. Shared-group growth remains owned by the existing libc broker.
+
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `crates/bunwasm-cli/memory-telemetry.c` and `build.rs` | Port | Original adapter around the existing WASI libc allocation ABI. No upstream allocator implementation is copied or changed. |
