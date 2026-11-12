@@ -78,6 +78,24 @@ export function chainCapacities(output: string): Record<string, number> {
   return capacityRecord(taggedLine(output, "capacities"));
 }
 
+/** What stopped a chain one level past its capacity (null when it never stopped), and whether a shallow one parsed next. */
+export interface ChainBoundary { readonly refusal: string | null; readonly recovered: boolean }
+
+/** The `boundaries` line a `chainCapacity` run prints: one refusal and recovery per parser chain. */
+export function chainBoundaries(output: string): Record<string, ChainBoundary> {
+  const parsed = taggedLine(output, "boundaries");
+  if (!parsed || typeof parsed !== "object") throw new Error("Malformed chain boundaries");
+  const boundaries: Record<string, ChainBoundary> = {};
+  for (const [mode, value] of Object.entries(parsed)) {
+    const valid = chainModes.includes(mode) && value && typeof value === "object" && "refusal" in value && "recovered" in value
+      && (value.refusal === null || typeof value.refusal === "string") && typeof value.recovered === "boolean";
+    if (!valid) throw new Error(`Malformed chain boundary ${mode}`);
+    boundaries[mode] = { refusal: value.refusal, recovered: value.recovered };
+  }
+  if (Object.keys(boundaries).length !== chainModes.length) throw new Error("Missing chain boundaries");
+  return boundaries;
+}
+
 export interface ChainOwnership {
   readonly before: Record<string, number>;
   readonly child: { readonly settings: GuestStackSettings; readonly capacities: Record<string, number> };

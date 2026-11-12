@@ -122,8 +122,9 @@ console.log(`module chain: ${JSON.stringify([loaded.values, loaded.d, loaded.e])
 // oxlint-disable-next-line no-eval -- Script code through the runtime's evaluator.
 console.log(`script chain: ${JSON.stringify((0, eval)("var sa, sb; sa = sb = [1, 2].length; [sa, sb]"))}`);
 
-// JSC reports a runtime error inside a chain at its own target. Other engines place it differently,
-// so positions are compared only where JSC parses: native Bun recorded these (line, column) pairs.
+// JSC gives an error it raises inside a chain the line and column of the failing target. Other
+// engines report positions differently or not at all, so positions are compared only where JSC
+// parses: native Bun recorded these (line, column) pairs.
 function jscParser(): boolean {
   // oxlint-disable-next-line no-eval -- The compiler under test is the runtime's evaluator.
   try { (0, eval)("let let = 1"); } catch (error) {
@@ -135,25 +136,21 @@ function jscParser(): boolean {
   throw new Error("Invalid lexical declaration was accepted");
 }
 
+// The level at `depth` is a frozen object for a strict write, or null for a compound read.
 function failurePosition(depth: number, count: number, form: "set" | "get"): string {
   const operator = form === "set" ? "=" : "+=";
-  const body = levels(count, i => `  h.o${i}.p ${operator}\n`);
-  // oxlint-disable-next-line no-eval -- A named function with its own source URL, so the stack names it.
-  const probe = (0, eval)(`(function chainProbe(h) {\nreturn (\n${body}  0);\n})\n//# sourceURL=chain-probe.js`) as (h: unknown) => unknown;
+  const body = `'use strict';\nreturn (\n${levels(count, i => `  h.o${i}.p ${operator}\n`)}  0);`;
   const h: Record<string, unknown> = {};
-  for (let i = 0; i < count; i++) {
-    const fail = () => { if (i === depth - 1) throw new Error(`level ${depth}`); };
-    h[`o${i}`] = { get p() { fail(); return 1; }, set p(_value: unknown) { fail(); } };
-  }
-  try { probe(h); } catch (error) {
-    const frame = /chainProbe.*?:(\d+):(\d+)/.exec(String((error as Error).stack));
-    return frame ? `${frame[1]}:${frame[2]}` : "none";
+  for (let i = 0; i < count; i++) h[`o${i}`] = i !== depth - 1 ? { p: 1 } : form === "set" ? Object.freeze({ p: 1 }) : null;
+  try { compile(body, false)(h as Harness); } catch (error) {
+    const { name, line, column } = error as Error & { line?: number; column?: number };
+    return `${name} ${line}:${column}`;
   }
   return "completed";
 }
 
 const positions = [1, 9, 200].flatMap(depth => (["set", "get"] as const).map(form => `${form} ${depth} ${failurePosition(depth, 200, form)}`));
-const nativePositions = ["set 1 3:7", "get 1 3:7", "set 9 11:7", "get 9 11:7", "set 200 202:9", "get 200 202:9"];
+const nativePositions = ["set 1 TypeError 5:7", "get 1 TypeError 5:7", "set 9 TypeError 13:7", "get 9 TypeError 13:7", "set 200 TypeError 204:9", "get 200 TypeError 204:9"];
 if (jscParser() && positions.join() !== nativePositions.join()) throw new Error(`JSC chain error positions moved: ${positions.join(", ")}`);
 console.log(`error positions: ${positions.length} checked`);
 

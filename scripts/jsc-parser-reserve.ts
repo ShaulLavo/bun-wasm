@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { effectiveParserReserve, jscStackBudgets, qualifiedParserReserves, stackHosts } from "../web/src/engine-stack-budget.ts";
-import { chainCapacities, chainMaximum, chainModes, generatorChains, guestStackSettings, iterativeChains, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
+import { chainBoundaries, chainCapacities, chainMaximum, chainModes, generatorChains, type ChainBoundary, guestStackSettings, iterativeChains, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
 
 const root = resolve(import.meta.dir, "..");
 
@@ -51,7 +51,22 @@ export function capacitiesAt(host: ProbeHost, requested: StackSettings): Capacit
   if (guest?.budget !== String(requested.budgetKib) || (guest.parserReserve ?? undefined) !== requested.parserReserve) {
     throw new Error(`The guest at ${label(requested)} reported other settings: ${JSON.stringify(guest)}`);
   }
-  return { requested, effectiveParserReserve: effectiveParserReserve(requested.parserReserve), capacities: chainCapacities(result.output) };
+  const capacities = chainCapacities(result.output);
+  checkBoundaries(requested, capacities, chainBoundaries(result.output));
+  return { requested, effectiveParserReserve: effectiveParserReserve(requested.parserReserve), capacities };
+}
+
+/**
+ * A capacity counts only as the guard's: every chain the probe stopped stopped with RangeError, a
+ * chain that never stopped reached the deepest depth tried, and a shallow chain parsed afterwards.
+ */
+function checkBoundaries(requested: StackSettings, capacities: Record<string, number>, boundaries: Record<string, ChainBoundary>): void {
+  for (const mode of chainModes) {
+    const { refusal, recovered } = boundaries[mode]!;
+    const expected = capacities[mode] === chainMaximum ? null : "RangeError";
+    if (refusal !== expected) throw new Error(`${mode} at ${label(requested)}: refused with ${refusal} past ${capacities[mode]}, not ${expected}`);
+    if (!recovered) throw new Error(`${mode} at ${label(requested)}: a shallow chain failed after the refusal`);
+  }
 }
 
 // One of each rejected form: empty, zero, below and above the range, five digits, a sign,

@@ -4,20 +4,23 @@ import { assertOwnership, type PageHost } from "../web/tests/parser-reserve-owne
 import { expect, test } from "bun:test";
 import { effectiveParserReserve, jscParserReserve } from "../web/src/engine-stack-budget.ts";
 import { capacitiesAt, fileThreshold, parserReserveControls, type ProbeHost, type StackSettings } from "./jsc-parser-reserve.ts";
-import { chainCapacities, chainMaximum, chainModes, chainOwnership, guestStackSettings, reserveSiteChains } from "./stack-measurement.ts";
+import { chainBoundaries, chainCapacities, chainMaximum, chainModes, chainOwnership, guestStackSettings, reserveSiteChains } from "./stack-measurement.ts";
 
 type ReserveRule = (value: string | undefined) => number;
 /** What one assignment level costs in a chain's full parse; `reserve` is the parser reserve in effect. */
 type AssignmentRule = (reserve: number) => number;
 /** The code generator's own 1024-byte reservation stops a fully parsed assignment chain. */
 const generatorCost: AssignmentRule = () => 1024;
+/** What a chain's probe reports one level past `capacity`. */
+type Boundary = (name: string, capacity: number) => { refusal: string | null; recovered: boolean };
+const guardBoundary: Boundary = (_name, capacity) => ({ refusal: capacity === chainMaximum ? null : "RangeError", recovered: true });
 
 /**
  * A guest whose parser stops when budget plus 64 KiB is spent, at `reserve(value)` plus a real frame
  * per level. Assignment chains parse without recursion: the syntax-check pass loads the deepest chain
  * tried, and the full parse stops at `assignment(reserve)` plus a frame per level.
  */
-function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object, assignment = generatorCost, iterative = true): ProbeHost {
+function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object, assignment = generatorCost, iterative = true, boundary: Boundary = guardBoundary): ProbeHost {
   return (settings, mode, depth) => {
     const room = settings.budgetKib * 1024 + 65536 - 22000;
     const bytes = reserve(settings.parserReserve);
@@ -27,8 +30,9 @@ function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (se
       return Math.floor(room / (level + 380 + index));
     };
     const capacities = Object.fromEntries(chainModes.map((name, index) => [name, capacity(name, index)]));
+    const boundaries = Object.fromEntries(chainModes.map(name => [name, boundary(name, capacities[name]!)]));
     const guest = reported?.(settings) ?? { budget: String(settings.budgetKib), parserReserve: settings.parserReserve ?? null };
-    return { code: 0, output: `settings ${JSON.stringify(guest)}\ncapacities ${JSON.stringify(capacities)}\ncompleted ${mode} ${depth}\ncontinued\n` };
+    return { code: 0, output: `settings ${JSON.stringify(guest)}\ncapacities ${JSON.stringify(capacities)}\nboundaries ${JSON.stringify(boundaries)}\ncompleted ${mode} ${depth}\ncontinued\n` };
   };
 }
 
@@ -56,6 +60,15 @@ for (const { fault, reserve, message } of brokenGuests) {
     expect(() => parserReserveControls(modelHost(reserve))).toThrow(message);
   });
 }
+
+test("a capacity counts only when the guard refused with RangeError and the parser recovered", () => {
+  const syntax: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainBlockCall8" ? "SyntaxError" : guardBoundary(name, capacity).refusal });
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, syntax))).toThrow("chainBlockCall8 at 192 KiB, reserve unset: refused with SyntaxError");
+  const stuck: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), recovered: name !== "chainAssignCall16" });
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, stuck))).toThrow("chainAssignCall16 at 192 KiB, reserve unset: a shallow chain failed");
+  const saturated: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainAssignCompile8" ? "RangeError" : guardBoundary(name, capacity).refusal });
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, saturated))).toThrow("chainAssignCompile8");
+});
 
 test("the tuples reject a guest whose assignment chains still recurse in the parser", () => {
   expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, false))).toThrow("does not reach 4096");
@@ -87,6 +100,11 @@ test("the probe's settings and capacities lines are read strictly", () => {
   expect(() => chainCapacities(`capacities ${JSON.stringify({ ...capacities, chainAssignCall8: -1 })}\n`)).toThrow("Malformed");
   expect(() => chainCapacities(`capacities ${JSON.stringify({ ...capacities, other: 1 })}\n`)).toThrow("Malformed");
   expect(() => chainCapacities(`capacities ${JSON.stringify({ chainAssignCall8: 1 })}\n`)).toThrow("Missing");
+  const boundaries = Object.fromEntries(chainModes.map(mode => [mode, { refusal: "RangeError", recovered: true }]));
+  expect(chainBoundaries(`boundaries ${JSON.stringify(boundaries)}\n`)).toEqual(boundaries);
+  expect(() => chainBoundaries(`boundaries ${JSON.stringify({ ...boundaries, chainBlockCall8: { refusal: 1, recovered: true } })}\n`)).toThrow("Malformed chain boundary chainBlockCall8");
+  expect(() => chainBoundaries(`boundaries ${JSON.stringify({ chainBlockCall8: { refusal: null, recovered: true } })}\n`)).toThrow("Missing");
+  expect(() => chainBoundaries("completed chainCapacity 4096\n")).toThrow("Expected one boundaries line");
 });
 
 test("a parent-and-Worker record needs both parent measurements and a completed child", () => {
@@ -195,7 +213,9 @@ for (const mode of ["chainCapacity", "chainWorker"]) {
     insideLoader = false;
     await completed;
     expect(output).toContain(`completed ${mode} 1`);
-    expect(phases).toHaveLength(mode === "chainWorker" ? 60 : 40);
+    // chainCapacity: a warm-up and a measured pass, then one recovery parse per chain (each saturates at 1).
+    // chainWorker: a warm-up and the parent's two measured passes.
+    expect(phases).toHaveLength(60);
     expect(phases).toEqual(phases.map(() => false));
     expect(compilations[0]).toBe("var o = {};\n0;");
     expect(compilations[20]).toBe("var o = {};\no.a = 0;");

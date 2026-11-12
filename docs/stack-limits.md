@@ -401,6 +401,11 @@ On an earlier guest, five framework rows failed this way while loading two files
 `dist/compiled/webpack/bundle5.js` and `@babel/types` 7.29.11's
 `lib/builders/generated/uppercase.js`.
 
+Chained assignment targets no longer recurse in the parser
+([JSC assignment chains](bun-patches/jsc-assignment-chains.md)): the code generator stops a
+chain, at 230 targets at 192 KiB, and the parser reserve no longer moves that limit. The
+measurements below predate that change.
+
 `BUN_WASM_JSC_PARSER_RESERVE` is the number of shadow bytes those two functions reserve. The
 default is 2048. The other 20 reserve sites, `parseAwaitExpression`, `StackBounds`, the hard and
 soft limits, the exception reserve and every budget do not read it. QuickJS and the host engine
