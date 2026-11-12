@@ -86,9 +86,10 @@ test("artifact transport failures release the runner within five minutes and sta
       if (!/^actions\/(?:upload|download)-artifact@/.test(String(step.uses))) continue;
       expect(step["timeout-minutes"]).toBe(5);
       expect(step["continue-on-error"]).toBeUndefined();
-      // The C1 lane retains its tiny first-failure packet for a week of diagnosis.
-      const retention = jobId === "web-unit" && step.name === "Retain first C1 WebKit admission failure" ? 7 : 1;
-      if (String(step.uses).startsWith("actions/upload-artifact@")) expect(record(step.with)["retention-days"]).toBe(retention);
+      const artifact = record(step.with);
+      const retainWeek = (jobId === "web-unit" && step.name === "Retain first C1 WebKit admission failure")
+        || (jobId === "rust" && artifact.name === "ordinary-spidermonkey-program");
+      if (String(step.uses).startsWith("actions/upload-artifact@")) expect(artifact["retention-days"]).toBe(retainWeek ? 7 : 1);
       transfers++;
     }
   }

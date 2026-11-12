@@ -481,6 +481,41 @@ is immediately ready in process polls. This local interop does not enable filesy
 transfer through spawn. Mixed filesystem, clock and stream polls preserve guest subscriptions;
 handled signals interrupt a blocked poll without consuming the signal.
 
+## Shared memory imports (`runtime_shm`)
+
+The native shared-memory host binds these imports to the caller's memory group.
+They return 0 on success or a negative WASI errno. A host without an admitted
+shared-memory member returns `-ENOTSUP` (`-58`). Requests require the current
+launched member incarnation; reserved, retained, released or replaced callers
+return `-ESRCH` (`-71`) without changing ownership.
+
+`shm_route_group(pin: u32) -> i32` atomically converts a pin owned by the caller
+to a pin owned by its containing group. An unknown pin, another member's pin,
+or an already group-owned pin returns `-EBADF` (`-8`) without mutation. Conversion
+allocates no ID and changes no pin quota, region reference count or member hold.
+
+Any launched member of that same group may release a group pin through
+`shm_unpin(pin: u32) -> i32`. Competing or repeated unpins have one success and
+then `-EBADF`, with one reference removed. IDs are scoped to the caller's group.
+Ordinary `shm_route(pin: u32, pid: u32) -> i32` and
+`shm_accept(pin: u32, out: u32) -> i32` reject group pins with `-EBADF` before
+changing routing or holds. Their existing member-pin behavior is unchanged.
+Publication ownership and withdrawal are unchanged.
+
+Group pins count against the existing total pin limit and survive individual
+member release, including release of the first member. A region remains live
+while any hold, pin or publication names it. When the last member is released,
+including an aborted last reservation, the native host removes outstanding pins
+through the normal region refcount path before retiring the publication directory,
+under the state lock. Retired entries are destroyed outside that lock. Regions
+and pins are then empty; the backing budget returns only after its actual leases
+have dropped. A retained member prevents this final cleanup.
+
+Native pin IDs and region handles are nonzero u32 values that never repeat during
+the group's life. Exhaustion returns `-EAGAIN` (`-6`) without mutation, even if
+earlier IDs have been freed. Region exhaustion is checked before reserving a
+chunk or charging backing growth.
+
 ## Hosts
 
 - `crates/bunwasm-host` (`bun-wasm` binary): native launcher on wasmtime,

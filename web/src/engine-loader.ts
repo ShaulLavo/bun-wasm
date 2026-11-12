@@ -25,10 +25,11 @@ export function engineBuildHint(engine: Engine): string {
 }
 
 /** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
-export function engineUnavailable(engine: Engine): string | null {
+export function engineUnavailable(engine: Engine, memoryProfile: ProgramMemoryProfile = "split"): string | null {
   if (engine !== "spidermonkey") return null;
   const { core, side } = programProfile(engine);
-  if (assetBuild(core) !== null && assetBuild(side) !== null) return null;
+  if (assetBuild(profileAsset(core, memoryProfile)) !== null && assetBuild(profileAsset(side, memoryProfile)) !== null) return null;
+  if (memoryProfile === "shared-group") return "SpiderMonkey shared-group is not in this build. Stage its matching pair with SHARED_SPIDERMONKEY_PROGRAM=/absolute/program-spidermonkey before building this host.";
   return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
 }
 
@@ -45,6 +46,8 @@ export class WasmMissing extends Error {}
 /** Select the engine and memory profile before fetching any program bytes. */
 export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryProfile, progress: (text: string) => void, override?: string) {
   requireProfileEngine(engine, profile);
+  const unavailable = engineUnavailable(engine, profile);
+  if (unavailable) throw new Error(unavailable);
   const url = new URL(override ?? profileAsset(ENGINES[engine].wasm, profile), location.href).href;
   const loaded = engine === "browser" ? await loadWasm(url, progress)
     : await loadPaired(url, engine, progress, profile);
