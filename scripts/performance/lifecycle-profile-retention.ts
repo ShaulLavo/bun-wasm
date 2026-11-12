@@ -8,7 +8,7 @@ export type TracingComplete = Parameters<Parameters<typeof protocol.on<"Tracing.
 
 export const chromeTraceConfig = {
   transferMode: "ReturnAsStream", streamFormat: "json", streamCompression: "none", bufferUsageReportingInterval: 1000,
-  traceConfig: { recordMode: "recordUntilFull", traceBufferSizeInKb: 204800,
+  traceConfig: { recordMode: "recordUntilFull", traceBufferSizeInKb: 524288,
     includedCategories: ["disabled-by-default-v8.cpu_profiler", "blink.user_timing"], excludedCategories: ["*"] },
 } satisfies TraceStart;
 

@@ -1,7 +1,8 @@
-import { chromium, firefox, type Browser, type Page, type CDPSession } from "playwright";
+import { chromium, firefox, type Browser, type CDPSession } from "playwright";
 import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
-import { evaluatePage, type Transport } from "../goals-matrix/transport";
+import { createPageTransport } from "../goals-matrix/transport";
+import { geckoCollectorConfig } from "./lifecycle-profile-config";
 import { bounded } from "../goals-matrix/bounded";
 import { chromeTraceConfig, type BufferUsage, type TracingComplete } from "./lifecycle-profile-retention";
 
@@ -12,9 +13,9 @@ export async function profileTransport(kind: ProfileBrowser, output: string, ena
   const browser = kind === "chrome"
     ? await chromium.launch({ executablePath, headless: true, timeout: timeoutMs })
     : await firefox.launch({ headless: true, timeout: timeoutMs, env: { ...process.env, ...(enabled ? {
-      MOZ_PROFILER_STARTUP: "1", MOZ_PROFILER_SHUTDOWN: join(output, "gecko.json"), MOZ_PROFILER_STARTUP_INTERVAL: "5",
-      MOZ_PROFILER_STARTUP_ENTRIES: "8000000", MOZ_PROFILER_STARTUP_FEATURES: "js,cpu",
-      MOZ_PROFILER_STARTUP_FILTERS: "DOM Worker,GeckoMain,JS Helper",
+      MOZ_PROFILER_STARTUP: "1", MOZ_PROFILER_SHUTDOWN: join(output, "gecko.json"), MOZ_PROFILER_STARTUP_INTERVAL: String(geckoCollectorConfig.intervalMs),
+      MOZ_PROFILER_STARTUP_ENTRIES: String(geckoCollectorConfig.entries), MOZ_PROFILER_STARTUP_FEATURES: geckoCollectorConfig.features,
+      MOZ_PROFILER_STARTUP_FILTERS: geckoCollectorConfig.filters,
     } : {}) } });
   try { return await opened(browser, kind, output, enabled, timeoutMs); }
   catch (error) { await browser.close(); throw error; }
@@ -23,23 +24,15 @@ export async function profileTransport(kind: ProfileBrowser, output: string, ena
 async function opened(browser: Browser, kind: ProfileBrowser, output: string, enabled: boolean, timeoutMs: number) {
   const context = await browser.newContext({ serviceWorkers: "allow" });
   const host = await context.newPage();
-  let page = host;
-  let preview: Page | undefined;
   const workers: { event: "born" | "exited"; url: string; at: number }[] = [];
   host.on("worker", worker => {
     workers.push({ event: "born", url: worker.url(), at: Date.now() });
     worker.on("close", () => workers.push({ event: "exited", url: worker.url(), at: Date.now() }));
   });
-  const transport: Transport = {
-    capabilities: { browserName: kind, browserVersion: browser.version(), executable: kind === "chrome" ? process.env.GOALS_CHROME_EXECUTABLE : firefox.executablePath(), headless: true },
-    async navigate(url) { await host.goto(url, { timeout: timeoutMs }); page = host; },
-    evaluate: (source, options) => evaluatePage(page, source, timeoutMs, options),
-    async openPreview(url) { preview = await context.newPage(); page = preview; await page.goto(url, { timeout: timeoutMs }); },
-    async useHost() { page = host; },
-    async usePreview() { if (!preview) throw new Error("Missing preview"); page = preview; },
-    async closePreview() { await preview?.close(); preview = undefined; page = host; },
-    async close() { await bounded(() => browser.close(), 15000); },
-  };
+  const transport = createPageTransport(context, host, {
+    browserName: kind, browserVersion: browser.version(),
+    executable: kind === "chrome" ? process.env.GOALS_CHROME_EXECUTABLE : firefox.executablePath(), headless: true,
+  }, timeoutMs, 3000, () => bounded(() => browser.close(), 15000));
   return { transport, workers,
     mark: async (label: string) => { if (enabled && kind === "chrome") await host.evaluate(message => { performance.mark(message); }, label); },
     capture: async () => enabled && kind === "chrome" ? trace(browser, output) : async () => {} };

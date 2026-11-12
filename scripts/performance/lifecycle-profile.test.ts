@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { analyzeChrome, chromeContext, chromeControl, chromeProfiles, geckoControl, analyzeGecko } from "./lifecycle-profile-analysis";
 import { array, object } from "./input";
 import { splitProfile } from "./profile";
+import { collectorConfiguration, validateProfileControl } from "./lifecycle-profile-config";
 import { chromeRetention } from "./lifecycle-profile-retention";
 
 const window = { before: 100, after: 110 };
@@ -158,4 +159,41 @@ test("profile context preserves sample union semantics and counts stripped Wasm 
   expect(result.unknownSelfSamples).toBe(1);
   expect(result.detourInclusivePercent).toBeCloseTo(200 / 3);
   expect(result.detourOverheadPercent).toBeCloseTo(100 / 3);
+});
+
+function controlContext() {
+  return { sourceHead: "committed-source", hostIdentity: "frozen-host", profile: "split",
+    browser: { executable: "/chrome", browserVersion: "157", headless: true }, collector: collectorConfiguration("chrome") };
+}
+function passedControl() {
+  return { configuration: { browser: "chrome", engine: "quickjs", phase: "control" }, collectorContext: controlContext(),
+    workloadFailure: null, observerFailure: null, chromeWindowMarkers: { begin: "unique-begin", end: "unique-end" },
+    observation: { profile: { available: true, retention: { available: true }, workloadWindow: {
+      available: true, source: { begin: "unique-begin", end: "unique-end" },
+    } } } };
+}
+test("collector fixes narrow record-until-full capacity and requires the same exact control context", () => {
+  const expected = { browser: "chrome", engine: "quickjs" };
+  const config = collectorConfiguration("chrome");
+  expect(config).toMatchObject({ traceConfig: { recordMode: "recordUntilFull", traceBufferSizeInKb: 524288,
+    includedCategories: ["disabled-by-default-v8.cpu_profiler", "blink.user_timing"], excludedCategories: ["*"] } });
+  expect(() => validateProfileControl(passedControl(), expected, controlContext())).not.toThrow();
+  for (const context of [
+    { ...controlContext(), collector: { traceConfig: { traceBufferSizeInKb: 204800 } } },
+    { ...controlContext(), collector: { ...config, bufferUsageReportingInterval: 2000 } },
+    { ...controlContext(), sourceHead: "different-source" },
+    { ...controlContext(), hostIdentity: "other-host" },
+    { ...controlContext(), browser: { ...controlContext().browser, browserVersion: "158" } },
+    { ...controlContext(), browser: { ...controlContext().browser, executable: "/other-chrome" } },
+    { ...controlContext(), browser: { ...controlContext().browser, headless: false } },
+  ]) expect(() => validateProfileControl(passedControl(), expected, context)).toThrow("context differs");
+  const legacy = { ...passedControl(), collectorContext: undefined };
+  expect(() => validateProfileControl(legacy, expected, controlContext())).toThrow();
+  expect(() => validateProfileControl(passedControl(), { ...expected, engine: "jsc" }, controlContext())).toThrow();
+  const failed = passedControl();
+  failed.observation.profile.retention.available = false;
+  expect(() => validateProfileControl(failed, expected, controlContext())).toThrow("retention");
+  const mismatched = passedControl();
+  mismatched.chromeWindowMarkers.end = "other-end";
+  expect(() => validateProfileControl(mismatched, expected, controlContext())).toThrow("boundaries");
 });
