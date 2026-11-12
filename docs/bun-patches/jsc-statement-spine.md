@@ -97,10 +97,20 @@ opened, every enclosing record still closes, and `generate` returns `OutOfMemory
   the label answers in `LabelNode`; the inlined constructor grew the parser's label function by two
   locals and labelled-block nests ran out of a V8 stack nine levels (1%) earlier, which the loop
   removed.
-- Refusal: a development build that refuses the record past a chosen depth gives `RangeError`
-  `Out of memory` with no code run when the refused record is a `using` block, a plain block, an
-  `if`, a folded `if` or an else branch under three open `using` blocks, sync and async, and the
-  guest compiles and runs a shallow `using` block afterwards.
+- Refusal, in a development-only build that is never shipped: the spine's actual growth branch
+  is made to fail as the allocator would, at its step from 32 to 64 records. That happens inside a
+  `for` loop body, a second activation whose base is 13 records, under three open `using` blocks.
+  Whether the refused record is a `using` block, a plain block, an `if` or a folded `if`, the
+  result is `RangeError` `Out of memory` with no resource acquired and no code run. 31 records
+  still emit, and the guest then compiles and runs nested `using` blocks with closures. The
+  earlier cases (a `using` block, a plain block, an `if`, a folded `if`, an else branch and an
+  async block under three `using` blocks) refuse the same way when the growth from 16 records
+  fails instead.
+- Debug assertions: that build turns the new assertions into release assertions (the spine and
+  `using` stacks empty after `generate`, a block's stored answers equal to its list's, the
+  current finally context at each `using` scope's end, the caller-owned destination at each loop
+  entry). Both semantics fixtures, the record limit gate and every probe ran on it at 192 and
+  800 KiB without one firing.
 - Size: `BlockNode` grows by 4 bytes on wasm32 (112 to 116). `LabelNode` is unchanged.
 - Code: `BlockNode::emitBytecode` and `IfElseNode::emitBytecode` are five-instruction calls to the
   loop, which calls neither `emitUsingBodyScope` nor `emitBodyWithUsingIfNeeded`. The loop's shadow
