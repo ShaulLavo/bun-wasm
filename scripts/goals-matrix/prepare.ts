@@ -33,10 +33,13 @@ await withStagedAssets(join(delivery, "web"), async assets => {
     SPIDERMONKEY_WASM: await Bun.file(join(assets, "bun-spidermonkey.wasm")).exists() ? join(assets, "bun-spidermonkey.wasm") : undefined,
     SHARED_QUICKJS_PROGRAM: await Bun.file(join(assets, "shared-quickjs/bun.wasm")).exists() ? join(assets, "shared-quickjs") : process.env.SHARED_QUICKJS_PROGRAM,
     SHARED_JSC_PROGRAM: await Bun.file(join(assets, "shared-jsc/bun.wasm")).exists() ? join(assets, "shared-jsc") : process.env.SHARED_JSC_PROGRAM,
+    SHARED_SPIDERMONKEY_PROGRAM: await Bun.file(join(assets, "shared-spidermonkey/bun.wasm")).exists() ? join(assets, "shared-spidermonkey") : process.env.SHARED_SPIDERMONKEY_PROGRAM,
   } });
   if (await build.exited !== 0) throw new Error("Playground build failed");
 }, { spidermonkey: spidermonkey?.directory });
-await preflight(resolve("web/dist"), profile === "shared-group" ? ["quickjs", "jsc"] : engines, profile);
+const sharedEngines = await Bun.file(resolve("web/dist/profiles/shared-group/bun-spidermonkey.wasm.gz")).exists()
+  ? ["quickjs", "jsc", "spidermonkey"] as const : ["quickjs", "jsc"] as const;
+await preflight(resolve("web/dist"), profile === "shared-group" ? sharedEngines : engines, profile);
 
 await writeFile(resolve("web/dist/goals-asset-sources.json"), JSON.stringify({
   profile, delivery: { directory: delivery, manifest },

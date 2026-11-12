@@ -16,11 +16,11 @@ const launcher: GuestLauncher = () => { throw new Error("Registration must not l
 test("playground defaults to Browser split and rejects unsupported profile selections", () => {
   expect(new Playground("")).toMatchObject({ engine: "browser", profile: "split" });
   expect(() => new Playground("?profile=shared-group")).toThrow("browser engine");
-  expect(() => new Playground("?engine=spidermonkey&profile=shared-group")).toThrow("spidermonkey engine");
+  expect(new Playground("?engine=spidermonkey&profile=shared-group")).toMatchObject({ engine: "spidermonkey", profile: "shared-group" });
   expect(() => new Playground("?engine=quickjs&profile=other")).toThrow("Unknown Bun program profile");
 });
 
-for (const engine of ["quickjs", "jsc"] as const) test(`${engine} prepared split aliases register only for the explicit split profile`, async () => {
+for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine} prepared split aliases register only for the explicit split profile`, async () => {
   const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("../src/fs-worker.ts", import.meta.url) }, memoryGroups: BUN_MEMORY_GROUP_POLICY });
   const adapter = spyOn(runtime, "registerAdapter"), programs = spyOn(runtime, "registerProgram");
   try {
