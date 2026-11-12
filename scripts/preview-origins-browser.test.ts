@@ -60,6 +60,17 @@ async function verify(name: keyof typeof engines, first: string, sibling: string
   }
 }
 
+function loadPreviewFrame(source: string): Promise<boolean> {
+  // WebKit never finishes a blocked frame, so bound the wait instead of hanging the test.
+  return new Promise(resolve => {
+    const frame = document.createElement("iframe");
+    const timer = setTimeout(() => resolve(false), 5_000);
+    frame.addEventListener("load", () => { clearTimeout(timer); resolve(true); }, { once: true });
+    frame.src = source;
+    document.body.appendChild(frame);
+  });
+}
+
 // Safari keeps previews in an iframe of the cross-origin isolated owner. The root-origin document must load
 // there, while a top-level preview tab keeps the app's own embedder policy.
 async function verifyIsolatedFrame(name: keyof typeof engines, page: Page, first: string): Promise<void> {
@@ -68,14 +79,7 @@ async function verifyIsolatedFrame(name: keyof typeof engines, page: Page, first
   await page.goto(isolatedOwner.url.href);
   assert.equal(await page.evaluate(() => crossOriginIsolated), true, `${name}: owner is cross-origin isolated`);
   const url = `${first}/framed`;
-  // WebKit never finishes a blocked frame, so bound the wait instead of hanging the test.
-  const loaded = await page.evaluate(source => new Promise<boolean>(resolve => {
-    const frame = document.createElement("iframe");
-    const timer = setTimeout(() => resolve(false), 5_000);
-    frame.addEventListener("load", () => { clearTimeout(timer); resolve(true); }, { once: true });
-    frame.src = source;
-    document.body.appendChild(frame);
-  }), url);
+  const loaded = await page.evaluate(loadPreviewFrame, url);
   assert.equal(loaded, true, `${name}: preview frame finishes loading in the isolated owner`);
   assert.equal(observations.findLast(row => row.path === "/framed")?.destination, "iframe", `${name}: frame navigation reports its destination`);
   // Playwright's Firefox driver cannot describe cross-origin frames; the load assertion above still applies.

@@ -131,8 +131,9 @@ const FRAME_EMBEDDING = [["cross-origin-embedder-policy", "require-corp"], ["cro
 function framedResponseHeaders(request: IncomingMessage, source: Headers): Headers {
   const destination = request.headers["sec-fetch-dest"];
   if (destination !== "iframe" && destination !== "frame") return source;
+  if (source.has("cross-origin-embedder-policy") || source.has("cross-origin-resource-policy")) return source;
   const headers = new Headers(source);
-  for (const [name, value] of FRAME_EMBEDDING) if (!headers.has(name)) headers.set(name, value);
+  for (const [name, value] of FRAME_EMBEDDING) headers.set(name, value);
   return headers;
 }
 
