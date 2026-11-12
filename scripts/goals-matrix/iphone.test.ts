@@ -146,14 +146,14 @@ test("a terminal log write failure cannot skip native resource teardown", async 
 
 test("a failed final observation preserves the already captured failure diagnostic", async () => {
   const { result, closed, logs } = await nativeLifecycle("failed-install");
-  expect(result).toMatchObject({ status: "fail", phase: "install" });
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: expect.stringContaining("bun install exited 17: Error: detailed install diagnostic") });
   expect(logs).toEqual(["--- Failure-time terminal observation ---\nError: detailed install diagnostic\n--- End failure-time terminal observation ---\n"]);
   expect(closed).toBe(true);
 });
 
 test("a never-settling failure log write is bounded before native teardown", async () => {
   const { result, closed } = await nativeLifecycle("stalled-failure-log");
-  expect(result).toMatchObject({ status: "fail", phase: "install" });
+  expect(result).toMatchObject({ status: "fail", phase: "install", error: expect.stringContaining("bun install exited 17: Error: detailed install diagnostic") });
   expect(closed).toBe(true);
 }, 8000);
 
@@ -177,11 +177,11 @@ function lifecycleObservation(evaluate: Transport["evaluate"], scenario: NativeS
   let reads = 0;
   const failedInstall = scenario === "failed-install" || scenario === "stalled-failure-log";
   return <T>(source: string) => {
-    if (failedInstall && source.includes("function shellState")) return evaluate<T>(JSON.stringify({ done: true, code: 17, error: null }));
+    if (failedInstall && source.includes("function shellState")) return evaluate<T>(`(${JSON.stringify({ done: true, code: 17, error: null })})`);
     if (!source.includes("function transcript")) return evaluate<T>(source);
     reads++;
     if (scenario === "stalled-terminal" && reads === 3) return new Promise<T>(() => {});
-    if (scenario === "failed-install" && reads === 2) return Promise.reject(new Error("final observation failed"));
+    if (scenario === "failed-install" && reads === 3) return Promise.reject(new Error("final observation failed"));
     if (failedInstall) return evaluate<T>(JSON.stringify("Error: detailed install diagnostic"));
     return scenario === "stalled-terminal" ? evaluate<T>(JSON.stringify("saved build transcript")) : evaluate<T>(source);
   };
