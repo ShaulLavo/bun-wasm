@@ -35,9 +35,10 @@ from the release that carries it. There is no fallback for a host without it. Th
   the host frees it at member release, so a failed `shm_attach` on a tag means that member is gone.
   Claiming, cleaning and freeing are compare-and-swap on the whole word, so the claimant is never a
   separate write. Generations never repeat and refuse before they would wrap.
-- Each lane slot also holds, per side, a 64-bit end word (owner tag, 28-bit epoch, state), the
-  version recorded at adoption and the custody of an end in flight; per direction, reader-closed,
-  the writer fence, severed and armed. Epochs are not reset when a slot is reused.
+- Each lane slot also holds, per side, a 64-bit end word (owner tag, 28-bit epoch, state), a
+  64-bit version word naming the open epoch it was recorded for, and the custody of an end in
+  flight; per direction, reader-closed, the writer fence, severed and armed. Severed and armed hold
+  the lane generation. Epochs are not reset when a slot is reused.
 - Lane region: magic and version, a 32-byte block per direction (write, read, tail, cursor) and two
   65,472-byte rings. Ring cursors run modulo twice the ring size. Records are a length word and
   UTF-8 bytes, or a 16-byte descriptor naming a spill segment by slot and generation.
@@ -47,8 +48,18 @@ from the release that carries it. There is no fallback for a host without it. Th
 ## Rules
 
 - Staging may allocate and call the host, and refuses with `DataCloneError` before detachment.
-  Commit is stores only, with one publication point: the ring cursor, a segment's committed or next
-  word, or the ring cursor after sealing.
+  Commit is stores only, with no allocation, and one publication point: the ring cursor, a
+  segment's committed or next word, or the ring cursor after sealing. The engines' native-call
+  bridge still decodes each call's arguments into a new list (`ops.rs`), so the JavaScript path
+  between detachment and publication is allocation-free only inside the lane itself.
+- A terminal end (Closed, or ClosedDead after an exit report) is reader-closed by its end word.
+  A close, cascade, death declaration or release therefore writes nothing after its terminal
+  swap except generation-checked swaps, and nothing counts dead ends but their end words. A
+  transfer reserves the epochs its terminal transitions need; a slot whose epochs run out is
+  never used again.
+- Sweeps, which may call the group owner, run only on an event-loop step, never inside a
+  synchronous receive. After its sweep the root retires broker records whose lane end a
+  cascade or release closed, and closes their peers.
 - Receiving is atomic loads, stores and copies on group memory. It validates every cursor, length,
   slot and address before use and closes the direction on corruption, never writing through an
   address that failed validation.
@@ -64,6 +75,8 @@ from the release that carries it. There is no fallback for a host without it. Th
 of the non-power-of-two period, spill chains and reuse with no host call, role handover, the
 custody cascade against adoption, the writer fence, exit reports before release, retained
 members, death at every creation host step, dead cleaners, two concurrent sweepers, group pins
-surviving the first member and a two-thread writer and reader. `scripts/worker-group-lanes.test.ts`
-runs the real runtime JavaScript over relay-mode Waffle pipes with a small model of the native
-contract, as a codec and topology control.
+surviving the first member and a two-thread writer and reader. It also parks a death declaration,
+and one of two finalizers, before each of its memory accesses while another guest frees and
+reuses the slot, and checks near-limit epochs. `scripts/worker-group-lanes.test.ts` runs the real
+runtime JavaScript over relay-mode Waffle pipes with a small model of the native contract, as a
+codec and topology control.
