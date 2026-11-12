@@ -190,3 +190,29 @@ test("shared native checks consume one matching launcher and one produced group 
   expect(shared).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   expect(shared).not.toContain("shared-wasm-memory");
 });
+
+test("shared production is fully cached before any of the five blocking consumers", () => {
+  const job: unknown = Bun.YAML.parse(shared);
+  assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
+  const steps = job.steps.map((step: unknown) => {
+    assert(step && typeof step === "object");
+    return step;
+  });
+  const producers = steps.flatMap((step, index) => "id" in step && /^shared-(?:quickjs|jsc|spidermonkey)-producer$/.test(String(step.id)) ? [index] : []);
+  const consumers = steps.flatMap((step, index) => "name" in step && String(step.name).startsWith("Consume the shared ") ? [index] : []);
+  expect(producers).toHaveLength(3);
+  expect(consumers).toHaveLength(5);
+  const saves = steps.flatMap((step, index) => {
+    if ("name" in step && step.name === "Save the completed shared native profile") return [index];
+    if ("uses" in step && ["./.github/actions/save-rust-build-cache", "./.github/actions/save-release-downloads"].includes(String(step.uses))) return [index];
+    return [];
+  });
+  expect(saves).toHaveLength(3);
+  expect(Math.min(...saves)).toBeGreaterThan(Math.max(...producers));
+  expect(Math.max(...saves)).toBeLessThan(Math.min(...consumers));
+  expect(job).toHaveProperty("timeout-minutes", 30);
+  for (const index of consumers) {
+    expect(steps[index]).toHaveProperty("if", "needs.quality.outputs.shared-native == 'true'");
+    expect(steps[index]).not.toHaveProperty("continue-on-error");
+  }
+});

@@ -2024,22 +2024,6 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program/
           if-no-files-found: error
           retention-days: 1
-      - name: Consume the shared native feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared Browser feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
-          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Produce the shared JSC profile once
         id: shared-jsc-producer
         if: needs.quality.outputs.shared-native == 'true'
@@ -2051,15 +2035,6 @@ jobs:
         run: |
           source env.sh
           bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" jsc
-      - name: Consume the shared JSC feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Retain the matched shared JSC program for qualification
         if: ${{ always() && steps.shared-jsc-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
@@ -2108,20 +2083,6 @@ jobs:
             ${{ env.SPIDERMONKEY_BUILD_DIR }}/receipt/
           if-no-files-found: error
           retention-days: 1
-      - name: Consume the shared SpiderMonkey native feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared SpiderMonkey Browser feature checks
-        if: needs.quality.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -2140,6 +2101,46 @@ jobs:
           cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
+
+      - name: Consume the shared native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
+          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Consume the shared JSC feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+      - name: Consume the shared SpiderMonkey native feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          export BUN_WASM_TRACE=1
+          bun scripts/test-checks.ts native --profile shared-group
+      - name: Consume the shared SpiderMonkey Browser feature checks
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          source env.sh
+          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
+          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
 
   web:
     needs: quality
