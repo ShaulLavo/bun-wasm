@@ -20,18 +20,24 @@ export function nativeButtonRef(snapshot: string, label: string): string {
 }
 type Row = Record<string, unknown>;
 const attached = (row: Row): boolean => typeof row.timeOrigin === "number" && row.visible === true;
+type PreviewWait = (stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void>;
 /**
- * One deadline for opening a preview. Each stage polls short reads and starts none after the
- * deadline, so a preview that never loads leaves no controller command pending behind it.
+ * One deadline for opening a preview. Each stage polls short reads, and starts none after the
+ * deadline or after `signal` aborts, so a preview that never loads leaves no controller command
+ * pending behind it. An expiry names its stage and the last state it read.
  */
-function previewDeadline(timeoutMs: number): (stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void> {
+function previewDeadline(timeoutMs: number, signal: AbortSignal): PreviewWait {
   const deadline = Date.now() + timeoutMs;
   return async (stage, read, accept) => {
     let last: Row | null = null;
+    const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
+    // A read cut off by the deadline is the same expiry, not a separate observer failure.
+    const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
     while (true) {
+      signal.throwIfAborted();
       const left = deadline - Date.now();
-      if (left <= 0) throw new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`);
-      last = await read(left);
+      if (left <= 0) throw expired();
+      last = await read(left).catch(fail);
       if (accept(last)) return;
       await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
     }
@@ -42,6 +48,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let role: "host" | "preview" = "host";
   // True only while the presented frame has loaded and its load listener focused it.
   let focused = false;
+  // Owns the wait on the presented frame. A presentation change or the start of cleanup ends it.
+  let opening = new AbortController();
   let opened = false;
   let deviceFailed = false;
   let title = "";
@@ -80,6 +88,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   async function present(url: string | null): Promise<void> {
     role = "host";
     focused = false;
+    opening.abort(new Error("iPhone preview presentation changed"));
     await evaluate(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
   }
   async function close(timeoutMs: number): Promise<void> {
@@ -93,7 +102,10 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   }
   return {
     capabilities,
-    beginCleanup() { observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs; },
+    beginCleanup() {
+      observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs;
+      opening.abort(new Error("iPhone cleanup began before the preview opened"));
+    },
     async navigate(url) {
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
@@ -106,13 +118,16 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     },
     evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => evaluate<T>(source, observationTimeoutMs, options?.observation === true),
     async openPreview(url) {
-      const wait = previewDeadline(config.timeoutMs);
+      const current = new AbortController();
+      const wait = previewDeadline(config.timeoutMs, current.signal);
       await request("preview/configure", { url });
       await present(url);
+      opening = current;
       // The owner role stays free for terminal and diagnostic reads until the preview document completes.
       await wait("document", async left => object(await request("preview/state", undefined, left) ?? {}), attached);
       await wait("load", async left => object(await execute("preview", `(${iphonePreviewLoad.toString()})()`, left, true)), row => row.loaded === true);
       await wait("focus", async left => object(await execute("host", `(${iphonePreviewFocus.toString()})()`, left)), row => row.focused === true);
+      current.signal.throwIfAborted();
       role = "preview";
       focused = true;
     },

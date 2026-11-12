@@ -75,6 +75,22 @@ test("a loaded preview whose frame was never focused expires without native inpu
   });
 });
 
+for (const [cause, message] of [["cleanup", "iPhone cleanup began before the preview opened"], ["presentation", "iPhone preview presentation changed"]] as const) {
+  test(`a waiting opening stops at the next ${cause} step and starts no further read`, async () => {
+    await withControl({ states: [configured], loads: [complete], focuses: [focusedFrame] }, 5000, async (transport, log) => {
+      const opening = transport.openPreview(url).then(() => "presented", (error: unknown) => String(error));
+      await Bun.sleep(150);
+      if (cause === "cleanup") await transport.beginCleanup?.();
+      else await transport.closePreview();
+      expect(await opening).toContain(message);
+      const settled = log.length;
+      await Bun.sleep(250);
+      expect(log).toHaveLength(settled);
+      await expect(transport.nativeClick!("button", "output", 200)).rejects.toThrow("not focused after load");
+    });
+  });
+}
+
 test("native input is accepted only between a completed opening and the next presentation change", async () => {
   await withControl({ states: [attached], loads: [complete], focuses: [focusedFrame] }, 1000, async (transport, log) => {
     const arms = () => log.filter(entry => entry.includes("armIphoneClick")).length;
