@@ -93,10 +93,10 @@ test("Linux counter covers orphan work, fails closed and cleans descendants; run
   try {
     const counter = join(scratch, "counter"), child = join(scratch, "child"), unit = join(scratch, "unit");
     const source = join(root, "crates/bunwasm-tools/src/bin/instruction-count.rs");
-    run("rustc", ["--edition", "2024", "-O", "-D", "warnings", source, "-o", counter]);
-    run("rustc", ["--edition", "2024", "--test", "-D", "warnings", source, "-o", unit]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "-O", "-D", "warnings", source, "-o", counter]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "--test", "-D", "warnings", source, "-o", unit]);
     run(unit, []);
-    run("rustc", ["--edition", "2024", "-O", "-D", "warnings", join(fixtures, "counter-child.rs"), "-o", child]);
+    run("rustup", ["run", "stable", "rustc", "--edition", "2024", "-O", "-D", "warnings", join(fixtures, "counter-child.rs"), "-o", child]);
     const allowed = /Cpus_allowed_list:\s*(\d+)/.exec(readFileSync("/proc/self/status", "utf8"));
     const cpu = Number(allowed?.[1] ?? "0");
     let ordinal = 0;

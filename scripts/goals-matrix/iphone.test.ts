@@ -1,6 +1,6 @@
-import type { Admission } from "./scope";
+import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -130,6 +130,67 @@ test("successful native-owned cleanup preserves the final terminal log", async (
   expect(closed).toBe(true);
   expect(logs).toEqual(["\n\nBrowser core trap memory snapshots unavailable: diagnostic hook is unavailable.\n"]);
 });
+
+test("owned cleanup uses the remaining campaign admission after handoff and logging", async () => {
+  const { result, budgets, settled } = await cleanupDeadlineControl("elapsed");
+  expect(budgets).toEqual([18_500]);
+  expect(settled).toBe(true);
+  expect(result.status).toBe("pass");
+  expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000,
+    evidence: { browserClosed: true, foregroundStopped: true, previewClosed: true } });
+});
+
+test.each(["expired", "cancelled"] as const)("%s cleanup admission dispatches no owned close", async scenario => {
+  const { result, budgets } = await cleanupDeadlineControl(scenario);
+  expect(budgets).toEqual([]);
+  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining(scenario === "expired" ? "Phase timed out after 20000 ms" : "cleanup cancelled") });
+});
+
+test.each(["late-success", "late-error"] as const)("owned cleanup consumes %s but never passes after expiry", async scenario => {
+  const { result, budgets, settled } = await cleanupDeadlineControl(scenario);
+  expect(budgets).toEqual([18_500]);
+  expect(settled).toBe(true);
+  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("Phase timed out after 20000 ms") });
+});
+
+async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancelled" | "late-success" | "late-error") {
+  const framework = frameworks[0]!;
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const open = Scope.open;
+  let cleanupScope: Scope | undefined;
+  const scopes = spyOn(Scope, "open").mockImplementation((timeoutMs, parent) => {
+    const scope = open(timeoutMs, parent);
+    if (timeoutMs === 20_000 && !parent) cleanupScope = scope;
+    return scope;
+  });
+  const budgets: number[] = [];
+  let settled = false;
+  function runCleanup(transport: Transport) {
+    Object.assign(transport.capabilities, { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": "fixture" });
+    transport.beginCleanup = () => { now += 1200; };
+    transport.cleanup = async timeoutMs => {
+      budgets.push(timeoutMs);
+      now += scenario.startsWith("late-") ? 18_501 : 13_196;
+      settled = true;
+      if (scenario === "late-error") throw new Error("late close rejection is consumed");
+      if (timeoutMs < 13_196) throw new Error("owned close budget exhausted");
+      return { browserClosed: true, foregroundStopped: true, previewClosed: true };
+    };
+    return execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
+      saveLog: async () => {
+        now += 300;
+        if (scenario === "expired" && cleanupScope) now = cleanupScope.deadline;
+        if (scenario === "cancelled") cleanupScope?.close(new Error("cleanup cancelled"));
+      },
+    });
+  }
+  try {
+    const result = await withPlayground(framework, 0, runCleanup);
+    return { result, budgets, settled };
+  } finally { scopes.mockRestore(); clock.mockRestore(); }
+}
 
 test("a stalled final terminal read saves the completed transcript and still closes the native page", async () => {
   const { result, closed, logs } = await nativeLifecycle("stalled-terminal");
