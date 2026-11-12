@@ -439,6 +439,7 @@ tests/fixtures/worker-node-executable/worker.cjs
 tests/hermes/fixtures/next-jest-worker/processChild.js
 tests/hermes/fixtures/next-jest-worker/threadChild.js
 tests/net-ws.mjs
+tests/performance/fixtures/nft-replay.cjs
 tests/servers/websocket.js
 tests/stack-depth.js
 tests/transpiler-hooks/expected.mjs

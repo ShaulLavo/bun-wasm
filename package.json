@@ -52,6 +52,7 @@
     "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
