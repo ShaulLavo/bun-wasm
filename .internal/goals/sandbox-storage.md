@@ -11,11 +11,13 @@ The shared producer packages the sandbox once and the guest regression harness i
 prepared. A 240 MiB live old-code control passed Vanilla's checkpoint and failed
 React's checkpoint despite its ready indicator.
 
-Production maintenance creation and pre-runtime reclamation remain blocked on the
-published Waffle maintenance API tuple. Current pins do not export that API. No
-compatibility fallback or private Waffle database access is used. The draft must
-not merge before wiring that tuple, executing the actual guest cases, and running
-the bounded eight-template storage measurement and warm Next reinstall.
+Production maintenance creation and pre-runtime reclamation are wired against the
+immutable Waffle development candidate at source `931a66d5`. The candidate package
+is installed locally without a committed dependency override. The inherited
+released pin does not yet export the maintenance API. No compatibility fallback
+or private Waffle database access is used. The draft must not merge before the
+actual storage API release is pinned, guest gates pass, and the bounded
+eight-template storage measurement and warm Next reinstall are recorded.
 
 Keep active workspaces and one eligible idle install. Before removing an idle
 workspace, preserve its complete user tree in a strict IndexedDB transaction.
@@ -35,8 +37,8 @@ failed install or checkpoint once, preserving the current page and pending edits
   flow. Parent supplies independent review. No nested workers.
 
 Architect exploration skipped. The parent supplied an approved design and binding
-independent review amendments. Integration waits for the actual Waffle API and
-published patch tuple rather than inventing a parallel storage contract.
+independent review amendments. Development uses the actual immutable Waffle
+candidate; final delivery requires its published patch tuple.
 
 ## Gates
 

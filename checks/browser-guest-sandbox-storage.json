@@ -157,6 +157,7 @@
     "sandbox/template/src/App.css",
     "sandbox/template/src/App.tsx",
     "sandbox/template/src/main.tsx",
-    "sandbox/template/vite.config.ts"
+    "sandbox/template/vite.config.ts",
+    "sandbox/template-react-router/app/preview-context.ts"
   ]
 }
