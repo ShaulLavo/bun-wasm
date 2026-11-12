@@ -66,6 +66,17 @@ async function execute(context: Context, call: Call, timeoutMs: number): Promise
   } finally { clearTimeout(timer); }
 }
 
+function executeSync(context: Context, call: Call, elements: Map<string, FixtureFrame>): Response {
+  try {
+    const script = runInContext(`(function () { ${text(call.body.script)} })`, context);
+    assert.ok(Array.isArray(call.body.args));
+    const result: unknown = script.apply(undefined, call.body.args);
+    if (!(result instanceof FixtureFrame)) return reply(result);
+    elements.set(result.reference, result);
+    return reply({ "element-6066-11e4-a52e-4f735466cecf": result.reference });
+  } catch (error) { return failure(String(error)); }
+}
+
 function fixture(options: FixtureOptions = {}) {
   const calls: Call[] = [];
   const pending = new Set<Promise<Response>>();
@@ -106,14 +117,7 @@ function fixture(options: FixtureOptions = {}) {
       assert.ok(call.body.id === null || frame);
       return reply(null);
     }
-    if (call.path === "/session/owned/execute/sync") {
-      const script = runInContext(`(function () { ${text(call.body.script)} })`, context());
-      assert.ok(Array.isArray(call.body.args));
-      const result: unknown = script.apply(undefined, call.body.args);
-      if (!(result instanceof FixtureFrame)) return reply(result);
-      elements.set(result.reference, result);
-      return reply({ "element-6066-11e4-a52e-4f735466cecf": result.reference });
-    }
+    if (call.path === "/session/owned/execute/sync") return executeSync(context(), call, elements);
     if (call.path === "/session/owned/execute/async") {
       return execute(context(), call, scriptTimeout);
     }
@@ -296,6 +300,101 @@ test("iPhone WebDriver host and retained preview survive serialized alternation,
     await withScoped(transport, page => page.openPreview("http://fixture.test/next"));
     expect(driver.windows.has("preview-2")).toBe(true);
   } finally { await transport.close(); }
+});
+
+test("desktop frame identity checks preserve a replaced or pre-existing presentation", async () => {
+  const driver = fixture();
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.openPreview("http://fixture.test/dev"));
+    await withScoped(transport, page => page.useHost());
+    await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation = "someone-else"'));
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("identity changed");
+    await expect(withScoped(transport, page => page.closePreview())).rejects.toThrow("identity changed");
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/production"))).rejects.toThrow("identity changed");
+    expect(await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).toBe("someone-else");
+    expect(driver.windows.has("host")).toBe(true);
+  } finally { await transport.close(); }
+
+  const occupied = fixture();
+  const second = await occupied.connect();
+  try {
+    await withScoped(second, page => page.evaluate('(() => { const frame = document.createElement("iframe"); frame.id = "__goalsIphonePreview"; frame.dataset.goalsPresentation = "existing"; document.body.appendChild(frame); })()'));
+    await expect(withScoped(second, page => page.openPreview("http://fixture.test/dev"))).rejects.toThrow("already occupied");
+    expect(await withScoped(second, page => page.evaluate('document.getElementById("__goalsIphonePreview").dataset.goalsPresentation'))).toBe("existing");
+  } finally { await second.close(); }
+});
+
+test("failed native frame selection removes only its owned frame and restores the host", async () => {
+  const driver = fixture({ intercept: call => call.path.endsWith("/frame") && call.body.id !== null ? failure("frame selection failed") : undefined });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.evaluate('globalThis.editor = "alive"'));
+    await expect(withScoped(transport, page => page.openPreview("http://fixture.test/broken"))).rejects.toThrow("frame selection failed");
+    expect(await withScoped(transport, page => page.evaluate('({ editor, frame: !!document.getElementById("__goalsIphonePreview") })'))).toEqual({ editor: "alive", frame: false });
+    await expect(withScoped(transport, page => page.usePreview())).rejects.toThrow("no preview");
+    expect(driver.calls.some(call => call.method === "DELETE" && call.path.endsWith("/window"))).toBe(false);
+  } finally { await transport.close(); }
+});
+
+test("desktop reopening replaces its own frame even at the same URL and preserves unrelated frames", async () => {
+  const driver = fixture();
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.evaluate('(() => { const frame = document.createElement("iframe"); frame.id = "unrelated"; document.body.appendChild(frame); })()'));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+    await withScoped(transport, page => page.evaluate("globalThis.oldDocument = true"));
+    await withScoped(transport, page => page.openPreview("http://fixture.test/app"));
+    expect(await withScoped(transport, page => page.evaluate("globalThis.oldDocument"))).toBeNull();
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("unrelated")'))).toBe(true);
+    await withScoped(transport, page => page.evaluate('document.getElementById("__goalsIphonePreview").remove()'));
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("unrelated")'))).toBe(true);
+  } finally { await transport.close(); }
+});
+
+test("a failed frame removal preserves its error and can be cleaned within the cleanup allowance", async () => {
+  let failRemoval = true;
+  const driver = fixture({ intercept: call => {
+    const args = call.body.args;
+    if (failRemoval && call.path.endsWith("/execute/sync") && Array.isArray(args) && args[1] === true) return failure("frame removal failed");
+  } });
+  const transport = await driver.connect();
+  try {
+    await withScoped(transport, page => page.openPreview("http://fixture.test/dev"));
+    await expect(withScoped(transport, page => page.closePreview())).rejects.toThrow("frame removal failed");
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(true);
+    failRemoval = false;
+    await withAdmission(async admission => transport.beginCleanup?.(admission));
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(false);
+  } finally { await transport.close(); }
+});
+
+test("late desktop frame creation remains owned for cleanup and dispatches no expired selection", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const driver = fixture({ intercept: async call => {
+    const args = call.body.args;
+    if (!call.path.endsWith("/execute/sync") || !Array.isArray(args) || typeof args[0] !== "object") return;
+    const script = runInContext(`(function () { ${text(call.body.script)} })`, driver.context());
+    script.apply(undefined, args);
+    entered.resolve(); await release.promise;
+    return reply(null);
+  } });
+  const transport = await driver.connect();
+  const scope = Scope.open(1000);
+  try {
+    const opening = transport.openPreview("http://fixture.test/late", scope);
+    await entered.promise;
+    scope.close(new Error("frame phase ended"));
+    await expect(opening).rejects.toThrow("frame phase ended");
+    release.resolve();
+    await withScoped(transport, page => page.closePreview());
+    expect(await withScoped(transport, page => page.evaluate('!!document.getElementById("__goalsIphonePreview")'))).toBe(false);
+    expect(driver.calls.filter(call => call.path.endsWith("/frame") && call.body.id !== null)).toEqual([]);
+    expect(driver.windows.size).toBe(1);
+  } finally { release.resolve(); scope.close(); await transport.close(true); }
 });
 
 test("failed preview navigation closes only the owned preview and restores host", async () => {
