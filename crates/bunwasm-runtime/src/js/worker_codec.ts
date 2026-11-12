@@ -32,7 +32,9 @@
   function cloneError(message = "The object cannot be cloned") { return new DOMException(message, "DataCloneError"); }
   function create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec {
     const sharedObjects = hooks.sharedObjects;
-    function prepare(value: unknown, transfer?: unknown, forbidden: readonly string[] = []) {
+    const groupLanes = hooks.groupLanes;
+    const local: BunWasm.LaneCustody = { kind: "local" };
+    function prepare(value: unknown, transfer?: unknown, forbidden: readonly string[] = [], custody = local) {
       const processEnv = typeof internal.require === "function" ? internal.require("process").env : undefined;
       const list = transfer == null ? [] : transfer;
       if (typeof list !== "object" || !(Symbol.iterator in list)) throw new TypeError("transferList must be iterable");
@@ -111,6 +113,9 @@
           const queue = visit(snapshot.queue, true);
           const meta = { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed };
+          // A group lane travels as the end's ledger slot, never as a raw address.
+          const group = snapshot.groupLane;
+          if (group) return ["port", { ...meta, lane: [group.slot, group.generation, group.side, group.epoch] }, queue];
           if (!snapshot.lane) return ["port", meta, queue];
           return ["port", { ...meta, side: snapshot.lane.side, poolIndex: snapshot.lane.poolIndex }, queue, visit(snapshot.lane.buffer, true)];
         }
@@ -176,7 +181,7 @@
         if (phase === "aborted") return;
         publication?.abort(); phase = "aborted";
       }
-      function commit(deliver?: () => void, toward?: string) {
+      function commit(deliver?: () => void, toward?: string, reserved = false) {
         if (phase !== "prepared") throw cloneError("Worker transfer is no longer prepared");
         try {
           validateTransfers();
@@ -186,14 +191,15 @@
             const plans = Array.from(ports.values());
             for (const plan of plans) plan.beforeCommit?.();
             validateTransfers(); detachBuffers();
-            for (let index = 0; index < plans.length; index++) plans[index].commit();
+            for (let index = 0; index < plans.length; index++) plans[index].commit(custody);
           };
           const routes = sharedObjects?.routes;
           if (routes?.enabled) routes.transaction(stage, finish);
           else {
             stage();
-            // Without a broker transaction, delivery already made this receipt observable.
-            if (deliver) publication?.commit();
+            // Without a broker transaction, delivery already made this receipt observable. A
+            // reserved frame is not visible until the caller publishes it after this commit.
+            if (deliver && !reserved) publication?.commit();
             finish();
           }
           publication?.commit();
@@ -215,7 +221,7 @@
     }
 
     function decode(value: unknown) {
-      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects), Boolean(groupLanes));
       const memory = new Map<number, unknown>();
       hydrate(graph, memory);
       function hydrate(graph: Graph, values?: Map<number, unknown>) {
@@ -302,9 +308,10 @@
           case "boxed": result = Object(read(node[1])); break;
           case "port": {
             const queue: unknown[] = [];
-            const { side, poolIndex, ...meta } = node[1];
+            const { side, poolIndex, lane: group, ...meta } = node[1];
             const lane = node.length === 4 && side !== undefined && poolIndex !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side, poolIndex } : null;
-            const port = hooks.restore({ ...meta, queue, lane });
+            const groupLane = group ? { slot: group[0], generation: group[1], side: group[2], epoch: group[3] } : null;
+            const port = hooks.restore({ ...meta, queue, lane, groupLane });
             memory.set(index, port); restored.push(port);
             const messages = read(node[2]);
             if (!Array.isArray(messages)) throw cloneError("Invalid port queue");
@@ -324,7 +331,7 @@
       const plan = prepare(value, transfer, forbidden); plan.commit(); return plan.graph;
     }
     function wait(value: unknown, ready: () => void) {
-      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects), Boolean(groupLanes));
       const references = sharedReferences(graph);
       return references.length ? sharedObjects!.wait(references, ready) : null;
     }
@@ -369,7 +376,7 @@
     if (name.endsWith("16Array")) return 2;
     return name.endsWith("32Array") ? 4 : 8;
   }
-  function validateGraph(value: unknown, depth = 0, nodeBuffer = false, shared = false): Graph {
+  function validateGraph(value: unknown, depth = 0, nodeBuffer = false, shared = false, group = false): Graph {
     if (depth > 256) throw cloneError("Worker port nesting exceeds 256 levels");
     if (!value || typeof value !== "object" || !("root" in value) || !("nodes" in value) || !Array.isArray(value.nodes)) throw cloneError("Invalid worker message");
     const nodes: unknown[] = value.nodes;
@@ -391,8 +398,9 @@
     }
     // A port node may name its channel's shared lane and the side of it this end reads.
     function validPortNode(node: unknown[]) {
-      if (!validPort(node[1], depth, nodeBuffer, shared) || !ref(node[2])) return false;
-      const { side, poolIndex } = node[1] as { side?: unknown; poolIndex?: unknown };
+      if (!validPort(node[1], depth, nodeBuffer, shared, group) || !ref(node[2])) return false;
+      const { side, poolIndex, lane } = node[1] as { side?: unknown; poolIndex?: unknown; lane?: unknown };
+      if (lane !== undefined) return node.length === 3 && side === undefined && poolIndex === undefined && group && validGroupLane(lane);
       if (node.length === 3) return side === undefined && poolIndex === undefined;
       return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1)
         && (poolIndex === null || typeof poolIndex === "number" && Number.isInteger(poolIndex) && poolIndex >= 0 && poolIndex < 32);
@@ -424,18 +432,24 @@
     if (!ref(value.root) || !nodes.every(valid)) throw cloneError("Invalid worker message graph");
     return value as Graph;
   }
-  function validPort(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean) {
+  /** Ledger slot, generation, side and in-flight epoch: bounded integers, checked again by the core. */
+  function validGroupLane(value: unknown) {
+    const generation = (item: unknown) => Number.isInteger(item) && (item as number) > 0 && (item as number) < 2 ** 28;
+    return Array.isArray(value) && value.length === 4 && Number.isInteger(value[0]) && value[0] >= 0 && value[0] < 512
+      && generation(value[1]) && (value[2] === 0 || value[2] === 1) && generation(value[3]);
+  }
+  function validPort(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean, group: boolean) {
     if (!value || typeof value !== "object") return false;
     return "id" in value && typeof value.id === "string" && "peer" in value && (value.peer === null || typeof value.peer === "string")
       && "version" in value && counter(value.version) && "sent" in value && counter(value.sent)
-      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer, shared))
+      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer, shared, group))
       && "closing" in value && (value.closing === null || counter(value.closing))
       && "closed" in value && typeof value.closed === "boolean";
   }
   function counter(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
-  function validPending(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean) {
+  function validPending(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean, group: boolean) {
     if (!Array.isArray(value) || value.length !== 2 || !counter(value[0])) return false;
-    validateGraph(value[1], depth + 1, nodeBuffer, shared);
+    validateGraph(value[1], depth + 1, nodeBuffer, shared, group);
     return true;
   }
   return { create };

@@ -171,10 +171,10 @@ impl Group {
 }
 
 fn drop_pin(state: &mut State, pin: u32) {
-    if let Some((region, _)) = state.pins.remove(&pin) {
-        if let Some(region) = state.regions.get_mut(&region) {
-            region.pins -= 1;
-        }
+    if let Some((region, _)) = state.pins.remove(&pin)
+        && let Some(region) = state.regions.get_mut(&region)
+    {
+        region.pins -= 1;
     }
 }
 
@@ -564,7 +564,6 @@ fn scenario(kind: &str) -> (Arc<Group>, Peer, LaneRef, Vec<Vec<u8>>, Vec<u8>) {
             frame(1, 100)
         }
     };
-    drop(lanes);
     (group, root, lane, sent, next)
 }
 

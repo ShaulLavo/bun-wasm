@@ -10,14 +10,14 @@ mod nested_invocation;
 #[cfg(bun_wasm_shared_group)]
 mod group;
 #[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/lane.rs"]
+mod lane;
+#[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/nested_description.rs"]
 mod nested_description;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/shared_buffer.rs"]
 mod shared_buffer;
-#[cfg(any(test, bun_wasm_shared_group))]
-#[path = "wasm/lane.rs"]
-mod lane;
 
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
@@ -502,6 +502,7 @@ fn install_group_transport(table: &mut Table) {
         nested::attach_module(a.u32(0)?)
     });
     table.add("wasm.withdrawShared", |a| nested::withdraw(a.u32(0)?));
+    lane::guest::install(table);
 }
 
 pub fn install(table: &mut Table) {

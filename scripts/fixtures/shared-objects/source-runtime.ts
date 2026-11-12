@@ -71,11 +71,11 @@ function childOverlay(source: string) {
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: Channel; graph?: Graph; beforeDetach?: () => void; active?: () => boolean } = {}) {
+export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean } = {}) {
   const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
-  const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
+  const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph, lanes: options.lanes }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
   const modules = new Map<string, unknown>([
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
     ["events", EventEmitter], ["structured_clone", { structuredClone }], ["net", {}],

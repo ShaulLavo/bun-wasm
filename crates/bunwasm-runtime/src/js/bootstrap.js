@@ -977,6 +977,8 @@
       read: reference => group().read(reference),
       readWasm: reference => group().readWasm(reference),
       wait: () => null,
+      // MessagePort frames between this group's guests travel in group memory (worker_lane.ts).
+      get groupLanes() { return internal.require("worker_lane"); },
     };
   }
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);

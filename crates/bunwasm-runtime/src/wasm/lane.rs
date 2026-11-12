@@ -479,7 +479,7 @@ pub(crate) fn valid_ledger(mem: &(impl Memory + ?Sized), address: u32) -> bool {
 
 fn in_bounds(mem: &(impl Memory + ?Sized), address: u32, len: u32) -> bool {
     address != 0
-        && address % PAGE == 0
+        && address.is_multiple_of(PAGE)
         && len != 0
         && u64::from(address) + u64::from(len) <= mem.size()
 }
@@ -1143,7 +1143,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
                 (claim.kind == phase::RELEASED).then(|| (self.mem.load(at + LENGTH), at, claim))
             })
             .collect();
-        released.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        released.sort_unstable_by_key(|item| std::cmp::Reverse(item.0));
         let mut pool: u32 = released.iter().map(|item| item.0).sum();
         for (length, at, claim) in released {
             let keep = length <= POOL_LIMIT && claim.count < MAX_COUNT && pool <= POOL_LIMIT;
@@ -1186,7 +1186,8 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     fn ring_positions(&self, view: &View) -> Result<(u32, u32), Refusal> {
         let write = self.mem.load(view.block + D_WRITE);
         let read = self.mem.load(view.block + D_READ);
-        let valid = write < PERIOD && read < PERIOD && write % 4 == 0 && read % 4 == 0;
+        let valid =
+            write < PERIOD && read < PERIOD && write.is_multiple_of(4) && read.is_multiple_of(4);
         if !valid || distance(write, read) > RING {
             return Err(Refusal::Corrupt("ring cursor"));
         }
@@ -1465,7 +1466,7 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         }
         let address = self.mem.load(at + ADDRESS);
         let length = self.mem.load(at + LENGTH);
-        if length < PAGE || length % PAGE != 0 || !in_bounds(self.mem, address, length) {
+        if length < PAGE || !length.is_multiple_of(PAGE) || !in_bounds(self.mem, address, length) {
             return Err(Refusal::Corrupt("segment address"));
         }
         if self.mem.load(address + S_MAGIC) != SEGMENT_MAGIC
@@ -1615,7 +1616,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         let capacity = segment.length - S_DATA;
         let committed = self.mem.load(address + S_COMMITTED);
         let read = self.mem.load(address + S_READ);
-        if committed > capacity || read > committed || read % 4 != 0 || committed % 4 != 0 {
+        if committed > capacity
+            || read > committed
+            || !read.is_multiple_of(4)
+            || !committed.is_multiple_of(4)
+        {
             return Err(Refusal::Corrupt("segment cursor"));
         }
         if read < committed {
@@ -1686,6 +1691,320 @@ impl Probes {
         };
         self.known.push((tag, dead));
         dead
+    }
+}
+
+/// The guest binding: this member's group memory, its `runtime_shm` imports and the natives
+/// `worker_lane.ts` wraps. Raw group addresses stay inside these natives.
+#[cfg(bun_wasm_shared_group)]
+pub(crate) mod guest {
+    use super::*;
+    use crate::{
+        data::{Args, NativeError, NativeResult, Val},
+        natives::Table,
+    };
+    use std::{cell::RefCell, collections::BTreeMap};
+
+    #[link(wasm_import_module = "runtime_shm")]
+    unsafe extern "C" {
+        fn shm_create(len: u32, align: u32, out: u32) -> i32;
+        fn shm_attach(handle: u32, out: u32) -> i32;
+        fn shm_detach(handle: u32) -> i32;
+        fn shm_pin(handle: u32, out: u32) -> i32;
+        fn shm_route_group(pin: u32) -> i32;
+        fn shm_unpin(pin: u32) -> i32;
+    }
+
+    struct Group;
+
+    impl Memory for Group {
+        fn size(&self) -> u64 {
+            core::arch::wasm32::memory_size::<0>() as u64 * u64::from(PAGE)
+        }
+        fn raw(&self, at: u32, _len: u32) -> *mut u8 {
+            at as usize as *mut u8
+        }
+    }
+
+    fn status(result: i32) -> Result<(), i32> {
+        if result < 0 { Err(-result) } else { Ok(()) }
+    }
+
+    struct Shm;
+
+    impl Host for Shm {
+        fn create(&self, len: u32) -> Result<(u32, u32), i32> {
+            let mut out = [0u32; 2];
+            status(unsafe { shm_create(len, PAGE, out.as_mut_ptr() as u32) })?;
+            Ok((out[0], out[1]))
+        }
+        fn attach(&self, handle: u32) -> Result<u32, i32> {
+            let mut out = [0u32; 1];
+            status(unsafe { shm_attach(handle, out.as_mut_ptr() as u32) })?;
+            Ok(out[0])
+        }
+        fn detach(&self, handle: u32) -> Result<(), i32> {
+            status(unsafe { shm_detach(handle) })
+        }
+        fn pin(&self, handle: u32) -> Result<u32, i32> {
+            let mut out = [0u32; 1];
+            status(unsafe { shm_pin(handle, out.as_mut_ptr() as u32) })?;
+            Ok(out[0])
+        }
+        fn route_group(&self, pin: u32) -> Result<(), i32> {
+            status(unsafe { shm_route_group(pin) })
+        }
+        fn unpin(&self, pin: u32) -> Result<(), i32> {
+            status(unsafe { shm_unpin(pin) })
+        }
+    }
+
+    #[derive(Default)]
+    struct State {
+        ledger: u32,
+        tag: u32,
+        deaths: u32,
+        next: u32,
+        staged: BTreeMap<u32, Staged>,
+    }
+
+    thread_local! {
+        static STATE: RefCell<State> = RefCell::default();
+    }
+
+    fn refused(error: Refusal) -> NativeError {
+        NativeError::error(error.to_string())
+    }
+
+    /// Runs `f` on this member's lanes. No state borrow survives into it.
+    fn with<T>(f: impl FnOnce(&Lanes<'_, Group, Shm>) -> T) -> Result<T, NativeError> {
+        let (ledger, tag) = STATE.with(|state| {
+            let state = state.borrow();
+            (state.ledger, state.tag)
+        });
+        if ledger == 0 {
+            return Err(NativeError::error(
+                "MessagePort lanes are not initialized in this thread",
+            ));
+        }
+        Ok(f(&Lanes {
+            mem: &Group,
+            host: &Shm,
+            ledger,
+            tag,
+        }))
+    }
+
+    fn lane(args: &Args<'_>, first: usize) -> Result<(LaneRef, u32), NativeError> {
+        let side = args.u32(first + 2)?;
+        Ok((
+            LaneRef {
+                slot: args.u32(first)?,
+                generation: args.u32(first + 1)?,
+            },
+            side,
+        ))
+    }
+
+    fn pair(first: u32, second: u32) -> Val {
+        Val::Array(vec![Val::from(first), Val::from(second)])
+    }
+
+    /// The group's first member: its tag, then the ledger every worker inherits.
+    fn ledger() -> NativeResult {
+        let existing = STATE.with(|state| state.borrow().ledger);
+        if existing != 0 {
+            return Ok(Val::from(existing));
+        }
+        let tag = create_tag(&Shm).map_err(refused)?;
+        let ledger = create_ledger(&Group, &Shm).map_err(refused)?;
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.tag = tag;
+            state.ledger = ledger;
+        });
+        Ok(Val::from(ledger))
+    }
+
+    /// A worker at startup, before it decodes `workerData`.
+    fn join(args: Args<'_>) -> NativeResult {
+        let ledger = args.u32(0)?;
+        if !valid_ledger(&Group, ledger) {
+            return Err(NativeError::error("Invalid MessagePort lane ledger"));
+        }
+        let tag = create_tag(&Shm).map_err(refused)?;
+        STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.tag = tag;
+            state.ledger = ledger;
+        });
+        let cell = CellRef {
+            index: args.u32(1)?,
+            generation: args.u32(2)?,
+        };
+        with(|lanes| Val::Bool(lanes.register(cell)))
+    }
+
+    /// An allocation refused for want of ledger slots sweeps once and retries.
+    fn retry<T>(
+        f: impl Fn(&Lanes<'_, Group, Shm>) -> Result<T, Refusal>,
+    ) -> Result<T, NativeError> {
+        with(|lanes| match f(lanes) {
+            Err(Refusal::Ledger | Refusal::Host(_)) => {
+                lanes.sweep(true);
+                f(lanes)
+            }
+            other => other,
+        })?
+        .map_err(refused)
+    }
+
+    fn reserve(args: Args<'_>) -> NativeResult {
+        let (lane, side) = lane(&args, 0)?;
+        let text = args.str(3)?.as_bytes();
+        let staged = retry(|lanes| lanes.reserve(lane, side, text))?;
+        Ok(Val::from(STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.next = state.next.wrapping_add(1).max(1);
+            let id = state.next;
+            state.staged.insert(id, staged);
+            id
+        })))
+    }
+
+    fn take(args: &Args<'_>) -> Result<Option<Staged>, NativeError> {
+        let id = args.u32(0)?;
+        Ok(STATE.with(|state| state.borrow_mut().staged.remove(&id)))
+    }
+
+    fn drain(args: Args<'_>) -> NativeResult {
+        let (lane, side) = lane(&args, 0)?;
+        let limit = args.u32(3)? as usize;
+        let drain = with(|lanes| lanes.drain(lane, side, limit))?.map_err(refused)?;
+        let mut frames = Vec::with_capacity(drain.frames.len());
+        for frame in drain.frames {
+            let text =
+                String::from_utf8(frame).map_err(|_| refused(Refusal::Corrupt("frame text")))?;
+            frames.push(Val::Str(text));
+        }
+        Ok(Val::Array(vec![
+            Val::Array(frames),
+            Val::Bool(drain.more),
+            Val::Bool(drain.terminal),
+        ]))
+    }
+
+    fn custody(args: &Args<'_>) -> Result<Custody, NativeError> {
+        let (kind, first, second, third) = (args.u32(3)?, args.u32(4)?, args.u32(5)?, args.u32(6)?);
+        match kind {
+            0 => Ok(Custody::Lane(
+                LaneRef {
+                    slot: first,
+                    generation: second,
+                },
+                third & 1,
+            )),
+            1 => Ok(Custody::Cell(CellRef {
+                index: first,
+                generation: second,
+            })),
+            _ => Ok(Custody::Tag(STATE.with(|state| state.borrow().tag))),
+        }
+    }
+
+    /// Sweeps on every event-loop step; a death anywhere in the group makes the next one full.
+    fn sweep(full: bool) -> Result<(), NativeError> {
+        if STATE.with(|state| state.borrow().ledger) == 0 {
+            return Ok(());
+        }
+        with(|lanes| {
+            let deaths = lanes.deaths();
+            let seen =
+                STATE.with(|state| std::mem::replace(&mut state.borrow_mut().deaths, deaths));
+            lanes.sweep(full || deaths != seen);
+        })
+    }
+
+    pub(crate) fn install(table: &mut Table) {
+        table.add("wasm.laneLedger", |_| ledger());
+        table.add("wasm.laneJoin", join);
+        table.add("wasm.laneCreate", |_| {
+            let lane = retry(|lanes| lanes.create_lane())?;
+            Ok(pair(lane.slot, lane.generation))
+        });
+        table.add("wasm.laneCell", |_| {
+            let cell = retry(|lanes| lanes.create_cell())?;
+            Ok(pair(cell.index, cell.generation))
+        });
+        table.add("wasm.laneTransferEpoch", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            Ok(Val::from(
+                with(|lanes| lanes.transfer_epoch(lane, side))?.map_err(refused)?,
+            ))
+        });
+        table.add("wasm.laneTransfer", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            let custody = custody(&a)?;
+            with(|lanes| lanes.transfer(lane, side, custody))?;
+            Ok(Val::Undefined)
+        });
+        table.add("wasm.laneAdopt", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            let (epoch, version) = (a.u32(3)?, a.u32(4)?);
+            Ok(Val::Bool(with(|lanes| {
+                lanes.adopt(lane, side, epoch, version)
+            })?))
+        });
+        table.add("wasm.laneReserve", reserve);
+        table.add("wasm.laneCommit", |a| {
+            let Some(staged) = take(&a)? else {
+                return Ok(Val::Bool(false));
+            };
+            Ok(Val::Bool(with(|lanes| lanes.commit(staged))?))
+        });
+        table.add("wasm.laneAbort", |a| {
+            if let Some(staged) = take(&a)? {
+                with(|lanes| lanes.abort(staged))?;
+            }
+            Ok(Val::Undefined)
+        });
+        table.add("wasm.laneDrain", drain);
+        table.add("wasm.laneCloseRead", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            with(|lanes| lanes.close_read(lane, side))?;
+            Ok(Val::Undefined)
+        });
+        table.add("wasm.laneCloseEnd", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            Ok(Val::Bool(with(|lanes| lanes.close_end(lane, side))?))
+        });
+        table.add("wasm.lanePeerClosed", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            Ok(Val::Bool(with(|lanes| lanes.peer_closed(lane, side))?))
+        });
+        table.add("wasm.laneEnd", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            let (state, version) = with(|lanes| lanes.end_state(lane, side))?;
+            Ok(pair(state, version))
+        });
+        table.add("wasm.laneSever", |a| {
+            let (lane, side) = lane(&a, 0)?;
+            with(|lanes| lanes.sever(lane, side))?;
+            Ok(Val::Undefined)
+        });
+        table.add("wasm.laneExited", |a| {
+            let cell = CellRef {
+                index: a.u32(0)?,
+                generation: a.u32(1)?,
+            };
+            with(|lanes| lanes.exited(cell))?;
+            sweep(true)?;
+            Ok(Val::Undefined)
+        });
+        table.add("wasm.laneSweep", |a| {
+            sweep(a.bool(0))?;
+            Ok(Val::Undefined)
+        });
     }
 }
 
