@@ -136,6 +136,28 @@ impl<E: Engine> Core<E> {
     }
 }
 
+fn bootstrap_error_text<E: Engine>(e: &E, err: &E::Value) -> String {
+    if !e.is_error(err) {
+        return format!("{:?}", e.to_val(err));
+    }
+    // Error properties are normally non-enumerable and disappear in to_val(err).
+    let property = |key| {
+        let value = e.get(err, key).ok()?;
+        let Val::Str(text) = e.to_val(&value) else {
+            return None;
+        };
+        Some(text)
+    };
+    let name = property("name").unwrap_or_else(|| String::from("Error"));
+    let message = property("message").unwrap_or_default();
+    let header = format!("{name}: {message}");
+    match property("stack") {
+        Some(stack) if stack.starts_with(&header) => stack,
+        Some(stack) if !stack.is_empty() => format!("{header}\n{stack}"),
+        _ => header,
+    }
+}
+
 pub(crate) fn run_in_engine<E: Engine>(
     e: &E,
     core: &Rc<Core<E>>,
@@ -145,7 +167,10 @@ pub(crate) fn run_in_engine<E: Engine>(
     match core.bootstrap(e) {
         Ok(internal) => *core.internal.borrow_mut() = Some(internal),
         Err(err) => {
-            eprintln!("bun-wasm: bootstrap failed: {:?}", e.to_val(&err));
+            eprintln!(
+                "bun-wasm: bootstrap failed: {}",
+                bootstrap_error_text(e, &err)
+            );
             return 70;
         }
     }
