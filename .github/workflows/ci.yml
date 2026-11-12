@@ -2423,12 +2423,23 @@ jobs:
       - name: Browser-guest checks on the verified site
         env:
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
+          BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
           BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
           TMPDIR: ${{ runner.temp }}
         run: |
+          mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
           bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest --batch "${{ matrix.batch }}"
+      - name: Retain Browser guest diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: browser-guest-diagnostics-${{ matrix.browser }}-${{ matrix.batch }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/browser-guest-diagnostics
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: ./.github/actions/save-release-downloads
 
   browser-process:

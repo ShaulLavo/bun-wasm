@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { resolve, join } from "node:path";
-import { preservationScenario, accumulation, quotaRefusalScenario } from "../sandbox/tests/storage-browser";
+import { preservationScenario, accumulation, quotaRefusalScenario, storageReportPath } from "../sandbox/tests/storage-browser";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 
@@ -58,9 +58,11 @@ test("chromium: a recorded single-install quota admits repeated framework switch
       const cdp = await context.newCDPSession(page);
       await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize });
       const rows = await accumulation(context, base, ["vanilla", "vite-react", "vite-vue", "vite-svelte"]);
-      if (process.env.BUN_WASM_STORAGE_REPORT) await Bun.write(process.env.BUN_WASM_STORAGE_REPORT, JSON.stringify({ quotaSize, browser: browser.version(), rows }, null, 2));
-      expect(rows).toHaveLength(4);
-      expect(rows.filter(row => row.error)).toEqual([]);
+      const evidence = JSON.stringify({ quotaSize, browser: browser.version(), rows }, null, 2);
+      const report = storageReportPath();
+      if (report) await Bun.write(report, evidence);
+      expect(rows, evidence).toHaveLength(4);
+      expect(rows.filter(row => row.error), evidence).toEqual([]);
     } finally { await context.close(); }
   });
 }, 420_000);

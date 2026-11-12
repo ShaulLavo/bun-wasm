@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Worker as PlaywrightWorker } from "playwright";
 import type { Runtime } from "waffle";
 import type { Editor } from "../src/editor";
@@ -8,6 +9,11 @@ import { workspaceName } from "../src/workspace-policy";
 declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean };
 const APP = "/home/user/app";
 const STARTUP_MS = 180_000;
+
+export function storageReportPath(env = process.env): string | undefined {
+  const directory = env.BUN_WASM_BROWSER_REPORT_DIR;
+  return env.BUN_WASM_STORAGE_REPORT ?? (directory ? join(directory, "sandbox-storage.json") : undefined);
+}
 
 async function openTemplate(page: Page, base: string, template: string): Promise<void> {
   const url = new URL(base);
@@ -205,7 +211,7 @@ export async function quotaRefusalScenario(browser: Browser, base: string): Prom
     console.error(JSON.stringify({ error: String(error), pages }, null, 2));
     throw error;
   } finally {
-    const report = process.env.BUN_WASM_STORAGE_REPORT;
+    const report = storageReportPath();
     try { if (report) await Bun.write(`${report.replace(/\.json$/, "")}-refusal.json`, JSON.stringify(evidence, null, 2)); }
     finally { await context.close(); }
   }

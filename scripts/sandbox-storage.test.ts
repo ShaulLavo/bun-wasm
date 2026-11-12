@@ -1,3 +1,4 @@
+import { storageReportPath } from "../sandbox/tests/storage-browser";
 import { describe, expect, test } from "bun:test";
 import { MemoryBackend } from "waffle/fs";
 import { templates } from "../sandbox/src/template-catalog";
@@ -237,4 +238,12 @@ test("marker must name the snapshot; failed flush retains source and a later mat
   control.failFlush = false;
   await restoreSource(fs, deps.index, "vanilla");
   expect(acks).toBe(1);
+});
+
+
+test("storage diagnostics use the CI report directory and preserve explicit local output selection", () => {
+  expect(storageReportPath({})).toBeUndefined();
+  expect(storageReportPath({ BUN_WASM_BROWSER_REPORT_DIR: "/work/tmp/reports" })).toBe("/work/tmp/reports/sandbox-storage.json");
+  expect(storageReportPath({ BUN_WASM_BROWSER_REPORT_DIR: "/work/tmp/reports", BUN_WASM_STORAGE_REPORT: "/work/tmp/local.json" })).toBe("/work/tmp/local.json");
+  expect(storageReportPath({ BUN_WASM_BROWSER_REPORT_DIR: "/work/tmp/reports", BUN_WASM_STORAGE_REPORT: "" })).toBe("");
 });
