@@ -91,13 +91,13 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "process-bundles": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     quality: "Source quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
     package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
-    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
+    "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
 });
@@ -679,7 +679,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: [quality, rust, process-bundles]");
+  expect(browsers).toContain("needs: [quality, rust, process-bundles, browser-guest]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -815,7 +815,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
-  expect(processes).toContain("needs: [quality, rust, process-bundles]");
+  expect(processes).toContain("needs: [quality, rust, process-bundles, browser-guest]");
   expect(processes).toContain("needs.rust.result == 'skipped'");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");

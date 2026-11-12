@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { requireCiSuccess } from "./ci-result";
 
 const always = ["quality", "package", "web", "web-unit", "process-bundles", "browser-process"];
-const rustJobs = ["jsc-prebuild", "native-quality", "rust"];
+const rustJobs = ["jsc-prebuild", "native-quality", "rust", "browser-guest"];
 const sharedJobs = ["shared-prebuild", "shared-sysroot"];
 const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
 
@@ -25,6 +25,11 @@ test.each(jobIds)("aggregate rejects failure, cancellation, skips and missing re
   const results = fixture();
   delete results[id];
   expect(() => requireCiSuccess(results)).toThrow();
+});
+
+test("guest matrix cannot be hidden by passing Processes results or an unexpected producer-disabled run", () => {
+  expect(() => requireCiSuccess({ ...fixture(), "browser-guest": { result: "failure" } })).toThrow("browser-guest must be success");
+  expect(() => requireCiSuccess({ ...fixture(false, false, false), "browser-guest": { result: "success" } })).toThrow("browser-guest must be skipped");
 });
 
 test("draft results fail even when their skipped jobs would satisfy individual required checks", () => {

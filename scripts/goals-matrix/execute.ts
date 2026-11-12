@@ -4,7 +4,7 @@ import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic"
 import type { Framework, Box } from "./catalog";
 import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
 import { scoped, type ScopedTransport, type Transport } from "./transport";
-import { admit, Scope, type Admission } from "./scope";
+import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
@@ -194,7 +194,7 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   } catch (error) { errors.push(error); }
   finally { handoff.close(); }
   let evidence: unknown;
-  try { evidence = await bounded(() => close(10_000), 10_000); }
+  try { evidence = await awaitWithin(close(admit(admission)), admission); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return evidence;

@@ -21,3 +21,8 @@ publishes `Code quality` from the aggregate result, rather than the early job.
 When adding a CI job, add it to the aggregate's `needs` and result policy.
 `checks/quality-ci-result.json` owns regression coverage that verifies the
 complete dependency list, selected skips and failure propagation.
+
+The split Browser guest matrix is selected with the Rust producer. Its aggregate
+result must succeed when selected, and may skip only when that producer is
+disabled. Both the final aggregate and the required Processes gates depend on
+all guest batches. Each batch consumes the same once-built verified site.

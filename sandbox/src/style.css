@@ -87,6 +87,18 @@ h1 {
   text-overflow: clip;
 }
 
+#storage-status {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--bad);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 20vh;
+  overflow: auto;
+}
+
 button,
 select {
   font: inherit;

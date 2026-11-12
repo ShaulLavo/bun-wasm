@@ -137,12 +137,17 @@ for (const path of [
   });
 }
 
-for (const path of ["web/src/main.ts", "web/src/editor.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md"]) {
+for (const path of ["web/src/main.ts", "web/src/editor.ts", "site/src/main.ts", "docs/code-quality.md"]) {
   test(`${path} does not compile engines for a UI or documentation change`, () => {
     expect(needsRust([path])).toBe(false);
     expect(needsJsc([path])).toBe(false);
   });
 }
+
+test("sandbox page selects its registered Browser guest producer", () => {
+  expect(needsRust(["sandbox/src/main.ts"])).toBe(true);
+  expect(needsJsc(["sandbox/src/main.ts"])).toBe(false);
+});
 
 test("engine-specific changes keep their own native gates", () => {
   expect(needsJsc(["crates/bunwasm-runtime/src/engine_quickjs.rs"])).toBe(false);
