@@ -43,7 +43,8 @@ async function nativeControl(executable: string, root: string, env: NodeJS.Proce
   } catch (error) { reason = String(error); }
   finally {
     if (observation) {
-      reason ??= await checkObservation(observation, join(directory, "observation.json"));
+      const observationReason = await checkObservation(observation, join(directory, "observation.json"));
+      reason ??= observationReason;
     }
     await job.close();
   }
