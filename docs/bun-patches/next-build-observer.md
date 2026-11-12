@@ -20,6 +20,8 @@ The baseline runs after dev-server stop and immediately before the single stock 
 
 Each capture uses a fresh filesystem fork. Every path component is resolved without following links and checked by kind. Resolve completions pin their inode handles through the read. A deadline or cleanup releases all completions and disposes the client before owned transport cleanup. Failed optional observations stay diagnostic records; they do not become a build result.
 
+Optional observer closure has a one-second child admission within the unchanged cleanup allowance, reserving the existing logging and transport teardown time. A delayed memory or process-service result checks capture liveness before processing values or reading metadata; expiration and explicit closure admit no later metadata calls.
+
 ## Retained observations
 
 The reader uses Waffle 0.0.123's public `FilesystemClient` and `runtime.processes().workerMemory()` / `memoryGroups()` APIs (host interface 2). It calls `__bunMemorySnapshots("quickjs", false)` once per capture. It neither waits on nor controls a child process. Process directory fields and other opaque properties are omitted. The retained fields contain selected identities, byte counts, group counts, QuickJS counters and allocation failures. Missing counters and acknowledgements remain unknown; timestamps and hook notes retain stale or unacknowledged observations. No stack sample or memory headroom is inferred.

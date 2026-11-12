@@ -30,18 +30,24 @@ function memoryRow(value: unknown): unknown[] {
     engineCounters: selectedNumbers(item.engineCounters, ["refreshSequence", "mallocBytes", "structuralHeapBytes", "arrayBufferBytes", "arrayBufferCount", "countersValid", "automaticGcCount", "mallocBytesAfterAutomaticGc", "mallocGcThreshold", "currentMallocBytes"]),
   }];
 }
-async function memory(): Promise<unknown> {
+async function memory(active: () => void): Promise<unknown> {
+  active();
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
   if (typeof getter !== "function") throw new Error("QuickJS memory hook unavailable");
   const rows: unknown = await getter("quickjs", false);
+  active();
   if (!Array.isArray(rows)) throw new Error("Unexpected memory snapshot shape");
   return { rows: rows.slice(0, 64).flatMap(memoryRow), truncated: rows.length > 64, freshness: "Counters can be stale between host-import boundaries; null is unknown, not headroom" };
 }
-async function processes(): Promise<unknown> {
+async function processes(active: () => void): Promise<unknown> {
+  active();
   if (!playground.runtime) throw new Error("Runtime process metadata unavailable");
   const service = await playground.runtime.processes();
+  active();
   const workers: unknown = service.workerMemory();
+  active();
   const groups: unknown = service.memoryGroups();
+  active();
   if (!Array.isArray(workers) || !Array.isArray(groups)) throw new Error("Unexpected process metadata shape");
   return { workers: workers.slice(0, 64).map(row => selectedNumbers(row, numberKeys.slice(0, 5))),
     groups: groups.slice(0, 64).map(groupRow), truncated: workers.length > 64 || groups.length > 64,
@@ -59,6 +65,9 @@ async function capture(deadline: number): Promise<NextBuildCapture> {
   const client = playground.fs ? new FilesystemClient(playground.fs.fork()) : undefined;
   const held: FilesystemCompletion[] = [];
   let closed = false;
+  function active(): void {
+    if (closed || Date.now() >= deadline - 25) throw new Error("Next observation closed or deadline expired");
+  }
   let rejectClosed: (reason: Error) => void = () => {};
   const cancelled = new Promise<never>((_resolve, reject) => { rejectClosed = reject; });
   function close(): void {
@@ -71,7 +80,7 @@ async function capture(deadline: number): Promise<NextBuildCapture> {
   globalThis.__goalsNextBuildClose = close;
   const timer = setTimeout(close, Math.max(0, deadline - Date.now() - 25));
   async function request(operation: string, args: unknown[]): Promise<unknown> {
-    if (closed || Date.now() >= deadline - 25) throw new Error("Next observation closed or deadline expired");
+    active();
     if (!client) throw new Error("Guest filesystem unavailable");
     const completion = client.submit(operation, args);
     // Keep resolve completions pinned through the read: path replacement cannot redirect a checked inode.
@@ -97,7 +106,7 @@ async function capture(deadline: number): Promise<NextBuildCapture> {
   };
   try {
     const files = Promise.all(nextBuildFiles.map(spec => available(() => read(spec)).then(result => result.status === "observed" ? result.value : { path: spec.path, ...result })));
-    const [observedFiles, observedMemory, observedProcesses] = await Promise.all([files, available(memory), available(processes)]);
+    const [observedFiles, observedMemory, observedProcesses] = await Promise.all([files, available(() => memory(active)), available(() => processes(active))]);
     return { at, files: observedFiles, memory: observedMemory, processes: observedProcesses };
   } finally { clearTimeout(timer); close(); }
 }

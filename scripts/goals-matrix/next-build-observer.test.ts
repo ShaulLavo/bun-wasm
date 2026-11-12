@@ -13,6 +13,7 @@ import { withPlayground } from "./test-fixture";
 import { nextBuildFilesystem } from "./next-build-fixture";
 import { nextBuildFiles, parseBuildFile, compareBuildFiles, type FileRead } from "./next-build-files";
 import { NextBuildObserver, buildNextBuildReaderSource, closeNextBuildObserver, type NextBuildObservation } from "./next-build-observer";
+import type { NextBuildCapture } from "./next-build-browser";
 
 const next = frameworks.find(item => item.id === "next");
 if (!next) throw new Error("Missing Next fixture");
@@ -260,6 +261,59 @@ test.each([false, true])("full execution retains original deadlines, cleanup and
     expect(events).toContainEqual(expect.objectContaining({ kind: "cleanup", status: failedClose ? "unavailable" : "closed" }));
     expect(await withScoped(transport, page => page.evaluate("commands.filter(text => text === 'bun run build')"))).toEqual(["bun run build"]);
   }, 0);
+});
+
+test.each([false, true])("stalled optional close leaves time for complete teardown, owned = %s", async owned => {
+  await fixture(async ({ transport, events }) => {
+    await withScoped(transport, page => page.evaluate(`const query = document.querySelector.bind(document); document.querySelector = selector => selector === '#engine' ? {value:'quickjs'} : selector === '#status' ? {textContent:'QuickJS ready'} : query(selector);`));
+    const evaluate = transport.evaluate.bind(transport);
+    let releaseClose = () => {};
+    const waiting = new Promise<void>(resolve => { releaseClose = resolve; });
+    transport.evaluate = (expression, admission, options) => expression.startsWith("globalThis.__goalsNextBuildClose")
+      ? waiting.then(() => evaluate(expression, admission, options)) : evaluate(expression, admission, options);
+    let cleaned = false;
+    const complete = async () => { await Bun.sleep(100); cleaned = true; };
+    const close = transport.close.bind(transport);
+    transport.close = async (...args) => { if (!owned) await complete(); await close(...args); };
+    if (owned) transport.cleanup = async () => { await complete(); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
+    const config: Parameters<typeof execute>[0] = { framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
+      nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
+    };
+    try {
+      const result = await execute(config);
+      expect(cleaned).toBe(true);
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+      expect(events).toContainEqual(expect.objectContaining({ kind: "cleanup", status: "unavailable" }));
+    } finally { releaseClose(); }
+  }, 0);
+});
+
+test.each([
+  { target: "processes", finish: "deadline" }, { target: "processes", finish: "close" },
+  { target: "memory", finish: "deadline" }, { target: "memory", finish: "close" },
+])("delayed metadata admits no post-close read: %j", async ({ target, finish }) => {
+  await fixture(async ({ fs, transport }) => {
+    const deferred = target === "processes"
+      ? `playground.runtime.processes = () => new Promise(resolve => { globalThis.__releaseMetadata = () => resolve({ workerMemory() { __metadataReads++; return []; }, memoryGroups() { __metadataReads++; return []; } }); globalThis.__metadataArmed = true; });`
+      : `globalThis.__bunMemorySnapshots = () => new Promise(resolve => { globalThis.__releaseMetadata = () => resolve([{ get engine() { __metadataReads++; return 'quickjs'; } }]); globalThis.__metadataArmed = true; });`;
+    await withScoped(transport, page => page.evaluate(`globalThis.__metadataReads = 0; globalThis.__metadataArmed = false; globalThis.__explicitClose = false; ${deferred}`));
+    const reader = await buildNextBuildReaderSource();
+    const close = finish === "close" ? "setTimeout(() => { globalThis.__explicitClose = true; globalThis.__goalsNextBuildClose?.(); }, 30);" : "";
+    try {
+      const capture = await withScoped(transport, page => page.evaluate<NextBuildCapture>(`${reader}\n${close}\n__goalsNextBuildRead(${Date.now() + (finish === "close" ? 1000 : 120)})`));
+      expect(target === "processes" ? capture.processes : capture.memory).toMatchObject({ status: "unavailable" });
+      expect(fs.disposed()).toBe(true);
+      expect(fs.outstanding()).toBe(0);
+      expect(await withScoped(transport, page => page.evaluate("__metadataArmed"))).toBe(true);
+      expect(await withScoped(transport, page => page.evaluate("__explicitClose"))).toBe(finish === "close");
+      await withScoped(transport, page => page.evaluate("__releaseMetadata();"));
+      await Bun.sleep(10);
+      expect(await withScoped(transport, page => page.evaluate("__metadataReads"))).toBe(0);
+    } finally {
+      await withScoped(transport, page => page.evaluate("globalThis.__releaseMetadata?.();"));
+      await withScoped(transport, closeNextBuildObserver);
+    }
+  });
 });
 
 test("full execution cancels a pending baseline and disposes before owned cleanup, without a late build dispatch", async () => {

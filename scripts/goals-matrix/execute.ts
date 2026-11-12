@@ -154,7 +154,15 @@ async function observeFailure(transport: Transport, options: Execution, capture:
 
 async function cleanup(transport: Transport | undefined, options: Execution, results: readonly PhaseResult[], failureLog: FailureLog | undefined, admission: Admission): Promise<unknown> {
   if (!transport) return { transportCreated: false };
-  if (options.nextBuildObservation) retainNextBuildObservation(options.nextBuildObservation, await closeNextBuildObserver(scoped(transport, admission)));
+  if (options.nextBuildObservation) {
+    const observerClose = Scope.open(1000, admission);
+    try {
+      const closed = await observerClose.run(guard => closeNextBuildObserver(scoped(transport, guard)));
+      retainNextBuildObservation(options.nextBuildObservation, closed);
+    } catch (error) {
+      retainNextBuildObservation(options.nextBuildObservation, { kind: "cleanup", at: Date.now(), status: "unavailable", reason: String(error) });
+    } finally { observerClose.close(); }
+  }
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup, admission);
   const errors: unknown[] = [];
