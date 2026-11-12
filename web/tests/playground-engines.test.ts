@@ -30,6 +30,21 @@ test("the shared profile picker disables engines outside the profile contract", 
   }
 });
 
+const sharedPair = Object.fromEntries(Object.entries(pair).map(([name, hash]) => [`profiles/shared-group/${name}`, hash]));
+for (const builds of [{}, pair, { "profiles/shared-group/bun-spidermonkey.wasm": "a".repeat(64) }, { "profiles/shared-group/spidermonkey-engine.wasm": "b".repeat(64) }, sharedPair]) {
+  test(`shared SpiderMonkey choice requires both profile manifest entries ${JSON.stringify(builds)}`, async () => {
+    const valid = builds === sharedPair;
+    const page = await fixture(builds);
+    const playground = new page.Playground("?engine=spidermonkey&profile=shared-group");
+    const markup = await page.renderPlayground(playground);
+    expect(markup.match(/<option[^>]*value="spidermonkey"[^>]*>/)?.[0]?.includes("disabled")).toBe(!valid);
+    method<() => void>(playground, "terminalOpened")();
+    await playground.start();
+    expect(page.loads).toEqual(valid ? ["profiles/shared-group/bun-spidermonkey.wasm"] : []);
+    if (valid) expect(page.sessionCreates[0]?.env?.BUN_WASM_SPIDERMONKEY_TIER).toBe("interp");
+  });
+}
+
 test("a staged SpiderMonkey pair is selectable from the ordinary Browser playground", async () => {
   const page = await fixture(pair);
   const playground = new page.Playground("");

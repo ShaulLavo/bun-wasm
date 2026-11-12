@@ -1,22 +1,101 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendCustomSection, importedMemory, tagProgramCore } from "../src/engine-kind";
+import { appendCustomSection, importedMemory, programProfile, tagProgramCore, type SupportedPairedEngine } from "../src/engine-kind";
 import { initializationPair } from "../tests/package/engine-initialization-fixture";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import type { ProgramBuildReceipt } from "./guest-core-receipt";
-import { stageSharedPrograms } from "./stage-program-profiles";
+import { sharedProgramReceipts, stageSharedPrograms } from "./stage-program-profiles";
 
 const hash = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
-function receipt(bytes: Uint8Array, scope: "core" | "quickjs"): ProgramBuildReceipt {
+function receipt(bytes: Uint8Array, scope: "core" | SupportedPairedEngine): ProgramBuildReceipt {
   const content = { selection: { profile: "shared-group" }, fixture: "Synthetic staging input, not producer evidence" };
   return {
     schema: 1,
     inputs: { schema: 1, scope, source: { head: (scope === "core" ? "a" : "b").repeat(40), tree: "c".repeat(40) }, content, contentSha256: hash(JSON.stringify(content)) },
     artifact: { artifactSha256: hash(bytes), artifactBytes: bytes.byteLength },
   };
+}
+
+async function writeSpiderMonkeyReceipts(source: string, pair: ReturnType<typeof initializationPair>, overrides: Partial<Record<"library" | "headers", unknown>> = {}) {
+  const identity = (bytes: Uint8Array | string) => ({ sha256: hash(bytes), bytes: typeof bytes === "string" ? Buffer.byteLength(bytes) : bytes.byteLength });
+  const library = { profile: "shared-group", library: { sha256: "d".repeat(64), bytes: 123 }, headers: { count: 1, sha256: "e".repeat(64) }, ...overrides };
+  const text = JSON.stringify(library) + "\n";
+  await Bun.write(join(source, "shared-group-library.json"), text);
+  const coreReceipt = receipt(pair.untaggedCore, "core");
+  await Bun.write(join(source, "bun-core.wasm.core.json"), JSON.stringify(coreReceipt) + "\n");
+  await Bun.write(join(source, "spidermonkey-shared.json"), JSON.stringify({ schema: 1, experimental: true, profile: "shared-group",
+    program: identity(pair.core), side: identity(pair.side), inputs: { source: coreReceipt.inputs.source, core: identity(pair.untaggedCore), coreReceipt,
+      native: { receipt: identity(text), library: library.library, headers: library.headers } } }));
+}
+
+function invalidNativeIdentities(field: "bytes" | "count") {
+  const valid = { sha256: "d".repeat(64), [field]: 1 };
+  return [
+    { defect: "missing", value: undefined },
+    { defect: "null", value: null },
+    { defect: "missing digest", value: { [field]: 1 } },
+    { defect: "invalid digest", value: { ...valid, sha256: "not-a-digest" } },
+    { defect: "missing size", value: { sha256: valid.sha256 } },
+    { defect: "zero size", value: { ...valid, [field]: 0 } },
+    { defect: "negative size", value: { ...valid, [field]: -1 } },
+    { defect: "fractional size", value: { ...valid, [field]: 1.5 } },
+    { defect: "unsafe size", value: { ...valid, [field]: Number.MAX_SAFE_INTEGER + 1 } },
+    { defect: "string size", value: { ...valid, [field]: "1" } },
+  ];
+}
+
+for (const identity of [{ name: "library", field: "bytes" }, { name: "headers", field: "count" }] as const) {
+  test.each(invalidNativeIdentities(identity.field))(`SpiderMonkey staging rejects matching ${identity.name} identities with $defect before publishing`, async ({ value }) => {
+    await withSharedProgram(async source => {
+      const pair = initializationPair("spidermonkey", true);
+      await Bun.write(join(source, "bun.wasm"), pair.core);
+      await Bun.write(join(source, "spidermonkey-engine.wasm"), pair.side);
+      await writeSpiderMonkeyReceipts(source, pair, { [identity.name]: value });
+      const builds = { existing: "preserved" }, out = join(source, "out");
+      await expect(stageSharedPrograms(out, builds, { spidermonkey: source })).rejects.toThrow("identity");
+      expect(builds).toEqual({ existing: "preserved" });
+      expect(existsSync(out)).toBe(false);
+    });
+  });
+}
+
+for (const engine of ["jsc", "spidermonkey"] as const) {
+  test(`${engine} shared staging verifies original receipt bytes before publishing`, async () => {
+    await withSharedProgram(async source => {
+      const pair = initializationPair(engine, true), names = programProfile(engine);
+      await Bun.write(join(source, "bun.wasm"), pair.core);
+      await Bun.write(join(source, names.side), pair.side);
+      if (engine === "spidermonkey") await writeSpiderMonkeyReceipts(source, pair);
+      else await Bun.write(join(source, `${names.side}.engine.json`), JSON.stringify(receipt(pair.side, engine)));
+      const builds: Record<string, string> = {};
+      await stageSharedPrograms(join(source, "out"), builds, { [engine]: source });
+      expect(builds).toEqual({ [`profiles/shared-group/${names.core}`]: hash(pair.core), [`profiles/shared-group/${names.side}`]: hash(pair.side) });
+      for (const name of sharedProgramReceipts(engine)) expect(await Bun.file(join(source, "out/profiles/shared-group/receipts", engine, name)).bytes()).toEqual(await Bun.file(join(source, name)).bytes());
+    });
+  });
+}
+
+for (const defect of ["core", "side", "library", "source", "pair receipt", "core receipt"] as const) {
+  test(`SpiderMonkey staging rejects changed ${defect} before publishing`, async () => {
+    await withSharedProgram(async source => {
+      const pair = initializationPair("spidermonkey", true);
+      await Bun.write(join(source, "bun.wasm"), pair.core);
+      await Bun.write(join(source, "spidermonkey-engine.wasm"), pair.side);
+      await writeSpiderMonkeyReceipts(source, pair);
+      const mutations = { core: ["bun.wasm", appendCustomSection(pair.core, "changed", new Uint8Array())], side: ["spidermonkey-engine.wasm", appendCustomSection(pair.side, "changed", new Uint8Array())],
+        library: ["shared-group-library.json", "{}"], source: ["source.txt", "b".repeat(40)], "pair receipt": ["spidermonkey-shared.json", "{}"], "core receipt": ["bun-core.wasm.core.json", "{}"] } satisfies Record<typeof defect, [string, string | Uint8Array]>;
+      const [name, data] = mutations[defect];
+      await Bun.write(join(source, name), data);
+      const builds = {};
+      await expect(stageSharedPrograms(join(source, "out"), builds, { spidermonkey: source })).rejects.toThrow();
+      expect(builds).toEqual({});
+      expect(await readdir(join(source, "out")).catch(() => [])).toEqual([]);
+    });
+  });
 }
 
 async function withSharedProgram(run: (source: string, pair: ReturnType<typeof initializationPair>) => Promise<void>): Promise<void> {
@@ -105,7 +184,7 @@ test("shared staging rejects a valid split pair before publishing profile assets
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
-function differentMaximum(bytes: Uint8Array, maximum: 16384 | 65536): Uint8Array {
+function differentMaximum(bytes: Uint8Array, maximum: 16384 | 65536): Uint8Array<ArrayBuffer> {
   expect(importedMemory(bytes)).toEqual({ shared: true, maximum: 32768 });
   const changed = Buffer.from(bytes);
   // Exact env.memory import in the executable fixture, including its three-byte maximum.
@@ -133,5 +212,26 @@ test.each([
     await Bun.write(join(source, "quickjs.wasm.engine.json"), JSON.stringify(receipt(side, "quickjs")));
     await expect(stageSharedPrograms(join(source, "out"), {}, { quickjs: source, jsc: undefined })).rejects.toThrow("current group address space");
     await rejectedBeforePublication(source);
+  });
+});
+
+test.each([
+  { component: "core", maximum: 16384 },
+  { component: "side", maximum: 16384 },
+  { component: "both", maximum: 16384 },
+  { component: "side", maximum: 65536 },
+] as const)("SpiderMonkey staging rejects $component at $maximum pages before receipt reads", async ({ component, maximum }) => {
+  await withSharedProgram(async source => {
+    const pair = initializationPair("spidermonkey", true);
+    const untaggedCore = component === "side" ? pair.untaggedCore : differentMaximum(pair.untaggedCore, maximum);
+    const side = component === "core" ? pair.side : differentMaximum(pair.side, maximum);
+    const core = tagProgramCore(untaggedCore, "spidermonkey");
+    await Bun.write(join(source, "bun.wasm"), core);
+    await Bun.write(join(source, "spidermonkey-engine.wasm"), side);
+    await writeSpiderMonkeyReceipts(source, { ...pair, core, side, untaggedCore });
+    const builds = {};
+    await expect(stageSharedPrograms(join(source, "out"), builds, { spidermonkey: source })).rejects.toThrow("current group address space");
+    expect(builds).toEqual({});
+    expect(await readdir(join(source, "out")).catch(() => [])).toEqual([]);
   });
 });

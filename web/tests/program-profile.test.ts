@@ -7,8 +7,8 @@ test("memory profile is explicit and independent of engine selection", async () 
   expect(parseMemoryProfile(null)).toBe("split");
   expect(parseMemoryProfile("shared-group")).toBe("shared-group");
   for (const value of ["", "shared", "jsc", "quickjs", 1]) expect(() => parseMemoryProfile(value)).toThrow("Unknown Bun program memory profile");
-  for (const engine of ["quickjs", "jsc"] as const) expect(() => requireProfileEngine(engine, "shared-group")).not.toThrow();
-  for (const engine of ["browser", "spidermonkey"] as const) {
+  for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) expect(() => requireProfileEngine(engine, "shared-group")).not.toThrow();
+  for (const engine of ["browser"] as const) {
     await expect(loadEngineProgram(engine, "shared-group", () => {})).rejects.toThrow("unavailable");
   }
 });

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import type { Engine } from "./catalog";
 import { engineFiles, profileEngineFiles, registeredEngineGroups } from "./engines";
 import { parseMemoryProfile, profileAsset, type ProgramMemoryProfile } from "../../web/src/program-profile";
-import { programProfile } from "../../src/engine-kind";
+import { programProfile, type PairedEngine } from "../../src/engine-kind";
+import { sharedProgramReceipts } from "../stage-program-profiles";
 export interface SpiderMonkeyInput { directory: string; source: string }
 export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput; shell?: string; profile?: ProgramMemoryProfile } {
   const [delivery, ...flags] = args;
@@ -73,12 +74,12 @@ export async function withStagedAssets<T>(source: string, build: (directory: str
       const selected = spiderMonkeyCore !== undefined && names.includes(spiderMonkeyCore) ? options.spidermonkey : undefined;
       await writeStagedEngine(selected ?? source, scratch, names, selected !== undefined);
     }
-    for (const engine of ["quickjs", "jsc"] as const) await stageSharedEngine(source, scratch, engine);
+    for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) await stageSharedEngine(source, scratch, engine);
     return await build(scratch);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 
-async function stageSharedEngine(source: string, scratch: string, engine: "quickjs" | "jsc"): Promise<void> {
+async function stageSharedEngine(source: string, scratch: string, engine: PairedEngine): Promise<void> {
   const files = await stagedEngine(source, profileEngineFiles(engine, "shared-group"));
   if (!files.length) return;
   const directory = join(scratch, `shared-${engine}`);
@@ -88,7 +89,7 @@ async function stageSharedEngine(source: string, scratch: string, engine: "quick
     const name = file.name === profileAsset(names.core, "shared-group") ? "bun.wasm" : names.side;
     await writeFile(join(directory, name), file.data);
   }
-  for (const name of ["bun-core.wasm.core.json", `${names.side}.engine.json`, "source.txt"]) {
+  for (const name of sharedProgramReceipts(engine)) {
     await cp(join(source, profileAsset(`receipts/${engine}/${name}`, "shared-group")), join(directory, name));
   }
 }

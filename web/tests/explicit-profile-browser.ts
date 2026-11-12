@@ -8,7 +8,7 @@ import type { Runtime } from "waffle";
 import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { verifySite } from "../../scripts/browser-guest-site";
 import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
-import { BUN_MEMORY_GROUP_POLICY, programKind } from "../../src/engine-kind";
+import { BUN_MEMORY_GROUP_POLICY, isPairedEngine, programKind, programProfile } from "../../src/engine-kind";
 
 declare const playground: {
   runtime: Runtime;
@@ -42,10 +42,9 @@ async function site(): Promise<string> {
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   if (program) {
     const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
-    if (kind === "spidermonkey") return root;
-    assert.ok(kind === "quickjs" || kind === "jsc", "Existing shared QuickJS or JSC producer required");
+    assert.ok(isPairedEngine(kind), "Existing shared paired producer required");
     const builds: Record<string, string> = await Bun.file(join(root, "engine-builds.json")).json();
-    await stageSharedPrograms(root, builds, { quickjs: kind === "quickjs" ? dirname(program) : undefined, jsc: kind === "jsc" ? dirname(program) : undefined });
+    await stageSharedPrograms(root, builds, { quickjs: kind === "quickjs" ? dirname(program) : undefined, jsc: kind === "jsc" ? dirname(program) : undefined, spidermonkey: kind === "spidermonkey" ? dirname(program) : undefined });
     const html = await Bun.file(join(root, "index.html")).text();
     await Bun.write(join(root, "index.html"), html.replace(/globalThis\.__bunwasmBuilds\s*=\s*\{[^;]*?\}/, `globalThis.__bunwasmBuilds=${JSON.stringify(builds)}`));
     await Bun.write(join(root, "engine-builds.json"), JSON.stringify(builds));
@@ -69,16 +68,6 @@ async function ready(page: Page, base: string, engine: string, profile: string):
   await page.goto(`${base}?engine=${engine}&profile=${profile}&mode=memory&prompt=off`);
   await page.waitForFunction(() => typeof playground !== "undefined", undefined, { timeout: 60_000 });
   assert.equal(await page.evaluate(() => playground.profile), profile);
-}
-
-async function unsupportedSpiderMonkey(page: Page, base: string): Promise<void> {
-  const requests: string[] = [];
-  page.on("request", request => requests.push(new URL(request.url()).pathname));
-  const rejected = page.waitForEvent("pageerror", { timeout: 60_000 });
-  const [, error] = await Promise.all([page.goto(`${base}?engine=spidermonkey&profile=shared-group&mode=memory&prompt=off`), rejected]);
-  assert.match(error.message, /spidermonkey.*does not support.*shared-group/);
-  assert.equal(requests.some(path => /\.wasm(?:\.gz)?$/.test(path)), false, "unsupported profile intent must not fetch or retry another engine");
-  console.log(JSON.stringify({ engine: "spidermonkey", sharedPlayground: "explicitly unsupported", wasmFetched: false, profileFallback: false }));
 }
 
 async function fixture(page: Page, directory: string): Promise<void> {
@@ -162,8 +151,8 @@ async function mismatch(base: string, root: string): Promise<void> {
   console.log(JSON.stringify({ mismatchedPair: "refused", profileFallback: false }));
 }
 
-async function poisonedCache(page: Page, base: string, root: string, engine: string): Promise<void> {
-  const core = engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm";
+async function poisonedCache(page: Page, base: string, root: string, engine: "quickjs" | "jsc" | "spidermonkey"): Promise<void> {
+  const core = programProfile(engine).core;
   const builds: Record<string, string> = await Bun.file(join(root, "engine-builds.json")).json();
   const hash = builds[`profiles/shared-group/${core}`];
   assert.ok(hash);
@@ -192,26 +181,24 @@ try {
   page.on("pageerror", error => console.error(String(error)));
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   const selected = program ? [programKind(new WebAssembly.Module(await Bun.file(program).bytes()))] : ["quickjs", "jsc"];
-  if (selected[0] === "spidermonkey") {
-    await unsupportedSpiderMonkey(page, base);
-  } else {
-    for (const engine of selected) await shared(page, base, engine);
-    await ready(page, base, "quickjs", "split");
-    await fixture(page, join(scratch!, "fixture-split"));
-    const refusal = await command(page, "bun run /home/user/fixture/cross-worker.ts");
-    assert.notEqual(refusal.code, 0, refusal.output);
-    assert.match(refusal.output, /shared|Shared/);
-    await settled(page);
-    const keys = await page.evaluate(async () => Array.from(await (await caches.open("bunwasm-engines")).keys(), request => request.url));
-    assert.ok(keys.some(key => key.includes("/profiles/shared-group/")), "shared cache entries missing");
-    assert.ok(keys.some(key => new URL(key).pathname === "/bun.wasm"), "split cache entries missing");
-    await page.evaluate(async () => { playground.sharedObjects.close(); await playground.runtime.dispose(); });
-    assert.equal(await page.evaluate(() => playground.runtime.disposed), true);
-    await poisonedCache(page, base, root, selected[0]!);
-    await page.close();
-    await mismatch(base, root);
-    console.log(JSON.stringify({ splitRefusal: true, cacheProfiles: "distinct", page: "disposed" }));
-  }
+  for (const engine of selected) await shared(page, base, engine);
+  await ready(page, base, "quickjs", "split");
+  await fixture(page, join(scratch!, "fixture-split"));
+  const refusal = await command(page, "bun run /home/user/fixture/cross-worker.ts");
+  assert.notEqual(refusal.code, 0, refusal.output);
+  assert.match(refusal.output, /shared|Shared/);
+  await settled(page);
+  const keys = await page.evaluate(async () => Array.from(await (await caches.open("bunwasm-engines")).keys(), request => request.url));
+  assert.ok(keys.some(key => key.includes("/profiles/shared-group/")), "shared cache entries missing");
+  assert.ok(keys.some(key => new URL(key).pathname === "/bun.wasm"), "split cache entries missing");
+  await page.evaluate(async () => { playground.sharedObjects.close(); await playground.runtime.dispose(); });
+  assert.equal(await page.evaluate(() => playground.runtime.disposed), true);
+  const first = selected[0];
+  assert.ok(first && isPairedEngine(first));
+  await poisonedCache(page, base, root, first);
+  await page.close();
+  await mismatch(base, root);
+  console.log(JSON.stringify({ splitRefusal: true, cacheProfiles: "distinct", page: "disposed" }));
 } finally {
   clearTimeout(deadline);
   await cleanup();
