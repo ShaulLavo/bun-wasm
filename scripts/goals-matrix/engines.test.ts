@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -68,8 +69,8 @@ function transport(status: string): Transport {
 }
 test("ready uses the registered SpiderMonkey status and refuses another engine's label", async () => {
   const status = `${ENGINES.spidermonkey.name} ready`;
-  expect(await ready(transport(status), box.engine, 100)).toHaveProperty("status", status);
-  await expect(ready(transport(`${ENGINES.jsc.name} ready`), box.engine, 100)).rejects.toThrow("Wrong running engine status");
+  expect(await withScoped(transport(status), page => ready(page, box.engine, 100))).toHaveProperty("status", status);
+  await expect(withScoped(transport(`${ENGINES.jsc.name} ready`), page => ready(page, box.engine, 100))).rejects.toThrow("Wrong running engine status");
 });
 
 const preparationInputs = [

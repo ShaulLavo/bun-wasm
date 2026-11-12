@@ -51,3 +51,9 @@ the saved log after normal cleanup. Separate controls preserve the thrown error'
 identity and keep unknown and imported-memory limits distinct. The imported
 control declares eight pages and constructs its actual memory with a four-page
 factory maximum. Telemetry keeps the unobservable factory maximum null.
+
+The goals executor reads these retained facts through its finite scoped transport
+view. Failure and final terminal observation share their original absolute
+observation budget with the optional fact read. An expired fact read preserves an
+already observed terminal, including an empty one, and labels the missing facts.
+The memory facts, hook behavior and diagnostic policy are unchanged.

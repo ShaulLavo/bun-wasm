@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { armIphoneClick } from "./iphone-browser";
@@ -5,6 +6,7 @@ import { withHeldPreview, type HeldPreview, type Hold } from "./iphone-load-fixt
 import { execute } from "./execute";
 import { frameworks, type Framework } from "./catalog";
 import { withPlayground } from "./test-fixture";
+import type { Admission } from "./scope";
 import type { Transport } from "./transport";
 
 // Shaped like the executor's terminal read: an owner-page promise that settles on a later task.
@@ -16,13 +18,13 @@ const frameActive = (page: Page) => page.waitForFunction(() => document.activeEl
 async function diagnosticsWhileHeld(engine: BrowserType, hold: Hold): Promise<void> {
   await withHeldPreview(engine, hold, 5000, async ({ page, bus, transport, preview, requested, presented, deviceCommands, release }) => {
     let outcome = "pending";
-    const opening = transport.openPreview(preview).then(() => { outcome = "presented"; }, (error: unknown) => { outcome = String(error); });
+    const opening = withScoped(transport, page => page.openPreview(preview)).then(() => { outcome = "presented"; }, (error: unknown) => { outcome = String(error); });
     await requested;
     // Allow the presentation command to return. If it never does, the reads below report the owner as busy.
     await Promise.race([presented, Bun.sleep(1000)]);
     for (let read = 0; read < 5; read++) {
-      await transport.useHost();
-      expect(await transport.evaluate<string>(diagnostic)).toBe("editor");
+      await withScoped(transport, page => page.useHost());
+      expect(await withScoped(transport, page => page.evaluate<string>(diagnostic))).toBe("editor");
     }
     expect(outcome).toBe("pending");
     expect(await page.evaluate(() => document.activeElement?.id)).toBe("editor");
@@ -32,27 +34,27 @@ async function diagnosticsWhileHeld(engine: BrowserType, hold: Hold): Promise<vo
     await opening;
     expect(outcome).toBe("presented");
     await frameActive(page);
-    expect(await transport.evaluate(arm)).toMatchObject({ ready: true, before: "Count 0" });
-    expect(await transport.evaluate("document.hasFocus()")).toBe(false);
+    expect(await withScoped(transport, page => page.evaluate(arm))).toMatchObject({ ready: true, before: "Count 0" });
+    expect(await withScoped(transport, page => page.evaluate("document.hasFocus()"))).toBe(false);
     expect(deviceCommands()).toEqual([]);
-    await transport.closePreview();
+    await withScoped(transport, page => page.closePreview());
     expect(await page.locator("iframe").count()).toBe(0);
   });
 }
 
 async function expiredLoadRefusesInput(engine: BrowserType): Promise<void> {
   await withHeldPreview(engine, "document", 1000, async ({ page, transport, preview, deviceCommands, release }) => {
-    const failure = await transport.openPreview(preview).then(() => "presented", (error: unknown) => String(error));
+    const failure = await withScoped(transport, page => page.openPreview(preview)).then(() => "presented", (error: unknown) => String(error));
     expect(failure).not.toBe("presented");
-    await transport.useHost();
-    expect(await transport.evaluate<string>(diagnostic)).toBe("editor");
+    await withScoped(transport, page => page.useHost());
+    expect(await withScoped(transport, page => page.evaluate<string>(diagnostic))).toBe("editor");
     expect(failure).toContain("iPhone preview document did not finish within 1000 ms");
     expect(failure).toContain('"visible":false');
     expect(failure).not.toContain("timeOrigin");
     release();
     // The late load still focuses the frame it belongs to, but the expired opening never arms or presses.
     await frameActive(page);
-    await expect(transport.nativeClick!("button", "button", 500)).rejects.toThrow("not focused after load");
+    await expect(withScoped(transport, page => page.nativeClick!("button", "button", 500))).rejects.toThrow("not focused after load");
     expect(await armedType(page)).toBe("undefined");
     expect(deviceCommands()).toEqual([]);
   });
@@ -60,7 +62,7 @@ async function expiredLoadRefusesInput(engine: BrowserType): Promise<void> {
 
 async function closingCancelsHeldLoad(engine: BrowserType): Promise<void> {
   await withHeldPreview(engine, "resource", 5000, async ({ page, transport, preview, requested, deviceCommands, release, controllerRequests }) => {
-    const opening = transport.openPreview(preview).then(() => "presented", (error: unknown) => String(error));
+    const opening = withScoped(transport, page => page.openPreview(preview)).then(() => "presented", (error: unknown) => String(error));
     await requested;
     await transport.close();
     expect(await opening).toContain("iPhone transport closing");
@@ -69,7 +71,7 @@ async function closingCancelsHeldLoad(engine: BrowserType): Promise<void> {
     await frameActive(page);
     await Bun.sleep(250);
     expect(controllerRequests()).toBe(settled);
-    await expect(transport.nativeClick!("button", "button", 500)).rejects.toThrow();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "button", 500))).rejects.toThrow();
     expect(controllerRequests()).toBe(settled);
     expect(await armedType(page)).toBe("undefined");
     expect(deviceCommands()).toEqual([]);
@@ -106,19 +108,19 @@ async function runFailureFixture(framework: Framework, fixture: Transport, held:
     return value;
   };
   const original = bus.execute.bind(bus);
-  bus.execute = (role, source, timeoutMs, observation) => {
-    const pending = original(role, source, timeoutMs, observation);
+  bus.execute = (role, source, timeoutMs, observation, deliverByMs) => {
+    const pending = original(role, source, timeoutMs, observation, deliverByMs);
     if (scenario === "focus-cancel" && source.includes("function iphonePreviewFocus")) abort.abort(new Error("Phase cancelled at focus acknowledgement"));
     return pending;
   };
   const facade: Transport = { ...transport, navigate: fixture.navigate,
-    evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => {
-      if (failed) return transport.evaluate<T>(source, options);
-      return fixture.evaluate<T>(source.includes("function transcript") ? JSON.stringify("completed install transcript") : source, options);
+    evaluate: <T>(source: string, admission: Admission, options?: Parameters<Transport["evaluate"]>[2]) => {
+      if (failed) return transport.evaluate<T>(source, admission, options);
+      return fixture.evaluate<T>(source.includes("function transcript") ? JSON.stringify("completed install transcript") : source, admission, options);
     },
-    async openPreview() {
+    async openPreview(_url, admission) {
       failed = true;
-      const opening = transport.openPreview(preview);
+      const opening = transport.openPreview(preview, admission);
       await requested;
       if (scenario === "focus-cancel") release();
       await opening;
