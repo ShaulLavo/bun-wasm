@@ -106,3 +106,27 @@ is bounded separately, and a stalled observer produces a labelled diagnostic log
 with the last completed command transcript when available. A log failure cannot
 skip resource teardown. Log capture and native close remain within the existing
 twenty-second outer cleanup bound.
+
+Every phase and observation now carries a finite admission. Closing it stops new
+polls, role switches, preview stages and native input, including after an awaited
+step. An already dispatched device command remains owned until its child exits
+and is reaped; teardown stays unguarded.
+
+Each observer role reserves its send turn synchronously and permits one reserved
+waiter. Failure and final transcript reads join the exact outstanding request
+within their original absolute observation deadline. Expired waiters never send
+later. The existing execute response certifies settlement of an accepted request,
+including ordinary expression errors. Network failures, malformed responses and
+uncertified errors leave the role unavailable until teardown rather than guessing
+that its bus slot is idle.
+
+The controller, bus and page carry the same absolute `deliverByMs` cutoff, using
+their existing `Date.now()` clock convention. The bus rejects expired arrivals and
+withdraws undelivered work. The page checks again immediately before evaluation,
+since selecting a poll response does not prove page receipt. Expired receipt sends
+one ordinary negative reply. Preview reload preserves the cutoff and immediately
+settles an observation made undelivered after it expired. Hard request lifetimes,
+origin, nonce, time-origin and reply-order checks remain unchanged. There is no
+input replay, retry, cancellation route or recovery from permanently stuck page
+JavaScript. Chromium and WebKit controls cover the normal short-read race,
+undelivered expiry, delayed receipt, natural handoff and unavailable outcomes.

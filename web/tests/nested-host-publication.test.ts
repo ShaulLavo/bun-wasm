@@ -34,6 +34,7 @@ const description = encoder.encode('{"memory":{},"imports":[],"exports":[]}');
 const emptyModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 const tableModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 4, 4, 1, 0x70, 0, 1, 7, 5, 1, 1, 0x74, 1, 0]);
 const globalModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 6, 6, 1, 0x7f, 0, 0x41, 0, 0x0b, 7, 5, 1, 1, 0x67, 3, 0]);
+const referenceGlobalModule = Uint8Array.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 6, 6, 1, 0x70, 0, 0xd0, 0x70, 0x0b, 7, 5, 1, 1, 0x67, 3, 0]);
 
 function compileLocal(member: Member): number {
   const memory = (member.host as unknown as { shared(): WebAssembly.Memory }).shared();
@@ -185,17 +186,22 @@ describe("published modules", () => {
     expect(receiver.send({ AttachModule: { token: good } })).toHaveProperty("AttachedModule");
   });
 
-  test("attachment keeps the global refusal that Compile has, and admits a table export as Compile does", () => {
+  test("attachment admits numeric globals and tables, and refuses reference globals without a hold", () => {
     const { join } = group();
     const sender = join(), receiver = join(sender);
-    const token = forgedModule(sender, description, globalModule);
+    const token = forgedModule(sender, description, referenceGlobalModule);
     const before = counters(sender.owner);
-    expect(errorText(receiver.send({ AttachModule: { token } }))).toBe("Nested globals are not available on the Browser host");
+    expect(errorText(receiver.send({ AttachModule: { token } }))).toBe("unsupported nested global export");
     expect(counters(sender.owner)).toEqual(before);
     expect(receiver.host.snapshot().modules).toBe(0);
     const admitted = forgedModule(sender, description, tableModule);
     expect(receiver.send({ AttachModule: { token: admitted } })).toHaveProperty("AttachedModule");
     expect(receiver.host.snapshot().modules).toBe(1);
+    const numeric = forgedModule(sender, description, globalModule);
+    const holds = counters(sender.owner);
+    expect(receiver.send({ AttachModule: { token: numeric } })).toHaveProperty("AttachedModule");
+    expect(receiver.host.snapshot().modules).toBe(2);
+    expect(counters(sender.owner)).toEqual(holds);
   });
 
   test("the owner decides kind before any byte is read", () => {

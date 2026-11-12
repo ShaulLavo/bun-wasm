@@ -174,7 +174,7 @@ async function check(browserName: string, engine: string) {
       await app.locator("vite-error-overlay").waitFor({ state: "hidden", timeout: STEP_MS });
       await app.locator("button.counter", { hasText: "count is 2" }).waitFor({ timeout: STEP_MS });
       await shot("5c-vanilla");
-      await selectAndNavigate(page, "#template", "react", NAVIGATION);
+      await selectAndNavigate(page, "#template", "vite-react", NAVIGATION);
       await app.locator("h1", { hasText: "Fixed it" }).waitFor({ timeout: STARTUP_MS });
     });
     await step("6 engine switch keeps edits", async () => {

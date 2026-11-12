@@ -12,7 +12,6 @@ shared-wasm-memory Browser budget: pass
 shared-wasm-memory reservation: pass
 shared-wasm-memory binding descriptor: pass
 shared-wasm-memory table exports: pass
-shared-wasm-memory Browser global refusal: pass
 shared-wasm-memory worker refusals: pass
 shared-wasm-memory cross-worker: pass
 plain-sab: pass
@@ -20,6 +19,8 @@ plain-sab guest: pass
 shared-buffer slice: pass
 shared-buffer alias: pass
 shared-buffer churn: pass
+table-global: pass
+table-global guest: pass
 shared-wasm-memory worker transport: pass
 shared-wasm-memory membership: pass
 shared-wasm-memory membership forgery: pass

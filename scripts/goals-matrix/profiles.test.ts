@@ -1,3 +1,4 @@
+import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { initialReport, options, playgroundURL } from "./run";
 import { nativeRunnerArgs } from "./fleet";
@@ -33,12 +34,12 @@ test("goals profile selection reaches both playground URLs and the remote FIFO r
 });
 
 test("readiness reads the running profile instead of trusting a requested URL or engine label", () => withPlayground(framework, 0, async transport => {
-  expect(await ready(transport, "browser", 100)).toHaveProperty("profile", "split");
-  await expect(ready(transport, "browser", 100, "shared-group")).rejects.toThrow("expected shared-group, observed split");
-  await transport.evaluate('location.href = "http://fixture/?engine=quickjs&profile=shared-group"; document.querySelector = selector => selector === "#engine" ? { value: "quickjs" } : { textContent: "QuickJS ready" };');
-  await transport.evaluate('playground.profile = "shared-group"');
-  expect(await ready(transport, "quickjs", 100, "shared-group")).toHaveProperty("profile", "shared-group");
-  await expect(ready(transport, "quickjs", 100, "split")).rejects.toThrow("expected split, observed shared-group");
+  expect(await withScoped(transport, page => ready(page, "browser", 100))).toHaveProperty("profile", "split");
+  await expect(withScoped(transport, page => ready(page, "browser", 100, "shared-group"))).rejects.toThrow("expected shared-group, observed split");
+  await withScoped(transport, page => page.evaluate('location.href = "http://fixture/?engine=quickjs&profile=shared-group"; document.querySelector = selector => selector === "#engine" ? { value: "quickjs" } : { textContent: "QuickJS ready" };'));
+  await withScoped(transport, page => page.evaluate('playground.profile = "shared-group"'));
+  expect(await withScoped(transport, page => ready(page, "quickjs", 100, "shared-group"))).toHaveProperty("profile", "shared-group");
+  await expect(withScoped(transport, page => ready(page, "quickjs", 100, "split"))).rejects.toThrow("expected split, observed shared-group");
 }));
 
 test("staged reports cannot silently change their selected program profile", async () => {

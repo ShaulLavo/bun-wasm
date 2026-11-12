@@ -499,7 +499,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         .concat(request.notifications ? [request.notifications.port] : [])
         .concat(request.network ? [request.network.port] : [])
         .concat(groupTransfer);
-      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
+      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob), request.module);
       worker.postMessage({ ...request, controlGrant } satisfies RunRequest, transfers);
       watchOutcome();
     }
