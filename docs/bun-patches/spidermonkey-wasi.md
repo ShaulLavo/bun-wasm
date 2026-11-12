@@ -66,3 +66,40 @@ Receipt creation writes the exported-header manifest. Artifact replay reads and
 compares the saved manifest without repairing or replacing it, including on
 failure. Missing or changed headers and missing or corrupt manifests fail closed.
 The profile tests have a feature-owned blocking quality manifest under scripts.
+
+## Embedding promise metadata
+
+`js/src/builtin/Promise.cpp` at Mozilla revision
+`a5df22d986d4b626f771b4f8885241941601c35c` is a local port under
+`__wasi__ && BUNWASM_EMBED`. It keeps allocation-site capture, async parents,
+all five slots, lazy IDs, settlement and rejection identities. It omits the
+allocation clock and ordinary resolution capture. The captured-rejection-stack
+branch still wraps and stores the stack and records its resolution timestamp.
+The missing-debug-info branch still transfers the allocation site and ID.
+
+This relies on the embedding contract. Upstream resolution-site consumers exist
+in `debugger/Object.cpp`, `jsapi.cpp`, `shell/js.cpp` and Promise debug dumping.
+The embedding installs no Debugger or promise-timing consumer. Its rejection
+callback reads `JS::GetPromiseResult`; Rust retains promise and reason handles.
+The optimization does not apply to an ordinary upstream shell.
+
+## Release embedding crash diagnostics
+
+`js/src/util/DiagnosticAssertions.h` at the same revision is a local port.
+Only the Nightly arm exempts the release WASI embedding from
+`JS_CRASH_DIAGNOSTICS`. DEBUG diagnostics remain enabled. This removes ordinary
+context diagnostics and optional extra poisoning. Diagnostic assertions,
+release assertions, explicit crashes, `releaseCheck`, actual pointer, memory
+and member-stack bounds, OOM, quotas and interrupt/watchdog behavior remain.
+No profiling, tracing, optimization, visibility, language-feature or tier flag
+changes accompany it.
+
+The original `diagnostic-profile.ts` adapter preprocesses the actual header with
+library compiler arguments and embedding settings, matching exported headers
+and forced confdefs, in both split and shared generations. It checks release
+and DEBUG macros and binds the readback into each fresh native receipt.
+
+Archive recipes and irregexp source ownership contribute to one ordered set of
+hashed input paths. Replay reads the complete saved set, then reconstructs the
+irregexp closure without adding duplicate records. Cold creation and replay
+therefore compare the same receipt while still hashing every required input.

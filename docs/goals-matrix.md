@@ -8,7 +8,7 @@ TMPDIR=/work/tmp bun /work/heavy-runner/current/run.js --class build goals-matri
   bun scripts/goals-matrix/prepare.ts /absolute/delivery
 ```
 
-The preparation command checks the delivery shell pin against the current consumer,
+The preparation command checks the shell receipt and bytes against the current consumer,
 expands the engine pairs in task-owned scratch, and builds with those inputs. It
 then checks embedded host fingerprints, engine-builds.json, and actual staged
 bytes. Copying WASM into an already built host is rejected before any cells run.
@@ -43,7 +43,7 @@ select current shell guests with `--shell`. That directory must contain the
 maintained shell builder's `bash-web-guests.json`, `bash-web-shell.wasm`, and
 `bash-web-env.wasm`. Preparation verifies the receipt against the current
 consumer's shell pin and file hashes, stages those guests, and records the receipt.
-Without `--shell`, the delivery's shell source must still match the current pin.
+Without `--shell`, preparation uses `BASH_WEB_GUESTS_DIR` or the checkout's `dist` directory. Its receipt and bytes must still match the current host pin. The verified builder stages them; preparation never overwrites them with donor programs after the build. `goals-site-inventory.json` records every prepared file and is checked before campaigns start.
 For a bounded
 Chrome campaign, run Hono first, then append Vite React with the same clean source:
 

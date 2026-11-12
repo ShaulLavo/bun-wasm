@@ -49,6 +49,7 @@ impl FinalOutcome {
 struct SignalState {
     started: bool,
     selected: Option<FinalOutcome>,
+    startup_detail: String,
     dispositions: [u8; 65],
     pending: u64,
 }
@@ -58,6 +59,7 @@ impl Default for SignalState {
         Self {
             started: false,
             selected: None,
+            startup_detail: String::new(),
             dispositions: [0; 65],
             pending: 0,
         }
@@ -259,7 +261,30 @@ impl Cancellation {
 
     /// Selection precedes descriptor teardown; publication to proc_wait comes later.
     pub fn select(&self, outcome: FinalOutcome) -> FinalOutcome {
+        self.select_with_detail(outcome, String::new())
+    }
+
+    pub fn select_start_failure(&self, errno: i32, detail: String) -> FinalOutcome {
+        self.select_with_detail(FinalOutcome::StartFailed(errno), detail)
+    }
+
+    pub fn spawn_error(&self) -> String {
+        let state = self.state.lock().unwrap();
+        if !matches!(state.selected, Some(FinalOutcome::StartFailed(_))) {
+            return String::new();
+        }
+        state.startup_detail.clone()
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.state.lock().unwrap().selected.is_some()
+    }
+
+    fn select_with_detail(&self, outcome: FinalOutcome, detail: String) -> FinalOutcome {
         let mut state = self.state.lock().unwrap();
+        if state.selected.is_none() {
+            state.startup_detail = super::bounded_spawn_detail(detail);
+        }
         let selected = *state.selected.get_or_insert(outcome);
         state.pending = 0;
         if let FinalOutcome::Signal(signal) = selected {

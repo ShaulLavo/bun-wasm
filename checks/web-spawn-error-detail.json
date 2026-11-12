@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/spawn-error-detail.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}
