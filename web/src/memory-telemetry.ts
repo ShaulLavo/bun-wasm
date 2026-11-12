@@ -296,6 +296,7 @@ type CleanupCensus = MemoryCensus & { boundary: "adapter-cleanup"; telemetryId: 
 export interface MemoryProcessEnvelope {
   schema: 1;
   time: number;
+  sequence: number;
   sharedBuffers: boolean;
   processes: MemoryProcessRow[];
   runtimes: MemoryCensus[];
@@ -465,7 +466,7 @@ function projectFrozenFailure(value: FrozenAllocatorFailure | null): FrozenAlloc
 
 /** Synchronous cached samples plus registered service reads. Never requests a guest sample. */
 export function retainedMemoryProcesses(): MemoryProcessEnvelope {
-  const result: MemoryProcessEnvelope = { schema: 1, time: Date.now(), sharedBuffers: typeof SharedArrayBuffer === "function",
+  const result: MemoryProcessEnvelope = { schema: 1, time: Date.now(), sequence: observationSequence, sharedBuffers: typeof SharedArrayBuffer === "function",
     processes: [], runtimes: [], censuses: [], loss: { ...observationLoss, outputCensuses: 0, outputWorkerRows: 0, outputProcesses: 0 }, incomplete: true };
   try {
     const rows = Array.from(processes.values());

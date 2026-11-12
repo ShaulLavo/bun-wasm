@@ -90,7 +90,7 @@ function census(value: unknown): value is MemoryCensus {
     && nullableCounter(value.knownSampledBytesSubtotal) && Array.isArray(value.workers) && value.workers.length <= 128 && value.workers.every(worker);
 }
 function envelope(value: unknown): value is MemoryProcessEnvelope {
-  if (!record(value) || value.schema !== 1 || !counter(value.time) || typeof value.sharedBuffers !== "boolean" || typeof value.incomplete !== "boolean") return false;
+  if (!record(value) || value.schema !== 1 || !counter(value.time) || !counter(value.sequence) || typeof value.sharedBuffers !== "boolean" || typeof value.incomplete !== "boolean") return false;
   if (!Array.isArray(value.processes) || value.processes.length > 256 || !value.processes.every(processRow)) return false;
   if (!Array.isArray(value.runtimes) || value.runtimes.length > 272 || !value.runtimes.every(census)) return false;
   if (!Array.isArray(value.censuses) || value.censuses.length > 16 || !value.censuses.every(cleanupCensus)) return false;
@@ -107,7 +107,7 @@ function projectObservation(value: MemoryProcessEnvelope): MemoryProcessEnvelope
     pid: row.binding.pid, parentPid: row.binding.parentPid, job: row.binding.job } : null,
     launchedAt: row.launchedAt, launchSequence: row.launchSequence, endedAt: row.endedAt, endSequence: row.endSequence,
     outcome: projectOutcome(row.outcome), status: row.status, sample: projectSample(row.sample), engineHeap: row.engineHeap }));
-  return { schema: 1, time: value.time, sharedBuffers: value.sharedBuffers, incomplete: value.incomplete, processes,
+  return { schema: 1, time: value.time, sequence: value.sequence, sharedBuffers: value.sharedBuffers, incomplete: value.incomplete, processes,
     runtimes: value.runtimes.map(projectCensus), censuses: value.censuses.map(row => ({ ...projectCensus(row), boundary: row.boundary, telemetryId: row.telemetryId })),
     loss: { active: value.loss.active, terminal: value.loss.terminal, runtimes: value.loss.runtimes,
       censuses: value.loss.censuses, outputCensuses: value.loss.outputCensuses, outputWorkerRows: value.loss.outputWorkerRows, outputProcesses: value.loss.outputProcesses } };

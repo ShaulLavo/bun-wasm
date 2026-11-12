@@ -1,5 +1,34 @@
 # Compatibility follow-ups
 
+## Guest process PID and parent PID
+
+Status: Approved follow-up. No guest fix or new ABI is included in the bounded
+host memory observation work.
+
+`crates/bunwasm-runtime/src/js/process.ts:275-276` sets `pid: 1` and `ppid: 0`
+instead of binding the admitted runtime process identity. The retained ordinary
+SpiderMonkey pair (pair/side source `f4b15c44`, core/native source `ca980da2`)
+reproduced this twice on Chromium with host `be736db8d` on November 12, 2026.
+The parent and both synchronous children printed PID 1, while `spawnSync`
+returned distinct child PIDs 3 and 4 and statuses 0 and 70. The original
+transcript is retained in the memory implementation report's
+`control-transcript.log`. This is an identity compatibility gap, not evidence
+about the cause of an allocation failure.
+
+Reproduce in the actual playground with the unchanged guest:
+
+```sh
+bun -e 'const {spawnSync}=require("node:child_process"); const r=spawnSync("node",["-e","console.log(JSON.stringify({pid:process.pid,ppid:process.ppid}))"],{encoding:"utf8"}); console.log(JSON.stringify({pid:process.pid,ppid:process.ppid,childPid:r.pid,status:r.status,stdout:r.stdout}));'
+```
+
+The expected process properties must come from the admitted runtime identity,
+including intermediaries and distinct runtimes. A future implementation needs
+its own guest/host contract and engine coverage; do not substitute ordering,
+job identity, environment guesses, or fixed values. The bounded observation
+control instead uses actual returned child PIDs, nonce-bound captured streams,
+and measured launcher/broker parent edges after a pre-control sequence boundary.
+It makes no independently guest-printed parent identity claim.
+
 ## Global Web Worker census
 
 Status: Approved.

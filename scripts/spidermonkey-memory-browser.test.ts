@@ -9,8 +9,8 @@ import { session } from "../web/tests/playground.mjs";
 import { preflight } from "./goals-matrix/preparation";
 import { verifyPreparedSiteInventory } from "./goals-matrix/prepared-site";
 import { ready, command } from "./goals-matrix/playground";
-import { engineMemoryLog, decodeMemoryObservation } from "./goals-matrix/browser-memory";
-import { memoryControlCommand, assertMemoryControl } from "./goals-matrix/memory-control";
+import { engineMemoryLog, readEngineMemory, decodeMemoryObservation } from "./goals-matrix/browser-memory";
+import { memoryControlCommand, memoryControlBoundary, assertMemoryControl } from "./goals-matrix/memory-control";
 import { evaluatePage, type Transport } from "./goals-matrix/transport";
 import { withScoped } from "./goals-matrix/scope-fixture";
 
@@ -77,7 +77,9 @@ async function scenario(browser: Browser, url: string): Promise<void> {
     await withScoped(pageTransport(host), async page => {
       await page.navigate(`${url}?engine=spidermonkey&profile=split&prompt=off&mode=memory`);
       await ready(page, "spidermonkey", 120000, "split");
-      const result = await command(page, memoryControlCommand(), 120000);
+      await command(page, "bun -e 0", 120000);
+      const boundary = memoryControlBoundary(await readEngineMemory(page), crypto.randomUUID());
+      const result = await command(page, memoryControlCommand(boundary.nonce), 120000);
       expect(result).toHaveProperty("code", 0);
       if (!result || typeof result !== "object" || !("output" in result) || typeof result.output !== "string") throw Error("Missing real control transcript");
       console.log(JSON.stringify({ transcript: result.output }));
@@ -86,7 +88,7 @@ async function scenario(browser: Browser, url: string): Promise<void> {
       expect(log).toContain(marker);
       const observation = decodeMemoryObservation(JSON.parse(log.slice(log.indexOf(marker) + marker.length)));
       console.log(JSON.stringify({ observation }));
-      const control = assertMemoryControl(result.output, observation);
+      const control = assertMemoryControl(result.output, observation, boundary);
       console.log(JSON.stringify({ control }));
     }, 240000);
   } finally { await context.close(); }

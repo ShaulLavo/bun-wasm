@@ -90,12 +90,20 @@ libc failure does not prove an engine limit. Allocator live bytes do not
 separate retained arenas, fragmentation, static/stack data or other gaps.
 
 The real split/interpreter positive control runs a parent Bun command with
-synchronous `node` children. Each prints a post-entry sentinel. The fail child
+synchronous `node` children after a pre-control host sequence boundary. A
+trivial setup command loads the lazy launcher before that read. Each child
+prints a post-entry sentinel under the control's unique nonce. The fail child
 requests exactly `new ArrayBuffer(1_073_807_360)`, prints a caught-error sentinel
-and exits 70. Assertions join the actual returned PIDs and outcomes to retained
-rows, require both readable libc exports, and require the failure census to
-contain known samples for the child and still-live parent. This qualifies a
-post-entry caught allocation failure. It does not reproduce an in-guest
+and exits 70. Each `spawnSync` result supplies its actual child PID, outcome,
+and separately captured mode/nonce stdout and stderr. Assertions require
+exactly one runtime containing both newly bound children and one common
+measured parent with its own launcher row. The failure census corroborates
+their parent edges, directory, root, individual observed jobs and known bytes.
+Both libc exports must be readable, and parent cleanup must not have been
+observed at that child census. The guest currently reports fixed compatibility
+values for `process.pid` and `process.ppid`; neither is an identity oracle.
+This qualifies returned-child PID binding and host parent attribution, without
+an independently guest-printed parent oracle. It does not reproduce an in-guest
 bootstrap failure, pre-entry Waffle startup failure, or the complete esbuild
 protocol. There is no automatic pressure experiment or source fix for an
 assumed cause.

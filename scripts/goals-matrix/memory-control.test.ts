@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { assertMemoryControl, memoryControlBytes, memoryControlCommand, readMemoryControlResult } from "./memory-control";
+import { assertMemoryControl, memoryControlBytes, memoryControlCommand, memoryControlBoundary, readMemoryControlResult, type MemoryControlResult } from "./memory-control";
 import { classifyMemoryProcess, decodeMemoryObservation, engineMemoryLog, readEngineMemory } from "./browser-memory";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
@@ -9,10 +9,12 @@ import type { Transport } from "./transport";
 import type { MemoryProcessEnvelope, MemoryProcessRow } from "../../web/src/memory-telemetry";
 import { discoverChecks, selectChecks } from "../test-checks";
 import { checkInputPaths } from "../ci-check-inputs";
+const nonce = "synthetic-memory-control-nonce";
+const boundary = { nonce, sequence: 5 };
 
 function syntheticProcess(pid: number, parentPid: number): MemoryProcessRow {
   return { id: `synthetic-${pid}`, engine: "spidermonkey", binding: { runtimeId: "synthetic-runtime", pid, parentPid, job: 1 },
-    launchedAt: 10, launchSequence: pid, endedAt: 20, endSequence: 30 + pid, outcome: { kind: "observed", value: { kind: "exited", code: 0, status: 0 } },
+    launchedAt: 10, launchSequence: 10 + pid, endedAt: 20, endSequence: 30 + pid, outcome: { kind: "observed", value: { kind: "exited", code: 0, status: 0 } },
     status: "sampled", engineHeap: "unsupported", sample: { time: 19, terminal: true, wasmCapacityBytes: 16777216, memoryLimitBytes: 1073741824,
       allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, allocatorFailure: null, frozenAllocatorFailure: null, libcTelemetry: { allocator: "read", failure: "read" } } };
 }
@@ -24,12 +26,13 @@ function syntheticControl(): { output: string; observation: MemoryProcessEnvelop
   if (!fail.sample) throw Error("synthetic fixture requires a sample");
   fail.sample.frozenAllocatorFailure = { bytes: memoryControlBytes, category: "libc.calloc", previousUsableBytes: null,
     allocatorLiveBytes: 1000, allocatorPeakBytes: 2000, wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 16777216, reason: "unknown" };
-  const output = ['SM_MEMORY_ENTRY {"pid":2,"mode":"ok"}', 'SM_MEMORY_ENTRY {"pid":3,"mode":"fail"}',
-    'SM_MEMORY_CAUGHT {"pid":3,"mode":"fail"}', 'SM_MEMORY_CONTROL {"pid":1,"children":[{"mode":"ok","pid":2,"status":0,"signal":null},{"mode":"fail","pid":3,"status":70,"signal":null}]}'].join("\n");
-  return { output, observation: { schema: 1, time: 50, sharedBuffers: true, processes: [parent, ok, fail], runtimes: [],
+  const children: MemoryControlResult["children"] = (["ok", "fail"] as const).map((mode, index) => ({ mode, pid: index + 2, status: mode === "ok" ? 0 : 70, signal: null,
+    stdout: "SM_MEMORY_ENTRY " + JSON.stringify({ nonce, mode }) + "\n", stderr: mode === "fail" ? "SM_MEMORY_CAUGHT " + JSON.stringify({ nonce, mode }) + "\n" : "" }));
+  const output = "SM_MEMORY_CONTROL " + JSON.stringify({ nonce, children });
+  return { output, observation: { schema: 1, time: 50, sequence: 60, sharedBuffers: true, processes: [parent, ok, fail], runtimes: [],
     censuses: [{ runtimeId: "synthetic-runtime", telemetryId: fail.id, boundary: "adapter-cleanup", time: 21, sequence: 40, state: "observed",
       truncated: 0, unknownBytes: 0, knownSampledBytesSubtotal: 33554432, aliasing: "uncertain", workers: [1, 3].map(pid => ({ pid, parentPid: pid === 1 ? 0 : 1,
-        rootPid: 1, job: 1, directory: `synthetic-directory-${pid}`, bytes: 16777216, engine: "spidermonkey" })) }],
+        rootPid: 1, job: 1, directory: "synthetic-directory", bytes: 16777216, engine: "spidermonkey" })) }],
     loss: { active: 0, terminal: 0, runtimes: 0, censuses: 0, outputCensuses: 0, outputWorkerRows: 0, outputProcesses: 0 }, incomplete: false } };
 }
 function failingChild(observation: MemoryProcessEnvelope): MemoryProcessRow {
@@ -39,9 +42,10 @@ function failingChild(observation: MemoryProcessEnvelope): MemoryProcessRow {
 }
 test("synthetic rows qualify only the pure assertions, not a live engine", () => {
   const fixture = syntheticControl();
-  expect(assertMemoryControl(fixture.output, { status: "observed", observation: fixture.observation }).pid).toBe(1);
-  expect(memoryControlCommand()).toContain(`new ArrayBuffer(${memoryControlBytes})`);
-  expect(memoryControlCommand()).not.toContain("maxByteLength");
+  expect(assertMemoryControl(fixture.output, { status: "observed", observation: fixture.observation }, boundary).parent.pid).toBe(1);
+  expect(memoryControlCommand(nonce)).toContain(`new ArrayBuffer(${memoryControlBytes})`);
+  expect(memoryControlCommand(nonce)).not.toContain("maxByteLength");
+  expect(memoryControlCommand(nonce)).not.toContain("process.pid");
 });
 
 const corruptions: [string, (value: MemoryProcessEnvelope) => void][] = [
@@ -60,17 +64,43 @@ const corruptions: [string, (value: MemoryProcessEnvelope) => void][] = [
   ["missing parent sample", value => { const census = value.censuses[0]; if (census) census.workers = census.workers.filter(worker => worker.pid !== 1); }],
   ["already-cleaned parent", value => { const parent = value.processes[0]; if (parent) parent.endSequence = 1; }],
   ["synthetic zero subtotal", value => { const census = value.censuses[0]; if (census) census.knownSampledBytesSubtotal = 0; }],
+  ["stale launch before the boundary", value => { failingChild(value).launchSequence = boundary.sequence; }],
+  ["missing parent identity", value => { value.processes = value.processes.filter(row => row.binding?.pid !== 1); }],
+  ["ambiguous parent identity", value => { const parent = value.processes[0]; if (parent) value.processes.push({ ...parent, id: "ambiguous-parent" }); }],
+  ["mismatched parent edges", value => { const binding = failingChild(value).binding; if (binding) binding.parentPid = 9; }],
+  ["different broker directory", value => { const worker = value.censuses[0]?.workers[1]; if (worker) worker.directory = "other-directory"; }],
+  ["different broker root", value => { const worker = value.censuses[0]?.workers[1]; if (worker) worker.rootPid = 99; }],
+  ["different broker parent edge", value => { const worker = value.censuses[0]?.workers[1]; if (worker) worker.parentPid = 99; }],
+  ["ambiguous runtimes", value => { value.processes = value.processes.concat(value.processes.map(row => ({ ...row, id: row.id + "-other",
+    binding: row.binding ? { ...row.binding, runtimeId: "other-runtime" } : null }))); }],
 ];
 test.each(corruptions)("synthetic red control rejects %s", (_name, corrupt) => {
   const fixture = syntheticControl();
   corrupt(fixture.observation);
-  expect(() => assertMemoryControl(fixture.output, { status: "observed", observation: fixture.observation })).toThrow();
+  expect(() => assertMemoryControl(fixture.output, { status: "observed", observation: fixture.observation }, boundary)).toThrow();
 });
-test("entry, caught-error and actual result PID sentinels are all mandatory", () => {
+test("entry, caught-error and actual returned PIDs are all mandatory", () => {
   const { output } = syntheticControl();
-  expect(() => readMemoryControlResult(output.replace("SM_MEMORY_ENTRY", "missing-entry"))).toThrow();
-  expect(() => readMemoryControlResult(output.replace("SM_MEMORY_CAUGHT", "missing-catch"))).toThrow();
-  expect(() => readMemoryControlResult(output.replace('"pid":3,"status":70', '"pid":0,"status":70'))).toThrow();
+  expect(() => readMemoryControlResult(output.replace("SM_MEMORY_ENTRY", "missing-entry"), nonce)).toThrow();
+  expect(() => readMemoryControlResult(output.replace("SM_MEMORY_CAUGHT", "missing-catch"), nonce)).toThrow();
+  expect(() => readMemoryControlResult(output.replace('"pid":3,"status":70', '"pid":0,"status":70'), nonce)).toThrow();
+});
+test.each(["streams", "pids", "nonce"])("captured stream/PID control rejects swapped or mismatched %s", kind => {
+  const fixture = syntheticControl();
+  const result = readMemoryControlResult(fixture.output, nonce);
+  const ok = result.children[0], fail = result.children[1];
+  if (!ok || !fail) throw Error("missing synthetic results");
+  if (kind === "streams") [ok.stdout, fail.stdout] = [fail.stdout, ok.stdout];
+  if (kind === "pids") [ok.pid, fail.pid] = [fail.pid, ok.pid];
+  if (kind === "nonce") fail.stderr = fail.stderr.replace(nonce, "mismatched-nonce");
+  expect(() => assertMemoryControl("SM_MEMORY_CONTROL " + JSON.stringify(result), { status: "observed", observation: fixture.observation }, boundary)).toThrow();
+});
+test("pre-control boundary requires a readable supported getter and no retention loss", () => {
+  const { observation } = syntheticControl();
+  expect(memoryControlBoundary({ status: "observed", observation }, nonce)).toEqual({ nonce, sequence: observation.sequence });
+  expect(() => memoryControlBoundary({ status: "unavailable", reason: "getter-unavailable" }, nonce)).toThrow();
+  observation.loss.active = 1;
+  expect(() => memoryControlBoundary({ status: "observed", observation }, nonce)).toThrow();
 });
 test("classification separates unsupported records, cached samples and frozen failure capacity", () => {
   const row = syntheticProcess(7, 1);

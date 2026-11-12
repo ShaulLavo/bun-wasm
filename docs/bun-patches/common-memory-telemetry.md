@@ -184,6 +184,10 @@ errors, unbound roots, stale samples, disposal and retention loss remain explici
 The campaign reader projects documented numeric fields and bounded status enums.
 The split/interpreter browser regression uses the unchanged ordinary pair and
 synchronous `node` children, with post-entry and caught-error sentinels. Its exact
-fixed ArrayBuffer request is 1,073,807,360 bytes. It qualifies the existing libc
-recorder and host lifecycle path, not bootstrap failure or browser growth refusal.
+fixed ArrayBuffer request is 1,073,807,360 bytes. Nonce-bound captured child
+streams and actual returned PIDs join one newly observed runtime/parent family;
+broker directory, root and parent edges corroborate the launcher records.
+Guest `process.pid` and `process.ppid` are not identity oracles. This qualifies
+the existing libc recorder and host lifecycle path, not bootstrap failure or
+browser growth refusal.
 See [memory attribution](../guides/memory-attribution.md) for the boundaries.
