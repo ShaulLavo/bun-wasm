@@ -113,9 +113,11 @@ Their physical stack retains the minimum required to run the wasm engine.
 enforce V8 heap-generation or code-range limits. `resourceLimits` reports the
 requested values; it does not claim engine-specific limits were enforced.
 
-Cross-guest SharedArrayBuffer and WebAssembly.Module cloning are unsupported and
-throw `DataCloneError`. SharedArrayBuffer sharing needs a host object table rather
-than a byte copy. `SHARE_ENV` propagates ordered updates before message and exit
+A SharedArrayBuffer, `WebAssembly.Memory` or `WebAssembly.Module` crosses guests as a
+shared reference, never a byte copy: the Browser engine through its shared-objects
+service (above), the shared-group engines through their group's directory. Both sides
+then see the same bytes and the same Module. Engines without either, such as the split
+profile, throw `DataCloneError` for these values. `SHARE_ENV` propagates ordered updates before message and exit
 events. It does not support synchronous polling loops across guests. The control
 channel bounds an incoming frame at 64 MiB. VM contexts remain unsupported, so
 `moveMessagePortToContext` validates its arguments and then throws.

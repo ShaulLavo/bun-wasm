@@ -9,6 +9,7 @@ shared-wasm-memory engine roots: pass
 shared-wasm-memory cross-worker: pass
 shared-wasm-memory worker refusals: pass
 shared-wasm-memory group lanes: pass
+shared-wasm-memory group lane lifetime: pass
 shared-buffer slice: pass
 shared-buffer alias: pass
 shared-buffer growable: pass

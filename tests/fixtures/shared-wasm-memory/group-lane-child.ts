@@ -1,6 +1,7 @@
+import { writeFileSync } from 'node:fs';
 import { parentPort, receiveMessageOnPort, workerData, type MessagePort } from 'node:worker_threads';
 
-type Data = { mode: string; port: MessagePort; gate: SharedArrayBuffer; check: string; count: number };
+type Data = { mode: string; port: MessagePort; gate: SharedArrayBuffer; check: string; count: number; size: number; seed: number; side: number; directory: string };
 const data: Data = workerData;
 
 function check(condition: boolean, label: string) {
@@ -79,7 +80,51 @@ function burst() {
   data.port.close();
 }
 
+/** Posts, confirms the post through the gate, then blocks for good until it is killed. */
+function postThenBlock(port: { postMessage(value: unknown): void }) {
+  for (let index = 0; index < (data.count || 1); index++) port.postMessage({ task: text(data.size, data.seed + index) });
+  const gate = new Int32Array(data.gate);
+  open(gate, 0);
+  Atomics.wait(gate, 3, 0);
+}
+
+/** Never reads: confirms it holds its port, then blocks for good until it is killed. */
+function holdUnread() {
+  const gate = new Int32Array(data.gate);
+  open(gate, 0);
+  Atomics.wait(gate, 3, 0);
+}
+
+/**
+ * One side of a ping-pong in turns counted by a shared word: on its turn a side must read the
+ * previous message at the first receive, then post the next. No event-loop turn is needed, so
+ * the exchange outlives the guest that set it up.
+ */
+function pingPong() {
+  const turn = new Int32Array(data.gate);
+  let received = 0;
+  for (let step = data.side; step < data.count; step += 2) {
+    for (let now = Atomics.load(turn, 0); now !== step; now = Atomics.load(turn, 0)) Atomics.wait(turn, 0, now);
+    if (step > 0) {
+      const message = receiveMessageOnPort(data.port);
+      check(message !== undefined, `step ${step}: the previous message is readable at the first receive`);
+      check((message!.message as { task: string }).task === text(data.size, step - 1), `step ${step}: whole message`);
+      received++;
+    }
+    data.port.postMessage({ task: text(data.size, step) });
+    if (step === 10) writeFileSync(`${data.directory}/started`, 'started');
+    Atomics.store(turn, 0, step + 1);
+    Atomics.notify(turn, 0);
+  }
+  writeFileSync(`${data.directory}/done-${data.side}`, String(received));
+}
+
 switch (data.mode) {
+  case 'post-then-block': postThenBlock(data.port); break;
+  case 'parent-post-then-block': postThenBlock(parentPort!); break;
+  case 'parent-post-then-exit': parentPort!.postMessage({ task: text(data.size, data.seed) }); process.exit(0); break;
+  case 'hold-unread': holdUnread(); break;
+  case 'ping-pong': pingPong(); break;
   case 'blocked': blocked(); break;
   case 'reply': reply(); break;
   case 'exit-after-post': data.port.postMessage({ task: text(300_000, 5) }); process.exit(0); break;
