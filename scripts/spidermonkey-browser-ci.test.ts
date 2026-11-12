@@ -26,8 +26,8 @@ test("the selected native producer feeds the discovered Browser group consumer o
   expect(step).toContain("bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group");
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|native --profile|BUN_WASM_SPIDERMONKEY_TIER/);
   expect(workflow.match(/name: Consume the shared SpiderMonkey Browser feature checks/g)).toHaveLength(1);
-  expect(workflow.indexOf("name: Consume the shared Browser feature checks")).toBeLessThan(workflow.indexOf("name: Produce the shared JSC profile once"));
-  expect(workflow.indexOf("name: Consume the shared JSC feature checks")).toBeLessThan(workflow.indexOf("name: Produce the shared SpiderMonkey profile once"));
+  expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the shared Browser feature checks"));
+  expect(workflow.indexOf("name: Produce the shared SpiderMonkey profile once")).toBeLessThan(workflow.indexOf("name: Consume the shared JSC feature checks"));
   expect(selectChecks("browser-guest", undefined, "shared-group")).toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("browser-guest")).not.toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("quality")).toContain("scripts/spidermonkey-browser-ci.test.ts");
