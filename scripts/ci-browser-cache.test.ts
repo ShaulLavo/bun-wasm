@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pruneArchives } from "../web/scripts/ci-browser-deps";
@@ -114,7 +114,9 @@ test("only main seeds the shared archive cache, before browser downloads or test
 function dependencyFixture(directory: string): void {
   mkdirSync(join(directory, "scripts"));
   mkdirSync(join(directory, "node_modules/playwright"), { recursive: true });
-  copyFileSync(new URL("../web/scripts/ci-browser-deps.ts", import.meta.url), join(directory, "scripts/ci-browser-deps.ts"));
+  const source = readFileSync(new URL("../web/scripts/ci-browser-deps.ts", import.meta.url), "utf8");
+  writeFileSync(join(directory, "scripts/ci-browser-deps.ts"), source.replace('"/etc/apt/sources.list.d/ubuntu.sources"', JSON.stringify(join(directory, "ubuntu.sources"))));
+  writeFileSync(join(directory, "ubuntu.sources"), "Types: deb\nURIs: https://archive.ubuntu.com/ubuntu\nSuites: resolute resolute-updates resolute-backports resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n");
   writeFileSync(join(directory, "node_modules/playwright/cli.js"), `
     const browsers = process.argv.slice(4);
     if (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER) {
@@ -147,12 +149,15 @@ for (const browsers of [["chromium", "firefox", "webkit"], ["chromium", "webkit"
       expect(result.status, result.stderr).toBe(0);
       const calls: unknown[] = readFileSync(join(directory, "apt-calls"), "utf8").trim().split("\n").map(line => JSON.parse(line));
       expect(calls).toHaveLength(3);
-      expect(calls[0]).toEqual(["apt-get", "update", "--error-on=any"]);
+      const sources = ["-o", `Dir::Etc::sourcelist=${join(directory, "ubuntu.sources")}`, "-o", "Dir::Etc::sourceparts=-"];
+      expect(calls[0]).toEqual(["apt-get", "update", "--error-on=any"].concat(sources));
       const plan = calls[1];
       const install = calls[2];
       if (!Array.isArray(plan) || !Array.isArray(install)) throw new Error("Expected apt argv");
-      expect(plan.slice(-5, -2)).toEqual(["libchromium", "libfirefox", "libwebkit"]);
-      expect(install.slice(-browsers.length)).toEqual(browsers.map(browser => "lib" + browser));
+      expect(plan.slice(-9, -6)).toEqual(["libchromium", "libfirefox", "libwebkit"]);
+      expect(plan.slice(-4)).toEqual(sources);
+      expect(install.slice(-4)).toEqual(sources);
+      expect(install.slice(-4 - browsers.length, -4)).toEqual(browsers.map(browser => "lib" + browser));
       expect(plan).toContain("Acquire::ForceHash=SHA256");
     });
   });
@@ -178,6 +183,20 @@ test("an unrelated failing third-party feed cannot block Ubuntu browser dependen
     expect(result.status, result.stderr).toBe(0);
   });
 });
+
+for (const contents of [undefined, ""]) {
+  test(`${contents === undefined ? "missing" : "empty"} Ubuntu sources fail before apt can use other feeds`, () => {
+    fixture(directory => {
+      dependencyFixture(directory);
+      const sources = join(directory, "ubuntu.sources");
+      if (contents === undefined) rmSync(sources);
+      else writeFileSync(sources, contents);
+      const result = setupDependencies(directory, ["webkit"]);
+      expect(result.status).not.toBe(0);
+      expect(readdirSync(directory)).not.toContain("apt-calls");
+    });
+  });
+}
 
 test("refreshed archive pools discard obsolete and unrelated debs before saving", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-cache-"));
