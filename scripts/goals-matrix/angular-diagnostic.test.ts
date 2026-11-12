@@ -10,6 +10,17 @@ import { withPlayground } from "./test-fixture";
 
 const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;
+
+test("uses the latest named Angular diagnostic in a cumulative terminal", () => {
+  const latest = "/tmp/ng-6O5XQu/angular-errors.log";
+  const output = `${reference}\nerror: script "dev" exited with code 127\n$ bun run dev\nSee "${latest}" for further details.`;
+  expect(namedAngularDiagnostic(output)).toBe(latest);
+});
+
+test("retains the latest reference when the same diagnostic is printed repeatedly", () => {
+  const latest = "/tmp/ng-current/angular-errors.log";
+  expect(namedAngularDiagnostic(`${reference}\nSee "${latest}" for further details.\nSee "${latest}" for further details.`)).toBe(latest);
+});
 type Fixture = DiagnosticFixture & { framework?: string; output?: string; fail?: boolean; owned?: boolean; slowTerminal?: boolean; changingTerminal?: boolean; failedRead?: "failure" | "final" | "both"; browserMemory?: "empty" | "trap" };
 
 async function runFixture(config: Fixture = {}) {
@@ -119,6 +130,13 @@ test.each([false, true])("failed Angular diagnostic survives final log save befo
   for (const log of observed.logs) expect(log).toContain("at ajv/dist/compile/codegen/index.js:181:24");
   expect(observed.events[0]).toBe("diagnostic");
   expect(observed.events.at(-1)).toBe(owned ? "cleanup" : "close");
+});
+
+test("failure capture reads the latest named log after an earlier Angular command", async () => {
+  const observed = await runFixture({ output: `See "/tmp/ng-previous/angular-errors.log" for further details.\n${reference}` });
+  expect(observed.readInodes).toEqual([observed.expected]);
+  expect(observed.logs.at(-1)).toContain(`--- Guest Angular diagnostic: ${path} ---`);
+  expect(observed.logs.at(-1)).toContain("at ajv/dist/compile/codegen/index.js:181:24");
 });
 
 test.each([false, true])("Angular capture preserves Browser trap facts when its read stalls = %s", async stalled => {

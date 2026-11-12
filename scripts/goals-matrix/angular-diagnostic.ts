@@ -3,7 +3,9 @@ declare const __GOALS_ANGULAR_DIAGNOSTIC__: string;
 let source: Promise<string> | undefined;
 
 export function namedAngularDiagnostic(output: string): string | undefined {
-  return /^See "(\/tmp\/ng-[A-Za-z0-9_-]{1,64}\/angular-errors\.log)" for further details\.$/m.exec(output)?.[1];
+  let path: string | undefined;
+  for (const match of output.matchAll(/^See "(\/tmp\/ng-[A-Za-z0-9_-]{1,64}\/angular-errors\.log)" for further details\.$/gm)) path = match[1];
+  return path;
 }
 
 export async function buildAngularDiagnosticSource(): Promise<string> {

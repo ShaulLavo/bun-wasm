@@ -185,6 +185,12 @@ before an absent failure can be reported as measured. Missing records, channel
 errors, unbound roots, stale samples, disposal and retention loss remain explicit.
 
 The campaign reader projects documented numeric fields and bounded status enums.
+Immediate launch-refusal details retain their existing separate collector and
+bounded metadata helper. The common snapshot merger preserves those facts and
+Browser trap counters across worker samples without adding them to the new
+process-memory block. Its cached process samples keep their observed boundary;
+legacy retained snapshots can accept a newer matching frame while remaining
+terminal. Campaign budget fallbacks preserve already copied refusal facts.
 The split/interpreter browser regression uses the unchanged ordinary pair and
 synchronous `node` children, with post-entry and caught-error sentinels. Its exact
 fixed ArrayBuffer request is 1,073,807,360 bytes. Nonce-bound captured child

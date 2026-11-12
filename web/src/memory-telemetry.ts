@@ -3,6 +3,7 @@ import { programCoreMemoryLimits, type CoreMemoryLimits } from "../../src/progra
 import { isPairedEngine, type Engine } from "../../src/engine-kind.js";
 import type { ProcessService } from "waffle";
 import type { ProcessExit } from "waffle/proc/types";
+import { copyLaunchFailure, type LaunchFailureFact } from "./launch-failure.js";
 export type TelemetryEngine = Engine;
 export interface FailedAllocation { bytes: number | null; category: string }
 export interface FrozenAllocatorFailure extends FailedAllocation {
@@ -35,6 +36,8 @@ export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   engineFailure: FailedAllocation | null;
   engineCounters: Record<string, number | null>;
   libcTelemetry?: { allocator: "read" | "unsupported"; failure: "read" | "unsupported" };
+  /** Immediate page-side launch failures, preserved across worker samples and end. */
+  launchFailures?: readonly LaunchFailureFact[];
 }
 export const emptyCounters: MemoryCounters = {
   wasmCapacityBytes: null, memoryLimitBytes: null, allocatorLiveBytes: null, allocatorPeakBytes: null,
@@ -153,6 +156,28 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 }
 
 const retained = new Map<string, MemorySnapshot>();
+function retainSnapshot(snapshot: MemorySnapshot): void {
+  const previous = retained.get(snapshot.id);
+  if (previous && (previous.engine !== snapshot.engine || previous.commandId !== snapshot.commandId
+    || previous.commandStartedAt !== snapshot.commandStartedAt || previous.commandSequence !== snapshot.commandSequence
+    || previous.incarnation !== snapshot.incarnation)) return;
+  const latest = previous && previous.time > snapshot.time ? previous : snapshot;
+  const earlier = latest === snapshot ? previous : snapshot;
+  const traps = Object.fromEntries(Object.entries(earlier?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
+  retained.set(snapshot.id, { ...latest, terminal: snapshot.terminal || previous?.terminal || false,
+    engineCounters: { ...traps, ...latest.engineCounters }, launchFailures: previous?.launchFailures,
+    allocatorFailure: latest.allocatorFailure ?? earlier?.allocatorFailure ?? null,
+    frozenAllocatorFailure: latest.frozenAllocatorFailure ?? earlier?.frozenAllocatorFailure ?? null,
+    engineFailure: latest.engineFailure ?? earlier?.engineFailure ?? null,
+    failedAllocation: latest.failedAllocation ?? earlier?.failedAllocation ?? null });
+}
+export function recordLaunchFailure(id: string, failure: LaunchFailureFact): void {
+  const fact = copyLaunchFailure(failure);
+  const snapshot = retained.get(id);
+  if (!fact || !snapshot) return;
+  const launchFailures = (snapshot.launchFailures ?? []).filter(value => value.attempt !== fact.attempt).concat([fact]).slice(-2);
+  retained.set(id, { ...snapshot, launchFailures });
+}
 const channels = new Map<string, SharedArrayBuffer>();
 const runtimes = new WeakMap<object, string>();
 const commandTimes = new Map<string, number>();
@@ -366,15 +391,15 @@ function acceptProcessSnapshot(value: unknown, expectedId?: string, channelIdent
   const id = expectedId ?? value.id;
   const previous = retained.get(id);
   const row = processes.get(id);
-  if (!previous || !row || row.endedAt !== null) return;
+  if (!previous || !row) return;
   if (value.id !== id || value.engine !== previous.engine || value.commandId !== previous.commandId
     || value.commandSequence !== previous.commandSequence || value.commandStartedAt !== previous.commandStartedAt || value.incarnation !== previous.incarnation) {
     if (channelIdentity) observationError(id, "invalid");
     return;
   }
-  if (row.sample?.terminal || row.sample && value.time < row.sample.time) return;
-  retained.set(id, value);
-  row.sample = value;
+  retainSnapshot(value);
+  if (row.endedAt !== null || row.sample?.terminal || row.sample && value.time < row.sample.time) return;
+  row.sample = retained.get(id) ?? value;
   row.status = "sampled";
 }
 function supersededSnapshot(value: unknown, expectedId?: string): boolean {
@@ -400,7 +425,7 @@ function finishProcessObservation(id: string, readOutcome?: () => ProcessExit | 
   row.endedAt = Date.now();
   row.endSequence = ++observationSequence;
   const snapshot = retained.get(id);
-  if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: row.endedAt });
+  if (snapshot) retained.set(id, { ...snapshot, terminal: true });
   if (row.binding && adverseObservation(row)) retainCleanupCensus(row.binding.runtimeId, id);
   trimProcessObservations();
 }
@@ -547,14 +572,15 @@ async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean)
     acceptProcessSnapshot(value, entry.id, true);
     const current = memoryChannelReady(entry.channel, entry.generation, false);
     if (!current) {
-      retained.set(entry.id, { ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
+      retainSnapshot({ ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
         notes: "Host snapshot was not acknowledged for this phase. " + value.notes });
       continue;
     }
     const normal = memoryChannelReady(entry.channel, entry.generation, refresh);
-    retained.set(entry.id, normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
+    retainSnapshot(normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
       notes: "Normal phase refresh not acknowledged. Engine counters are unavailable for this phase. " + value.notes });
   }
   return retainedMemorySnapshots();
 }
 Reflect.set(globalThis, "__bunMemorySnapshots", requestMemorySnapshots);
+Reflect.set(globalThis, "__bunRetainedMemorySnapshots", retainedMemorySnapshots);

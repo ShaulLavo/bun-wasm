@@ -1,4 +1,5 @@
-import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess, observeMemoryOutcome } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot, registerMemoryProcess, observeMemoryOutcome, recordLaunchFailure } from "./memory-telemetry.js";
+import { errorFact, launchFailureFact, type LaunchFailureFact } from "./launch-failure.js";
 import { programMetadata } from "../../src/assets.js";
 import { isSharedGroupCore } from "../../src/engine-kind.ts";
 import { bunEnvironment } from "../../src/executable-paths.js";
@@ -54,6 +55,7 @@ function sharedGroupLaunch(module: WebAssembly.Module, worker: unknown): "new" |
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
   return (context, service) => launchBunProcess(engine, options, context, service);
 }
+let launchAttempt = 0;
 
 async function launchBunProcess(engine: Engine, options: BunLauncherOptions, context: Parameters<GuestLauncher>[0], service: Parameters<GuestLauncher>[1]) {
   const memoryTelemetryId = crypto.randomUUID();
@@ -98,6 +100,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     } catch (error) { sharedRoute?.close(); if (active()) context.fail(error); }
   };
   let dispatch: ((message: unknown) => void) | undefined;
+  let memoryGroup: "new" | "inherit" | undefined;
+  let attempt: number | undefined;
   try {
     if (!active()) throw new Error("Bun process launch was revoked");
     const module = options.loadTools && isToolCommand(context.request.argv.slice(1))
@@ -123,12 +127,13 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     dispatch = message => dispatchBunNetwork(session, message);
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
     const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job), module);
+    attempt = ++launchAttempt;
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,
       // A group core has no other way to link. A guest thread joins its parent's group; every
       // other process starts its own, as on the native host. Only the typed spawn request decides.
-      memoryGroup: sharedGroupLaunch(module, context.request.worker),
+      memoryGroup: memoryGroup = sharedGroupLaunch(module, context.request.worker),
       request: {
         engine, memoryTelemetry, adapter: "bun", module, ...programMetadata(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
@@ -140,9 +145,27 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       onMessage,
     });
   } catch (error) {
-    await cleanup();
+    const failure = attempt === undefined ? undefined : observeLaunchFailure(error, context, service, options.runtime, memoryTelemetryId, memoryGroup ?? null, attempt);
+    try { await cleanup(); }
+    catch (cleanupError) {
+      observeCleanupFailure(memoryTelemetryId, failure, cleanupError);
+      throw cleanupError;
+    }
     throw error;
   }
+}
+
+function observeLaunchFailure(error: unknown, context: Parameters<GuestLauncher>[0], service: Parameters<GuestLauncher>[1], runtime: ProcessRuntime, id: string, memoryGroup: "new" | "inherit" | null, attempt: number): LaunchFailureFact | undefined {
+  try {
+    const failure = launchFailureFact(error, context, service, runtime, memoryGroup, attempt);
+    recordLaunchFailure(id, failure);
+    return failure;
+  } catch { /* Diagnostics must not change launch failure or cleanup. */ }
+}
+function observeCleanupFailure(id: string, failure: LaunchFailureFact | undefined, error: unknown): void {
+  if (!failure) return;
+  try { recordLaunchFailure(id, { ...failure, cleanupError: errorFact(error) }); }
+  catch { /* Keep the original cleanup error and failure semantics. */ }
 }
 
 /** Launches a third-party preview1 program, with no Bun slots, in the sibling preview1 worker. */

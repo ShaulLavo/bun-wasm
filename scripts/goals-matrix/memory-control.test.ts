@@ -9,6 +9,7 @@ import type { Transport } from "./transport";
 import type { MemoryProcessEnvelope, MemoryProcessRow } from "../../web/src/memory-telemetry";
 import { discoverChecks, selectChecks } from "../test-checks";
 import { checkInputPaths } from "../ci-check-inputs";
+import { launchFailureFixture } from "../fixtures/launch-failure";
 const nonce = "synthetic-memory-control-nonce";
 const boundary = { nonce, sequence: 5 };
 
@@ -162,11 +163,13 @@ test.each([[false, false], [true, false], [false, true], [true, true]])("synthet
   const saves: string[] = [];
   const diagnostic = Promise.withResolvers<void>();
   const fixture = syntheticControl();
+  const launchFailure = launchFailureFixture().capture();
   const transport: Transport = { capabilities: { synthetic: true }, async navigate() { throw Error("synthetic original startup failure"); },
     async useHost() {}, async usePreview() {}, async openPreview() {}, async closePreview() {},
     async evaluate<T>(expression: string): Promise<T> {
       if (stalled && expression.includes("retainedProcessFacts")) await diagnostic.promise;
       return runInNewContext(expression, { __bunMemoryProcesses: () => fixture.observation,
+        __bunRetainedMemorySnapshots: () => [{ engine: "spidermonkey", launchFailures: [launchFailure] }],
         playground: { term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
           shell: { running: false }, previews: { serves: () => false } } });
     }, async close() { closed = true; } };
@@ -178,6 +181,7 @@ test.each([[false, false], [true, false], [false, true], [true, true]])("synthet
   expect(result.error).toContain("synthetic original startup failure");
   expect(closed).toBe(true);
   expect(saves.join("\n")).toContain(stalled ? '"reason":"observation-budget"' : '"state":"failed-request"');
+  expect(saves.join("\n")).toContain('"message":"original native refusal"');
   expect(result.attempts[0]?.phases.find(phase => phase.phase === "cleanup")?.status).toBe("pass");
   const saved = saves.slice();
   diagnostic.resolve();

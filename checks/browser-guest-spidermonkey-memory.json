@@ -3,6 +3,7 @@
   "path": "scripts/spidermonkey-memory-browser.test.ts",
   "inputs": [
     "web/src/memory-telemetry.ts",
+    "web/src/launch-failure.ts",
     "web/src/bun-launcher.ts",
     "scripts/goals-matrix/browser-memory.ts",
     "scripts/goals-matrix/execute.ts",

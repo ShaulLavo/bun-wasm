@@ -54,6 +54,25 @@ test("native HTTP keeps root paths, methods, body, headers and status on fixed o
   expect(await (await fetch(first.origin, { method: "HEAD" })).text()).toBe("");
 });
 
+const framePolicies: { name: string; headers: Record<string, string>; embedder: string | null; resource: string | null }[] = [
+  { name: "neither policy", headers: {}, embedder: "require-corp", resource: "cross-origin" },
+  { name: "COEP only", headers: { "Cross-Origin-Embedder-Policy": "credentialless" }, embedder: "credentialless", resource: null },
+  { name: "CORP only", headers: { "Cross-Origin-Resource-Policy": "cross-origin" }, embedder: null, resource: "cross-origin" },
+  { name: "both policies", headers: { "Cross-Origin-Embedder-Policy": "unsafe-none", "Cross-Origin-Resource-Policy": "same-origin" }, embedder: "unsafe-none", resource: "same-origin" },
+];
+test.each(framePolicies)("frame defaults preserve explicit app policies: $name", async ({ headers, embedder, resource }) => {
+  const endpoint = fixture("policies");
+  endpoint.fetch = () => new Response("preview body", { status: 201, headers });
+  const binding = await host().bind({}, 3137, endpoint);
+  for (const destination of ["iframe", "frame"]) {
+    const response = await fetch(binding.origin, { headers: { "sec-fetch-dest": destination } });
+    expect(response.headers.get("cross-origin-embedder-policy")).toBe(embedder);
+    expect(response.headers.get("cross-origin-resource-policy")).toBe(resource);
+    expect(response.status).toBe(201);
+    expect(await response.text()).toBe("preview body");
+  }
+});
+
 test("foreign owner origins, wrong Host/port and cross-site requests never dispatch", async () => {
   const registry = host();
   const first = await registry.bind({}, 3137, fixture("first"));
