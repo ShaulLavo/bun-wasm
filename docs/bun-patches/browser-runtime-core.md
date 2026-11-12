@@ -48,11 +48,10 @@ OPFS waits for an occupied Web Lock, reports waiting in the UI and resumes autom
 the owner releases it. IndexedDB retains its default original takeover adapter. A new holder steals the lock, allocates a persisted epoch, and checks that epoch
 inside every write transaction. A displaced page stops persistence and preserves visible editor text.
 These changes extend bun-wasm's own adapters at `b14f536f`; no upstream implementation is copied.
-The conformance host also answers Waffle's packaged quota-control requests with
-an explicit unavailable result because this fixture has no CDP controller. Its
-worker keeps these replies outside command dispatch. Native quota exhaustion is
-qualified by the Waffle runner and the sandbox guest suite with their controllers;
-the unchanged persistence smoke deadline still catches a missing host response.
+The conformance host forwards Waffle's packaged quota-control requests to real
+Chromium controls, keeping replies outside worker command dispatch. The
+[provider quota adapter](persistence-provider-quota.md) records the protocol,
+case isolation and native rejection, reset and error controls.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
 and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus
 fixture retains only generated package-file sizes from the original local storage spike's
