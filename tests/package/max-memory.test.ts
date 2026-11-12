@@ -127,9 +127,11 @@ test("no consumer keeps its own capacity number", () => {
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   const capacity = /536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES/;
   const nativeOracles = ["scripts/fixtures/quickjs-frame-stack.c", "scripts/fixtures/quickjs-parser-stack.c"];
+  // Recorded Chrome tracing buffer statistics are evidence, not Bun guest memory ceilings.
+  const traceStatistics = ["tests/performance/fixtures/lifecycle-chrome-retention.json"];
   // These standalone engine oracles set native pthread stacks, not guest memory ceilings.
   expect(tracked(capacity.source)
-    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual(nativeOracles);
+    .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual(nativeOracles.concat(traceStatistics));
   for (const path of nativeOracles) {
     expect(read(path).split("\n").filter(line => capacity.test(line)))
       .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
