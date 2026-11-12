@@ -22,8 +22,8 @@ function read(path: FileRead["path"], text: string, offset = 0): Extract<FileRea
 
 async function fixture<T>(action: (value: { fs: ReturnType<typeof nextBuildFilesystem>; transport: Transport; events: NextBuildObservation[] }) => Promise<T>, buildDelayMs = 350) {
   const fs = nextBuildFilesystem();
-  fs.write({ [manifestPath]: '{"version":1,"files":["dev.js"]}', [tracePath]: JSON.stringify([span("dev", 1, 1)]) + "\n", [diagnosticsPath]: '{"buildStage":"dev"}' });
   try {
+    fs.write({ [manifestPath]: '{"version":1,"files":["dev.js"]}', [tracePath]: JSON.stringify([span("dev", 1, 1)]) + "\n", [diagnosticsPath]: '{"buildStage":"dev"}' });
     return await withPlayground(next!, 0, async transport => {
       await withScoped(transport, page => page.evaluate(`
         globalThis.commands = []; globalThis.inputs = []; globalThis.lines = ['Compiled successfully'];
