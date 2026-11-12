@@ -31,6 +31,7 @@ SpiderMonkey split pair, and checks the installed Waffle version.
 source env.sh
 scratch=$(mktemp -d /work/tmp/bun-wasm-lifecycle-XXXXXX)
 export GOALS_CHROME_EXECUTABLE=/work/cache/google-chrome/opt/google/chrome/chrome
+export BASH_WEB_GUESTS_DIR=/absolute/current-receipt-backed-shell
 bun /work/heavy-runner/current/run.js --host local --class build lifecycle-host -- \
   bun scripts/performance/prepare-lifecycle.ts \
   /work/tmp/bun-wasm-chrome-firefox-guests-20261111 "$scratch" \
@@ -47,6 +48,9 @@ The caller owns the newly created scratch directory. Remove it after the runner
 exits and its servers, native children, and browsers have stopped. Preserve the
 coordinator-owned canonical delivery and prepared native source. Do not remove
 the prepared host while another lane is copying it.
+Preparation explicitly selects the split program profile and verifies current shell
+receipts independently of Bun guest source. Its closed site inventory includes the
+lifecycle metadata added by this adapter.
 
 ## Collect and resume runs
 

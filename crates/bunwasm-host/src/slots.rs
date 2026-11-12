@@ -408,7 +408,7 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
             |mut caller: Caller<'_, Host>, ptr: i32, len: i32| {
                 let (memory, size) = guest(&mut caller)?;
                 let Some(at) = proc_range(size, ptr, len) else {
-                    return Ok(crate::process::FAULT);
+                    return Ok(caller.data_mut().processes.spawn_fault());
                 };
                 view(&mut caller, &memory, &[at], |parts, host| {
                     host.processes.spawn(parts[0])
@@ -585,6 +585,26 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
         |caller: Caller<'_, Host>, index: u32| -> Result<i32> {
             caller.data().cancel.check()?;
             Ok(caller.data().processes.inherited_fd(index))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
+        "spawn_error",
+        |mut caller: Caller<'_, Host>, pid: i32, ptr: i32, capacity: i32| -> Result<i32> {
+            let (memory, size) = guest(&mut caller)?;
+            let Some(range) = proc_range(size, ptr, capacity) else {
+                return Ok(crate::process::FAULT);
+            };
+            let detail = match caller.data().processes.spawn_error(pid) {
+                Ok(detail) => detail,
+                Err(errno) => return Ok(errno),
+            };
+            if detail.len() <= range.len() {
+                memory
+                    .write(&mut caller, range.start, detail.as_bytes())
+                    .context("validated spawn_error output")?;
+            }
+            Ok(detail.len() as i32)
         },
     )?;
     linker.func_wrap(

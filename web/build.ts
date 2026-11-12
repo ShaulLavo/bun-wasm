@@ -9,6 +9,7 @@ import { projectTemplates } from "./src/playground/project-templates";
 import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, resolve } from "node:path";
+import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -62,6 +63,7 @@ function commandChunks(metafile: Metafile): string[] {
 
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
 const engineBuilds: Record<string, string> = {};
+await stageSharedPrograms(out, engineBuilds);
 
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) return false;

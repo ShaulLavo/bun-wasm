@@ -38,6 +38,14 @@ stored there consume the repository's cache allowance but cannot warm other PRs.
 Main archives can be restored by every PR. Large merge-ref copies can evict main
 and turn an ordinary change into a full native/JSC rebuild.
 
+The shared profile job produces QuickJS, JSC and SpiderMonkey before its five
+consumer steps. It saves the complete native target, compiler objects and release
+downloads after production, so a later fixture failure or job timeout does not
+discard finished build work. These remain build caches: all consumers still block
+the job, and every restored profile still passes the producer's input and byte
+checks. Saving the immutable native key after only one engine would strand an
+incomplete entry, so there is one save after all three producers succeed.
+
 ## Verify the policy
 
 The Quality owner discovers `scripts/ci-cache-policy.test.ts`. It parses the actual

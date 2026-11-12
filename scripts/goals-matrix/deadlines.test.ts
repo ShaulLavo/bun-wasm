@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initialReport, options, run } from "./run";
+import { writePreparedSiteInventory } from "./prepared-site";
 import { deadlinePolicy, campaignDeadlines, cellDeadlines } from "./deadlines";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
@@ -178,6 +179,8 @@ async function withDriver(transport: Transport, action: (endpoint: string, timeo
     if (path.endsWith("/timeouts")) { timeouts.push(body); return Response.json({ value: null }); }
     if (path.endsWith("/window") && request.method === "GET") return Response.json({ value: "host" });
     if (path.endsWith("/window/new")) return Response.json({ value: { handle: "preview" } });
+    if (path.endsWith("/element")) return Response.json({ value: { "element-6066-11e4-a52e-4f735466cecf": "fixture-counter" } });
+    if (path.endsWith("/element/fixture-counter/click")) await withScoped(transport, page => page.evaluate("globalThis.__goalsFixtureNativeClick()"));
     if (path.endsWith("/url")) await withScoped(transport, page => page.navigate(String(body.url)));
     if (path.endsWith("/execute/async")) return evaluation(body);
     return Response.json({ value: null });
@@ -200,6 +203,7 @@ async function stageUnitHost(root: string, framework: string): Promise<void> {
   await writeFile(join(root, "index.html"), `globalThis.__bunwasmBuilds=${builds};`);
   await writeFile(join(root, "goals-host-source.json"), JSON.stringify({ commit: "0".repeat(40), dirty: true }));
   await writeFile(join(root, `${framework}.json`), "{}");
+  await writePreparedSiteInventory(root);
 }
 test.each(["nuxt", "astro"])("the real runner and WebDriver transport apply the override only to %s's install in a local unit fixture", async id => {
   const framework = frameworks.find(item => item.id === id);

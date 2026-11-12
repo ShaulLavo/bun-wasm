@@ -8,6 +8,7 @@ import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../sc
 import { dirname, join, resolve } from "node:path";
 import { templates } from "./src/template-catalog";
 import { templateFiles } from "./template-files";
+import { stageSharedPrograms } from "../scripts/stage-program-profiles";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
@@ -28,6 +29,7 @@ await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
 // ---------- engines ----------
 
 const engineBuilds: Record<string, string> = {};
+await stageSharedPrograms(out, engineBuilds);
 
 async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) {

@@ -1551,6 +1551,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         Ok(host::proc_access(a.str(0)?, a.str(1)?).into())
     });
     t.add("procSpawn", |a| Ok(host::proc_spawn(a.bytes(0)?).into()));
+    t.add("procSpawnError", |a| {
+        text_or_code(host::proc_spawn_error(a.i32(0)?))
+    });
     t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
     t.add("procPipe", |_| {
         Ok(match host::proc_pipe() {
