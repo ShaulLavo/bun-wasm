@@ -3,7 +3,9 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import { until } from "./playground";
 import { armSafariClick, observeSafariClick } from "./safari-click";
 import { presentIphonePreview } from "./iphone-browser";
+import { SafariOwnershipWitness, ownershipRequest, type SafariOwnershipSink, type SafariOwnershipOperation } from "./safari-ownership";
 export type SafariTransportOptions = {
+  ownershipSink?: SafariOwnershipSink;
   endpoint: string;
   browser: "safari" | "iphone-safari";
   deviceUDID?: string;
@@ -107,7 +109,7 @@ Promise.resolve().then(() => (0, eval)(expression)).then(value => {
 }).catch(error => done({ ok: false, message: String(error), stack: error && error.stack ? String(error.stack) : "" }));
 `;
 
-function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests, browser: SafariTransportOptions["browser"]): SafariTransport {
+function transport(request: Request, sessionPath: string, host: string, capabilities: SafariTransport["capabilities"], lifetime: AbortController, cleanup: CleanupRequests, browser: SafariTransportOptions["browser"], witness?: SafariOwnershipWitness): SafariTransport {
   let preview: Preview | undefined;
   let tail = Promise.resolve();
   let closing: Promise<void> | undefined;
@@ -115,6 +117,10 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   const command = (admission: Admission | undefined, path: string, body?: unknown, method?: string): Promise<unknown> => {
     if (admission) admit(admission);
     return operationRequest(sessionPath + path, body, method);
+  };
+  const ownedCommand = (operation: SafariOwnershipOperation, admission: Admission | undefined, path: string, body?: unknown, method?: string) => {
+    if (admission) admit(admission);
+    return ownershipRequest(witness, operation, () => command(admission, path, body, method), admission);
   };
   const select = async (selected: string, admission?: Admission): Promise<void> => { await command(admission, "/window", { handle: selected }); };
   const navigate = async (url: string, admission: Admission): Promise<void> => { await command(admission, "/url", { url }); };
@@ -125,7 +131,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
   }
 
   async function frameElement(token: string, remove: boolean, admission?: Admission): Promise<unknown> {
-    return command(admission, "/execute/sync", { script: `return (${ownedFrame.toString()})(arguments[0], arguments[1]);`, args: [token, remove] });
+    return ownedCommand({ kind: remove ? "frame-remove" : "frame-reference", token }, admission, "/execute/sync", { script: `return (${ownedFrame.toString()})(arguments[0], arguments[1]);`, args: [token, remove] });
   }
 
   async function previewContext(admission: Admission): Promise<void> {
@@ -133,8 +139,8 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     if (preview.kind === "tab") return select(preview.handle, admission);
     await hostContext(admission);
     const element = object(await frameElement(preview.token, false, admission));
-    handle(element["element-6066-11e4-a52e-4f735466cecf"]);
-    await command(admission, "/frame", { id: element });
+    const id = handle(element["element-6066-11e4-a52e-4f735466cecf"]);
+    await ownedCommand({ kind: "frame-select", token: preview.token, element: id }, admission, "/frame", { id: element });
   }
 
   function serial<T>(admission: Admission, action: () => Promise<T>): Promise<T> {
@@ -161,7 +167,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 
   async function closeTab(selected: string, admission?: Admission): Promise<void> {
     await select(selected, admission);
-    await command(admission, "/window", undefined, "DELETE");
+    await ownedCommand({ kind: "preview-tab-close", handle: selected }, admission, "/window", undefined, "DELETE");
   }
 
   async function openPreview(url: string, admission: Admission): Promise<void> {
@@ -181,7 +187,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     await hostContext(admission);
     const token = crypto.randomUUID();
     preview = { kind: "frame", token };
-    await command(admission, "/execute/sync", {
+    await ownedCommand({ kind: "frame-present", token }, admission, "/execute/sync", {
       script: `(${presentFrame.toString()})(arguments[0], ${presentIphonePreview.toString()}); return null;`, args: [{ url, token }],
     });
     await previewContext(admission);
@@ -189,7 +195,7 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 
   async function ownedPreview(admission: Admission): Promise<string> {
     if (preview?.kind === "tab") return preview.handle;
-    const created = handle(object(await command(admission, "/window/new", { type: "tab" })).handle);
+    const created = handle(object(await ownedCommand({ kind: "preview-tab-create" }, admission, "/window/new", { type: "tab" })).handle);
     if (created === host) throw new Error("Safari returned the host handle for a new preview");
     preview = { kind: "tab", handle: created };
     return created;
@@ -230,9 +236,15 @@ function transport(request: Request, sessionPath: string, host: string, capabili
     closePreview: (admission: Admission) => serial(admission, () => closePreview(admission)),
     close(interruptPending = false) {
       if (interruptPending) lifetime.abort(new Error("Safari session cleanup interrupted pending commands"));
-      return closing ??= tail.then(async () => { await cleanup.session(sessionPath, undefined, "DELETE"); });
+      return closing ??= tail.then(() => finishSession(witness, cleanup, sessionPath));
     },
   });
+}
+
+async function finishSession(witness: SafariOwnershipWitness | undefined, cleanup: CleanupRequests, sessionPath: string): Promise<void> {
+  const remove = async () => { await ownershipRequest(witness, { kind: "session-delete" }, () => cleanup.session(sessionPath, undefined, "DELETE")); };
+  if (witness) await witness.finish(remove);
+  else await remove();
 }
 
 export async function createSafariTransport(options: SafariTransportOptions): Promise<SafariTransport> {
@@ -246,13 +258,18 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const address = endpoint.href.replace(/\/$/, "");
   const request = createRequest(address, options.timeoutMs, lifetime.signal);
   const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal), session: createRequest(address, cleanupTimeoutMs), timeoutMs: cleanupTimeoutMs };
-  const opened = object(await request("/session", { capabilities: { alwaysMatch: requested } }));
-  const sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
+  const witness = options.ownershipSink ? new SafariOwnershipWitness(options.ownershipSink) : undefined;
+  let sessionPath: string;
+  let opened: Record<string, unknown>;
+  try {
+    opened = object(await ownershipRequest(witness, { kind: "session-create" }, () => request("/session", { capabilities: { alwaysMatch: requested } })));
+    sessionPath = `/session/${encodeURIComponent(handle(opened.sessionId))}`;
+  } catch (error) { return cleanupAfterFailure(error, () => witness ? witness.finish(async () => {}) : Promise.resolve()); }
   try {
     const capabilities = freezeCapabilities(opened.capabilities);
     verifyCapabilities(capabilities, options);
     await request(`${sessionPath}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 });
-    const host = handle(await request(`${sessionPath}/window`));
-    return transport(request, sessionPath, host, capabilities, lifetime, cleanup, options.browser);
-  } catch (error) { return cleanupAfterFailure(error, async () => { await cleanup.session(sessionPath, undefined, "DELETE"); }); }
+    const host = handle(await ownershipRequest(witness, { kind: "host-handle" }, () => request(`${sessionPath}/window`)));
+    return transport(request, sessionPath, host, capabilities, lifetime, cleanup, options.browser, witness);
+  } catch (error) { return cleanupAfterFailure(error, () => finishSession(witness, cleanup, sessionPath)); }
 }

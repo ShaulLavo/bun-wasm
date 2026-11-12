@@ -46,3 +46,12 @@ server stop; owned cleanup observes before transport cleanup. A missing
 failure-time observation is labelled as unavailable. Successful logs retain
 their existing format. The Angular diagnostic and iPhone executor fixtures
 cover both cleanup paths and unavailable observations.
+
+Opt-in ownership capture uses the original local adapter in
+`safari-ownership.ts`. It observes only the existing session creation, host handle,
+preview creation, frame reference/selection and teardown requests. Records separate
+intent, dispatch, acknowledgement and request failure. An acknowledgement carries
+only the identifiers returned for that operation. Failed requests have unknown
+effects, and an expired admission is labelled even when its request later returns.
+Sink failures are deferred until session deletion has been attempted and aggregate
+with an original cleanup error. Capture adds no browser requests or context inventory.

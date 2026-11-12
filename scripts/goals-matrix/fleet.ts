@@ -66,8 +66,9 @@ async function verifyNativeStopped(remote: string): Promise<void> {
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
     || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
 }
-export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
+export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false, beforeRemoval?: () => Promise<void>): Promise<void> {
   if (started) await verifyRemoteStopped(remote, waitForQueueExit);
+  await beforeRemoval?.();
   await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
@@ -75,7 +76,7 @@ export async function removeStaging(remote: string, started: boolean, config: Op
 export function nativeRunnerArgs(config: Options, remote: string): string[] {
   const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
   const queue = admission(config);
-  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : []);
+  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : [], config.safariOwnership ? ["--safari-ownership"] : []);
 }
 async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
   admission(config);
@@ -113,8 +114,15 @@ export async function collectNativeReport(collected: string, output: string): Pr
   await cp(join(collected, "native-cleanup.json"), join(output, "native-cleanup.json"));
   return report;
 }
+async function collectFailedOwnership(remote: string, output: string): Promise<void> {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-ownership-"));
+  try {
+    await ownedCommand(["mesh", "cp", "-r", `mac:${remote}/report/logs`, join(scratch, "logs")], undefined, 30_000);
+    await cp(join(scratch, "logs"), join(output, "logs"), { recursive: true });
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
-  try { await removeStaging(remote, started, config, failure !== undefined); }
+  try { await removeStaging(remote, started, config, failure !== undefined, started && failure !== undefined && config.safariOwnership ? () => collectFailedOwnership(remote, config.output) : undefined); }
   catch (error) {
     await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify the installed queue has settled and its supervised consumers have stopped before removing this staging directory" }, null, 2));
     if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; cleanup: ${String(error)}`);
