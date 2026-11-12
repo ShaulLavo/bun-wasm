@@ -55,3 +55,10 @@ only the identifiers returned for that operation. Failed requests have unknown
 effects, and an expired admission is labelled even when its request later returns.
 Sink failures are deferred until session deletion has been attempted and aggregate
 with an original cleanup error. Capture adds no browser requests or context inventory.
+
+The small original fixture `fixtures/safari-ownership-smoke.ts` imports the same
+native lifecycle, scoped driver and receipt writer. Its standalone bundle needs no
+Playwright import. It serves one local HTML fixture, observes its own host and
+frame, verifies the receipt is readable before teardown, and records frame-removal
+and session-deletion acknowledgements separately. It makes no framework, process
+ownership or physical-window-absence acceptance claim.

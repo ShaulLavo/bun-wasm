@@ -43,15 +43,14 @@ export class SafariOwnershipWitness {
   private event = 0;
   private sessionId: string | null = null;
   private hostHandle: string | null = null;
-  private sinkError: unknown;
-  private sinkFailed = false;
+  private sinkFailure: { error: unknown } | undefined;
   constructor(private readonly sink: SafariOwnershipSink) {}
 
   private record(event: number, operation: SafariOwnershipOperation, outcome: Outcome, admission?: Admission): void {
     const entry: SafariOwnershipEvent = { sequence: ++this.sequence, event, at: new Date().toISOString(), sessionId: this.sessionId, hostHandle: this.hostHandle,
       admission: !admission ? "unscoped" : admission.signal.aborted || Date.now() >= admission.deadline ? "expired" : "active", operation, outcome };
     try { this.sink(entry); }
-    catch (error) { if (!this.sinkFailed) this.sinkError = error; this.sinkFailed = true; }
+    catch (error) { this.sinkFailure ??= { error }; }
   }
 
   async request(operation: SafariOwnershipOperation, action: () => Promise<unknown>, admission?: Admission): Promise<unknown> {
@@ -75,10 +74,10 @@ export class SafariOwnershipWitness {
   }
 
   async finish(action: () => Promise<void>): Promise<void> {
-    let failure: unknown[] = [];
+    const failure: unknown[] = [];
     try { await action(); }
-    catch (error) { failure = [error]; }
-    if (this.sinkFailed) failure.push(new Error("Safari ownership witness sink failed", { cause: this.sinkError }));
+    catch (error) { failure.push(error); }
+    if (this.sinkFailure) failure.push(new Error("Safari ownership witness sink failed", { cause: this.sinkFailure.error }));
     if (failure.length === 1) throw failure[0];
     if (failure.length > 1) throw new AggregateError(failure, `Safari cleanup and ownership witness failed: ${failure.map(String).join("; ")}`);
   }

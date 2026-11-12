@@ -66,9 +66,8 @@ async function verifyNativeStopped(remote: string): Promise<void> {
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
     || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
 }
-export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false, beforeRemoval?: () => Promise<void>): Promise<void> {
+export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
   if (started) await verifyRemoteStopped(remote, waitForQueueExit);
-  await beforeRemoval?.();
   await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
@@ -122,7 +121,10 @@ async function collectFailedOwnership(remote: string, output: string): Promise<v
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
-  try { await removeStaging(remote, started, config, failure !== undefined, started && failure !== undefined && config.safariOwnership ? () => collectFailedOwnership(remote, config.output) : undefined); }
+  try {
+    if (started && failure !== undefined && config.safariOwnership) await collectFailedOwnership(remote, config.output);
+    await removeStaging(remote, started, config, failure !== undefined);
+  }
   catch (error) {
     await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: false, error: String(error), removalCondition: "Verify the installed queue has settled and its supervised consumers have stopped before removing this staging directory" }, null, 2));
     if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; cleanup: ${String(error)}`);

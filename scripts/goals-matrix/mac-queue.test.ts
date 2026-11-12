@@ -198,7 +198,7 @@ async function localMesh(f: Fixture, operation: () => Promise<void>, entered?: s
   const previous = process.env.PATH;
   await mkdir(join(f.home, "bin"));
   const mesh = join(f.home, "bin/mesh");
-  await writeFile(mesh, `#!/bin/sh\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\n${entered ? `printf entered > ${quote(entered)}\n` : ""}exec "$@"\n`);
+  await writeFile(mesh, `#!/bin/sh\nif [ "$1" = cp ]; then shift; shift; source=\${1#mac:}; exec cp -R "$source" "$2"; fi\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\n${entered ? `printf entered > ${quote(entered)}\n` : ""}exec "$@"\n`);
   await chmod(mesh, 0o755);
   process.env.PATH = join(f.home, "bin") + ":" + previous;
   try { await operation(); }
@@ -336,3 +336,44 @@ test.each([false, true])("direct Mac CLI uses the same admission route with an e
   expect(called.slice(0, 13)).toEqual(queuedNativeCommand(config(), [], `bun-wasm goals ${f.remote}/report`, f.home).slice(2, 15));
   expect(called.slice(-args.length)).toEqual(args);
 }, `if(process.argv[2]==='status')console.log(JSON.stringify({holder:null,waiting:[]}));else{await Bun.write(process.env.EVENTS,JSON.stringify(process.argv.slice(2)));process.exitCode=75;}`));
+
+test("ownership capture forwards through ordinary run and fleet CLI options", () => {
+  const request = { ...config(), safariOwnership: true };
+  expect(options(nativeRunnerArgs(request, "/Users/fixture/task")).safariOwnership).toBe(true);
+  expect(options(nativeRunnerArgs(config(), "/Users/fixture/task")).safariOwnership).toBe(false);
+  expect(options(["--asset-source=test", "--safari-ownership=true"]).safariOwnership).toBe(true);
+  expect(() => options(["--asset-source=test", "--safari-ownership=false"])).toThrow("accepts only true");
+});
+
+test.each([false, true])("failed native run collects ownership before staging disposition, native stopped = %j", nativeStopped => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  const name = "vite-react-safari-spidermonkey.ownership-capture.jsonl";
+  const retained = '{"sessionId":"exact-session","outcome":{"state":"request-failed","effect":"unknown"}}\n';
+  await writeFile(join(f.remote, "report/logs", name), retained);
+  await writeFile(join(f.remote, "queue-exit"), "1\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: nativeStopped, safariExited: nativeStopped, admissionOwner: "installed-mac-queue" }));
+  const request = { ...config(), output: f.home, safariOwnership: true };
+  const original = new Error("original cell cleanup failed");
+  if (nativeStopped) await cleanupStaging(f.remote, true, request, original);
+  else await expect(cleanupStaging(f.remote, true, request, original)).rejects.toThrow("original cell cleanup failed; cleanup:");
+  expect(await readFile(join(f.home, "logs", name), "utf8")).toBe(retained);
+  expect(existsSync(f.remote)).toBe(!nativeStopped);
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("failure to collect ownership retains staging and preserves the original failure", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/ownership.jsonl"), "own receipt\n");
+  const mesh = join(f.home, "bin/mesh");
+  await writeFile(mesh, "#!/bin/sh\nexit 7\n");
+  const original = new Error("original operation failed");
+  const request = { ...config(), output: f.home, safariOwnership: true };
+  let error: unknown;
+  try { await cleanupStaging(f.remote, true, request, original); }
+  catch (caught) { error = caught; }
+  expect(error).toBeInstanceOf(AggregateError);
+  if (!(error instanceof AggregateError)) throw error;
+  expect(error.errors[0]).toBe(original);
+  expect(await readFile(join(f.remote, "report/logs/ownership.jsonl"), "utf8")).toBe("own receipt\n");
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
