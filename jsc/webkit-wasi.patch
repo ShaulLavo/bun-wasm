@@ -2310,12 +2310,12 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 +        beginUsingBodyScope(usingCount, block->hasAwaitUsingDeclaration());
 +    StatementNode* head = block->m_statements->firstStatement();
 +    StatementNode* lastWithCompletionValue = nullptr;
-+    if (shouldBeConcernedWithCompletionValue()) {
-+        for (StatementNode* statement = head; statement; statement = statement->next()) {
-+            if (statement->hasCompletionValue())
-+                lastWithCompletionValue = statement;
-+        }
++    for (StatementNode* statement = shouldBeConcernedWithCompletionValue() ? head : nullptr;
++         statement; statement = statement->next()) {
++        if (statement->hasCompletionValue())
++            lastWithCompletionValue = statement;
 +    }
++
 +    m_statementSpine.append(StatementSpineRecord { StatementSpineRecord::Kind::Block, !!usingCount, false, block, dst, head, lastWithCompletionValue, nullptr, nullptr });
 +}
 +
