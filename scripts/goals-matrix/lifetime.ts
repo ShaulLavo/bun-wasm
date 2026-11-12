@@ -27,7 +27,10 @@ export async function ownedCommand(args: string[], signal?: AbortSignal, timeout
   signal?.addEventListener("abort", interrupt, { once: true });
   try {
     const output = inherit ? Promise.resolve("") : new Response(child.stdout).text();
-    const errors = new Response(child.stderr).text();
+    const errors = new Response(child.stderr).text().then(error => {
+      if (inherit) process.stderr.write(error);
+      return error;
+    });
     const [code, text, error] = await bounded(() => Promise.all([child.exited, output, errors]), timeoutMs, signal);
     if (!allowed.includes(code)) throw new CommandExitError(`${args[0]} exited ${code}: ${error.slice(-2000)} ${text.slice(-1000)}`, code);
     return text;

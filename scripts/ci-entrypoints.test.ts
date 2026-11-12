@@ -31,6 +31,9 @@ async function importBundle(root: string, entrypoint: string, exported: string):
 test("the maintained fleet runner bundle imports without executing the downloader CLI", () => scratch(async root => {
   await symlink(resolve(import.meta.dir, "../node_modules"), join(root, "node_modules"), "dir");
   await importBundle(root, resolve(import.meta.dir, "goals-matrix/run.ts"), "options");
+  const cli = spawnSync(process.execPath, [join(root, "run.js"), "--unknown=fixture"], { encoding: "utf8", timeout: 10_000 });
+  expect(cli.status).toBe(1);
+  expect(cli.stderr).toContain("Unknown or repeated option --unknown=fixture");
 }));
 
 test("a bundled bootstrap import does not execute either CI helper CLI", () => scratch(async root => {

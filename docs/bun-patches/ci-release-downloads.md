@@ -71,3 +71,9 @@ The ordinary Bun cache retains its checkout-relative `BUN_INSTALL_CACHE_DIR` and
 lock-based keys. It can accelerate registry and Git inputs, but release acquisition no
 longer depends on it being warm. Download diagnostics go to stderr so callers retain
 machine-readable stdout.
+
+The downloader CLI uses `import.meta.main`, like the other host entry points.
+An imported Bun bundle shares its final URL across modules, so comparing that URL
+with `process.argv[1]` incorrectly ran this CLI during fleet runner imports.
+The executable regression bundles the fleet runner and imports it with that argv
+shape. Fixture-only CLI controls retain direct Bun and Node execution.

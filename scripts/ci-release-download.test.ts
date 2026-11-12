@@ -160,7 +160,7 @@ test("a cold CI release download fails closed without a token, but cached bytes 
   }
 });
 
-test("bootstrap exposes bunx and can provision the same Bun version twice", async () => {
+test.each([process.execPath, "node"])("bootstrap exposes bunx and can provision the same Bun version twice under %s", async host => {
   const root = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-bootstrap-"));
   try {
     const fixture = join(root, "fixture");
@@ -177,7 +177,7 @@ test("bootstrap exposes bunx and can provision the same Bun version twice", asyn
     const env = { ...process.env, RUNNER_TEMP: root, GITHUB_PATH: output, CI_RELEASE_CACHE: cache, CI_BUN_VERSION: "1.4.4", CI_NODE_VERSION: "", GITHUB_ACTIONS: "true", GITHUB_TOKEN: "" };
     const script = new URL("./ci-bootstrap-tools.ts", import.meta.url).pathname;
     for (let attempt = 0; attempt < 2; attempt++) {
-      const install = spawnSync("node", [script], { env, encoding: "utf8" });
+      const install = spawnSync(host, [script], { env, encoding: "utf8" });
       expect(install.status, install.stderr).toBe(0);
       const bin = join(root, "ci-tools/bun-1.4.4/bun-linux-x64");
       expect((await readFile(output, "utf8")).trim().split("\n")).toContain(bin);
