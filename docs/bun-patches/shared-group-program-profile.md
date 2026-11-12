@@ -28,6 +28,20 @@ exported separately.
 
 The original executable fixture in `tests/package/engine-initialization-fixture.ts` uses passive data segments and trapping relocation/constructor checks. Its package test runs the released Waffle loader for all three split engine profiles and shared QuickJS, including repeated initialization. No upstream fixture or implementation is copied.
 
+The original page and worker adapters in `src/assets.ts`, `src/bun-adapter.ts`,
+`web/src/bun-executor.ts`, `web/src/bun-launcher.ts`, `web/src/runner.ts`,
+`web/src/subprocess-broker.ts` and `web/scripts/node-linked.ts` share Waffle's prepared
+compiled image across workers. The page retains one loading promise per adapter
+installation and supplies the matching image and memory limit together. Workers adopt
+the compiled image without source bytes or compilation. Adopted roots present the
+original page-issued module/image pair to group admission. Instances, memory regions,
+initialization and cleanup remain owned by each process. These are original host
+adapters; no upstream implementation is copied or changed by this transport.
+
+The original `web/scripts/node-signals.ts` adapter creates standalone outcome buffers
+through Waffle's factory. Terminal state and startup diagnostic storage then retain one
+shared identity when Node sends their backing buffer to another worker.
+
 ### J11 real-build prerequisite repairs
 
 The first current shared-group build reproduced the unresolved TLS `errno` side

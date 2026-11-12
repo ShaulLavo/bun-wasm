@@ -10,20 +10,25 @@ const entry = (label: string, kind: number, index: number) => name(label).concat
 const body = (code: number[]) => unsigned(code.length + 2).concat([0], code, [0x0b]);
 const module = (parts: number[][]) => Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...parts));
 
-export function quickjsPair(kind: PairedEngine = "quickjs"): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
+/** A bounded fixture also exposes a real allocator record for limit-forwarding checks. */
+export function quickjsPair(kind: PairedEngine = "quickjs", maximumPages?: number): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
   const exports = [entry("memory", 2, 0), entry("__indirect_function_table", 1, 0), entry("__stack_pointer", 3, 0),
     entry("bun_core_idle", 0, 1), entry("bun_core_poll", 0, 1), entry("_start", 0, 1),
     entry("bun_core_alloc", 0, 2), entry("__wasm_call_ctors", 0, 3),
-    entry("bun_core_bind_engine", 0, 4), entry("core_checkpoint", 0, 5), entry("value", 0, 6), entry("ctors", 3, 1)];
+    entry("bun_core_bind_engine", 0, 4), entry("core_checkpoint", 0, 5), entry("value", 0, 6), entry("ctors", 3, 1)]
+    .concat(maximumPages === undefined ? [] : [entry("bun_memory_telemetry", 0, 7)]);
   const core = module([
     section(1, [4, 0x60, 0, 0, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7f]),
     section(2, [1].concat(name("runtime_proc"), name("signal"), [0, 1])),
-    section(3, [6, 0, 1, 0, 2, 0, 3]), section(4, [1, 0x70, 0, 1]), section(5, [1, 0, 1]),
+    section(3, [maximumPages === undefined ? 6 : 7, 0, 1, 0, 2, 0, 3].concat(maximumPages === undefined ? [] : [3])), section(4, [1, 0x70, 0, 1]),
+    section(5, maximumPages === undefined ? [1, 0, 1] : [1, 1, 1].concat(unsigned(maximumPages))),
     section(6, [2, 0x7f, 1, 0x41, 0x80, 0x08, 0x0b, 0x7f, 1, 0x41, 0, 0x0b]),
     section(7, [exports.length].concat(...exports)),
-    section(10, [6].concat(body([]), body([0x41, 0x80, 0x08]), body([0x23, 1, 0x41, 1, 0x6a, 0x24, 1]),
-      body([0x20, 0]), body([]), body([0x41, 0, 0x28, 2, 0]))),
-  ]);
+    section(10, [maximumPages === undefined ? 6 : 7].concat(body([]), body([0x41, 0x80, 0x08]), body([0x23, 1, 0x41, 1, 0x6a, 0x24, 1]),
+      body([0x20, 0]), body([]), body([0x41, 0, 0x28, 2, 0]), maximumPages === undefined ? [] : body([0x41, 0x80, 4]))),
+  ].concat(maximumPages === undefined ? [] : [section(11, [1, 0, 0x41, 0x80, 4, 0x0b, 80].concat(
+    Array.from({ length: 80 }, (_, index) => index === 0 ? 1 : index === 8 ? 80 : 0),
+  ))]));
   const imports = [name("env").concat(name("core_checkpoint"), [0, 0]),
     name("env").concat(name("bun_core_idle"), [0, 0]), name("env").concat(name("bun_core_poll"), [0, 0]),
     name("env").concat(name("memory"), [2, 0, 1]),

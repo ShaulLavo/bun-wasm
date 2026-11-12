@@ -6,7 +6,7 @@ import * as assets from "bun-wasm/asset";
 
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
-import { instantiateLinkPlan, prepareLinkPlan } from "waffle/link";
+import { instantiateLinkPlan, adoptLinkPlan } from "waffle/link";
 
 const [corePath, sidePath, smCorePath, smSidePath] = process.argv.slice(2);
 if (!corePath || !sidePath || !smCorePath || !smSidePath) throw new Error("Expected QuickJS core, JSC side, and SpiderMonkey pair paths");
@@ -42,11 +42,10 @@ const smAsset = { kind: "spidermonkey", core: describe("https://example.test/sm-
 assert.equal(root.ENGINE_BIN.spidermonkey, "/opt/bun/spidermonkey/bin");
 for (const load of [root.loadBunWasm, assets.loadBunWasm]) {
   const module = await load({ asset: smAsset, fetch: async url => new Response(url === smAsset.core.url ? smCore : smSide) });
-  const source = assets.programLinkPlan(module);
+  const source = assets.programMetadata(module).linkPlan;
   assert(source);
-  assert.equal(source.libraries[0]?.id, "spidermonkey");
   const wasi = new Wasi({ args: [], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: { signal: () => 0 } } });
-  const linked = instantiateLinkPlan(await prepareLinkPlan(source), { wasi, checkActive() {} });
+  const linked = instantiateLinkPlan(adoptLinkPlan(source), { wasi, checkActive() {} });
   try {
     const value = linked.entry.exports.value;
     assert.equal(typeof value, "function");

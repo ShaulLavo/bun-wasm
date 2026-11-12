@@ -52,8 +52,8 @@ The `delayed-finish` regression defers finish entry initialization by 500 ms;
 it does not change command budgets or any original case. The late-error control
 also permits the shared host's existing single interrupted-finish cleanup document,
 never another execution of the case body.
-The consumer pins published Waffle 0.0.121, source
-`6515a313bdc5b6b56491eab6210a3a58b9232224`, through public tarballs.
+The consumer pins published Waffle 0.0.122, source
+`612d4e947e78f632061de4103ffa70630a622718`, through public tarballs.
 The derived driver names its control record `processObservations`, keeping it
 distinct from the released base driver's private document observations.
 The hosted controls require confirmed teardown for their session, launcher, server,
