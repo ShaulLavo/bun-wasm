@@ -12,6 +12,20 @@ import { nativeLifecycle, resetNativeCache } from "./lifecycle-native";
 import { summarizeLifecycle } from "./lifecycle-summary";
 import { sha256 } from "./input";
 import { executableIdentity, finalizeHostVerification, lifecycleDriverInputs, recordInvocationEnvironment, verifyResume } from "./lifecycle-campaign";
+import { beginExecutionInterval } from "./lifecycle-evidence";
+
+test("execution intervals distinguish incomplete startup from a completed monotonic bracket", () => {
+  const observations = new Map<string, unknown>();
+  const finish = beginExecutionInterval((name, value) => { observations.set(name, value); }, "startup", "readiness envelope");
+  expect(observations.get("startup")).toMatchObject({ kind: "pending", unit: "ms", reason: "Interval did not reach completion" });
+  const before = observations.get("startup");
+  finish();
+  expect(observations.get("startup")).toMatchObject({ kind: "completed", unit: "ms", scope: "readiness envelope" });
+  if (!before || typeof before !== "object" || !("beforeMs" in before) || typeof before.beforeMs !== "number") throw new Error("Missing startup beginning");
+  const completed = observations.get("startup");
+  if (!completed || typeof completed !== "object" || !("afterMs" in completed) || typeof completed.afterMs !== "number") throw new Error("Missing startup completion");
+  expect(completed.afterMs).toBeGreaterThanOrEqual(before.beforeMs);
+});
 
 const fixture = resolve(import.meta.dir, "fixtures/lifecycle-process.ts");
 test("shared matrix contains 10 Next and 12 Vite cells with matched native preview browsers", () => {
