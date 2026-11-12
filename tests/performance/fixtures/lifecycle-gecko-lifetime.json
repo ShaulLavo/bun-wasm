@@ -1,0 +1,13 @@
+{
+  "meta": { "startTime": 100 },
+  "threads": [
+    {
+      "name": "DOM Worker", "pid": 1, "tid": 1, "registerTime": 1, "unregisterTime": 9,
+      "stringTable": ["lifecycleProfileRoot", "lifecycleProfileChild"],
+      "samples": { "schema": { "stack": 0, "time": 1 }, "data": [[0, 0.9], [0, 1], [0, 1.1], [1, 8.9], [1, 9], [1, 9.1]] },
+      "stackTable": { "schema": { "prefix": 0, "frame": 1 }, "data": [[null, 0], [0, 1]] },
+      "frameTable": { "schema": { "location": 0 }, "data": [[0], [1]] }
+    }
+  ],
+  "processes": []
+}

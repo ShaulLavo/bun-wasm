@@ -22,3 +22,8 @@ This removes the actions' public-release download calls without changing workflo
 timeouts, runner choices or required gates. Existing checksum-owning callers keep
 their checksum checks. The bootstrap actions previously imposed no published
 archive checksum check. Temporary download archives are removed after extraction.
+
+The bootstrap uses `import.meta.main` to keep imports inert in Bun bundles.
+Comparing its module URL with `process.argv[1]` cannot distinguish an imported
+helper after bundling. Bundle import and cached-archive CLI controls cover both
+the bootstrap and its downloader; direct CLI controls run under Bun and Node.

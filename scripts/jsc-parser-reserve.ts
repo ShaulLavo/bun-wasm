@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { effectiveParserReserve, jscStackBudgets, qualifiedParserReserves, stackHosts } from "../web/src/engine-stack-budget.ts";
-import { chainCapacities, chainMaximum, chainModes, guestStackSettings, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
+import { chainBoundaries, chainCapacities, chainMaximum, chainModes, generatorChains, type ChainBoundary, guestStackSettings, iterativeChains, reserveSiteChains, stackOutcome } from "./stack-measurement.ts";
 
 const root = resolve(import.meta.dir, "..");
 
@@ -51,7 +51,22 @@ export function capacitiesAt(host: ProbeHost, requested: StackSettings): Capacit
   if (guest?.budget !== String(requested.budgetKib) || (guest.parserReserve ?? undefined) !== requested.parserReserve) {
     throw new Error(`The guest at ${label(requested)} reported other settings: ${JSON.stringify(guest)}`);
   }
-  return { requested, effectiveParserReserve: effectiveParserReserve(requested.parserReserve), capacities: chainCapacities(result.output) };
+  const capacities = chainCapacities(result.output);
+  checkBoundaries(requested, capacities, chainBoundaries(result.output));
+  return { requested, effectiveParserReserve: effectiveParserReserve(requested.parserReserve), capacities };
+}
+
+/**
+ * A capacity counts only as the guard's: every chain the probe stopped stopped with RangeError, a
+ * chain that never stopped reached the deepest depth tried, and a shallow chain parsed afterwards.
+ */
+function checkBoundaries(requested: StackSettings, capacities: Record<string, number>, boundaries: Record<string, ChainBoundary>): void {
+  for (const mode of chainModes) {
+    const { refusal, recovered } = boundaries[mode]!;
+    const expected = capacities[mode] === chainMaximum ? null : "RangeError";
+    if (refusal !== expected) throw new Error(`${mode} at ${label(requested)}: refused with ${refusal} past ${capacities[mode]}, not ${expected}`);
+    if (!recovered) throw new Error(`${mode} at ${label(requested)}: a shallow chain failed after the refusal`);
+  }
 }
 
 // One of each rejected form: empty, zero, below and above the range, five digits, a sign,
@@ -68,6 +83,18 @@ const same = (left: CapacityRecord, right: CapacityRecord) => compare(left, righ
 const atMost = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, chainModes, (a, b) => a <= b, "at most");
 // The two reserved parser sites, in both parser passes and both source widths: eight differentials.
 const sitesBelow = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, reserveSiteChains, (a, b) => a < b, "below");
+// The code generator, not the parser reserve, stops a fully parsed assignment chain.
+const generatorSame = (left: CapacityRecord, right: CapacityRecord) => compare(left, right, generatorChains, (a, b) => a === b, "equal to");
+// Every chain the guard can stop: the iterative syntax-check pass loads the deepest chain tried at every tuple.
+const boundedChains = chainModes.filter(mode => !iterativeChains.includes(mode));
+
+function iterativeLoads(record: CapacityRecord): CapacityRecord {
+  for (const mode of iterativeChains) {
+    const capacity = record.capacities[mode];
+    if (capacity !== chainMaximum) throw new Error(`${mode}: ${capacity} at ${label(record.requested)} does not reach ${chainMaximum}, the deepest tried`);
+  }
+  return record;
+}
 
 /** The distinct host budgets, and each family's shipped value at its budget. */
 function shippedSettings(): StackSettings[] {
@@ -84,7 +111,7 @@ function shippedSettings(): StackSettings[] {
 export function parserReserveControls(host: ProbeHost): CapacityRecord[] {
   const records: CapacityRecord[] = [];
   const at = (budgetKib: number, parserReserve?: string) => {
-    const record = capacitiesAt(host, { budgetKib, parserReserve });
+    const record = iterativeLoads(capacitiesAt(host, { budgetKib, parserReserve }));
     records.push(record);
     return record;
   };
@@ -93,7 +120,7 @@ export function parserReserveControls(host: ProbeHost): CapacityRecord[] {
   const smallest = defaults.get(budgets[0]!)!;
   compare(smallest, smallest, chainModes, a => a > 0, "above zero, unlike");
   for (let index = 1; index < budgets.length; index++) atMost(defaults.get(budgets[index - 1]!)!, defaults.get(budgets[index]!)!);
-  compare(smallest, defaults.get(budgets.at(-1)!)!, chainModes, (a, b) => a < b, "below");
+  compare(smallest, defaults.get(budgets.at(-1)!)!, boundedChains, (a, b) => a < b, "below");
   // A rejected value is never clamped: the guest keeps the default's capacity exactly.
   for (const value of rejectedSettings.concat(["2048"])) same(at(smallest.requested.budgetKib, value), smallest);
   const half = at(smallest.requested.budgetKib, "1024"), quarter = at(smallest.requested.budgetKib, "512");
@@ -101,10 +128,16 @@ export function parserReserveControls(host: ProbeHost): CapacityRecord[] {
   sitesBelow(half, quarter);
   atMost(smallest, half);
   atMost(half, quarter);
+  generatorSame(smallest, half);
+  generatorSame(smallest, quarter);
   // 1000 rounds up to 1008, and 1009 to 1024.
   same(at(smallest.requested.budgetKib, "1000"), at(smallest.requested.budgetKib, "1008"));
   same(at(smallest.requested.budgetKib, "1009"), half);
-  for (const shipped of shippedSettings()) sitesBelow(defaults.get(shipped.budgetKib)!, at(shipped.budgetKib, shipped.parserReserve));
+  for (const shipped of shippedSettings()) {
+    const reduced = at(shipped.budgetKib, shipped.parserReserve);
+    sitesBelow(defaults.get(shipped.budgetKib)!, reduced);
+    generatorSame(defaults.get(shipped.budgetKib)!, reduced);
+  }
   return records;
 }
 

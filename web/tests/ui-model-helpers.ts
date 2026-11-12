@@ -132,7 +132,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     loadEngineProgram: (engine: engineLoader.Engine, profile: Parameters<typeof engineLoader.loadEngineProgram>[1], _progress: (text: string) => void, override?: string): ReturnType<typeof engineLoader.loadEngineProgram> => boundary.loadWasm(override ?? profileAsset(engineLoader.ENGINES[engine].wasm, profile)),
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
-    linkLocalUrls() {}, openTerminal() {},
+    linkLocalUrls() {}, installPreviewLinks() { return () => {}; }, openTerminal() {},
     createPrompt: (options: PromptOptions) => {
       promptCreates.push(options);
       return { variables: [], prepare() {}, render: async (context: { readonly ps1: string }) => context.ps1 };
@@ -163,6 +163,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
+    "preview-links": ["installPreviewLinks"],
     "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],
   };
   const result = await Bun.build({
