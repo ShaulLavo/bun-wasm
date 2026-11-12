@@ -47,21 +47,49 @@ fn bytes(units: &[u16]) -> Val {
     Val::Bytes(units.iter().flat_map(|c| c.to_le_bytes()).collect())
 }
 
-fn parsed(value: path::PathParsed<'_, u16>) -> Val {
-    Record::new()
-        .set("root", bytes(value.root))
-        .set("dir", bytes(value.dir))
-        .set("base", bytes(value.base))
-        .set("ext", bytes(value.ext))
-        .set("name", bytes(value.name))
-        .into()
+#[derive(Clone, Copy)]
+enum Encoding {
+    String,
+    Units,
 }
 
-fn lexical(a: Args<'_>) -> NativeResult {
+impl Encoding {
+    fn read(self, a: &Args<'_>, index: usize) -> Result<Vec<u16>, NativeError> {
+        match self {
+            Self::String => Ok(a.str(index)?.encode_utf16().collect()),
+            Self::Units => Ok(units(a.bytes(index)?)),
+        }
+    }
+
+    fn write(self, units: &[u16]) -> NativeResult {
+        match self {
+            Self::String => String::from_utf16(units).map(Val::Str).map_err(|_| {
+                NativeError::error("Path string result contains an unpaired surrogate")
+            }),
+            Self::Units => Ok(bytes(units)),
+        }
+    }
+
+    fn parsed(self, value: path::PathParsed<'_, u16>) -> NativeResult {
+        Ok(Record::new()
+            .set("root", self.write(value.root)?)
+            .set("dir", self.write(value.dir)?)
+            .set("base", self.write(value.base)?)
+            .set("ext", self.write(value.ext)?)
+            .set("name", self.write(value.name)?)
+            .into())
+    }
+}
+
+fn lexical(a: Args<'_>, encoding: Encoding) -> NativeResult {
     let windows = a.bool(0);
     let operation = a.str(1)?;
-    let input = units(a.bytes(2)?);
-    let suffix = a.opt_bytes(3).map(units);
+    let input = encoding.read(&a, 2)?;
+    let suffix = if a.is_missing(3) {
+        None
+    } else {
+        Some(encoding.read(&a, 3)?)
+    };
     let value = match (operation, windows) {
         ("basename", false) => path::basename_posix_t(&input, suffix.as_deref()),
         ("basename", true) => path::basename_windows_t(&input, suffix.as_deref()),
@@ -71,8 +99,8 @@ fn lexical(a: Args<'_>) -> NativeResult {
         ("extname", true) => path::extname_windows_t(&input),
         ("isAbsolute", false) => return Ok(path::is_absolute_posix_t(&input).into()),
         ("isAbsolute", true) => return Ok(path::is_absolute_windows_t(&input).into()),
-        ("parse", false) => return Ok(parsed(path::parse_posix_t(&input))),
-        ("parse", true) => return Ok(parsed(path::parse_windows_t(&input))),
+        ("parse", false) => return encoding.parsed(path::parse_posix_t(&input)),
+        ("parse", true) => return encoding.parsed(path::parse_windows_t(&input)),
         ("normalize", _) => {
             let mut output = vec![0; path::normalize_buf_len(&input)];
             let result = if windows {
@@ -80,26 +108,30 @@ fn lexical(a: Args<'_>) -> NativeResult {
             } else {
                 path::normalize_posix_t(&input, &mut output)
             };
-            return Ok(bytes(result));
+            return encoding.write(result);
         }
         _ => return Err(NativeError::type_error("Unknown path operation")),
     };
-    Ok(bytes(value))
+    encoding.write(value)
 }
 
-fn path_slices(a: Args<'_>, index: usize) -> Result<Vec<Vec<u16>>, NativeError> {
+fn path_slices(
+    a: Args<'_>,
+    index: usize,
+    encoding: Encoding,
+) -> Result<Vec<Vec<u16>>, NativeError> {
     let input = a
         .array(index)
         .ok_or_else(|| NativeError::type_error("Expected path array"))?;
     input
         .iter()
-        .map(|v| Args(std::slice::from_ref(v)).bytes(0).map(units))
+        .map(|v| encoding.read(&Args(std::slice::from_ref(v)), 0))
         .collect()
 }
 
 fn resolve_windows(a: Args<'_>) -> NativeResult {
     let cwd = units(a.bytes(0)?);
-    let paths = path_slices(a, 1)?;
+    let paths = path_slices(a, 1, Encoding::Units)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
     let size = path::resolve_buf_len(true, &slices).max(cwd.len() + 2);
     let mut output = vec![0; size];
@@ -110,9 +142,9 @@ fn resolve_windows(a: Args<'_>) -> NativeResult {
     Ok(bytes(result))
 }
 
-fn join(a: Args<'_>) -> NativeResult {
+fn join(a: Args<'_>, encoding: Encoding) -> NativeResult {
     let windows = a.bool(0);
-    let paths = path_slices(a, 1)?;
+    let paths = path_slices(a, 1, encoding)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
     let size = path::join_buf_len(windows, &slices);
     let mut output = vec![0; size];
@@ -122,25 +154,30 @@ fn join(a: Args<'_>) -> NativeResult {
     } else {
         path::join_posix_t(&slices, &mut output, &mut scratch)
     };
-    Ok(bytes(result))
+    encoding.write(result)
+}
+
+fn relative(a: Args<'_>, encoding: Encoding) -> NativeResult {
+    let from = encoding.read(&a, 1)?;
+    let to = encoding.read(&a, 2)?;
+    let size = path::relative_buf_len(&from, &to);
+    let mut output = vec![0; size];
+    let mut scratch = vec![0; size];
+    output[..to.len()].copy_from_slice(&to);
+    let result = if a.bool(0) {
+        relative_windows_resolved(&from, &mut output, to.len(), &mut scratch)?
+    } else {
+        relative_posix_resolved(&from, &mut output, to.len(), &mut scratch)?
+    };
+    encoding.write(result)
 }
 
 pub fn install(table: &mut Table) {
-    table.add("nodePath.lexical", lexical);
+    table.add("nodePath.lexicalString", |a| lexical(a, Encoding::String));
+    table.add("nodePath.lexicalUnits", |a| lexical(a, Encoding::Units));
     table.add("nodePath.resolveWindows", resolve_windows);
-    table.add("nodePath.join", join);
-    table.add("nodePath.relative", |a| {
-        let from = units(a.bytes(1)?);
-        let to = units(a.bytes(2)?);
-        let size = path::relative_buf_len(&from, &to);
-        let mut output = vec![0; size];
-        let mut scratch = vec![0; size];
-        output[..to.len()].copy_from_slice(&to);
-        let result = if a.bool(0) {
-            relative_windows_resolved(&from, &mut output, to.len(), &mut scratch)?
-        } else {
-            relative_posix_resolved(&from, &mut output, to.len(), &mut scratch)?
-        };
-        Ok(bytes(result))
-    });
+    table.add("nodePath.joinString", |a| join(a, Encoding::String));
+    table.add("nodePath.joinUnits", |a| join(a, Encoding::Units));
+    table.add("nodePath.relativeString", |a| relative(a, Encoding::String));
+    table.add("nodePath.relativeUnits", |a| relative(a, Encoding::Units));
 }

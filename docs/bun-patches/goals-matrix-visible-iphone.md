@@ -19,6 +19,40 @@ cannot pass. The same button in the same document must receive a trusted click,
 and its counter must change from zero to one. Other browser transports keep their
 existing click implementation.
 
+The owner focuses each new preview iframe after its document loads. Native iOS
+input can otherwise end in a trusted `touchcancel` without reaching the counter,
+even when the accessibility target and coordinates are correct. A native control
+kept the unfocused counter at zero and incremented the focused counter with one
+trusted tap. Focus does not dispatch a click, retry input, or change a deadline.
+Chromium and WebKit controls verify that a new preview takes focus from the owner
+editor and still closes normally. Opening the preview waits for that load and
+focus callback, so a load-blocking resource cannot race the single native press.
+The child document's `hasFocus()` is not a readiness predicate: native iPhone
+Safari can report false with an enabled counter and the parent iframe active.
+Controls preserve that false value while proving load ordering and native arming.
+
+The wait for that load does not occupy the owner's observer. Each page runs one
+command at a time, so a presentation command that awaited the frame's load event
+left the owner unable to answer terminal or diagnostic reads whenever a preview
+never finished loading. A native SvelteKit run on JSC reached that state: its
+render phase expired with the preview configured but never attached, and the final
+terminal read was refused as already pending. The presentation command now inserts
+the frame and returns. The frame's own load listener focuses it and records that on
+the frame element, so the record is discarded with the frame. Opening then waits
+under one deadline, in three stages of short reads: the preview observer attaches
+and is visible, the preview document reports `readyState` complete through
+read-only observations in the preview role, and cached owner state confirms the
+frame's focus record. Regular owner polls publish that record with a fresh
+presentation identity. The controller never enqueues an owner command to confirm
+focus, so cancellation there cannot block failure-time terminal reads. A record
+from an earlier presentation cannot admit input. No read starts after the deadline, after cleanup begins, or after the
+presentation changes, and an expiry names its stage and last observation. The
+transport accepts native input only between a completed opening and the next
+presentation change, so an expired or cancelled opening cannot arm or press even
+when the frame loads later. Chromium and WebKit controls hold the
+preview navigation and a load-blocking image, read the owner repeatedly meanwhile,
+expire and close a held opening, and check that a late load brings no input.
+
 Native arming reports a missing or disabled SSR counter as pending until its
 hydration enables the button. The transport polls that state within the original
 click phase deadline before taking a native snapshot or pressing once. A ready

@@ -106,7 +106,8 @@ test("exports use exactly the selected engine producers and never add a receipt 
   expect(producers[2]!.run).toBe('source env.sh\nbun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey\n');
   const engines: string[] = exports.map(output => output.engine);
   for (const engine of engines.concat(["spidermonkey"])) {
-    expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "uses", "with"]);
+    expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "timeout-minutes", "uses", "with"]);
+    expect(uploadFor(engine)["timeout-minutes"]).toBe(5);
   }
 });
 
@@ -144,7 +145,7 @@ test("native and Chromium consumers retain their selection, profile, launcher an
   for (const consumer of consumers) {
     expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: selection, run: consumer.run });
   }
-  expect(shared.needs).toEqual(["quality", "rust", "shared-prebuild"]);
+  expect(shared.needs).toEqual(["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
   expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });

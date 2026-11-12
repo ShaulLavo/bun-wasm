@@ -27,9 +27,11 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     if (path.endsWith("/configure")) return Response.json(arm.url);
-    if (path.endsWith("/state")) return Response.json({ ...arm, visible: true, userAgent: "iPhone Safari" });
+    if (path.endsWith("/state")) return Response.json({ ...arm, visible: true, userAgent: "iPhone Safari", previewFocus: { presentation: "frame-id", presented: true, focused: true } });
     const row = object(await request.json());
     if (typeof row.source !== "string") throw new Error("Missing click expression");
+    if (row.source.includes("function presentIphonePreview")) return Response.json("frame-id");
+    if (row.source.includes("function iphonePreviewLoad")) return Response.json({ loaded: true, readyState: "complete" });
     sources.push(row.source);
     if (row.source.includes("function armIphoneClick")) return Response.json(arms[Math.min(arming++, arms.length - 1)]);
     if (observation === "pending") await release.promise;
@@ -38,6 +40,8 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000,
     saveNative: save ?? (async text => { const row = JSON.parse(text); if (row.command) commands.push(row.command.slice(1)); else rows.push(row); }),
   });
+  // Native input is only accepted for a preview that opened: loaded, then focused.
+  await transport.openPreview(arm.url);
   return { transport, rows, sources, commands, closed, async close() { release.resolve(); await transport.close(); await server.stop(true); await rm(root, { recursive: true, force: true }); } };
 }
 
