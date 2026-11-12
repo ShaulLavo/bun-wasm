@@ -12,7 +12,7 @@ import { assetIdentity } from "../goals-matrix/assets";
 import { preflight } from "../goals-matrix/preparation";
 import { canonical, object, sha256, treeInventory } from "./input";
 
-function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" | "controls" | "observation" } {
+function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" | "controls" | "observation" | "observer-off" } {
   const values = new Map<string, string>();
   for (const arg of args) {
     const match = /^--(output|scratch|host|prepared|cells|timeout-ms|mode)=(.+)$/.exec(arg);
@@ -26,7 +26,7 @@ function options(args: string[]): { output: string; scratch: string; host: strin
   if (cells.some(id => !baseMatrix().some(cell => cell.id === id))) throw new Error("Unknown matrix cell");
   const mode = values.get("mode") ?? "timing";
   if (mode === "controls" && cells.some(id => baseMatrix().find(cell => cell.id === id)?.arm.kind !== "goals-browser")) throw new Error("Startup controls mode supports browser cells only");
-  if (mode !== "timing" && mode !== "selection" && mode !== "controls" && mode !== "observation") throw new Error("Use timing, selection, controls or observation");
+  if (mode !== "timing" && mode !== "selection" && mode !== "controls" && mode !== "observation" && mode !== "observer-off") throw new Error("Use timing, selection, controls, observation or observer-off");
   if (mode === "selection" && cells.some(id => baseMatrix().find(cell => cell.id === id)?.arm.kind !== "native")) throw new Error("Selection probes currently support native cells only");
   return { output: required("output"), scratch: required("scratch"), host: required("host"), prepared: required("prepared"), cells, timeoutMs, mode };
 }

@@ -12,7 +12,7 @@ Use fresh lifecycle output directories for each site and observation condition. 
 
 Raw samples include actual controller monotonic timestamps, UTC timestamps, task CPU ticks, available `schedstat` counters, affinity, process RSS/PSS, task faults and host memory/CPU pressure. Queue deltas require an advancing scheduler run counter. Missing entries and reads remain visible. Entire short-lived processes/threads and final CPU tails can be missed. Peaks are sampled; shared pages can be counted more than once by summed RSS. CPU seconds and queue seconds are separate from wall time and never form a wall partition.
 
-Run observer-on and observer-off conditions on the same host/site with new output directories. Observation wall times are diagnostic annotations and excluded from timing distributions. Keep their raw differences as overhead sensitivity, with workload variation and shared-host contention unresolved. Profiles and the existing instruction counter remain separate tools; this observer adds no counter.
+Use `--mode=observation` and `--mode=observer-off` for observer-on and observer-off conditions. Both execute the same controls before the cache reset; only the observation condition samples the measured job. Run both conditions on the same host/site with new output directories. Observation wall times are diagnostic annotations and excluded from timing distributions. Keep their raw differences as overhead sensitivity, with workload variation and shared-host contention unresolved. Profiles and the existing instruction counter remain separate tools; this observer adds no counter.
 
 For each workload, these selections cover all eight browser-engine cells:
 

@@ -45,7 +45,7 @@ async function viteOutcome(transport: Transport, url: string, timeoutMs: number)
   return { kind: "vite", listening, rendered, counter: { beforeMs: beforeCounter, afterMs: performance.now() }, before: counter.before, after: counter.after };
 }
 
-export async function nativeLifecycle(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" = "timing") {
+export async function nativeLifecycle(cell: LifecycleCell, prepared: string, scratch: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off" = "timing") {
   if (cell.arm.kind !== "native") throw new Error("Expected native lifecycle arm");
   const root = await mkdtemp(join(scratch, cell.id + "-"));
   try {
@@ -55,7 +55,7 @@ export async function nativeLifecycle(cell: LifecycleCell, prepared: string, scr
     return await measureNative(cell, root, output, timeoutMs, signal, mode);
   } finally { await rm(root, { recursive: true, force: true }); }
 }
-async function measureNative(cell: LifecycleCell, root: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation") {
+async function measureNative(cell: LifecycleCell, root: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "selection" | "observation" | "observer-off") {
   if (cell.arm.kind !== "native") throw new Error("Expected native lifecycle arm");
   const executable = Bun.which(cell.arm.runtime);
   if (!executable) throw new Error(`Missing ${cell.arm.runtime}`);
@@ -67,16 +67,17 @@ async function measureNative(cell: LifecycleCell, root: string, output: string, 
   let serverObserver: Awaited<ReturnType<typeof startObservation>> | null = null;
   let previewObserver: Awaited<ReturnType<typeof startObservation>> | null = null;
   let timing: { submission: Bracket; completion: Bracket | null } | null = null;
+  const useControls = mode === "observation" || mode === "observer-off";
   try {
     await mkdir(env.HOME); await mkdir(env.TMPDIR);
     const control = await ownedCommand([executable, "-e", "process.stdout.write(JSON.stringify({execPath:process.execPath,argv:process.argv,versions:process.versions}))"], signal);
-    const nativeControlPassed = mode === "observation" ? await nativeObserverControls(executable, root, env, output, signal) : false;
+    const nativeControlPassed = useControls ? await nativeObserverControls(executable, root, env, output, signal) : false;
     await rm(join(root, ".perf-activity"), { force: true });
     const inputs = immutableIdentity(root, cell.workload);
     preview = cell.arm.browser ? await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true) : null;
     const previewProcesses = preview?.processRoot === undefined ? null : await processTree(preview.processRoot);
     const port = preview ? await previewPort() : null;
-    const previewControlPassed = mode === "observation" && preview ? await previewObserverControl(preview, output) : false;
+    const previewControlPassed = useControls && preview ? await previewObserverControl(preview, output) : false;
     if (mode === "observation" && preview) previewObserver = previewControlPassed ? await startObservation(preview.processRoot, "Native preview browser subprocess tree only; server and controller excluded") : { observer: null, unavailable: "Preview CPU control failed" };
     const reset = await resetNativeCache(root, cell.workload);
     const preload = mode === "selection" && cell.arm.runtime === "bun" ? ["--preload", resolve("scripts/performance/lifecycle-selection.ts")] : [];

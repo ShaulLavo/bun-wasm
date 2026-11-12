@@ -64,7 +64,7 @@ function observedTransport(transport: Transport, observed: { completion: Bracket
     return value;
   } };
 }
-export async function browserLifecycle(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "controls" | "observation" = "timing", sharing: "shared" | "unshared" = "shared") {
+export async function browserLifecycle(cell: LifecycleCell, base: string, prepared: string, output: string, timeoutMs: number, signal: AbortSignal, mode: "timing" | "controls" | "observation" | "observer-off" = "timing", sharing: "shared" | "unshared" = "shared") {
   if (cell.arm.kind !== "goals-browser") throw new Error("Expected goals browser arm");
   const transport = await createPlaywrightTransport(cell.arm.browser, timeoutMs, 10_000, true);
   const interrupt = () => { void transport.close().catch(() => {}); };
@@ -93,7 +93,7 @@ export async function browserLifecycle(cell: LifecycleCell, base: string, prepar
     await writeFile(join(output, "native.bun.lock"), lock);
     const resolution = verifyResolution(lock, guestLock);
     await command(transport, "bun install --frozen-lockfile", timeoutMs);
-    if (mode === "observation") {
+    if (mode === "observation" || mode === "observer-off") {
       const controls = await startupControls(transport, output, timeoutMs, cell.arm.engine !== "browser" && sharing === "unshared").catch(error => [{ mode: "setup", status: "fail", reason: String(error), observerCoverage: { cpu: "unavailable" } }]);
       await writeFile(join(output, "startup-control.json"), JSON.stringify({ runtime, controls }));
       observationAllowed = controls.every(control => control.status === "pass" && control.observerCoverage.cpu === "positive");
