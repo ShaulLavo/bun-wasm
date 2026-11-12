@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::State;
-use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val, WordFn};
 use crate::modules;
 use crate::resolve::{self, Kind, Resolved};
 
@@ -31,6 +31,8 @@ use crate::resolve::{self, Kind, Resolved};
 pub struct Table {
     pub functions: Vec<(&'static str, DataFn)>,
     pub constants: Vec<(&'static str, Val)>,
+    /// Natives called through the scalar bridge, which cannot fail.
+    pub(crate) words: Vec<(&'static str, WordFn)>,
 }
 
 impl Table {
@@ -40,6 +42,11 @@ impl Table {
         f: impl Fn(Args<'_>) -> NativeResult + 'static,
     ) {
         self.functions.push((name, Rc::new(f)));
+    }
+
+    #[cfg(bun_wasm_shared_group)]
+    pub(crate) fn add_word(&mut self, name: &'static str, f: WordFn) {
+        self.words.push((name, f));
     }
 }
 

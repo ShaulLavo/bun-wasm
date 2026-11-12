@@ -262,5 +262,14 @@ fn describe(v: &Val) -> &'static str {
 /// A native over plain data.
 pub type DataFn = Rc<dyn Fn(Args<'_>) -> NativeResult>;
 
+/// Scalar arguments of one word native.
+pub(crate) const WORD_ARGS: usize = 8;
+
+/// A native whose call and return cannot fail: scalar arguments in and one scalar out, through
+/// a frame the engine allocated once at startup. The bridge allocates nothing for it on either
+/// side and reports no error, so an effect it made is never followed by a failed return. An
+/// operation that can be refused says so in its result.
+pub(crate) type WordFn = fn(&[u32; WORD_ARGS]) -> i64;
+
 #[path = "data/codec.rs"]
 pub(crate) mod codec;

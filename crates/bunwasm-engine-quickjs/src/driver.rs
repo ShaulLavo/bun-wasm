@@ -16,7 +16,7 @@ pub(crate) enum Entry {
 }
 
 pub(crate) fn run<E: Engine>(session: u32) -> i32 {
-    let client = CoreClient { session };
+    let client = CoreClient::new(session);
     let (entry, main) = client.entry().expect("core entry description");
     let core = Rc::new(Core::<E> {
         client,
