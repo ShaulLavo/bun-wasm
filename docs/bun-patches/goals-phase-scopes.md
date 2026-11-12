@@ -1,8 +1,9 @@
 # Goals phase admission
 
 Classification: original local test adapter. No upstream implementation is copied.
-The implementation lives in `scripts/goals-matrix/scope.ts`, `transport.ts` and
-`execute.ts`; `bounded.ts` retains its independent callers and behavior.
+The implementation lives in `scripts/goals-matrix/scope.ts`, `transport.ts`,
+`scoped-transport.ts` and `execute.ts`; `bounded.ts` retains its independent callers
+and behavior.
 
 A finite scope owns an absolute deadline and cancellation reason. It closes before
 failure capture starts. A bound transport view admits every helper call and ends
@@ -16,3 +17,9 @@ preserves an already observed terminal, and unavailable final logs name the fina
 and capture reasons. Cleanup handoff scopes close before unguarded resource
 teardown. Existing phase errors and observation, cleanup and close budgets remain
 unchanged. The Angular reader receives the same bound view and observation cutoff.
+
+The generic `scoped` wrapper lives separately from the Playwright implementation,
+so the native Safari measurement bundle does not import unused browser automation
+packages. `transport.ts` re-exports that same wrapper for existing matrix callers.
+The native Safari lifecycle imports the same `bounded` helper directly, avoiding
+the matrix executor and its Playwright factory while retaining its existing bounds.

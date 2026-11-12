@@ -104,6 +104,69 @@ function records(box: Sandbox): { argv: string[]; cwd: string; tier: string; cac
   return readFileSync(box.env.RECORD, "utf8").trimEnd().split("\n").map(line => JSON.parse(line));
 }
 
+function fixtureProcessState(pid: number): string {
+  try {
+    if (process.platform !== "linux") {
+      process.kill(pid, 0);
+      return "present";
+    }
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const match = /^\d+ \([\s\S]*\) ([A-Za-z]) /.exec(stat);
+    if (!match) throw new Error(`Invalid process stat for fixture ${pid}: ${stat}`);
+    return match[1]!;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ESRCH")) return "absent";
+    throw error;
+  }
+}
+
+function expectFixtureTerminated(pid: number) {
+  // GNU timeout's group-wide KILL can kill the monitor before it reaps the
+  // launcher. On Linux, Z/X prove execution ended; every live state must fail.
+  expect(["absent", "Z", "X"], `fixture ${pid} must be terminated at harness return`).toContain(fixtureProcessState(pid));
+}
+
+test("the fixture termination oracle rejects a live process", () => {
+  expect(() => expectFixtureTerminated(process.pid)).toThrow();
+});
+
+test.skipIf(process.platform !== "linux")("the fixture termination oracle accepts an unreaped zombie without waiting for its PID to disappear", async () => {
+  // This parent owns and deliberately retains one zombie until stdin closes.
+  // waitid(WNOWAIT) observes death without changing any host reaper setting.
+  const child = Bun.spawn(["python3", "-c", `
+import os, signal, sys
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+pid = os.fork()
+if pid == 0:
+    os._exit(0)
+try:
+    os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+    print(pid, flush=True)
+    sys.stdin.read()
+finally:
+    os.waitpid(pid, 0)
+`], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  children.add(child);
+  try {
+    const reader = child.stdout.getReader();
+    const first = await reader.read();
+    reader.releaseLock();
+    const pid = Number(new TextDecoder().decode(first.value));
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+    expect(process.kill(pid, 0)).toBe(true);
+    expect(fixtureProcessState(pid)).toBe("Z");
+    expectFixtureTerminated(pid);
+    expect(() => expectFixtureTerminated(child.pid)).toThrow();
+    child.stdin.end();
+    expect(await child.exited).toBe(0);
+    expect(fixtureProcessState(pid)).toBe("absent");
+  } finally {
+    child.stdin.end();
+    await child.exited;
+    children.delete(child);
+  }
+});
+
 test("explicit interpreter and PBL runs use the supplied native pair and separate child environments without building", () => {
   const box = sandbox();
   for (const tier of ["interp", "pbl"]) {
@@ -191,7 +254,7 @@ test("a timed-out fixture fails, terminates its child, and removes scratch", () 
   expect(result.code).toBe(1);
   expect(result.output).toContain("exit 124, expected 0");
   const pid = records(box)[0]!.pid;
-  expect(() => process.kill(pid, 0)).toThrow();
+  expectFixtureTerminated(pid);
 });
 
 test("specialized selector failures remain in the denominator when a harness cannot start", () => {
@@ -281,20 +344,6 @@ async function waitForLaunch(box: Sandbox) {
   throw new Error("Synthetic launcher never started");
 }
 
-async function waitForProcessExit(pid: number) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { process.kill(pid, 0); }
-    catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
-      throw error;
-    }
-    // timeout can exit before init reaps the killed launcher. This waits only
-    // for host teardown, without changing the guest's TERM/KILL deadlines.
-    await Bun.sleep(10);
-  }
-  throw new Error(`Synthetic fixture process ${pid} was not reaped`);
-}
-
 test("SIGTERM stops the active fixture child before removing its scratch", async () => {
   const box = sandbox();
   const child = Bun.spawn(["bash", join(box.root, "scripts/test.sh")].concat(selection(box), ["hello"]), {
@@ -305,8 +354,7 @@ test("SIGTERM stops the active fixture child before removing its scratch", async
     const record = await waitForLaunch(box);
     child.kill("SIGTERM");
     expect(await child.exited).toBe(143);
-    await waitForProcessExit(record.pid);
-    expect(() => process.kill(record.pid, 0)).toThrow();
+    expectFixtureTerminated(record.pid);
     expect(readdirSync(join(box.root, "tmp"))).toEqual([]);
   } finally {
     child.kill("SIGTERM");
@@ -324,14 +372,13 @@ test("the default experimental selection counts every discovered fixture", () =>
   expect(records(box)).toHaveLength(4);
 });
 
-test("a fixture ignoring TERM is killed at the escalation deadline and still counts as failed", async () => {
+test("a fixture ignoring TERM is killed at the escalation deadline and still counts as failed", () => {
   const box = sandbox();
   const result = invoke(box, selection(box).concat(["hello"]), { HANG: "1", IGNORE_TERM: "1", SHORT_TIMEOUT: "1" });
   expect(result.code).toBe(1);
   expect(result.output).toContain("expected 0");
   expect(result.output).toContain("0 passed, 1 failed");
-  await waitForProcessExit(records(box)[0]!.pid);
-  expect(() => process.kill(records(box)[0]!.pid, 0)).toThrow();
+  expectFixtureTerminated(records(box)[0]!.pid);
 });
 
 type SpecializedFixtureBox = ReturnType<typeof specializedFixtureSandbox>;

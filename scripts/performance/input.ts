@@ -44,10 +44,12 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function treeInventory(root: string): { path: string; kind: string; sha256: string }[] {
+export function treeInventory(root: string, mutableRoots: readonly string[] = []): { path: string; kind: string; sha256: string }[] {
   root = resolve(root);
+  if (mutableRoots.some(path => !path || isAbsolute(path) || path.split(/[\\/]/).includes(".."))) throw new Error("mutable roots must be relative descendants");
   const rows: { path: string; kind: string; sha256: string }[] = [];
   function visit(relative: string) {
+    if (mutableRoots.some(path => relative === path || relative.startsWith(path + sep))) return;
     const full = join(root, relative);
     const stat = lstatSync(full);
     if (stat.isSymbolicLink()) {
