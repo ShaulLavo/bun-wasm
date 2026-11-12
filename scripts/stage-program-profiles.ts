@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { prepareProgram } from "../src/assets";
-import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind";
+import { BUN_MEMORY_GROUP_POLICY, importedMemory, programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind";
 import { profileAsset, verifyMemoryProfile } from "../web/src/program-profile";
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt";
 
@@ -67,6 +67,10 @@ async function stageProgram(engine: PairedEngine, source: string, out: string, b
   const side = await Bun.file(join(source, names.side)).bytes();
   const module = await prepareProgram({ kind: engine, core, side });
   verifyMemoryProfile(module, "shared-group");
+  for (const bytes of [core, side]) {
+    const memory = importedMemory(bytes);
+    if (!memory?.shared || memory.maximum !== BUN_MEMORY_GROUP_POLICY.maximumPages) throw new Error("Shared program memory must match the current group address space");
+  }
   const coreFile = await receiptFile(source, "bun-core.wasm.core.json", "core");
   const untaggedCore = core.subarray(0, coreFile.receipt.artifact.artifactBytes);
   verifyProgramReceipt(untaggedCore, coreFile.receipt, coreFile.receipt.inputs);

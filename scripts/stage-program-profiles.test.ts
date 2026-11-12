@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendCustomSection, programProfile, tagProgramCore, type SupportedPairedEngine } from "../src/engine-kind";
+import { appendCustomSection, importedMemory, programProfile, tagProgramCore, type SupportedPairedEngine } from "../src/engine-kind";
 import { initializationPair } from "../tests/package/engine-initialization-fixture";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import type { ProgramBuildReceipt } from "./guest-core-receipt";
@@ -150,4 +150,56 @@ test("shared staging rejects a valid split pair before publishing profile assets
     expect(builds).toEqual({});
     expect(await Bun.file(join(scratch, "out/profiles/shared-group/bun.wasm.gz")).exists()).toBe(false);
   } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+function differentMaximum(bytes: Uint8Array, maximum: 16384 | 65536): Uint8Array {
+  expect(importedMemory(bytes)).toEqual({ shared: true, maximum: 32768 });
+  const changed = Buffer.from(bytes);
+  // Exact env.memory import in the executable fixture, including its three-byte maximum.
+  const entry = Buffer.from([3, 101, 110, 118, 6, 109, 101, 109, 111, 114, 121, 2, 3, 1, 0x80, 0x80, 2]);
+  const at = changed.indexOf(entry);
+  expect(at).toBeGreaterThanOrEqual(0);
+  changed[at + entry.length - 1] = maximum === 16384 ? 1 : 4;
+  expect(WebAssembly.validate(changed)).toBe(true);
+  expect(importedMemory(changed)).toEqual({ shared: true, maximum });
+  return changed;
+}
+
+test.each([
+  { component: "core", maximum: 16384 },
+  { component: "side", maximum: 16384 },
+  { component: "both", maximum: 16384 },
+  { component: "side", maximum: 65536 },
+] as const)("shared staging rejects $component at $maximum pages even with matching receipts", async ({ component, maximum }) => {
+  await withSharedProgram(async (source, pair) => {
+    const core = component === "side" ? pair.untaggedCore : differentMaximum(pair.untaggedCore, maximum);
+    const side = component === "core" ? pair.side : differentMaximum(pair.side, maximum);
+    await Bun.write(join(source, "bun.wasm"), tagProgramCore(core, "quickjs"));
+    await Bun.write(join(source, "quickjs.wasm"), side);
+    await Bun.write(join(source, "bun-core.wasm.core.json"), JSON.stringify(receipt(core, "core")));
+    await Bun.write(join(source, "quickjs.wasm.engine.json"), JSON.stringify(receipt(side, "quickjs")));
+    await expect(stageSharedPrograms(join(source, "out"), {}, { quickjs: source, jsc: undefined })).rejects.toThrow("current group address space");
+    await rejectedBeforePublication(source);
+  });
+});
+
+test.each([
+  { component: "core", maximum: 16384 },
+  { component: "side", maximum: 16384 },
+  { component: "both", maximum: 16384 },
+  { component: "side", maximum: 65536 },
+] as const)("SpiderMonkey staging rejects $component at $maximum pages before receipt reads", async ({ component, maximum }) => {
+  await withSharedProgram(async source => {
+    const pair = initializationPair("spidermonkey", true);
+    const untaggedCore = component === "side" ? pair.untaggedCore : differentMaximum(pair.untaggedCore, maximum);
+    const side = component === "core" ? pair.side : differentMaximum(pair.side, maximum);
+    const core = tagProgramCore(untaggedCore, "spidermonkey");
+    await Bun.write(join(source, "bun.wasm"), core);
+    await Bun.write(join(source, "spidermonkey-engine.wasm"), side);
+    await writeSpiderMonkeyReceipts(source, { ...pair, core, side, untaggedCore });
+    const builds = {};
+    await expect(stageSharedPrograms(join(source, "out"), builds, { spidermonkey: source })).rejects.toThrow("current group address space");
+    expect(builds).toEqual({});
+    expect(await readdir(join(source, "out")).catch(() => [])).toEqual([]);
+  });
 });
