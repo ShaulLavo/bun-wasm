@@ -1,4 +1,4 @@
-import { browserTrapLog } from "./browser-memory";
+import { browserTrapLog, launchFailureLog } from "./browser-memory";
 import { cleanupTimeoutMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
@@ -111,7 +111,9 @@ async function captureFailure(transport: Transport, options: Execution, results:
     await scope.run(admission => observeFailure(transport, options, capture, admission));
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
-    if (capture.terminal.status === "observed" && options.box.engine === "browser" && !capture.diagnostic) capture.diagnostic = "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n";
+    if (capture.terminal.status === "observed" && !capture.diagnostic) capture.diagnostic = options.box.engine === "browser"
+      ? "\n\nBrowser core trap memory snapshots unavailable within the failure observation budget.\n"
+      : "\n\nBun immediate launch failure snapshots unavailable within the failure observation budget.\n";
   } finally { scope.close(); }
   if (capture.terminal.status === "unavailable") return capture;
   const text = capture.terminal.text;
@@ -130,9 +132,11 @@ async function observeFailure(transport: Transport, options: Execution, capture:
   const text = await terminal(page);
   admit(admission);
   capture.terminal = { status: "observed", text };
+  capture.diagnostic = await launchFailureLog(page, options.box.engine);
+  admit(admission);
   const diagnostic = await browserTrapLog(page, options.box.engine);
   admit(admission);
-  capture.diagnostic = diagnostic;
+  capture.diagnostic += diagnostic;
   if (options.framework.id !== "angular") return;
   const path = namedAngularDiagnostic(text);
   if (!path) return;
@@ -190,7 +194,7 @@ async function saveFinalLog(transport: Transport, options: Execution, results: r
       const text = await terminal(page);
       admit(guard);
       observation.terminal = { status: "observed", text };
-      return text + (failureLog?.diagnostic || await browserTrapLog(page, options.box.engine));
+      return text + (failureLog?.diagnostic || (await launchFailureLog(page, options.box.engine) + await browserTrapLog(page, options.box.engine)));
     });
   }
   catch (error) {
@@ -204,7 +208,7 @@ async function saveFinalLog(transport: Transport, options: Execution, results: r
 }
 
 function finalLogFallback(terminal: TerminalCapture, engine: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, error: unknown): string {
-  if (terminal.status === "observed") return terminal.text + (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "");
+  if (terminal.status === "observed") return terminal.text + (failureLog?.diagnostic || (engine === "browser" ? "\n\nBrowser core trap memory snapshots unavailable within the final observation budget.\n" : "\n\nBun immediate launch failure snapshots unavailable within the final observation budget.\n"));
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
   return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;

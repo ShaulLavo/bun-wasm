@@ -10,6 +10,7 @@ import { createBunExecutor, type RunRequest } from "../src/bun-executor";
 import { runtimeRelay } from "../src/net/relay";
 import { SharedMemoryAdmissionError } from "waffle";
 import { retainedMemorySnapshots } from "../src/memory-telemetry";
+import * as memoryTelemetry from "../src/memory-telemetry";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
 interface Launch { workerUrl: string; memoryGroup?: unknown; request: Record<string, any>; network?: { connection: Record<string, unknown>; dispose(): void }; cleanup?(): void | Promise<void>; executableName?(name: string): string }
@@ -92,7 +93,7 @@ for (const inherited of [false, true]) test(`launch refusal retains its native c
     sharedMemory: {
       snapshot() {
         calls.push("ledger"); expect(cleaned).toBe(false);
-        return { platform: { kind: "unbounded" }, budgetBytes: null, reservedBytes: 65536, availableBytes: null, awaitingReleaseBytes: 0, debtBytes: 0, effectiveBudgetBytes: null, contradictions: [], sharedGuests: [], holders: [] };
+        return { platform: { kind: "unbounded", source: "default" }, budgetBytes: null, reservedBytes: 65536, availableBytes: null, awaitingReleaseBytes: 0, debtBytes: 0, effectiveBudgetBytes: null, contradictions: [], sharedGuests: [], holders: [] };
       },
       check() { throw Error("not used"); },
     },
@@ -133,6 +134,42 @@ test("launch observation failures preserve the cleanup error and the original la
     const snapshot = retainedMemorySnapshots().find(value => value.launchFailures?.some(fact => fact.error.message === launchError.message));
     expect(snapshot).toMatchObject({ terminal: true, launchFailures: [{ error: { message: launchError.message }, cleanupError: { message: cleanupError.message },
       groups: { availability: "unavailable", rowCount: null }, workers: { availability: "unavailable", rowCount: null }, ledger: { availability: "unavailable" } }] });
+  } finally { await owner.dispose(); }
+});
+
+test("a throwing diagnostic publication preserves launch identity and still cleans up", async () => {
+  const launchError = new Error("original refusal despite failed publication");
+  let cleaned = false;
+  let publications = 0;
+  const owner = processRuntimeFixture({ directoryHandle: async () => ({ handle: 1, release() { cleaned = true; } }) });
+  const publication = spyOn(memoryTelemetry, "recordLaunchFailure").mockImplementation(() => { publications++; throw Error("publication failed"); });
+  try {
+    const launcherService = Object.assign(service([]), { launchWorker() { throw launchError; } });
+    await expect(bunLauncher("quickjs", { runtime: owner, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, launcherService)).rejects.toBe(launchError);
+    expect(publications).toBe(1);
+    expect(cleaned).toBe(true);
+  } finally { publication.mockRestore(); await owner.dispose(); }
+});
+
+test("launch observation preserves call argument getter order without reading them again", async () => {
+  const calls: string[] = [];
+  const launchError = new Error("getter order refusal");
+  const request = { ...context.request };
+  Object.defineProperties(request, {
+    worker: { get() { calls.push("worker"); return undefined; } },
+    cwd: { get() { calls.push("cwd"); return "/work"; } },
+    executable: { get() { calls.push("executable"); return "/bin/bun"; } },
+  });
+  const launcherService = service([]);
+  Object.defineProperty(launcherService, "launchWorker", { get() { calls.push("method"); return () => { calls.push("launch"); throw launchError; }; } });
+  const owner = processRuntimeFixture({ directoryHandle: async () => ({ handle: 1, release() { calls.push("cleanup"); } }) });
+  try {
+    const launcher = bunLauncher("quickjs", { runtime: owner,
+      get workerUrl() { calls.push("workerUrl"); return "./worker.js"; },
+      get notificationWorkerUrl() { calls.push("notificationWorkerUrl"); return "./notification-worker.js"; },
+    });
+    await expect(launcher({ ...context, module: groupCore, request }, launcherService)).rejects.toBe(launchError);
+    expect(calls).toEqual(["method", "workerUrl", "notificationWorkerUrl", "worker", "cwd", "executable", "cwd", "launch", "cleanup"]);
   } finally { await owner.dispose(); }
 });
 for (const { name, core, request, expected } of [

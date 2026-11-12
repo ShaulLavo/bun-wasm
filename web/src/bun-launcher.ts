@@ -122,14 +122,13 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     dispatch = message => dispatchBunNetwork(session, message);
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
     const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job), module);
-    memoryGroup = sharedGroupLaunch(module, context.request.worker);
     attempt = ++launchAttempt;
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       notificationWorkerUrl: options.notificationWorkerUrl,
       // A group core has no other way to link. A guest thread joins its parent's group; every
       // other process starts its own, as on the native host. Only the typed spawn request decides.
-      memoryGroup,
+      memoryGroup: memoryGroup = sharedGroupLaunch(module, context.request.worker),
       request: {
         engine, memoryTelemetry, adapter: "bun", module, ...programMetadata(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },

@@ -97,14 +97,14 @@ function appendRows(result: RowsFact, values: unknown[], project: (value: unknow
   result.rowsTruncated = result.rows.length < values.length;
 }
 function ledgerRow(value: unknown): Row {
-  const result = row(value, ["label", "scope", "state", "declaredBytes", "grownBytes", "phase", "fence", "chargedBytes", "initialPages", "actualMaximumPages", "sourceMaximumPages", "bytes", "observed", "budget"]);
+  const result = row(value, ["label", "scope", "state", "declaredBytes", "grownBytes", "phase", "fence", "chargedBytes", "initialPages", "actualMaximumPages", "sourceMaximumPages", "requestedBytes", "totalChargedBytesAfterRefund"]);
   for (const key of ["shape", "owner", "aliases", "continuations"]) {
     const nested = row(data(value, key), ["kind", "initial", "maximum", "maximumPages", "pages", "bytes", "length", "directory", "pid", "reserved", "transferred", "retained", "active"]);
     for (const [name, value] of Object.entries(nested)) if (value !== null) result[`${key}.${name}`] = value;
   }
   return result;
 }
-function ledgerFact(runtime: ProcessRuntime): LedgerFact {
+function ledgerFact(runtime: Pick<ProcessRuntime, "sharedMemory">): LedgerFact {
   const sampleStartedAt = now();
   try {
     const value = runtime.sharedMemory.snapshot();
@@ -124,26 +124,29 @@ function ledgerFact(runtime: ProcessRuntime): LedgerFact {
 /** Synchronous API snapshots after launchWorker throws, before Bun adapter cleanup starts.
  * These APIs reconcile bookkeeping. They are neither a native census nor physical memory.
  */
-export function launchFailureFact(error: unknown, context: RuntimeProcessContext, service: ProcessService, runtime: ProcessRuntime, memoryGroup: "new" | "inherit" | null, attempt: number): LaunchFailureFact {
+export function launchFailureFact(error: unknown, context: Pick<RuntimeProcessContext, "pid" | "parentPid" | "job" | "request">, service: Pick<ProcessService, "memoryGroups" | "workerMemory">, runtime: Pick<ProcessRuntime, "sharedMemory">, memoryGroup: "new" | "inherit" | null, attempt: number): LaunchFailureFact {
   const time = now();
   const refusal = data(error, "refusal");
+  const originalError = errorFact(error);
+  const originalRefusal = { kind: text(data(refusal, "kind")), label: text(data(refusal, "label")), cause: errorFact(data(refusal, "cause")) };
+  const request = data(context, "request");
+  const process: Row = { ...row(context, ["pid", "parentPid", "job"]), executable: text(data(request, "executable")), cwd: text(data(request, "cwd")) };
   const groups = sample(() => service.memoryGroups(), groupRow);
   let worker: Row | undefined;
   const workers = sample(() => {
     const values = service.workerMemory();
-    worker = row(values.find(value => value.pid === context.pid), workerFields);
+    worker = row(values.find(value => data(value, "pid") === process.pid), workerFields);
     return values;
   }, value => row(value, workerFields));
   return {
     time, attempt, attemptScope: "bun-launcher module instance", memoryGroup,
-    process: { ...row(context, ["pid", "parentPid", "job"]), rootPid: worker?.rootPid ?? null, directory: worker?.directory ?? null,
-      executable: text(context.request.executable), cwd: text(context.request.cwd) },
-    error: errorFact(error), refusal: { kind: text(data(refusal, "kind")), label: text(data(refusal, "label")), cause: errorFact(data(refusal, "cause")) },
+    process: { ...process, rootPid: worker?.rootPid ?? null, directory: worker?.directory ?? null },
+    error: originalError, refusal: originalRefusal,
     groups, workers, ledger: ledgerFact(runtime), cleanupError: null,
   };
 }
 
-/** Validate and detach the scalar-only fact before retaining a caller's value. */
+/** Detach scalar fields and enforce the serialized bound before retention. */
 export function copyLaunchFailure(value: LaunchFailureFact): LaunchFailureFact | null {
   try {
     const copy: LaunchFailureFact = {

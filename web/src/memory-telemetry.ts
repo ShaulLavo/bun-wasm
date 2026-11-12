@@ -156,7 +156,11 @@ function retainSnapshot(snapshot: MemorySnapshot): void {
   const previous = retained.get(snapshot.id);
   const traps = Object.fromEntries(Object.entries(previous?.engineCounters ?? {}).filter(([key]) => key.startsWith("browserCallTrap") || key.startsWith("browserCore")));
   retained.set(snapshot.id, { ...snapshot, terminal: snapshot.terminal || previous?.terminal || false,
-    engineCounters: { ...traps, ...snapshot.engineCounters }, launchFailures: previous?.launchFailures });
+    engineCounters: { ...traps, ...snapshot.engineCounters }, launchFailures: previous?.launchFailures,
+    allocatorFailure: snapshot.allocatorFailure ?? previous?.allocatorFailure ?? null,
+    frozenAllocatorFailure: snapshot.frozenAllocatorFailure ?? previous?.frozenAllocatorFailure ?? null,
+    engineFailure: snapshot.engineFailure ?? previous?.engineFailure ?? null,
+    failedAllocation: snapshot.failedAllocation ?? previous?.failedAllocation ?? null });
 }
 export function recordLaunchFailure(id: string, failure: LaunchFailureFact): void {
   const fact = copyLaunchFailure(failure);
@@ -305,3 +309,4 @@ async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean)
   return retainedMemorySnapshots();
 }
 Reflect.set(globalThis, "__bunMemorySnapshots", requestMemorySnapshots);
+Reflect.set(globalThis, "__bunRetainedMemorySnapshots", retainedMemorySnapshots);
