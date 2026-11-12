@@ -181,6 +181,10 @@ Original adapters, none of which retains an upstream implementation:
 - `tests/stack-depth.js`, `scripts/stack-measurement.ts`, `scripts/measure-stack.py` and
   `web/tests/browser-stack.mjs` gain the parser chains (five shapes, two parser passes, two source
   widths), an `await`-chain control, the guest's reported settings and a parent-and-Worker mode.
+  Capacity and ownership measurements first run the complete search loop at zero depth. This
+  completes its first execution before the capacity observations on portable baseline.
+  The requested-depth search and all before/after, parent/child and reserve comparisons remain.
+  Individual chain actions and their cold overflow controls are unchanged.
 - `scripts/jsc-parser-reserve.ts` runs the gate's tuples and the file threshold search.
   `web/tests/browser-jsc-parser-reserve.ts` and `web/tests/parser-reserve-ownership.ts` are the
   browser harnesses, and `tests/fixtures/shared-wasm-memory/parser-reserve-ownership.ts` is the
