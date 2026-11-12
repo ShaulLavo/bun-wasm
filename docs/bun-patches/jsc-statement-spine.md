@@ -79,11 +79,11 @@ opened, every enclosing record still closes, and `generate` returns `OutOfMemory
 
 ## Evidence
 
-- Bytecode: `JSC_dumpGeneratedBytecodes` reaches the guest. The semantics fixture's full dump
-  (474 code blocks, the runtime's own included) is identical before and after, except the print
-  order of string `switch` tables, whose hash map mixes in its own address
-  (`RobinHoodHashTable::computeTableHash`); the entries are the same. Two baseline runs give
-  identical dumps.
+- Bytecode: `JSC_dumpGeneratedBytecodes` reaches the guest. After excluding explicit diagnostic
+  code-block, cell and structure identities, all 474 code blocks match before and after.
+  String `switch` entries have the same contents but a different print order because
+  `RobinHoodHashTable::computeTableHash` mixes in the table's address. Two baseline dumps
+  are byte-identical.
 - `tests/fixtures/statement-spine-semantics` matches native Bun on the baseline and on the change.
 - Capacities, before and after, from one guest process per attempt: blocks, `if`s, `else if`
   chains, labels, `using` blocks, braced `for`, `while`, `do`, `try`, `switch` and `with` nests,
@@ -121,7 +121,7 @@ opened, every enclosing record still closes, and `generate` returns `OutOfMemory
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`jsc/webkit-wasi.patch`, statement spine](#jsc-block-and-if-nests-emitted-in-one-generator-loop) | Port | Store block and label completion answers when built; emit nests of blocks and `if`s, including `using` blocks, in one generator loop. |
+| [`jsc/webkit-wasi.patch`, statement spine](#jsc-block-and-if-nests-emitted-in-one-generator-loop) | Port | Store block completion answers when built, walk label chains iteratively, and emit block and `if` nests, including `using` blocks, in one generator loop. |
 | `tests/fixtures/statement-spine-semantics` | Original adapter | Block, `if` and `using` semantics through the guest entry point. |
 
 [Ledger scope and pinned revisions](scope.md).
