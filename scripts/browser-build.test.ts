@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -152,13 +152,15 @@ for (const failure of ["missing", "corrupt"]) test(`browser build rejects a ${fa
     const installed = resolveRuntimePackage(import.meta.filename);
     const loader = installed.source("waffle/network");
     const dependency = join(scratch, "node_modules/waffle");
-    await mkdir(join(dependency, "browser/net"), { recursive: true });
-    await writeFile(join(dependency, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./network": "./browser/net/module.ts" } }));
-    await Bun.write(join(dependency, "browser/net/module.ts"), Bun.file(loader));
-    await Bun.write(join(dependency, "browser/net/network.sha256"), Bun.file(join(dirname(loader), "network.sha256")));
-    if (failure === "corrupt") await writeFile(join(dependency, "browser/net/network.wasm"), "not the selected asset");
+    await cp(installed.physical, dependency, { recursive: true });
     const main = join(scratch, "main.ts");
     await writeFile(main, 'export { loadNetworkModule } from "waffle/network";');
+    const valid = join(scratch, "valid");
+    expect((await Bun.build(browserBuildConfig([main], valid))).success).toBe(true);
+    expect(await Bun.file(join(valid, "network.wasm")).bytes()).toEqual(await Bun.file(join(dirname(loader), "network.wasm")).bytes());
+    const artifact = join(dirname(resolveRuntimePackage(main).source("waffle/network")), "network.wasm");
+    if (failure === "corrupt") await writeFile(artifact, "not the selected asset");
+    else await rm(artifact);
     const config = browserBuildConfig([main], join(scratch, "dist"));
     await expect(Bun.build(config)).rejects.toThrow(failure === "corrupt" ? "checksum mismatch" : "ENOENT");
     expect(await Bun.file(join(scratch, "dist/network.wasm")).exists()).toBe(false);
