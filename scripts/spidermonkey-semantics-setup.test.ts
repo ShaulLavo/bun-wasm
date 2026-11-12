@@ -87,11 +87,14 @@ function deadlineObservation(pid: number | undefined, temporary: string) {
   return { group: pid ?? null, boundary: "post-child-return/pre-group-kill", scanStartedAt, scanEndedAt: Date.now(), processes, files, hostWidePressure };
 }
 
-function runControls(root: string, args: readonly string[] = [], env = process.env) {
+function runControls(root: string, args: readonly string[] = [], env = process.env, progress: "file" | "directory" = "file") {
   const trace = join(root, "compiler.trace");
   const temporary = mkdtempSync(join(root, "tmp/control-"));
   writeFileSync(trace, "");
-  writeFileSync(`${trace}.progress`, "");
+  const progressPath = `${trace}.progress`;
+  rmSync(progressPath, { recursive: true, force: true });
+  if (progress === "directory") mkdirSync(progressPath);
+  else writeFileSync(progressPath, "");
   const started = performance.now();
   let pid: number | undefined;
   try {
@@ -189,9 +192,10 @@ function prepareRegressionControls() {
     compilerWrapper(join(root, "bin"), "c++", "");
     const afterInterruption = runControls(root);
     const interruptedCompilerAlive = processExists(Number(readFileSync(join(root, "compiler.trace.pid"), "utf8")));
-    compilerWrapper(join(root, "bin"), "c++", 'rm -f "$BUN_WASM_SM_COMPILER_TRACE.progress"\nmkdir "$BUN_WASM_SM_COMPILER_TRACE.progress"');
-    const unavailableProgress = runControls(root);
-    return { unavailableProgress, slow, compileElapsedMs, wrongBorrow, filtered, failedBuild, interrupted, interruptedTemporaryEntries, interruptedCompilerPid, interruptedCompilerAlive, afterInterruption };
+    compilerWrapper(join(root, "bin"), "c++", 'test -d "$BUN_WASM_SM_COMPILER_TRACE.progress" || exit 42');
+    const unavailableProgress = runControls(root, [], process.env, "directory");
+    const unavailableProgressAgain = runControls(root, [], process.env, "directory");
+    return { unavailableProgress, unavailableProgressAgain, slow, compileElapsedMs, wrongBorrow, filtered, failedBuild, interrupted, interruptedTemporaryEntries, interruptedCompilerPid, interruptedCompilerAlive, afterInterruption };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -312,8 +316,10 @@ test("stat parsing preserves names with parentheses and raw ticks and rejects mi
 });
 
 test("unavailable progress observations preserve the real outcome and cleanup", () => {
-  expectRuntimeControls(controls.unavailableProgress);
-  expect(controls.unavailableProgress.compilerProgress).toBeNull();
-  expect(controls.unavailableProgress.leftovers).toEqual([]);
-  if (process.platform === "linux") expect(controls.unavailableProgress.deadline.processes).toEqual([]);
+  for (const result of [controls.unavailableProgress, controls.unavailableProgressAgain]) {
+    expectRuntimeControls(result);
+    expect(result.compilerProgress).toBeNull();
+    expect(result.leftovers).toEqual([]);
+    if (process.platform === "linux") expect(result.deadline.processes).toEqual([]);
+  }
 });
