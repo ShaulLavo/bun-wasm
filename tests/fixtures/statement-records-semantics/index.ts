@@ -85,15 +85,21 @@ show("syntax error in a deep if spine", () => compile(["t"], ifs(300, "return )"
 show("syntax error after a deep nest", () => compile([], `${blocks(300, "")} return );`));
 
 // Deep nests under the outcome rule.
-function outcome(label: string, run: () => boolean, shallow: () => boolean): void {
+function outcome(label: string, run: () => boolean, shallow: () => boolean, began: () => boolean): void {
   let result: string;
   try {
     result = run() ? "ok" : "wrong effects";
   } catch (error) {
-    result = error instanceof RangeError ? (shallow() ? "ok" : "refused, then a shallow nest failed") : `unexpected ${error instanceof Error ? error.name : String(error)}`;
+    result = error instanceof RangeError && !began() ? (shallow() ? "ok" : "refused, then a shallow nest failed") : `unexpected ${error instanceof Error ? error.name : String(error)}`;
   }
   console.log(`deep ${label}: ${result}`);
 }
+
+const runtimeMarker = { began: false };
+outcome("runtime refusal is not parser refusal", () => {
+  runtimeMarker.began = true;
+  throw new RangeError("after execution");
+}, () => true, () => runtimeMarker.began);
 
 const deepShapes: [string, (n: number) => string, (n: number, value: unknown) => boolean][] = [
   ["blocks", n => `var x = 0; ${blocks(n, "x = 1;")} return x;`, (_, value) => value === 1],
@@ -106,15 +112,22 @@ const deepShapes: [string, (n: number) => string, (n: number, value: unknown) =>
 ];
 for (const depth of [300, 1000, 4096, 10000]) {
   for (const [label, body, check] of deepShapes) {
-    outcome(`${label} ${depth}`, () => check(depth, compile(["t"], body(depth))(true)), () => check(20, compile(["t"], body(20))(true)));
+    const marker = { began: false };
+    outcome(`${label} ${depth}`, () => check(depth, compile(["t", "marker"], `marker.began = true; ${body(depth)}`)(true, marker)), () => check(20, compile(["t"], body(20))(true)), () => marker.began);
   }
 }
 
-// The record bound counts open blocks and `if`s together: 10,001 of them, then a mix.
-const mixedRecords = (n: number) => `var x = 0; ${r(n, i => (i % 2 ? "{" : "if (t) {"))} x = 1; ${"}".repeat(n)} return x;`;
-outcome("10001 open records", () => compile(["t"], mixedRecords(10001))(true) === 1, () => compile(["t"], mixedRecords(20))(true) === 1);
-outcome("10001 records in an arrow body", () => compile(["t"], `return (() => { ${mixedRecords(10001)} })();`)(true) === 1, () => compile(["t"], `return (() => { ${mixedRecords(20)} })();`)(true) === 1);
-outcome("10001 records in eval", () => indirectEval(`var t = true; ${r(10001, () => "{")} 1; ${"}".repeat(10001)}`) === 1, () => indirectEval(blocks(20, "1;")) === 1);
+// Portable deep semantics permit clean refusal. The exact JSC record cap needs its own guest gate.
+// Each source level below contributes one block or one bare `if`; a function body is additional.
+const mixedRecords = (n: number) => `var x = 0; ${r(n, i => (i % 2 ? "{" : "if (t) "))} x = 1; ${"}".repeat(Math.floor(n / 2))} return x;`;
+const functionMarker = { began: false };
+outcome("large mixed function source", () => compile(["t", "marker"], `marker.began = true; ${mixedRecords(10001)}`)(true, functionMarker) === 1, () => compile(["t"], mixedRecords(20))(true) === 1, () => functionMarker.began);
+const arrowMarker = { began: false };
+outcome("large mixed arrow source", () => compile(["t", "marker"], `return (() => { marker.began = true; ${mixedRecords(10001)} })();`)(true, arrowMarker) === 1, () => compile(["t"], `return (() => { ${mixedRecords(20)} })();`)(true) === 1, () => arrowMarker.began);
+const evalMarker = { began: false };
+Reflect.set(globalThis, "__statementRecordExecution", evalMarker);
+outcome("large block eval source", () => indirectEval(`globalThis.__statementRecordExecution.began = true; var t = true; ${r(10001, () => "{")} 1; ${"}".repeat(10001)}`) === 1, () => indirectEval(blocks(20, "1;")) === 1, () => evalMarker.began);
+Reflect.deleteProperty(globalThis, "__statementRecordExecution");
 
 // Deep `using` nests: every resource acquired before an exit is disposed once, innermost first.
 type Log = string[];
@@ -148,13 +161,20 @@ const usingRows: [string, (n: number) => string, boolean, (n: number, log: Log, 
 ];
 for (const depth of [300, 1000, 4096, 10000]) {
   for (const [label, body, fail, check] of usingRows) {
-    const run = (n: number, log: Log) => check(n, log, compile(["res", "log"], body(n))(makeRes(log, fail), log));
+    const run = (n: number, log: Log, marker: { began: boolean }) => check(n, log, compile(["res", "log", "marker"], `marker.began = true; ${body(n)}`)(makeRes(log, fail), log, marker));
     const log: Log = [];
+    const marker = { began: false };
     // A refused nest must not have acquired anything.
-    outcome(`${label} ${depth}`, () => run(depth, log), () => log.length === 0 && run(20, []));
+    outcome(`${label} ${depth}`, () => run(depth, log, marker), () => log.length === 0 && run(20, [], { began: false }), () => marker.began);
   }
 }
 
+const awaitUsingNest = (n: number) => `${r(n, i => `{ await using r${i} = res("r${i}");`)} log.push("body"); ${"}".repeat(n)}`;
+async function shallowAsyncUsing(): Promise<boolean> {
+  const log: Log = [];
+  await new AsyncFunction("res", "log", awaitUsingNest(20))(makeRes(log, false), log);
+  return disposedInOrder(log, 20, ["body"]);
+}
 async function asyncRows(): Promise<void> {
   try {
     console.log(`await as the first item: ${JSON.stringify(await new AsyncFunction(blocks(9, "await null; return 21;"))())}`);
@@ -172,13 +192,13 @@ async function asyncRows(): Promise<void> {
   // quadratic in live registers, and a nest keeps every level's registers live), native Bun included.
   for (const depth of [300]) {
     const log: Log = [];
+    const marker = { began: false };
     let result: string;
     try {
-      const body = `${r(depth, i => `{ await using r${i} = res("r${i}");`)} log.push("body"); ${"}".repeat(depth)}`;
-      await new AsyncFunction("res", "log", body)(makeRes(log, false), log);
+      await new AsyncFunction("res", "log", "marker", `marker.began = true; ${awaitUsingNest(depth)}`)(makeRes(log, false), log, marker);
       result = disposedInOrder(log, depth, ["body"]) ? "ok" : "wrong effects";
     } catch (error) {
-      result = error instanceof RangeError && log.length === 0 ? "ok" : `unexpected ${error instanceof Error ? error.name : String(error)}`;
+      result = error instanceof RangeError && !marker.began && log.length === 0 && await shallowAsyncUsing() ? "ok" : `unexpected ${error instanceof Error ? error.name : String(error)}`;
     }
     console.log(`deep await using order ${depth}: ${result}`);
   }

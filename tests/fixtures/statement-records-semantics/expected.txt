@@ -57,6 +57,7 @@ syntax error at depth 9: SyntaxError
 syntax error at depth 300: SyntaxError
 syntax error in a deep if spine: SyntaxError
 syntax error after a deep nest: SyntaxError
+deep runtime refusal is not parser refusal: unexpected RangeError
 deep blocks 300: ok
 deep ifs 300: ok
 deep ifs with else 300: ok
@@ -85,9 +86,9 @@ deep bare ifs 10000: ok
 deep else-if chain 10000: ok
 deep mixed blocks, labels and ifs 10000: ok
 deep block scopes 10000: ok
-deep 10001 open records: ok
-deep 10001 records in an arrow body: ok
-deep 10001 records in eval: ok
+deep large mixed function source: ok
+deep large mixed arrow source: ok
+deep large block eval source: ok
 deep using order 300: ok
 deep using throw 300: ok
 deep using return 300: ok
