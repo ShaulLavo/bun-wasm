@@ -366,6 +366,9 @@ jobs:
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -815,7 +818,6 @@ jobs:
           compression-level: 0
       - uses: ./.github/actions/save-rust-build-cache
         with:
-          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
@@ -825,6 +827,9 @@ jobs:
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1436,7 +1441,6 @@ jobs:
           retention-days: 1
       - uses: ./.github/actions/save-rust-build-cache
         with:
-          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
@@ -1859,6 +1863,9 @@ jobs:
     needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -2199,7 +2206,6 @@ jobs:
       - uses: ./.github/actions/save-rust-build-cache
         if: needs.quality.outputs.shared-native == 'true'
         with:
-          cache-hit: ${{ steps.rust-objects.outputs.cache-hit }}
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 

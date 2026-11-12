@@ -257,7 +257,7 @@ test("only quality gets read-only Actions access and main marker wiring preserve
   expect(steps.find(step => step.id === "changes")?.run).toContain('bun scripts/ci-changes.ts "$BASE" "$HEAD"');
   for (const [id, value] of Object.entries(jobs)) {
     if (id === "quality") continue;
-    expect(object(object(value).permissions ?? {}).actions).toBeUndefined();
+    expect(object(object(value).permissions ?? {}).actions).toBe(["native-quality", "rust", "shared-sysroot"].includes(id) ? "write" : undefined);
   }
 });
 
