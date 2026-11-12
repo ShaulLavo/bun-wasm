@@ -18,6 +18,10 @@ iPhone host setting `BUN_WASM_STACK_KIB=192`; this native recursion budget does
 not change the core's linker stack. The embedding receipt is checked against the
 composed build's source, input stamp, archives, and both program files.
 
+An imported side memory may omit its maximum. The in-memory delivery description
+omits that property too, so strict verification matches the JSON representation
+written to disk without inventing a side limit or changing the original receipt.
+
 All four receipts accompany the raw pair unchanged. The core receipt covers the
 untagged prefix, which must reproduce the supplied core with exactly its JSC tag.
 The separate side receipt must equal the origin retained by the composed build.

@@ -46,7 +46,8 @@ test("exports the raw split pair and every original receipt without rewriting ca
     const expected: readonly string[] = ordinaryJscFiles;
     expect((await readdir(output)).sort()).toEqual(expected.concat(["delivery.json", "source.txt"]).sort());
     const result = await verifyOrdinaryJscProgram(output, join(output, "bun-core.wasm.core.json"), source);
-    expect(await Bun.file(join(output, "delivery.json")).json()).toEqual(result.delivery);
+    expect(await Bun.file(join(output, "delivery.json")).json()).toStrictEqual(result.delivery);
+    expect(result.delivery.capacity.sideMemory).not.toHaveProperty("maximum");
     expect(result.delivery.components.core.source.head).toBe("3".repeat(40));
     expect(result.delivery.components.side.source.head).toBe("1".repeat(40));
     expect(result.delivery.source).toEqual(source);

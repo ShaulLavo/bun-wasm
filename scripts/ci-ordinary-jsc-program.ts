@@ -55,11 +55,13 @@ export async function verifyOrdinaryJscProgram(directory: string, coreReceipt: s
   assert("engineOrigin" in build, "Missing JSC engine origin");
   assert.deepEqual(sideOrigin, build.engineOrigin, "Ordinary JSC side origin differs from build receipt");
   verifyEmbedding(JSON.parse(new TextDecoder().decode(embeddingText)), build, core, side);
+  const { maximum: sideMaximum, ...sideCapacity } = sideMemory[0]!;
+  const sideLimits = sideMaximum === undefined ? sideCapacity : { ...sideCapacity, maximum: sideMaximum };
   const delivery = {
     schema: 1, engine: "jsc", profile: "split", source,
     components: { core: { ...artifactIdentity(core), source: coreOrigin.inputs.source, inputSha256: coreOrigin.inputs.contentSha256 },
       side: { ...artifactIdentity(side), source: sideOrigin.inputs.source, inputSha256: sideOrigin.inputs.contentSha256 } },
-    capacity: { maximumMemoryBytes: 16384 * 65536, coreMemory: coreMemory[0], sideMemory: sideMemory[0], environment: { BUN_WASM_STACK_KIB: jscStackBudgets.other } },
+    capacity: { maximumMemoryBytes: 16384 * 65536, coreMemory: coreMemory[0], sideMemory: sideLimits, environment: { BUN_WASM_STACK_KIB: jscStackBudgets.other } },
     files: ordinaryJscFiles.map((name, index) => ({ name, ...artifactIdentity(files[index]!) })),
   };
   return { files: ordinaryJscFiles.map((name, index) => ({ name, bytes: files[index]! })), delivery };
