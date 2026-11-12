@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Archive = { uri: string; filename: string; size: number; sha256: string };
+const ubuntuSources = "/etc/apt/sources.list.d/ubuntu.sources";
 
 export function missingPackages(output: string): string[] {
   if (output.trim() === "All system dependencies are installed.") return [];
@@ -38,7 +39,9 @@ export async function inBatches<T>(items: readonly T[], concurrency: number, tas
 }
 
 function apt(args: string[], capture = false): string {
-  const result = spawnSync("sudo", ["apt-get"].concat(args), {
+  const result = spawnSync("sudo", ["apt-get"].concat(args, [
+    "-o", `Dir::Etc::sourcelist=${ubuntuSources}`, "-o", "Dir::Etc::sourceparts=-",
+  ]), {
     encoding: "utf8", stdio: capture ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, LC_ALL: "C" },
   });
@@ -108,6 +111,7 @@ async function main(): Promise<void> {
   }
   const temporary = process.env.RUNNER_TEMP;
   if (process.env.GITHUB_ACTIONS !== "true" || !temporary) throw new Error("System setup is restricted to GitHub Actions");
+  if (!(await readFile(ubuntuSources, "utf8")).trim()) throw new Error(`Empty Ubuntu apt sources: ${ubuntuSources}`);
   const directory = join(temporary, "browser-apt");
   await mkdir(directory, { recursive: true });
   apt(["update", "--error-on=any"]);
