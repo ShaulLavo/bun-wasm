@@ -2314,8 +2314,11 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 +         statement; statement = statement->next()) {
 +        if (statement->hasCompletionValue())
 +            lastWithCompletionValue = statement;
-+    }
-+
+     }
+ 
+-    Ref<Label> beforeThen = generator.newLabel();
+-    Ref<Label> beforeElse = generator.newLabel();
+-    Ref<Label> afterElse = generator.newLabel();
 +    m_statementSpine.append(StatementSpineRecord { StatementSpineRecord::Kind::Block, !!usingCount, false, block, dst, head, lastWithCompletionValue, nullptr, nullptr });
 +}
 +
@@ -2328,11 +2331,8 @@ diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaSc
 +    if (shouldBeConcernedWithCompletionValue()) {
 +        if (ifNode->m_ifBlock->hasEarlyBreakOrContinue() || (ifNode->m_elseBlock && ifNode->m_elseBlock->hasEarlyBreakOrContinue()))
 +            emitLoad(dst, jsUndefined());
-     }
- 
--    Ref<Label> beforeThen = generator.newLabel();
--    Ref<Label> beforeElse = generator.newLabel();
--    Ref<Label> afterElse = generator.newLabel();
++    }
++
 +    Ref<Label> beforeThen = newLabel();
 +    Ref<Label> beforeElse = newLabel();
 +    Ref<Label> afterElse = newLabel();
@@ -2908,7 +2908,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/par
 diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parser/Parser.h
 --- a/Source/JavaScriptCore/parser/Parser.h
 +++ b/Source/JavaScriptCore/parser/Parser.h
-@@ -1603,6 +1603,87 @@ private:
+@@ -1603,6 +1603,91 @@ private:
      // chain level. The chain level suspends: it publishes its record and returns to its driver.
      enum class AssignmentEdge : uint8_t { Call, Suspend };
  
@@ -2956,8 +2956,12 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
 +        }
 +        ~StatementRecordScope()
 +        {
-+            if (m_parser.m_statementRecords.size() > m_recordBase || m_parser.m_ifClauses.size() > m_clauseBase || m_parser.m_ifBranches.size() > m_branchBase) [[unlikely]]
++            ASSERT(m_parser.m_statementRecords.size() >= m_recordBase && m_parser.m_ifClauses.size() >= m_clauseBase && m_parser.m_ifBranches.size() >= m_branchBase);
++            if (m_parser.m_statementRecords.size() > m_recordBase || m_parser.m_ifClauses.size() > m_clauseBase || m_parser.m_ifBranches.size() > m_branchBase) [[unlikely]] {
++                // An activation leaves records behind only when it returns on an error.
++                ASSERT(m_parser.hasError());
 +                m_parser.unwindStatementRecords(m_recordBase, m_clauseBase, m_branchBase);
++            }
 +        }
 +        bool hasOwnRecord() const { return m_parser.m_statementRecords.size() > m_recordBase; }
 +
@@ -2996,7 +3000,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
      // Used to determine type of error to report.
      bool isFunctionMetadataNode(ScopeNode*) { return false; }
      bool isFunctionMetadataNode(FunctionMetadataNode*) { return true; }
-@@ -1827,7 +1908,34 @@ private:
+@@ -1827,7 +1912,34 @@ private:
      template <class TreeBuilder> TreeStatement parseDebuggerStatement(TreeBuilder&);
      template <class TreeBuilder> TreeStatement parseExpressionStatement(TreeBuilder&);
      template <class TreeBuilder> TreeStatement parseExpressionOrLabelStatement(TreeBuilder&, bool allowFunctionDeclarationAsStatement);
@@ -3032,7 +3036,7 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
      enum class BlockType : uint8_t { Normal, CatchBlock, StaticBlock };
      template <class TreeBuilder> TreeStatement parseBlockStatement(TreeBuilder&, BlockType = BlockType::Normal);
      template <class TreeBuilder> TreeExpression parseExpression(TreeBuilder&);
-@@ -2176,6 +2284,12 @@ private:
+@@ -2176,6 +2288,12 @@ private:
      // bun-wasm: the suspended levels of every chain driver of this parse, innermost last. A driver
      // removes exactly the records above its base before it returns.
      Vector<AssignmentLevel, 8> m_suspendedAssignmentLevels;
