@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { launchFailureFixture } from "../../scripts/fixtures/launch-failure.ts";
 import { browserTrapSource } from "../../scripts/fixtures/browser-call-trap.ts";
 import { copyLaunchFailure, errorFact, launchFailureFact, maxLaunchFailureBytes } from "../src/launch-failure.ts";
-import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots, type FrozenAllocatorFailure } from "../src/memory-telemetry.ts";
+import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots, retainedMemoryProcesses, type FrozenAllocatorFailure } from "../src/memory-telemetry.ts";
 import { createMemoryPublisher } from "../src/memory-channel.ts";
 
 test("bounded scalar copies include admitted identity outside the truncated worker table", () => {
@@ -81,6 +81,10 @@ test("launch facts coexist with Browser traps and survive later samples, end and
     const retained = retainedMemorySnapshots().find(value => value.id === id);
     expect(retained).toMatchObject({ terminal: true, failedAllocation: { bytes: 123 }, launchFailures: [fact],
       engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536 } });
+    const observation = retainedMemoryProcesses().processes.find(value => value.id === id);
+    expect(observation?.sample).not.toBeNull();
+    expect(observation?.sample).not.toHaveProperty("launchFailures");
+    expect(JSON.stringify(observation)).not.toContain("original native refusal");
     for (let attempt = 2; attempt <= 5; attempt++) recordLaunchFailure(id, { ...fixture.capture(), attempt });
     expect(retainedMemorySnapshots().find(value => value.id === id)?.launchFailures?.map(value => value.attempt)).toEqual([4, 5]);
     recordLaunchFailure(id, { ...fixture.capture(), attempt: 5, cleanupError: errorFact(Error("cleanup")) });
@@ -109,9 +113,11 @@ test("cached terminal telemetry stays newer than delayed messages while retainin
     recordMemorySnapshot({ type: "bun-memory", snapshot: old });
     expect(retainedMemorySnapshots().find(value => value.id === id)).toMatchObject({ terminal: true, time: newer.time,
       engineCounters: newer.engineCounters, frozenAllocatorFailure: newer.frozenAllocatorFailure, launchFailures: [fact] });
+    expect(retainedMemoryProcesses().processes.find(value => value.id === id)?.sample).toMatchObject({ time: newer.time, terminal: false });
     recordMemorySnapshot({ type: "bun-memory", snapshot: latest });
     expect(retainedMemorySnapshots().find(value => value.id === id)).toMatchObject({ terminal: true, time: latest.time,
       engineCounters: latest.engineCounters, frozenAllocatorFailure: latest.frozenAllocatorFailure, launchFailures: [fact] });
+    expect(retainedMemoryProcesses().processes.find(value => value.id === id)?.sample).toMatchObject({ time: newer.time, terminal: false });
   } finally { endMemorySnapshot(id); }
 });
 

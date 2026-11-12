@@ -1,7 +1,9 @@
 import { expect, spyOn, test } from "bun:test";
-import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
+import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots,
+  registerMemoryProcess, observeMemoryOutcome, memoryRuntimeId, memoryCommandId, retainedMemoryProcesses, memoryObservationLimits, type MemorySnapshot } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
+import type { ProcessService } from "waffle";
 
 // Passed through as the core's declared maximum; any page multiple shows it is not a constant.
 const LIMIT_BYTES = 7 * 65536;
@@ -98,14 +100,17 @@ test("QuickJS backing stores, first failure and unknown values retain their sepa
 
 test("terminal channel retains bounded validated identities and unknown aggregates cannot pass as zero", () => {
   const f = fixture("quickjs");
-  const snapshot = f.reader.finish();
+  const transport = beginMemorySnapshot("quickjs", crypto.randomUUID());
+  if (!transport) throw Error("missing transport");
+  const snapshot = createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport).finish();
   expect(recordMemorySnapshot({ type: "bun-memory", snapshot })).toBe(true);
   expect(retainedMemorySnapshots().some(value => value.id === snapshot.id)).toBe(true);
-  expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { id: "invalid" } })).toThrow();
+  expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { id: "invalid" } }, transport.id)).not.toThrow();
   expect(recordMemorySnapshot({ type: "stdout" })).toBe(false);
   expect(aggregate([snapshot, { ...emptyCounters }]).allocatorLiveBytes).toBeNull();
   expect(aggregate([snapshot, snapshot]).allocatorLiveBytes).toBe(20000);
   expect(aggregate([]).jsHeapBytes).toBeNull();
+  endMemorySnapshot(transport.id);
 });
 
 test("an unsampled live process stays unknown rather than inheriting a previous terminal process", () => {
@@ -376,9 +381,231 @@ test("frozen record survives channel teardown and validates at the host boundary
     for (const invalid of [undefined, {}, { ...initial?.frozenAllocatorFailure, reason: "limit" },
       { ...initial?.frozenAllocatorFailure, previousUsableBytes: -1 },
       { ...initial?.frozenAllocatorFailure, bytes: Number.MAX_SAFE_INTEGER + 1 }]) {
-      expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { ...terminal, frozenAllocatorFailure: invalid } })).toThrow();
+      expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { ...terminal, frozenAllocatorFailure: invalid } }, transport.id)).not.toThrow();
+      expect(retainedMemoryProcesses().processes.find(row => row.id === transport.id)?.status).toBe("invalid");
     }
   } finally { endMemorySnapshot(transport.id); }
   expect(retainedMemorySnapshots().find(value => value.id === transport.id)?.frozenAllocatorFailure)
     .toEqual(f.reader.sample().frozenAllocatorFailure);
+});
+
+function observationFixture(pid = 101, runtime = { disposed: false }, service: Pick<ProcessService, "workerMemory"> = { workerMemory: () => [
+  { pid, parentPid: 1, rootPid: 1, job: 7, directory: `synthetic-directory-${pid}`, bytes: 65536 },
+] }) {
+  const f = frozenFixture();
+  const id = crypto.randomUUID();
+  registerMemoryProcess("spidermonkey", id, runtime, { pid, parentPid: 1, job: 7 }, service);
+  const transport = beginMemorySnapshot("spidermonkey", id, memoryCommandId(runtime, 7));
+  if (!transport) throw Error("missing synthetic transport");
+  const reader = createMemoryReader("spidermonkey", f.core, undefined, LIMIT_BYTES, transport);
+  const publisher = createMemoryPublisher(transport.buffer, reader);
+  return { ...f, id, runtime, service, transport, reader, publisher };
+}
+function processObservation(id: string) {
+  const row = retainedMemoryProcesses().processes.find(row => row.id === id);
+  if (!row) throw Error(`missing test process ${id}`);
+  return row;
+}
+const cleanExit = () => ({ kind: "exited", code: 0, status: 0 } as const);
+function writeSyntheticFrame(buffer: SharedArrayBuffer, value: unknown): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  new Uint8Array(buffer, 32, bytes.length).set(bytes);
+  Atomics.store(new Int32Array(buffer), 4, bytes.length);
+}
+
+test("launcher-entry identity covers setup failure without inventing a sample or runtime activation", () => {
+  const runtime = { disposed: false, processes() { throw Error("must not activate"); } };
+  const service = { workerMemory: () => [] };
+  const id = crypto.randomUUID();
+  registerMemoryProcess("spidermonkey", id, runtime, { pid: 8, parentPid: 7, job: 6 }, service);
+  expect(processObservation(id)).toMatchObject({ binding: { runtimeId: memoryRuntimeId(runtime), pid: 8, parentPid: 7, job: 6 }, sample: null, endedAt: null });
+  endMemorySnapshot(id, () => ({ kind: "start-failed", error: "ENOMEM", code: 12, status: null }));
+  expect(processObservation(id)).toMatchObject({ status: "missing", outcome: { kind: "observed", value: { kind: "start-failed", error: "ENOMEM", code: 12, status: null } } });
+});
+test("unbound runner-style roots stay unbound and both export/read facts are needed", () => {
+  const f = frozenFixture();
+  const transport = beginMemorySnapshot("spidermonkey", crypto.randomUUID());
+  if (!transport) throw Error("missing transport");
+  const reader = createMemoryReader("spidermonkey", f.core, undefined, LIMIT_BYTES, transport);
+  createMemoryPublisher(transport.buffer, reader).finish();
+  endMemorySnapshot(transport.id);
+  expect(processObservation(transport.id)).toMatchObject({ binding: null, sample: { libcTelemetry: { allocator: "read", failure: "read" } } });
+  const unsupported = createMemoryReader("spidermonkey", f.core, undefined, LIMIT_BYTES);
+  const ordinary = fixture("quickjs");
+  expect(unsupported.sample().libcTelemetry?.failure).toBe("read");
+  expect(ordinary.reader.sample().libcTelemetry).toEqual({ allocator: "read", failure: "unsupported" });
+});
+test.each(["length", "json", "shape"])("corrupt %s channel is nonthrowing, detached and terminal", kind => {
+  const f = observationFixture();
+  if (kind === "length") Atomics.store(new Int32Array(f.transport.buffer), 4, f.transport.buffer.byteLength);
+  if (kind === "json") { new Uint8Array(f.transport.buffer)[32] = 123; Atomics.store(new Int32Array(f.transport.buffer), 4, 1); }
+  if (kind === "shape") writeSyntheticFrame(f.transport.buffer, { id: f.id });
+  expect(() => endMemorySnapshot(f.id, cleanExit)).not.toThrow();
+  const before = processObservation(f.id);
+  expect(before.status).toBe(kind === "shape" ? "invalid" : "read-failed");
+  expect(before.endedAt).not.toBeNull();
+  f.publisher.finish();
+  endMemorySnapshot(f.id, () => { throw Error("idempotent cleanup must not read twice"); });
+  expect(processObservation(f.id)).toEqual(before);
+});
+test.each(["id", "commandId", "engine", "commandSequence", "incarnation"])("terminal channel validates %s before accepting a frame", field => {
+  const f = observationFixture();
+  const value: MemorySnapshot = { ...f.reader.finish() };
+  const invalid = field === "commandSequence" ? value.commandSequence + 1 : field === "incarnation" ? (value.incarnation ?? 0) + 1 : "wrong-identity";
+  Reflect.set(value, field, invalid);
+  writeSyntheticFrame(f.transport.buffer, value);
+  endMemorySnapshot(f.id, cleanExit);
+  expect(processObservation(f.id)).toMatchObject({ status: "invalid", sample: null });
+});
+test("a reused telemetry ID and command still reject frames from the earlier incarnation", () => {
+  const f = observationFixture();
+  const old = f.reader.finish();
+  endMemorySnapshot(f.id, cleanExit);
+  beginMemorySnapshot("spidermonkey", f.id, f.transport.commandId);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: old }, f.id);
+  expect(processObservation(f.id)).toMatchObject({ status: "pending", sample: null });
+  endMemorySnapshot(f.id);
+});
+test("a valid posted frame cannot poison another incarnation's accepted sample", () => {
+  const f = observationFixture();
+  const old = f.reader.finish();
+  endMemorySnapshot(f.id, cleanExit);
+  const transport = beginMemorySnapshot("spidermonkey", f.id, f.transport.commandId);
+  if (!transport) throw Error("missing transport");
+  const current = createMemoryReader("spidermonkey", f.core, undefined, LIMIT_BYTES, transport).sample();
+  recordMemorySnapshot({ type: "bun-memory", snapshot: current }, f.id);
+  const before = processObservation(f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: old }, f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: { ...old, frozenAllocatorFailure: {} } }, f.id);
+  expect(processObservation(f.id)).toEqual(before);
+  endMemorySnapshot(f.id);
+});
+test("late posted frames cannot reopen terminal rows, poison another identity or populate unregistered rows", () => {
+  const f = observationFixture();
+  f.publisher.finish();
+  endMemorySnapshot(f.id, cleanExit);
+  const before = processObservation(f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: { ...f.reader.sample(), terminal: false } }, f.id);
+  recordMemorySnapshot({ type: "bun-memory", snapshot: { ...f.reader.sample(), id: crypto.randomUUID() } });
+  expect(processObservation(f.id)).toEqual(before);
+  expect(retainedMemorySnapshots().find(row => row.id === f.id)?.terminal).toBe(true);
+});
+test("outcome null, failed reads, signals and exited 134 remain distinct", () => {
+  const reads = [() => null, () => { throw Error("collected incarnation"); },
+    () => ({ kind: "signaled", code: 9, status: 137 } as const), () => ({ kind: "exited", code: 134, status: 134 } as const)];
+  const outcomes = reads.map(read => {
+    const f = observationFixture();
+    f.publisher.finish();
+    endMemorySnapshot(f.id, read);
+    return processObservation(f.id).outcome;
+  });
+  expect(outcomes).toEqual([{ kind: "observed", value: null }, { kind: "unavailable", reason: "read-failed" },
+    { kind: "observed", value: { kind: "signaled", code: 9, status: 137 } }, { kind: "observed", value: { kind: "exited", code: 134, status: 134 } }]);
+});
+test("revocation retains a protected typed outcome before collection without rereading it at cleanup", () => {
+  const f = observationFixture();
+  const exit = { kind: "exited", code: 70, status: 70 } as const;
+  observeMemoryOutcome(f.id, () => exit);
+  f.publisher.finish();
+  let lateReads = 0;
+  endMemorySnapshot(f.id, () => { lateReads++; throw Error("incarnation collected"); });
+  observeMemoryOutcome(f.id, () => { lateReads++; throw Error("late revocation"); });
+  expect(lateReads).toBe(0);
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "observed", value: exit }, outcomeBoundary: "revocation" });
+});
+test("an early null outcome is distinct from a later failed read and never becomes a selected exit", () => {
+  const f = observationFixture();
+  observeMemoryOutcome(f.id, () => null);
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "observed", value: null }, outcomeBoundary: "revocation" });
+  endMemorySnapshot(f.id, () => { throw Error("incarnation collected"); });
+  expect(processObservation(f.id)).toMatchObject({ outcome: { kind: "unavailable", reason: "read-failed" }, outcomeBoundary: "adapter-cleanup" });
+});
+test("concurrent runtime/PID joins preserve directory, trigger sequence and known subtotals", async () => {
+  const first = observationFixture(12), second = observationFixture(12);
+  first.publisher.finish(); second.publisher.finish();
+  await Promise.all([first, second].map(async f => { endMemorySnapshot(f.id, () => ({ kind: "signaled", code: 9, status: 137 })); }));
+  const result = retainedMemoryProcesses();
+  const rows = result.censuses.filter(row => row.telemetryId === first.id || row.telemetryId === second.id);
+  expect(rows).toHaveLength(2);
+  expect(new Set(rows.map(row => row.runtimeId)).size).toBe(2);
+  expect(rows[0]?.sequence).not.toBe(rows[1]?.sequence);
+  for (const row of rows) expect(row).toMatchObject({ boundary: "adapter-cleanup", state: "observed", knownSampledBytesSubtotal: 65536,
+    aliasing: "uncertain", workers: [{ pid: 12, parentPid: 1, rootPid: 1, directory: "synthetic-directory-12", engine: "spidermonkey", bytes: 65536 }] });
+});
+test("getter never requests, refreshes or reactivates; disposed and failed service reads preserve terminal samples", () => {
+  let reads = 0;
+  const runtime = { disposed: false };
+  const service = { workerMemory() { reads++; throw Error("private collection context"); } };
+  const f = observationFixture(12, runtime, service);
+  f.publisher.finish();
+  endMemorySnapshot(f.id, cleanExit);
+  const words = new Int32Array(f.transport.buffer);
+  const generation = Atomics.load(words, 0);
+  expect(retainedMemoryProcesses().runtimes.find(row => row.runtimeId === memoryRuntimeId(runtime))?.state).toBe("read-failed");
+  const before = reads;
+  runtime.disposed = true;
+  const result = retainedMemoryProcesses();
+  expect(result.runtimes.find(row => row.runtimeId === memoryRuntimeId(runtime))?.state).toBe("disposed");
+  expect(reads).toBe(before);
+  expect(Atomics.load(words, 0)).toBe(generation);
+  expect(processObservation(f.id).sample?.terminal).toBe(true);
+  expect(JSON.stringify(result)).not.toContain("private collection context");
+  const copy = result.processes.find(row => row.id === f.id);
+  if (copy?.binding) copy.binding.pid = 999;
+  expect(processObservation(f.id).binding?.pid).toBe(12);
+});
+test("weak service/runtime registrations do not keep their owners alive", async () => {
+  function register() {
+    const runtime = { disposed: false }, service = { workerMemory: () => [] };
+    const id = crypto.randomUUID();
+    const runtimeId = memoryRuntimeId(runtime);
+    registerMemoryProcess("spidermonkey", id, runtime, { pid: 77, parentPid: 1, job: 1 }, service);
+    endMemorySnapshot(id, cleanExit);
+    return { runtimeId, runtime: new WeakRef(runtime), service: new WeakRef(service) };
+  }
+  const refs = register();
+  await Bun.sleep(0);
+  Bun.gc(true);
+  expect(refs.runtime.deref()).toBeUndefined();
+  expect(refs.service.deref()).toBeUndefined();
+  expect(retainedMemoryProcesses().runtimes.find(row => row.runtimeId === refs.runtimeId)?.state).toBe("disposed");
+});
+test("recent census retention and hard process bounds expose coherent eviction and truncation", () => {
+  const before = retainedMemoryProcesses().loss;
+  const fixtures = Array.from({ length: memoryObservationLimits.active + 1 }, (_, i) => observationFixture(1000 + i));
+  expect(retainedMemoryProcesses().loss.active).toBeGreaterThan(before.active);
+  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 })); }
+  const result = retainedMemoryProcesses();
+  expect(result.processes.filter(row => row.endedAt !== null).length).toBeLessThanOrEqual(memoryObservationLimits.terminal);
+  expect(result.censuses).toHaveLength(memoryObservationLimits.censuses);
+  expect(result.censuses.at(-1)?.telemetryId).toBe(fixtures.at(-1)?.id);
+  expect(result.loss.censuses).toBeGreaterThan(before.censuses);
+  expect(result.loss.terminal).toBeGreaterThan(before.terminal);
+  expect(result.loss.runtimes).toBeGreaterThan(before.runtimes);
+  expect(result.incomplete).toBe(true);
+  const ids = new Set(result.processes.map(row => row.id));
+  expect(retainedMemorySnapshots().every(row => ids.has(row.id))).toBe(true);
+});
+test("worker and serialized output bounds retain explicit loss, unknown bytes and adapter labels", () => {
+  const workers = Array.from({ length: memoryObservationLimits.workers + 1 }, (_, i) => ({ pid: i + 1, parentPid: 0, rootPid: 1,
+    job: 1, directory: "d".repeat(128), bytes: i % 2 ? null : 65536 }));
+  const fixtures = Array.from({ length: memoryObservationLimits.runtimes }, (_, i) => observationFixture(2000 + i, { disposed: false }, { workerMemory: () => workers }));
+  for (const f of fixtures) { f.publisher.finish(); endMemorySnapshot(f.id, () => ({ kind: "exited", code: 70, status: 70 })); }
+  const result = retainedMemoryProcesses();
+  expect(new TextEncoder().encode(JSON.stringify(result)).byteLength).toBeLessThanOrEqual(memoryObservationLimits.outputBytes);
+  expect(result.loss.outputCensuses + result.loss.outputWorkerRows).toBeGreaterThan(0);
+  expect(result.runtimes.some(row => row.truncated > 0)).toBe(true);
+  expect(result.censuses.every(row => row.workers.length <= memoryObservationLimits.workers)).toBe(true);
+  expect(result.runtimes.some(row => row.unknownBytes > 0)).toBe(true);
+  expect(result.runtimes.flatMap(row => row.workers).every(row => row.engine === null)).toBe(true);
+});
+test("legacy caller labels cannot expose paths or defeat the bounded observation projection", () => {
+  const id = "/private/caller/path".repeat(1000);
+  beginMemorySnapshot("spidermonkey", id);
+  endMemorySnapshot(id);
+  const result = retainedMemoryProcesses();
+  expect(result.loss.outputProcesses).toBeGreaterThan(0);
+  const serialized = JSON.stringify(result);
+  expect(serialized).not.toContain("/private/caller/path");
+  expect(new TextEncoder().encode(serialized).byteLength).toBeLessThanOrEqual(memoryObservationLimits.outputBytes);
 });

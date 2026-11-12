@@ -5,6 +5,7 @@
 | `crates/bunwasm-cli/memory-telemetry.c` and `build.rs` | Port | Original adapter around the existing WASI libc allocation ABI. No upstream allocator implementation is copied or changed. |
 | `crates/bunwasm-runtime/src/js/{process.ts,runtime.d.ts}` | Original adapter | Nullable memory values and derived RSS values preserve unknowns. No Bun or Node implementation copied. |
 | `web/src/{memory-telemetry.ts,memory-channel.ts}`, executor and launchers | Host feature | Original readers and transport for core and engine snapshots. Uses Waffle's public linked-group API from the pinned package. |
+| Bounded process registry, campaign reader and synchronous-child control | Original adapter | Use Waffle 0.0.123 process context, outcome and worker-memory APIs (`runtime.ts`, `proc/outcome.ts`, `browser/process-broker.ts`, source `8255a0cc806ef8fdc4d82557fbfe4b6d42c53dc7`). No upstream implementation is copied or changed. |
 | `scripts/engine-producer.ts`, `producer-closure.ts` and guest receipt/profile helpers | Original adapter | Compose one core with the selected original engine receipts, record a source-matched launcher, and require the complete split or shared-group closure before qualification. No upstream implementation copied. |
 
 The core retains its existing WASI libc allocator. Linker wrapping observes
@@ -170,3 +171,32 @@ counters keep their existing wire representation.
 The JSC allocation-boundary check manifest also runs the channel regression. It
 round-trips a complete wide diagnostic record through publication and teardown,
 including null counters and the unchanged guest memory limit.
+
+## Bounded host observations
+
+The launcher registers runtime/PID identity before asynchronous setup. Original
+host code retains typed outcomes, bounded terminal samples, and recent
+adapter-cleanup worker censuses through weak runtime/service references. The
+existing revocation callback captures selected outcomes before their process
+records can be collected. Cleanup preserves that typed value and records its
+observation boundary; unavailable reads are never synthesized as exit codes. The
+read-only getter makes no guest calls. Both libc record reads must succeed
+before an absent failure can be reported as measured. Missing records, channel
+errors, unbound roots, stale samples, disposal and retention loss remain explicit.
+
+The campaign reader projects documented numeric fields and bounded status enums.
+Immediate launch-refusal details retain their existing separate collector and
+bounded metadata helper. The common snapshot merger preserves those facts and
+Browser trap counters across worker samples without adding them to the new
+process-memory block. Its cached process samples keep their observed boundary;
+legacy retained snapshots can accept a newer matching frame while remaining
+terminal. Campaign budget fallbacks preserve already copied refusal facts.
+The split/interpreter browser regression uses the unchanged ordinary pair and
+synchronous `node` children, with post-entry and caught-error sentinels. Its exact
+fixed ArrayBuffer request is 1,073,807,360 bytes. Nonce-bound captured child
+streams and actual returned PIDs join one newly observed runtime/parent family;
+broker directory, root and parent edges corroborate the launcher records.
+Guest `process.pid` and `process.ppid` are not identity oracles. This qualifies
+the existing libc recorder and host lifecycle path, not bootstrap failure or
+browser growth refusal.
+See [memory attribution](../guides/memory-attribution.md) for the boundaries.
