@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { Transport } from "./transport";
 import { ownedCommand } from "./lifetime";
 import { until } from "./playground";
-import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
+import { armIphoneClick, iphonePreviewLoad, presentIphonePreview } from "./iphone-browser";
 import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
@@ -18,9 +18,43 @@ export function nativeButtonRef(snapshot: string, label: string): string {
   if (matches.length !== 1 || !matches[0]?.[1]) throw new Error(`Expected one visible native button named ${JSON.stringify(label)}, found ${matches.length}`);
   return matches[0][1];
 }
+type Row = Record<string, unknown>;
+const attached = (row: Row): boolean => typeof row.timeOrigin === "number" && row.visible === true;
+function presentedFocus(row: Row, presentation: string): boolean {
+  const focus = row.previewFocus;
+  return focus !== null && typeof focus === "object" && "presentation" in focus && focus.presentation === presentation && "focused" in focus && focus.focused === true;
+}
+type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void>;
+/**
+ * One deadline for opening a preview. Each stage polls short reads, and starts none after the
+ * deadline or after `signal` aborts, so a preview that never loads leaves no controller command
+ * pending behind it. An expiry names its stage and the last state it read.
+ */
+function previewDeadline(timeoutMs: number): PreviewWait {
+  const deadline = Date.now() + timeoutMs;
+  return async (signal, stage, read, accept) => {
+    let last: Row | null = null;
+    const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
+    // A read cut off by the deadline is the same expiry, not a separate observer failure.
+    const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
+    while (true) {
+      signal.throwIfAborted();
+      const left = deadline - Date.now();
+      if (left <= 0) throw expired();
+      last = await read(left).catch(fail);
+      if (accept(last)) return;
+      await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+    }
+  };
+}
 export async function createIphoneTransport(config: Config): Promise<Transport> {
   validateIphoneControl(config.control, config.agent);
   let role: "host" | "preview" = "host";
+  // True only while the presented frame has loaded and its load listener focused it.
+  let focused = false;
+  // Owns the wait on the presented frame. A presentation change ends it; so does the start of cleanup, for good.
+  let opening = new AbortController();
+  const cleaning = new AbortController();
   let opened = false;
   let deviceFailed = false;
   let title = "";
@@ -50,15 +84,23 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
   }
+  function execute(selected: "host" | "preview", source: string, timeoutMs: number, observation = false): Promise<unknown> {
+    return request(selected + "/execute", { source, timeoutMs, observation }, timeoutMs);
+  }
   async function evaluate<T>(source: string, timeoutMs = observationTimeoutMs, observation = false): Promise<T> {
-    return await request(role + "/execute", { source, timeoutMs, observation }, timeoutMs) as T;
+    return await execute(role, source, timeoutMs, observation) as T;
   }
-  async function ready(selected: "host" | "preview"): Promise<Record<string, unknown>> {
-    return until(async () => object(await request(selected + "/state") ?? {}), row => typeof row.timeOrigin === "number" && row.visible === true, config.timeoutMs);
-  }
-  async function present(url: string | null): Promise<void> {
+  // Every presentation change ends the wait on the previous frame and withdraws its focus record.
+  async function present(url: string | null): Promise<{ signal: AbortSignal; presentation: string | null }> {
     role = "host";
-    await evaluate(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
+    focused = false;
+    opening.abort(new Error("iPhone preview presentation changed"));
+    opening = new AbortController();
+    const signal = AbortSignal.any([opening.signal, cleaning.signal]);
+    const presentation = await evaluate<unknown>(`(${presentIphonePreview.toString()})(${JSON.stringify(url)})`);
+    if (presentation !== null && typeof presentation !== "string") throw new Error("Invalid iPhone presentation identity");
+    if (url !== null && !presentation) throw new Error("Missing iPhone presentation identity");
+    return { signal, presentation };
   }
   async function close(timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -71,12 +113,16 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   }
   return {
     capabilities,
-    beginCleanup() { observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs; },
+    beginCleanup() {
+      focused = false;
+      observationTimeoutMs = config.cleanupTimeoutMs ?? config.timeoutMs;
+      cleaning.abort(new Error("iPhone cleanup began before the preview opened"));
+    },
     async navigate(url) {
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
       await device(["open", "com.apple.mobilesafari", target], config.timeoutMs); opened = true;
-      const state = await ready("host");
+      const state = await until(async () => object(await request("host/state") ?? {}), attached, config.timeoutMs);
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       capabilities.userAgent = state.userAgent;
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
@@ -84,9 +130,17 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     },
     evaluate: <T>(source: string, options?: Parameters<Transport["evaluate"]>[1]) => evaluate<T>(source, observationTimeoutMs, options?.observation === true),
     async openPreview(url) {
+      const wait = previewDeadline(config.timeoutMs);
       await request("preview/configure", { url });
-      await present(url);
-      await ready("preview"); role = "preview";
+      const { signal, presentation } = await present(url);
+      if (presentation === null) throw new Error("Missing iPhone presentation identity");
+      // The owner role stays free for terminal and diagnostic reads until the preview document completes.
+      await wait(signal, "document", async left => object(await request("preview/state", undefined, left) ?? {}), attached);
+      await wait(signal, "load", async left => object(await execute("preview", `(${iphonePreviewLoad.toString()})()`, left, true)), row => row.loaded === true);
+      await wait(signal, "focus", async left => object(await request("host/state", undefined, left) ?? {}), row => presentedFocus(row, presentation));
+      signal.throwIfAborted();
+      role = "preview";
+      focused = true;
     },
     async useHost() { role = "host"; },
     async usePreview() { role = "preview"; },
@@ -96,6 +150,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       return { browserClosed: true, foregroundStopped: true, previewClosed: true };
     },
     async nativeClick(button, clicked, timeoutMs) {
+      if (!focused) throw new Error("iPhone preview is not focused after load; refusing native input");
       const deadline = Date.now() + timeoutMs;
       const remaining = () => { const left = deadline - Date.now(); if (left <= 0) throw new Error("iPhone click deadline expired"); return left; };
       const trace = new IphoneClickTrace(config.saveNative, timeoutMs, lifetime.signal);
