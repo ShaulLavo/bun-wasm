@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "On-demand Bun lint and format drivers for wasm32-wasip1"
+autobins = false
 
 [[bin]]
 name = "bun-tools"

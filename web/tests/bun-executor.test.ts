@@ -16,6 +16,7 @@ import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
 import { installLookupServer } from "../src/net/lookup";
 import { createMemoryChannel, memoryChannelReady, requestMemoryChannel } from "../src/memory-channel";
+import { beginMemorySnapshot, endMemorySnapshot } from "../src/memory-telemetry.ts";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
@@ -59,7 +60,7 @@ const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
 afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
-async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
+async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net" | "memoryTelemetry">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
@@ -73,7 +74,7 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   const request: RunRequest = { controlGrant: control.grant,
     engine: options.engine ?? "browser", adapter: options.adapter, module: guest(options.ready ?? 1),
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
-    trace: false, net: options.net ?? null, slots: options.slots,
+    trace: false, net: options.net ?? null, slots: options.slots, memoryTelemetry: options.memoryTelemetry,
   };
   try {
     await bootstrapBun(request, host);
@@ -154,6 +155,25 @@ for (const [label, options] of [
   const { messages } = await run(options);
   expect(startEngineHost).not.toHaveBeenCalled();
   expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
+}));
+
+test("the Browser executor connects its trap observer to the existing snapshot transport", controlled(async () => {
+  const id = crypto.randomUUID();
+  const memoryTelemetry = beginMemorySnapshot("browser", id);
+  if (!memoryTelemetry) throw Error("Missing diagnostic transport");
+  startEngineHost.mockImplementationOnce(async options => {
+    const observer = options.onWasmCallTrap;
+    if (typeof observer !== "function") throw Error("Missing native-call observer");
+    observer(new WebAssembly.RuntimeError("executor wiring control"), 7);
+    return 0;
+  });
+  try {
+    const { messages } = await run({ memoryTelemetry });
+    expect(messages.find(message => message.type === "bun-memory")).toMatchObject({ type: "bun-memory", snapshot: {
+      id, engine: "browser", wasmCapacityBytes: 65536, memoryLimitBytes: null,
+      engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536, browserCoreDeclaredMaximumBytes: null, browserCoreFactoryMaximumBytes: null },
+    } });
+  } finally { endMemorySnapshot(id); }
 }));
 
 test("the engine host gets the page's networking surface only when slots are on", controlled(async () => {
@@ -488,7 +508,8 @@ for (const [boundary, wait] of linkedSideImports) test(wait ? `linked ${boundary
   const pair = quickjsPair("quickjs");
   const module = await prepareProgram({ kind: "quickjs", ...pair });
   const channel = createMemoryChannel();
-  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel };
+  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel,
+    coreMemoryLimits: { declaredMaximumBytes: null, factoryMaximumBytes: null } };
   const connection = createFilesystemConnection();
   const request: RunRequest = { controlGrant: control.grant, engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
     filesystem: connection.client, trace: false, net: null, slots: "off", memoryTelemetry };

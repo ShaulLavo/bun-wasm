@@ -11,6 +11,7 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
@@ -320,7 +321,7 @@ class Reader {
 
 // --- calling the wasm --------------------------------------------------------------------
 
-function wasmCaller(exports) {
+function wasmCaller(exports, onWasmCallTrap) {
   const memory = memoryViews(exports.memory);
   const result = () => {
     const ptr = exports.bunwasm_result_ptr() >>> 0;
@@ -338,7 +339,12 @@ function wasmCaller(exports) {
     w.value(args);
     const ptr = exports.bunwasm_alloc(w.len);
     memory.bytes().set(w.buf.subarray(0, w.len), ptr);
-    const status = exports.bunwasm_call(index, ptr, w.len);
+    let status;
+    try { status = exports.bunwasm_call(index, ptr, w.len); }
+    catch (error) {
+      reportWasmCallTrap(onWasmCallTrap, error, index);
+      throw error;
+    }
     const value = result();
     if (status !== 0) throw nativeError(value);
     return value;
@@ -406,7 +412,7 @@ class EngineHost {
   constructor(o, resolve) {
     this.o = o;
     this.resolveDone = resolve;
-    this.wasm = wasmCaller(o.instance.exports);
+    this.wasm = wasmCaller(o.instance.exports, o.onWasmCallTrap);
     this.exited = false;
     this.pendingAsync = 0;
     this.testComplete = false;

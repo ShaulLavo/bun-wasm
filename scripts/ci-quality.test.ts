@@ -19,10 +19,14 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
-test("CI uses a Node host that preserves direct spread eval scope", () => {
-  const versions = Array.from(workflow.matchAll(/^\s+node-version: '([^']+)'$/gm), match => match[1]);
+test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
+  const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
+  expect(pin).toMatch(/^26\.\d+\.\d+$/);
+  const versions = Array.from(workflow.matchAll(/^\s+node-version: (.+)$/gm), match => match[1]);
   expect(versions.length).toBeGreaterThan(0);
-  expect(versions.every(version => version === "26")).toBe(true);
+  expect(versions.every(version => version === "${{ env.CI_NODE_VERSION }}")).toBe(true);
+  const { checkpoint, consumer } = nativePipeline(workflow);
+  for (const job of [checkpoint, consumer]) expect(job).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   const reference = spawnSync("node", ["-e", 'process.stdout.write(String(Function("values", "storage", "return eval(...values)")(["storage"], 17)))'], { encoding: "utf8" });
   expect(reference.status, reference.stderr).toBe(0);
   expect(reference.stdout).toBe("17");
@@ -769,7 +773,9 @@ test("split engine producers reuse one common core and retain both pair receipts
   const paths = workflowString(workflowField(nativeWorkflowStep("name", "Configure private JSC build paths"), "run"));
   expect(paths).toContain('JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine');
   expect(jsc.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
-  expect(rust).toContain("dist/jsc-engine.wasm.engine.json");
+  expect(rust).not.toContain("name: jsc-embedding-receipts");
+  expect(rust).toContain("name: web-guest-fixture-receipts");
+  expect(rust).toContain("dist/*.wasm.embedding.json");
   expect(rust).toContain("${{ runner.temp }}/jsc/engine/engine-link.map");
   expect(rust).toContain("dist/*.wasm.engine.json");
 });
