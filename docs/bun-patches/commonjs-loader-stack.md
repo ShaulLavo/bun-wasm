@@ -41,9 +41,11 @@ The wrapper is entered through `Reflect.apply`, captured before application code
 Module loading does not consult mutable `call` or `apply` properties on a wrapper.
 A require hook uses ordinary method dispatch. This adds an ordinary bytecode frame
 on the default path, which QuickJS stores outside the native stack after PR 597,
-and removes a native `Reflect.apply` entry on the hooked path. At the unchanged
-32 KiB budget, Next 15.5.6's stock require hook and webpack config loader previously
-refused while compiling `bundle5.js`. Direct dispatch gets past that compilation.
+and removes a native `Reflect.apply` entry on the hooked path. A retained-pair
+diagnostic got Next 15.5.6 past webpack compilation at 32 KiB by changing only
+this dispatch. The normal source-built guest still refuses at 32 KiB and loads
+the initializer at 36 KiB; Next's own native `call` reentry remains. This loader
+improvement does not close the remaining mobile Next failure.
 The 24-module hooked chain regression also loads, catches an overflow in a longer
 chain, clears failed cache entries and loads another hooked chain.
 The initial one-frame measurement used `Function.prototype.apply`; its native
