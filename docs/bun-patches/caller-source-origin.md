@@ -15,7 +15,7 @@ SpiderMonkey at revision `a5df22d986d4b626f771b4f8885241941601c35c` reads
 the existing native saved-frame adapter rather than parsing stack
 text. This preserves filenames containing `@` and stops at an unavailable user frame.
 Origin reads ask the adapter to exclude self-hosted frames through
-`js::GetFirstSubsumedSavedFrame`; native callbacks such as `Array.map` still report
+the saved-frame accessors' `SavedFrameSelfHosted::Exclude` option; native callbacks such as `Array.map` still report
 the calling user script. Exception formatting keeps its existing frame selection.
 Its `js/public/SavedFrameAPI.h` exposes source labels and IDs, but no introduction type
 or eval creation origin. In `js/src/vm/SavedStacks.cpp`, `SavedStacks::getLocation`
