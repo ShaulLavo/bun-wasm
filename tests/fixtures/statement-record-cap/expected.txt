@@ -1,0 +1,15 @@
+record cap, program blocks: ok
+record cap, program blocks, 16-bit: ok
+record cap, program bare ifs: ok
+record cap, program bare ifs, 16-bit: ok
+record cap, program mixed: ok
+record cap, program mixed, 16-bit: ok
+record cap, direct eval blocks: ok
+record cap, direct eval blocks, 16-bit: ok
+record cap, function blocks: ok
+record cap, function blocks, 16-bit: ok
+record cap, function bare ifs: ok
+record cap, function bare ifs, 16-bit: ok
+record cap, arrow blocks: ok
+record cap, arrow blocks, 16-bit: ok
+negative controls: 9 of 9 broken contracts rejected, intact contract accepted
