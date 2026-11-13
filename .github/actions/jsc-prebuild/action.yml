@@ -1,0 +1,121 @@
+name: Verified JSC prebuild
+description: Restore or build JSC under the caller's effective-identity lock and verify before sharing
+inputs:
+  key:
+    description: Existing complete JSC cache identity
+    required: true
+  prefix:
+    description: Existing compatible restore prefix
+    required: true
+  expected-key:
+    description: Identity used by the caller's concurrency group
+    required: true
+  transfer:
+    description: Package a run-bound transfer for full CI
+    default: 'false'
+outputs:
+  manifest-sha256:
+    description: Digest of the run-bound transfer manifest
+    value: ${{ steps.jsc-artifact.outputs.manifest-sha256 }}
+runs:
+  using: composite
+  steps:
+    - name: Require the identity used to serialize producers
+      shell: bash
+      env:
+        EXPECTED_KEY: ${{ inputs.expected-key }}
+        ACTUAL_KEY: ${{ inputs.key }}
+      run: test -n "$EXPECTED_KEY" && test "$EXPECTED_KEY" = "$ACTUAL_KEY"
+    - uses: actions/cache/restore@v4
+      id: jsc-prebuild-cache
+      with:
+        path: ${{ runner.temp }}/jsc/prebuild
+        key: ${{ inputs.key }}
+        restore-keys: |
+          ${{ inputs.prefix }}
+    - name: Build or verify the JSC prebuild
+      id: jsc-producer
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      env:
+        CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
+      run: |
+        run_jsc_prebuild() {
+          source env.sh
+          export JOBS=2 CAGE=
+          if [[ "$CI_JSC_PREBUILD_HIT" != 'true' ]]; then
+            bash scripts/build-jsc.sh
+          fi
+          source jsc/common.sh
+          check_jsc_inputs_stamp
+        }
+        jsc_pid=
+        jsc_completion=
+        jsc_log="$RUNNER_TEMP/jsc-prebuild.log"
+        cleanup() {
+          status=$?
+          trap - EXIT INT TERM
+          # $! also covers a signal between the fork and PID assignment.
+          jsc_pid=${jsc_pid:-${!:-}}
+          if [[ -n "$jsc_pid" ]]; then
+            kill -TERM -- "-$jsc_pid" 2>/dev/null || true
+            kill -KILL -- "-$jsc_pid" 2>/dev/null || true
+            wait "$jsc_pid" 2>/dev/null || true
+          fi
+          if [[ -n "$jsc_completion" ]]; then rm -f -- "$jsc_completion" || true; fi
+          if [[ -f "$jsc_log" ]]; then cat "$jsc_log" || true; fi
+          exit "$status"
+        }
+        trap cleanup EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        jsc_completion=$(mktemp "$RUNNER_TEMP/jsc-completion-XXXXXX")
+        # Only this child owns a process group; its descendants inherit it.
+        set -m
+        (
+          set +m
+          trap - EXIT INT TERM
+          run_jsc_prebuild
+          printf 'verified\n' > "$jsc_completion"
+        ) > "$jsc_log" 2>&1 &
+        jsc_pid=$!
+        set +m
+        wait "$jsc_pid"
+        [[ "$(cat "$jsc_completion")" == verified ]]
+        echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
+    - name: Save the JSC prebuild cache once per input revision
+      if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/jsc/prebuild
+        key: ${{ inputs.key }}
+    # One archive for the prebuild and the sysroot it was built against, bound to
+    # this run and commit. The native job checks this manifest digest, extracts at
+    # the same absolute paths and re-verifies both in its own environment.
+    - name: Package the verified prebuild and sysroot
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      id: jsc-artifact
+      if: inputs.transfer == 'true'
+      run: |
+        set -euo pipefail
+        source env.sh
+        bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+        mkdir "$bundle"
+        bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" split "$bundle/prebuild.tar.zst"
+        tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
+        cp "$RUNNER_TEMP/jsc-prebuild.log" "$bundle/jsc-prebuild.log"
+        {
+          printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          (cd "$bundle" && sha256sum prebuild.tar.zst sysroot.tar.zst)
+        } > "$bundle/manifest"
+        transfer="$RUNNER_TEMP/jsc-prebuild.tar"
+        tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
+        ls -l "$bundle" "$transfer"
+        echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@v7
+      if: inputs.transfer == 'true'
+      timeout-minutes: 5
+      with:
+        path: ${{ runner.temp }}/jsc-prebuild.tar
+        if-no-files-found: error
+        retention-days: 1
+        archive: false

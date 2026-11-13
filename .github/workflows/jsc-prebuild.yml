@@ -1,0 +1,49 @@
+name: JSC cache producer
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+  BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
+
+jobs:
+  identity:
+    name: Resolve effective JSC inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      key: ${{ steps.setup.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/jsc-setup
+        id: setup
+      - uses: ./.github/actions/save-release-downloads
+
+  jsc-prebuild:
+    name: JSC C/C++ prebuild
+    needs: identity
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ needs.identity.outputs.key }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 45
+    outputs:
+      manifest-sha256: ${{ steps.prebuild.outputs.manifest-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/jsc-setup
+        id: setup
+      - uses: ./.github/actions/jsc-prebuild
+        id: prebuild
+        with:
+          key: ${{ steps.setup.outputs.key }}
+          prefix: ${{ steps.setup.outputs.prefix }}
+          expected-key: ${{ needs.identity.outputs.key }}
+          transfer: 'false'
+      - uses: ./.github/actions/save-release-downloads

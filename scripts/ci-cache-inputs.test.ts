@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -16,13 +17,13 @@ function string(value: unknown): string {
   return value;
 }
 
-const workflow: unknown = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+const workflow: unknown = Bun.YAML.parse(expandedCiWorkflow());
 function jobSteps(job: string): unknown[] {
   const steps: unknown = field(field(field(workflow, "jobs"), job), "steps");
   if (!Array.isArray(steps)) throw new Error("Expected workflow steps");
   return steps;
 }
-const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).ordered}`);
+const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(expandedCiWorkflow()).ordered}`);
 const orderedSteps = field(field(field(pipeline, "jobs"), "rust"), "steps");
 if (!Array.isArray(orderedSteps)) throw new Error("Expected ordered native steps");
 const stepList = orderedSteps;

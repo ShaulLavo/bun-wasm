@@ -1,0 +1,161 @@
+name: JSC build environment
+description: Prepare the pinned toolchain and resolve the existing effective JSC cache identity
+outputs:
+  key:
+    description: Complete existing JSC cache key
+    value: ${{ steps.identity.outputs.key }}
+  prefix:
+    description: Existing compatible JSC restore prefix
+    value: ${{ steps.identity.outputs.prefix }}
+runs:
+  using: composite
+  steps:
+    - name: Configure portable quality toolchain homes
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+        echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
+        echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+        echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/release-downloads
+    - uses: ./.github/actions/setup-tools
+      with:
+        bun-version: 1.4.4
+    - name: Install native build tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
+           command -v ruby && command -v gperf && command -v bison &&
+           ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+    # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+    # land on different runner images. Every producer and consumer uses the same pinned bytes.
+    - uses: actions/cache/restore@v4
+      id: build-tools-cache
+      with:
+        path: |
+          ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+          ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+        key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+    - name: Install pinned CMake and Ninja
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-build-tools.ts
+    - name: Save completed build-tools-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+          ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+        key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
+    # Image updates change many unrelated packages. Build caches follow the host
+    # tools these builds run; each layer's own input hash covers its toolchain.
+    - name: Identify host build tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      id: host-tools
+      run: |
+        report="$RUNNER_TEMP/host-tools.txt"
+        {
+          for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
+            command -v "$tool"
+            "$tool" --version | sed -n '1,2p'
+          done
+          ldd --version | sed -n '1p'
+          ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
+        } > "$report"
+        cat "$report"
+        echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: sdk
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+    - name: Install pinned WASI SDK
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      if: steps.sdk.outputs.cache-hit != 'true'
+      run: |
+        archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+        trap 'rm -f "$archive"' EXIT
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+          https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
+        echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+        mkdir -p "$WASM_TOOLS/wasi-sdk"
+        tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+    - name: Save completed sdk setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: ${{ steps.sdk.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: binaryen-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+        key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+    - name: Install pinned Binaryen
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-binaryen.ts
+    - name: Save completed binaryen-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+        key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: .ci-bun-cache
+        key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+    - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    - name: Identify sysroot build inputs
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      id: sysroot-inputs
+      run: |
+        source env.sh
+        inputs=$(bun scripts/build-wasi-sysroot.ts --inputs)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: sysroot-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+        key: wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
+        restore-keys: |
+          wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-
+    - name: Build patched WASI sysroot
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        time bun scripts/build-wasi-sysroot.ts
+    - name: Save the verified sysroot cache
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+        key: ${{ steps.sysroot-cache.outputs.cache-primary-key }}
+    - name: Configure private JSC build paths
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
+    - name: Identify JSC prebuild inputs
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      id: jsc-inputs
+      env:
+        JOBS: "2"
+        CAGE: ""
+      run: |
+        source jsc/common.sh
+        copy_jsc_config_inputs
+        inputs=$(jsc_inputs_hash)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - name: Report the existing JSC cache identity
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      id: identity
+      env:
+        CACHE_PREFIX: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-
+        CACHE_KEY: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
+      run: |
+        echo "key=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+        echo "prefix=$CACHE_PREFIX" >> "$GITHUB_OUTPUT"
