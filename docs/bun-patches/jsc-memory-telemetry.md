@@ -1,5 +1,11 @@
 # JSC memory telemetry
 
+The original core sampler in `crates/bunwasm-jsc/cpp/helpers.cpp` validates the
+allocator failure record at ABI 2 and 104 bytes. It still copies only the unchanged
+failed-size and category prefix. The common allocator growth extension is described
+in [common memory telemetry](common-memory-telemetry.md). The focused C++ sampler
+control compiles this production function against both valid and invalid headers.
+
 ## Classification
 
 | Source | Class | Origin and change |

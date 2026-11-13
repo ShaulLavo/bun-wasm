@@ -45,6 +45,38 @@ const BunjscMemoryTelemetry* otherTranslationUnit() { return bunjsc_cached_memor
   });
 });
 
+test('production core sampler accepts the extended frozen ABI and rejects stale headers', () => {
+  withTelemetryHeader((scratch) => {
+    const helpers = readFileSync(join(root, 'crates/bunwasm-jsc/cpp/helpers.cpp'), 'utf8');
+    const start = helpers.indexOf('static bool sampleCoreAllocator(');
+    assert.notEqual(start, -1);
+    const end = helpers.indexOf('\n}', start);
+    assert.notEqual(end, -1);
+    const source = join(scratch, 'core-sampler.cpp');
+    writeFileSync(source, `#include <cassert>
+#include "WASIMemoryTelemetry.h"
+uint64_t counters[10] = { 1, 80, 11, 22, 33, 3, 1, 2, 0, 65536 };
+uint64_t failure[13] = { 2, 104, 33, 3 };
+const uint64_t* bun_memory_telemetry() { return counters; }
+const uint64_t* bun_memory_failure_telemetry() { return failure; }
+${helpers.slice(start, end + 2)}
+int main() {
+    BunjscCoreAllocatorSample sample;
+    assert(sampleCoreAllocator(sample));
+    assert(sample.live == 11 && sample.firstFailureSize == 33 && sample.firstFailureCategory == 3);
+    failure[0] = 1;
+    assert(!sampleCoreAllocator(sample));
+    failure[0] = 2;
+    failure[1] = 72;
+    assert(!sampleCoreAllocator(sample));
+}
+`);
+    const binary = join(scratch, 'core-sampler');
+    execFileSync('c++', ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', scratch, source, '-o', binary]);
+    execFileSync(binary);
+  });
+});
+
 test('patched typed-array nullable failure latches before an OOM callback that does not unwind', () => {
   withTelemetryHeader((scratch) => {
     const path = 'Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h';

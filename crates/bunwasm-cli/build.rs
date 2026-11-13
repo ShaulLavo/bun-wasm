@@ -246,6 +246,7 @@ fn memory_telemetry() {
         "__libc_malloc",
         "__libc_calloc",
         "__libc_free",
+        "sbrk",
     ] {
         println!("cargo:rustc-link-arg-bin=bun=--wrap={name}");
     }

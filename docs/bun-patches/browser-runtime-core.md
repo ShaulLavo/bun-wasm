@@ -53,7 +53,11 @@ Chromium controls, keeping replies outside worker command dispatch. The
 [provider quota adapter](persistence-provider-quota.md) records the protocol,
 case isolation and native rejection, reset and error controls.
 The original persistence browser fixtures in `web/tests/persistence-browser-{main,worker}.ts`
-and their Playwright/Safari runners exercise these adapters without a wasm build. The corpus
+and their Playwright/Safari runners exercise these adapters without a wasm build.
+The worker routes only persistence command envelopes through its own message listener,
+preserving Waffle's nested lease-peer receiver during storage contract cases. This is
+original consumer protocol integration; no provider fixture or upstream code is changed.
+The corpus
 fixture retains only generated package-file sizes from the original local storage spike's
 `build-corpus.py` output, identified by its SHA-256 in `fixtures/persistence-corpus.json`.
 The worker reproduces the spike's original `fs-worker.js` synthetic seeded-word generator
