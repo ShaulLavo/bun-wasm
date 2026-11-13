@@ -1,8 +1,9 @@
-import { prepareLinkPlan, type LinkPlanSource, type PreparedLinkPlan } from "waffle/link";
+import type { prepareLinkPlan, LinkPlanSource, PreparedLinkPlan } from "waffle/link";
 import { appendCustomSection, programKind, programProfile, SHARED_GROUP_CORE_INITIALIZE_MEMORY, sharedGroupPair, verifyProgramSide, type PairedProgramFiles } from "./engine-kind.ts";
 
 /** Own both snapshots through pair identity, preparation and compiled-side validation. */
-export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Promise<{ source: LinkPlanSource; plan: PreparedLinkPlan }> {
+// The consuming runtime must issue the plan through its own SDK instance.
+export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>, prepare: typeof prepareLinkPlan): Promise<{ source: LinkPlanSource; plan: PreparedLinkPlan }> {
   const input = { kind: files.kind, core: Uint8Array.from(files.core), side: Uint8Array.from(files.side) };
   // Browser main threads refuse synchronous compilation of modules over 8 MB.
   const core = await WebAssembly.compile(input.core);
@@ -12,7 +13,7 @@ export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Pro
   const kind = new TextEncoder().encode(input.kind);
   const identity = Uint8Array.from(Array.from(kind).concat([0], Array.from(new Uint8Array(digests[0]!)), Array.from(new Uint8Array(digests[1]!))));
   const source = linkPlan({ ...input, core: appendCustomSection(input.core, "bun-wasm-pair", identity) }, group);
-  const plan = await prepareLinkPlan(source);
+  const plan = await prepare(source);
   verifyProgramSide(input.kind, plan.memberModule(input.kind));
   return { source, plan };
 }

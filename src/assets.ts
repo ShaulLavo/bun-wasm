@@ -1,5 +1,5 @@
 import { recordProgramMemory } from "./program-memory.ts";
-import type { SharedLinkPlan } from "waffle/link";
+import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";
 import { ExecutableFormatError } from "waffle/proc";
 import { engineLinkPlan } from "./quickjs-program.ts";
 import { memoryMaximumBytes, parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
@@ -187,7 +187,7 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     return module;
   }
   try {
-    const { source, plan } = await engineLinkPlan(files);
+    const { source, plan } = await engineLinkPlan(files, prepareLinkPlan);
     programs.set(plan.entryModule, Object.freeze({ linkPlan: plan.shared, memoryLimitBytes: memoryMaximumBytes(source.core.source) ?? null }));
     recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;

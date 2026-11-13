@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { adoptLinkPlan } from "waffle/link";
+import { adoptLinkPlan, prepareLinkPlan } from "waffle/link";
 import { BunWasmAssetError, prepareProgram, programMetadata } from "../../src/assets.ts";
 import { appendCustomSection, pairedEngineKinds } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
@@ -52,7 +52,7 @@ for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
     const pair = initializationPair(kind, shared);
     const sideHash = digest(pair.side);
     await preparingOnly(async calls => {
-      const { plan } = await engineLinkPlan(pair);
+      const { plan } = await engineLinkPlan(pair, prepareLinkPlan);
       const count = calls.length;
       const side = plan.memberModule(kind);
       expect(plan.memberModule(kind)).toBe(side);

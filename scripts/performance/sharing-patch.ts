@@ -4,7 +4,7 @@ import { ownedCommand } from "../goals-matrix/lifetime";
 
 const changes = [
   { path: "src/assets.ts", replacements: [
-    ['import type { SharedLinkPlan } from "waffle/link";', 'import type { SharedLinkPlan, LinkPlanSource } from "waffle/link";'],
+    ['import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";', 'import { prepareLinkPlan, type SharedLinkPlan, type LinkPlanSource } from "waffle/link";'],
     ["readonly linkPlan: SharedLinkPlan | undefined;", "readonly linkPlan: SharedLinkPlan | undefined;\n  readonly diagnosticLinkSource?: LinkPlanSource;"],
     ["linkPlan: plan.shared, memoryLimitBytes:", "linkPlan: undefined, diagnosticLinkSource: source, memoryLimitBytes:"],
   ] },

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { WASI } from "node:wasi";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
-import { adoptLinkPlan, instantiateLinkPlan, type SharedLinkPlan, type LinkedGroup } from "waffle/link";
+import { adoptLinkPlan, instantiateLinkPlan, prepareLinkPlan, type SharedLinkPlan, type LinkedGroup } from "waffle/link";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
 
@@ -19,7 +19,7 @@ export async function loadNodeProgram(path: string, expected?: PairedEngine): Pr
   if (expected !== undefined && kind !== expected) throw new TypeError(`Selected ${expected} core declares ${kind}`);
   if (kind === "single") return { module };
   const side = readFileSync(join(dirname(path), programProfile(kind).side));
-  const { plan } = await engineLinkPlan({ kind, core: bytes, side });
+  const { plan } = await engineLinkPlan({ kind, core: bytes, side }, prepareLinkPlan);
   return { module: plan.entryModule, linkPlan: plan.shared };
 }
 

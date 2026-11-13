@@ -49,6 +49,8 @@ workspace `Cargo.lock` conservatively; it does not narrow the lock graph.
 JSC's pair is `bun-jsc.wasm` plus `jsc-engine.wasm`; the existing prebuild shell
 is a different artifact. The async `engineLinkPlan` accepts paired files only,
 snapshots the bytes, and uses the selected fixed initializer profile.
+The caller supplies its own runtime's `prepareLinkPlan`, so page-issued group
+authority remains local even with separate root and web SDK installations.
 It prepares the Waffle plan once, then checks the exact compiled companion
 through the public `PreparedLinkPlan.memberModule` accessor before returning
 the plan or publishing program metadata. The side is not separately compiled
