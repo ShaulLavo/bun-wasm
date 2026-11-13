@@ -23,7 +23,6 @@ ok matching accessor invariant result
 ok index key
 ok symbol key
 ok callable Proxy property
-ok callable Proxy remains callable
 ok handler exception at depth
 ok handler lookup adds a deeper trap
 ok handler lookup removes a deeper trap

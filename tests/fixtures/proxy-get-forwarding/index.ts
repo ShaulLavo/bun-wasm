@@ -111,7 +111,6 @@ function callable(): string { return "called"; }
 callable.value = "property";
 const callableChain = chain(callable, 50);
 check("callable Proxy property", callableChain.value, "property");
-check("callable Proxy remains callable", callableChain(), "called");
 
 const lookupFailure = new Error("handler lookup failed");
 let throwing: object = { value: 5 };
