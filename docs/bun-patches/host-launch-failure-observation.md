@@ -31,7 +31,9 @@ backings, shared guest backings, guest declarations, admission headroom, and
 filesystem capacity promises. Shared-guest alias metadata is not another backing.
 Declared bytes are ledger accounting. Maximum bytes are sums of explicit shape
 lengths or maxima, not measured WebKit cage occupancy. Unknown current lengths
-have a separate count. Missing or invalid sizes and overflow produce null sums.
+have a separate count. Missing or invalid declared or maximum sizes produce null
+sums. Current bytes sum known lengths; `unknownCurrentCount` marks an incomplete
+subtotal. Overflow produces a null sum.
 Unknown shapes and states are counted, and unavailable differs from observed empty.
 The aggregate is detached along with the detail rows and fits the same fact bound.
 
