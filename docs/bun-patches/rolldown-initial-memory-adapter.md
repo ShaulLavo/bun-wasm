@@ -82,4 +82,8 @@ rebuilds caught errors from their messages, discarding their original stacks.
 The capacity controls do not establish which allocation failed on iPhone or
 claim that a Vite workflow is fixed.
 
+The Rolldown and Oxc warmed-source cache regressions use the existing
+`modules::tests::host_` group selected by the native quality gate. Both remain
+ordinary module tests as well; no workflow filter or test assertion changes.
+
 [Ledger scope and pinned revisions](scope.md).

@@ -979,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn oxc_loaders_requalify_after_prepared_source_cache_hits() {
+    fn host_oxc_loaders_requalify_after_prepared_source_cache_hits() {
         let fixture = TestModule::new("oxc-external-cache");
         let directory = fixture
             .0
@@ -1019,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn rolldown_loaders_requalify_after_prepared_source_cache_hits() {
+    fn host_rolldown_loaders_requalify_after_prepared_source_cache_hits() {
         let state = State::new(
             Vec::new(),
             Box::new(crate::transpiler::PassthroughTranspiler),
