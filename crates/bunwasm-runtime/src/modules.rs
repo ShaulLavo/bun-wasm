@@ -9,6 +9,8 @@
 
 #[path = "next_swc.rs"]
 mod next_swc;
+#[path = "oxc_memory.rs"]
+mod oxc_memory;
 
 use std::io::Read as _;
 use std::rc::Rc;
@@ -494,6 +496,7 @@ impl State {
         loader: SourceLoader,
     ) -> Result<crate::Transpiled, NativeError> {
         let adapted = next_swc::adapt(raw, path);
+        let adapted = oxc_memory::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
