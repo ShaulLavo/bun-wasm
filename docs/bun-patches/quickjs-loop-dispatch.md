@@ -37,7 +37,8 @@ alignment and containment assertions. With reduce state the continuation is
 Budgets, backing limits and native entry reservations are unchanged.
 
 `Array.prototype.reduce` and `reduceRight` use that same return path for ordinary
-bytecode callbacks. Their step mirrors upstream `js_array_reduce`. It converts
+bytecode callbacks. Initialization and stepping stay out of line. Their step
+mirrors upstream `js_array_reduce`. It converts
 the receiver, reads length once, scans present indices in the chosen direction,
 and supplies the accumulator, value, index and original object with an undefined
 callback receiver. Element accessors, proxies and length coercion keep native

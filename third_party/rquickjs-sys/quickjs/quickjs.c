@@ -45450,7 +45450,7 @@ exception:
     return JS_EXCEPTION;
 }
 
-static int js_cont_reduce_init(JSContFrame *c)
+static no_inline int js_cont_reduce_init(JSContFrame *c)
 {
     JSContext *ctx = c->base.caller_ctx;
     JSReduceState *r = &c->reduce;
