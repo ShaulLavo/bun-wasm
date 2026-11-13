@@ -7,7 +7,7 @@ use crate::compression::tests::measure;
 
 #[test]
 fn the_staged_commit_of_a_post_that_carries_ports_allocates_nothing() {
-    super::lane::tests::staged_commit_under(|commit| {
+    crate::wasm::lane::tests::staged_commit_under(|commit| {
         let ((), largest, _) = measure(commit);
         assert_eq!(largest, 0, "bytes asked for during the commit");
     });

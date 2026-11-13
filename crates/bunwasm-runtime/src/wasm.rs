@@ -9,12 +9,10 @@ mod nested_invocation;
 
 #[cfg(bun_wasm_shared_group)]
 mod group;
+// Visible to the crate for `lane_allocation_tests`, which the crate root declares.
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/lane.rs"]
-mod lane;
-#[cfg(test)]
-#[path = "wasm/lane_allocation_tests.rs"]
-mod lane_allocation_tests;
+pub(crate) mod lane;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/nested_description.rs"]
 mod nested_description;
