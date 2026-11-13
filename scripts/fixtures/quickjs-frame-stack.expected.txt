@@ -64,4 +64,5 @@ call nested C entry and recovery => 42,14
 call cross realm and class errors => 4,1,2,3 | false,true
 call fallbacks and patched builtin => 3,13,7,patched:5,9,true,5
 call collects cyclic and escaped arguments => 42
+call foreign intrinsic alias => true,1,,1,true
 async => 10,20,closed,30,f0,f1,f2,bottom

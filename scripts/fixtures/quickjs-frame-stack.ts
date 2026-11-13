@@ -311,6 +311,15 @@ report("call collects cyclic and escaped arguments", () => {
   collectGarbage();
   return read();
 });
+report("call foreign intrinsic alias", () => {
+  const foreignCall = otherRealm("Function.prototype.call") as (...args: unknown[]) => unknown;
+  const target = Object.assign(function (this: unknown, a?: number, b?: number) {
+    "use strict";
+    collectGarbage();
+    return [this === 7, a, b, arguments.length, new.target === undefined].join();
+  }, { foreignCall });
+  return target.foreignCall(7, 1);
+});
 
 // Asynchronous functions.
 async function asyncCalls(): Promise<void> {
