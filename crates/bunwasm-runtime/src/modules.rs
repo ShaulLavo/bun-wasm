@@ -412,13 +412,14 @@ impl State {
         Ok(code)
     }
 
-    /// Read, transpile and classify a file. Results are cached while the
-    /// file's content stays the same.
+    /// Read, transpile and classify a file. Ordinary results stay cached while
+    /// content is unchanged; binary-qualified loaders requalify on every load.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
         if let Some(code) = self.load_text_module(path)? {
             return Ok((Rc::from(code), Format::Esm));
         }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
+        let cacheable = !oxc_memory::depends_on_binary(path);
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
@@ -431,16 +432,14 @@ impl State {
             Ok(raw) => raw,
             // A virtual module (`[eval]`) has no file behind it.
             Err(e) => {
-                return self
-                    .sources
-                    .borrow()
-                    .get(path)
-                    .cloned()
-                    .ok_or_else(|| crate::natives::io_error(e, "open", Some(path)));
+                let cached = cacheable
+                    .then(|| self.sources.borrow().get(path).cloned())
+                    .flatten();
+                return cached.ok_or_else(|| crate::natives::io_error(e, "open", Some(path)));
             }
         };
         self.revalidate(path, &raw);
-        if let Some(hit) = self.sources.borrow().get(path) {
+        if cacheable && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
         let raw = String::from_utf8(raw)
@@ -951,10 +950,8 @@ mod tests {
         assert_eq!(&*state.load_source(&name).unwrap().0, "console.log(1)");
     }
 
-    #[cfg(feature = "engine-host")]
     struct TestModule(std::path::PathBuf);
 
-    #[cfg(feature = "engine-host")]
     impl TestModule {
         fn new(name: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("bunwasm-{name}-{}", std::process::id()));
@@ -971,11 +968,50 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "engine-host")]
     impl Drop for TestModule {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn oxc_loaders_requalify_after_prepared_source_cache_hits() {
+        let fixture = TestModule::new("oxc-external-cache");
+        let directory = fixture
+            .0
+            .join("node_modules/@oxc-parser/binding-wasm32-wasi");
+        std::fs::create_dir_all(&directory).unwrap();
+        let loader = directory.join("parser.wasi.cjs");
+        let path = loader.to_str().unwrap();
+        let stock = "module.exports = { initial: 4000 };";
+        std::fs::write(&loader, stock).unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let load = || state.load_source(path).unwrap().0.to_string();
+        assert_eq!(load(), stock);
+        let seed_prepared_reduction = || {
+            state.sources.borrow_mut().insert(
+                path.to_owned(),
+                (Rc::from("module.exports = { initial: 980 };"), Format::Cjs),
+            );
+        };
+        seed_prepared_reduction();
+        std::fs::write(directory.join("parser.wasm32-wasi.wasm"), b"changed").unwrap();
+        assert_eq!(load(), stock);
+        seed_prepared_reduction();
+        std::fs::write(directory.join("parser.wasm32-wasi.debug.wasm"), b"debug").unwrap();
+        assert_eq!(load(), stock);
+        seed_prepared_reduction();
+        std::fs::remove_file(&loader).unwrap();
+        assert!(state.load_source(path).is_err());
+
+        fixture.write("module.exports = 1;");
+        let unrelated = fixture.path();
+        let first = state.load_source(&unrelated).unwrap().0;
+        let second = state.load_source(&unrelated).unwrap().0;
+        assert!(Rc::ptr_eq(&first, &second));
     }
 
     #[cfg(feature = "engine-host")]

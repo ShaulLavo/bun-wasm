@@ -13,7 +13,7 @@ struct Binding {
 }
 
 // These identities bind the layout to the unmodified public 0.94.0 packages.
-const BINDINGS: [Binding; 3] = [
+static BINDINGS: [Binding; 3] = [
     Binding {
         name: "parser",
         source: "ad3db1eb96b2b8d5e2cd66a4c292361c76b7619dfef8bf91138acd1796404a5f",
@@ -47,16 +47,24 @@ fn file_digest(path: &Path) -> io::Result<String> {
     }
 }
 
-pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
+fn binding(path: &str) -> Option<&'static Binding> {
     if !path.ends_with(".wasi.cjs") {
-        return Cow::Borrowed(source);
+        return None;
     }
-    let Some(binding) = BINDINGS.iter().find(|binding| {
+    BINDINGS.iter().find(|binding| {
         path.ends_with(&format!(
             "/node_modules/@oxc-{}/binding-wasm32-wasi/{}.wasi.cjs",
             binding.name, binding.name
         ))
-    }) else {
+    })
+}
+
+pub(super) fn depends_on_binary(path: &str) -> bool {
+    binding(path).is_some()
+}
+
+pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
+    let Some(binding) = binding(path) else {
         return Cow::Borrowed(source);
     };
     if format!("{:x}", Sha256::digest(source.as_bytes())) != binding.source {

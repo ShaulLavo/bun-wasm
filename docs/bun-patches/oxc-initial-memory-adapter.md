@@ -29,6 +29,10 @@ to the matching package path and exact published pair. Changed sources, changed
 or missing binaries, and the upstream debug-binary selection keep their original
 behavior.
 
+Prepared-source cache hits do not bypass that qualification. These three loader
+paths prepare again on reload because their Wasm or debug selection can change
+without changing the JavaScript. Unrelated source caches retain their behavior.
+
 ## Layout and change
 
 The loaders request 4,000 initial pages. The actual binary imports require 980
