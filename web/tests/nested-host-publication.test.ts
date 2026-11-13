@@ -104,14 +104,59 @@ describe("published memories", () => {
     expect(errorText(sender.send({ PublishMemory: { memory } }))).toContain("Again");
   });
 
-  test("a status that is neither success nor an absent token is answered as refused", () => {
+  test("only a caller the group no longer serves is answered as refused; another status is no answer", () => {
     const { join } = group();
     const sender = join();
     const provider = Reflect.get(sender.host, "provider") as RegionProvider;
-    for (const status of [-71, -28, -6]) {
+    sender.host.bindProvider({ ...provider, shm_withdraw: () => -71 });
+    expect(count(sender.send({ Withdraw: { token: 1 } }))).toBe(WITHDRAW_REFUSED);
+    // A status that may pass is an error reply, which the guest does not settle on.
+    for (const [status, name] of [[-6, "Again"], [-48, "NoMem"], [-28, "Inval"], [-99, "-99"]] as const) {
       sender.host.bindProvider({ ...provider, shm_withdraw: () => status });
-      expect(count(sender.send({ Withdraw: { token: 1 } }))).toBe(WITHDRAW_REFUSED);
+      expect(errorText(sender.send({ Withdraw: { token: 1 } }))).toContain(name);
     }
+    // A guest with no group member can never withdraw: refused, not thrown.
+    Reflect.set(sender.host, "provider", undefined);
+    expect(count(sender.send({ Withdraw: { token: 1 } }))).toBe(WITHDRAW_REFUSED);
+  });
+
+  test("a host exception before the owner acted is no answer, and asking again withdraws", () => {
+    const { join } = group();
+    const sender = join();
+    const provider = Reflect.get(sender.host, "provider") as RegionProvider;
+    const memory = handle(sender.send({ Reserve: { initial: 1, maximum: 1 } }));
+    const token = count(sender.send({ PublishMemory: { memory } }));
+    let fail = true;
+    sender.host.bindProvider({ ...provider, shm_withdraw(value) {
+      if (fail) { fail = false; throw new RangeError("Maximum call stack size exceeded"); }
+      return provider.shm_withdraw(value);
+    } });
+    // An error reply, not a count: nothing in it says the publication is gone, and it is not.
+    expect(errorText(sender.send({ Withdraw: { token } }))).toContain("Maximum call stack size exceeded");
+    expect(sender.owner.snapshot().published).toBe(1);
+    expect(count(sender.send({ Withdraw: { token } }))).toBe(WITHDRAWN);
+    expect(sender.owner.snapshot().published).toBe(0);
+  });
+
+  test("a host exception after the owner acted is no answer either, and asking again is answered absent", () => {
+    const { join } = group();
+    const sender = join();
+    const provider = Reflect.get(sender.host, "provider") as RegionProvider;
+    const memory = handle(sender.send({ Reserve: { initial: 1, maximum: 1 } }));
+    const token = count(sender.send({ PublishMemory: { memory } }));
+    const later = count(sender.send({ PublishMemory: { memory } }));
+    let fail = true;
+    sender.host.bindProvider({ ...provider, shm_withdraw(value) {
+      const status = provider.shm_withdraw(value);
+      if (fail) { fail = false; throw new RangeError("reply lost"); }
+      return status;
+    } });
+    expect(errorText(sender.send({ Withdraw: { token } }))).toContain("reply lost");
+    expect(sender.owner.snapshot().published).toBe(1);
+    // The same token again reaches nothing else: the later publication stays.
+    expect(count(sender.send({ Withdraw: { token } }))).toBe(WITHDRAW_ABSENT);
+    expect(sender.owner.snapshot().published).toBe(1);
+    expect(count(sender.send({ Withdraw: { token: later } }))).toBe(WITHDRAWN);
   });
 
   test("only the publishing incarnation withdraws, and a token from another group names nothing", () => {

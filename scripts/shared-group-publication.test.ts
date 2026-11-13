@@ -100,7 +100,7 @@ test("a withdrawal lost before the directory acted stays owed until it is answer
   // A send prepared while the first token is still owed gets its own publication.
   const later = codec.prepare({ memory });
   expect(Array.from(directory.keys())).toEqual([1, 2]);
-  settle();
+  settle(); settle();
   expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
   later.commit();
   settle();
@@ -111,20 +111,67 @@ test("a withdrawal lost before the directory acted stays owed until it is answer
   expect(Array.from(directory.keys())).toEqual([2]);
 });
 
-for (const fault of ["refused", "broken"] as const) test(`a ${fault} withdrawal is given up once, with a warning, and never asked again`, () => {
+test("the host's refusal gives a publication up once, with a warning, and it is never asked again", () => {
   const { codec, control, directory, memory, settle } = fixture();
-  control.faults.push(fault);
+  control.faults.push("refused");
   const plan = codec.prepare({ memory });
   const said = warnings(() => plan.abort());
   expect(said).toHaveLength(1);
   expect(said[0]).toContain("Shared publication 1 could not be withdrawn");
-  expect(warnings(() => { settle(); settle(); })).toEqual([]);
-  expect(control.withdrawals).toEqual([]);
+  expect(warnings(() => { for (let index = 0; index < 8; index++) settle(); })).toEqual([]);
+  expect(control.asked).toBe(1);
   expect(directory.size).toBe(1);
   // The memory is not stuck: it is published again under a new token.
   const later = codec.prepare({ memory });
   later.commit();
   expect(Array.from(directory.keys())).toEqual([1, 2]);
+});
+
+// An error the host replied with is thrown by the guest's native. It is not the host's answer:
+// the host caught something before the group owner acted, or after. However final its name,
+// text or code looks, the withdrawal stays owed and is asked again.
+test("a host error before the owner acted leaves the publication owed, and asking again withdraws it", () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.faults.push("host-error-before");
+  expect(warnings(() => codec.prepare({ memory }).abort())).toEqual([]);
+  expect(directory.size).toBe(1);
+  expect(warnings(() => settle())).toEqual([]);
+  expect(directory.size).toBe(0);
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
+  expect(control.asked).toBe(2);
+});
+
+test("a host error after the owner acted leaves it owed too, and asking again is answered absent", () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.faults.push("host-error-after");
+  expect(warnings(() => codec.prepare({ memory }).abort())).toEqual([]);
+  expect(directory.size).toBe(0);
+  // A later publication of the same memory is not what the repeated request reaches.
+  const later = codec.prepare({ memory });
+  later.commit();
+  expect(warnings(() => settle())).toEqual([]);
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN], [1, WITHDRAW_ABSENT]]);
+  expect(Array.from(directory.keys())).toEqual([2]);
+  settle(); settle();
+  expect(control.asked).toBe(2);
+});
+
+test("a host that never answers is asked ever more rarely, and the withdrawal is never dropped", () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.always = "host-error-before";
+  expect(warnings(() => codec.prepare({ memory }).abort())).toEqual([]);
+  expect(warnings(() => { for (let index = 0; index < 100; index++) settle(); })).toEqual([]);
+  // Asked at the abort and then after 1, 2, 4, 8, 16 and 32 further settles: not on each.
+  expect(control.asked).toBe(7);
+  expect(directory.size).toBe(1);
+  // No limit: when the host answers at last, however late, the publication goes.
+  control.always = null;
+  for (let index = 0; index < 64 && directory.size; index++) settle();
+  expect(directory.size).toBe(0);
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
+  const asked = control.asked;
+  for (let index = 0; index < 8; index++) settle();
+  expect(control.asked).toBe(asked);
 });
 
 type Scenario = { name: string; published: number; run(runtime: ReturnType<typeof fixture>): () => void };

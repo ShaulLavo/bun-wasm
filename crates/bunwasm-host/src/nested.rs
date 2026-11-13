@@ -172,12 +172,16 @@ fn index(id: u32) -> Result<usize> {
     Ok((id & !BACKEND) as usize)
 }
 /// What the group owner answered to a withdrawal, as `wire::Request::Withdraw` documents it.
-/// Every status is an answer, not an error: the guest retries only a call that got none.
-fn withdrawal(result: Result<(), shm::Errno>) -> u32 {
+/// Three outcomes are final and are answered as counts: withdrawn, no such publication, and
+/// a caller that is no member the group serves (`Search`, or `None` for a guest in no group
+/// at all), which can never withdraw anything. Any other status is not known to be final, so
+/// it stays an error reply: the guest takes that as no answer and asks again.
+fn withdrawal(result: Option<Result<(), shm::Errno>>) -> Result<u32> {
     match result {
-        Ok(()) => wire::WITHDRAWN,
-        Err(shm::Errno::BadF) => wire::WITHDRAW_ABSENT,
-        Err(_) => wire::WITHDRAW_REFUSED,
+        Some(Ok(())) => Ok(wire::WITHDRAWN),
+        Some(Err(shm::Errno::BadF)) => Ok(wire::WITHDRAW_ABSENT),
+        Some(Err(shm::Errno::Search)) | None => Ok(wire::WITHDRAW_REFUSED),
+        Some(Err(other)) => Err(anyhow!("shared publication withdrawal: {other:?}")),
     }
 }
 
@@ -424,10 +428,16 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
                 description: description.to_string(),
             })
         }
-        Request::Withdraw { token } => Ok(Reply::Count(withdrawal(shm::nested::withdraw(
-            member(caller)?,
-            token,
-        )))),
+        Request::Withdraw { token } => {
+            let reply = Reply::Count(withdrawal(
+                member(caller)
+                    .ok()
+                    .map(|member| shm::nested::withdraw(member, token)),
+            )?);
+            // Exactly what the guest settles on. Everything else leaves as an error reply.
+            debug_assert!(wire::withdraw_answer(&reply).is_some());
+            Ok(reply)
+        }
         Request::TableExport { instance, name } => table_export(caller, instance, &name),
         Request::TableLength { table } => Ok(Reply::Count(u32::try_from(
             nested_table(caller, table)?.size(&*caller),

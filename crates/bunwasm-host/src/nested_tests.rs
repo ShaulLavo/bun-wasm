@@ -432,7 +432,7 @@ fn a_withdrawal_is_answered_withdrawn_absent_or_refused() {
     let member = group.reserve(1).unwrap().launch();
     let memory = NestedMemory::new(&member, 1, 1).unwrap();
     let token = memory.publish().unwrap();
-    let ask = |token| withdrawal(shm::nested::withdraw(&member, token));
+    let ask = |token| withdrawal(Some(shm::nested::withdraw(&member, token))).unwrap();
     assert_eq!(ask(token), wire::WITHDRAWN);
     // Asked again, as after a lost reply: absent, and a later publication is not reached.
     let next = memory.publish().unwrap();
@@ -444,4 +444,18 @@ fn a_withdrawal_is_answered_withdrawn_absent_or_refused() {
     member.failed_physical_stop();
     assert_eq!(ask(next), wire::WITHDRAW_REFUSED);
     assert_eq!(group.snapshot().published, 1);
+    // So does a guest that is in no group at all.
+    assert_eq!(withdrawal(None).unwrap(), wire::WITHDRAW_REFUSED);
+    // A status that is not known to be final is no answer. It stays an error reply, which
+    // the guest does not settle on, whatever the status names.
+    for errno in [
+        shm::Errno::Again,
+        shm::Errno::NoMem,
+        shm::Errno::Interrupted,
+        shm::Errno::Inval,
+        shm::Errno::NotSup,
+    ] {
+        let reply = error_reply(withdrawal(Some(Err(errno))).unwrap_err(), "RuntimeError");
+        assert_eq!(wire::withdraw_answer(&reply), None, "{errno:?}");
+    }
 }

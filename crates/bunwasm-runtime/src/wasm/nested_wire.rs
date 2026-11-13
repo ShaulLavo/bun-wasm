@@ -14,6 +14,17 @@ pub const WITHDRAW_ABSENT: u32 = 1;
 /// The group owner refused for good, for example because the member is no longer running.
 pub const WITHDRAW_REFUSED: u32 = 2;
 
+/// What a `Withdraw` reply says, when it says anything. Only the three counts are an answer.
+/// An error reply is not one, whatever it names: the host turns anything it catches on the
+/// way to or from the group owner into one, before the owner acted or after. Nor is another
+/// reply or a count this caller does not know. With no answer the caller asks again.
+pub fn withdraw_answer(reply: &Reply) -> Option<u32> {
+    match reply {
+        Reply::Count(answer @ (WITHDRAWN | WITHDRAW_ABSENT | WITHDRAW_REFUSED)) => Some(*answer),
+        _ => None,
+    }
+}
+
 pub fn request_length(length: usize) -> Option<u32> {
     let length = u32::try_from(length).ok()?;
     (length <= MAX_REQUEST_BYTES).then_some(length)
@@ -31,6 +42,32 @@ mod request_tests {
         );
         assert_eq!(request_length(MAX_REQUEST_BYTES as usize + 1), None);
         assert_eq!(request_length(usize::MAX), None);
+    }
+
+    #[test]
+    fn only_the_three_counts_answer_a_withdrawal() {
+        use super::{Reply, WITHDRAW_ABSENT, WITHDRAW_REFUSED, WITHDRAWN, withdraw_answer};
+        for answer in [WITHDRAWN, WITHDRAW_ABSENT, WITHDRAW_REFUSED] {
+            assert_eq!(withdraw_answer(&Reply::Count(answer)), Some(answer));
+        }
+        // An error reply is whatever the host caught, before or after the owner acted. It
+        // settles nothing, whatever category or text it carries.
+        for (category, message) in [
+            ("RuntimeError", "one-shot host entry failure"),
+            ("RangeError", "Maximum call stack size exceeded"),
+            ("RuntimeError", "shared publication withdrawal: BadF"),
+        ] {
+            let reply = Reply::Error {
+                category: category.into(),
+                message: message.into(),
+            };
+            assert_eq!(withdraw_answer(&reply), None);
+        }
+        assert_eq!(withdraw_answer(&Reply::Count(3)), None);
+        assert_eq!(withdraw_answer(&Reply::Count(u32::MAX)), None);
+        assert_eq!(withdraw_answer(&Reply::Handle(0)), None);
+        assert_eq!(withdraw_answer(&Reply::PendingException), None);
+        assert_eq!(withdraw_answer(&Reply::Null), None);
     }
 }
 

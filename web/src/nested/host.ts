@@ -25,7 +25,8 @@ const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const NO_MEMORY = 48;
 const BAD_HANDLE = 8;
-const SHM_ERRORS = new Map([[6, "Again"], [BAD_HANDLE, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
+const NO_MEMBER = 71;
+const SHM_ERRORS = new Map([[6, "Again"], [BAD_HANDLE, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [NO_MEMBER, "Search"]]);
 const MODULE_ALIGN = 16;
 const encoder = new TextEncoder();
 
@@ -579,11 +580,21 @@ export class NestedHost {
     return { AttachedModule: { id: pushResource(this.modules, compileRegionized(code)), description } };
   }
 
-  /** Every status is an answer, not an error: the guest retries only a call that got none. */
+  /**
+   * Three outcomes are final and are answered as counts: withdrawn, no such publication of
+   * this member, and a caller the group no longer serves or a guest with no group member,
+   * neither of which can ever withdraw. Any other status is not known to be final and is
+   * thrown. Whatever is thrown here or on the way to the owner and back becomes an error
+   * reply in `reply`. That is no answer: nothing says whether the owner acted, so the guest
+   * keeps the withdrawal owed and asks again.
+   */
   private withdraw(token: number): Reply {
-    const status = this.region().shm_withdraw(token);
+    if (!this.provider) return { Count: WITHDRAW_REFUSED };
+    const status = this.provider.shm_withdraw(token);
     if (status >= 0) return { Count: WITHDRAWN };
-    return { Count: status === -BAD_HANDLE ? WITHDRAW_ABSENT : WITHDRAW_REFUSED };
+    if (status === -BAD_HANDLE) return { Count: WITHDRAW_ABSENT };
+    if (status === -NO_MEMBER) return { Count: WITHDRAW_REFUSED };
+    throw new Error(`shared publication withdrawal: ${shmError(status)}`);
   }
 
   private span(id: number): Reply {

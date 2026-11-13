@@ -425,15 +425,18 @@
   const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
   /** One prepared send: the publications it refers to, and whether it committed once it is known. */
   type PublicationPlan = { used: Set<PendingPublication>; outcome: boolean | null };
-  /** A publication no committed send has named yet. `holders` are the plans that refer to it. */
-  type PendingPublication = { token: number; holders: Set<PublicationPlan>; committed: boolean; forget: () => void };
+  /**
+   * A publication no committed send has named yet. `holders` are the plans that refer to it.
+   * `spacing` and `skip` pace the withdrawal of one nobody holds while the host gives no answer.
+   */
+  type PendingPublication = { token: number; holders: Set<PublicationPlan>; committed: boolean; forget: () => void; spacing: number; skip: number };
   const pendingPublications = new Map<number, PendingPublication>();
   /** Plans that refer to a publication and have not released every reference. */
   const openPlans = new Set<PublicationPlan>();
-  /** A withdrawal's third answer (nested_wire.rs): the group refused for good. */
+  /** A withdrawal's third answer (nested_wire.rs): the group will never withdraw it for this member. */
   const WITHDRAW_REFUSED = 2;
-  /** The code of a withdrawal the host or the nested exchange reported as failed (nested.rs). */
-  const WITHDRAW_FAILED = 'ERR_BUNWASM_WITHDRAW_FAILED';
+  /** The most settles an unanswered withdrawal lets pass between two tries. */
+  const MAX_SPACING = 1024;
   function cloneError(reason: unknown) { return new DOMException(message(reason), 'DataCloneError'); }
   function directoryToken(id: string, kind: string) {
     const [prefix, value] = id.split('/');
@@ -489,25 +492,25 @@
   // Settling a send can be interrupted anywhere and is then run again. So nothing below counts:
   // each step is an assignment or a set or map operation that does nothing the second time,
   // and whatever names the work still owed is removed last.
-  function withdrawalFailed(token: number, reason: unknown) {
+  function withdrawalRefused(token: number) {
     if (typeof process === 'undefined' || typeof process.emitWarning !== 'function') return;
-    process.emitWarning(`Shared publication ${token} could not be withdrawn and stays until its group ends: ${message(reason)}`);
+    process.emitWarning(`Shared publication ${token} could not be withdrawn and stays until its group ends: the group no longer serves this member`);
   }
-  /** Whether an uncommitted publication is settled: withdrawn, gone already, or given up for good. */
+  /**
+   * Whether an uncommitted publication is settled. Only the host's own answer settles it:
+   * withdrawn, absent, or refused for good. Anything thrown is no answer, whatever it says. The
+   * bridge, the nested exchange or the host failed the call somewhere on its way in or out, an
+   * error reply is only what the host caught, and none of that says whether the group owner
+   * acted. A token is issued once, so asking again withdraws that one publication or is answered
+   * "absent", and reaches nothing else.
+   */
   function withdraw(pending: PendingPublication) {
     pending.forget();
     let answer: number;
     try { answer = native.withdrawShared(pending.token); }
-    catch (error) {
-      // Anything the host did not report is no answer: the bridge or the engine failed the call
-      // on its way in or out, and the withdrawal may have happened. A token is issued once, so
-      // asking again is answered "absent" and reaches no other publication.
-      if ((error as { code?: unknown } | null)?.code !== WITHDRAW_FAILED) return false;
-      // A reported failure is final: the publication is given up, and said so, not asked forever.
-      withdrawalFailed(pending.token, error);
-      return true;
-    }
-    if (answer === WITHDRAW_REFUSED) withdrawalFailed(pending.token, 'the group refused');
+    catch { return false; }
+    // The host's word that this member can never withdraw it: given up, and said so.
+    if (answer === WITHDRAW_REFUSED) withdrawalRefused(pending.token);
     return true;
   }
   /** The record itself is the debt: it stays listed until the publication is committed or gone. */
@@ -515,8 +518,12 @@
     if (pending.holders.size) return;
     // A token of 0 was never published: the native refused, and there is nothing to withdraw.
     if (pending.token && !pending.committed && !withdraw(pending)) {
-      // Still owed. Listed, so the debt outlives the plan that is about to forget it.
+      // Still owed, with no limit on how long. Listed, so the debt outlives the plan that is
+      // about to forget it. Each try that gets no answer doubles the settles until the next,
+      // so a host that never answers is asked ever more rarely, not on every loop step.
       pendingPublications.set(pending.token, pending);
+      pending.spacing = Math.min(pending.spacing * 2 || 1, MAX_SPACING);
+      pending.skip = pending.spacing - 1;
       return;
     }
     pendingPublications.delete(pending.token);
@@ -534,7 +541,10 @@
   /** Finishes what an interrupted settlement left: plans with an outcome, then records nobody holds. */
   function settlePublications() {
     for (const plan of openPlans) if (plan.outcome !== null) finishPlan(plan);
-    for (const pending of pendingPublications.values()) finishPublication(pending);
+    for (const pending of pendingPublications.values()) {
+      if (pending.skip > 0) pending.skip--;
+      else finishPublication(pending);
+    }
   }
   function beginPublication(): BunWasm.SharedPublication {
     const plan: PublicationPlan = { used: new Set(), outcome: null };
@@ -550,7 +560,7 @@
      * the plan's abort finds the token whatever interrupts the bookkeeping that follows. */
     function draft(forget: (token: number) => void) {
       openPlans.add(plan);
-      const pending: PendingPublication = { token: 0, holders: new Set([plan]), committed: false, forget: () => forget(pending.token) };
+      const pending: PendingPublication = { token: 0, holders: new Set([plan]), committed: false, forget: () => forget(pending.token), spacing: 0, skip: 0 };
       plan.used.add(pending);
       return pending;
     }
