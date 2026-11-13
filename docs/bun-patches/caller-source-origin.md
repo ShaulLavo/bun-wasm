@@ -11,6 +11,20 @@ CommonJS uses eval in this host, so its caller origin is `null` there. The adapt
 an opaque caller frame instead of reporting a later ES module as the caller. ES modules work
 in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
+SpiderMonkey reads the existing native saved-frame adapter rather than parsing stack
+text. This preserves filenames containing `@` and stops at an unavailable user frame.
+Its `js/public/SavedFrameAPI.h` exposes source labels and IDs, but no introduction type
+or eval creation origin. In `js/src/vm/SavedStacks.cpp`, `SavedStacks::getLocation`
+chooses a sourceURL display name when present, otherwise the script filename.
+`js/src/vm/JSScript.cpp`, `FormatIntroducedFilename`, builds synthetic filenames as
+`{filename} line {lineno} > {introducer}`. Eval and Function constructor kinds use
+these labels. The adapter returns `null` at them, even when the filename begins
+with `bun-wasm:`, rather than skipping to a different caller or guessing an origin
+by stripping the suffix. Ordinary filenames and sourceURLs remain usable. A label
+that exactly matches the synthetic grammar is ambiguous through this API and also
+returns `null`; a filename such as `/line 13 > eval.mjs` remains meaningful.
+These are original adapter changes; no SpiderMonkey implementation is copied.
+
 
 The caller-origin helper does not format stack positions or fetch source lines on structured-stack engines. Function construction needs a caller filename, not a rendered stack. This avoids repeatedly decoding large one-line compiler bundles during webpack rebuilds. It preserves module URL display names, eval creation metadata, opaque caller boundaries, and the application formatter. V8 builtin callbacks with no filename and no eval origin are skipped even when their isNative flag is false, as in the existing formatter. Opaque eval frames still stop lookup. Error stack formatting itself is unchanged.
 

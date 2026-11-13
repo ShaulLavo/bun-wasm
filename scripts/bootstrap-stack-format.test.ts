@@ -260,6 +260,7 @@ test("real V8 builtin callback frames preserve the calling module origin", () =>
     import { pathToFileURL } from "node:url";
     const factory = (0, eval)(${JSON.stringify(callerOriginSource.stdout.toString() + "\n//# sourceURL=bun-wasm:caller_origin")});
     globalThis.lookupOrigin = factory({
+      native: { engine: "host" },
       hasNativeStackTrace: true,
       pathToFileHref: path => pathToFileURL(path).href,
       displayName: file => file,
