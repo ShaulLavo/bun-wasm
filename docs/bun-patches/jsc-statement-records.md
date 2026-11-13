@@ -64,8 +64,8 @@ From a local split build against current main's side with the same core:
 
 - **Payoff:** `bundle5.js` (sha256 `4f227eea…445b2c`) loads alone through `require` at 176 and
   192 KiB with the default reserve. Before, it threw `RangeError` at both.
-- **Bytecode:** the semantics fixture's full `JSC_dumpGeneratedBytecodes` output matches the
-  baseline (string `switch` tables differ only in print order).
+- **Bytecode:** all 474 code blocks match the baseline after excluding diagnostic code-block,
+  cell, and structure identities. String `switch` entries match as multisets; their print order differs.
 - **Syntax errors:** class, message, line and column are identical to the baseline for 63 rows of
   blocks, `if` spines, `else if` chains, unclosed blocks and missing branches at depths 1, 9 and
   300, in function, script and module code and both source widths.
