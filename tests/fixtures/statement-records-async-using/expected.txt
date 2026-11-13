@@ -1,0 +1,12 @@
+await using order: returned "fell through"; 300 acquired, 300 disposed in reverse; same as flat
+await using throw: threw Error: body; 300 acquired, 300 disposed in reverse; same as flat
+await using return: returned "returned"; 300 acquired, 300 disposed in reverse; same as flat
+await using label: returned "fell through"; 300 acquired, 300 disposed in reverse; same as flat
+await using fail: threw 300 suppressed errors over Error: body; 300 acquired, 300 disposed in reverse; same as flat
+await using order, 16-bit: returned "fell through"; 300 acquired, 300 disposed in reverse; same as flat
+await using throw, 16-bit: threw Error: body; 300 acquired, 300 disposed in reverse; same as flat
+await using return, 16-bit: returned "returned"; 300 acquired, 300 disposed in reverse; same as flat
+await using label, 16-bit: returned "fell through"; 300 acquired, 300 disposed in reverse; same as flat
+await using fail, 16-bit: threw 300 suppressed errors over Error: body; 300 acquired, 300 disposed in reverse; same as flat
+await using past the record limit: refused or ran in full; shallow nest afterwards ran
+await using past the record limit, 16-bit: refused or ran in full; shallow nest afterwards ran

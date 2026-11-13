@@ -31,7 +31,11 @@ adapter in `web/src/net/install-cache.ts` also honors the guest's
 and quoted extension values, so a forced refresh fetches and captures new
 tarball bytes instead of returning a warm hit. Request headers and authenticated
 cache bypass remain unchanged. This is an original host adapter correction, not
-an upstream patch. Native and TypeScript
+an upstream patch. Cache publication streams the already-owned captured chunks
+to Cache Storage after EOF, without another full-body assembly buffer or copy.
+Each chunk remains independent of the forwarded download and is released from
+the capture array as storage consumes it. The four MiB capture limit is unchanged.
+Native and TypeScript
 host redirect adapters validate package destinations and remove sensitive headers on full-origin changes.
 Host tracing prints metadata sizes rather than header values or payload text.
 These redirect, trace and decoded-metadata guards are original adapters. The

@@ -99,6 +99,20 @@ export function assignmentChainFixtures() {
 }
 
 /**
+ * JSC's statement record limit, exactly: each nest shape is accepted at its last counted record and
+ * refused at the next with the parser's RangeError before running, at the smallest browser budget
+ * (the records use no stack). And deep `await using` nests past the limit are refused before
+ * acquiring anything (docs/bun-patches/jsc-statement-records.md).
+ */
+export function statementRecordFixtures() {
+  return ["native-statement-record-cap.json", "native-statement-records-async-using.json"].map((manifest) => {
+    const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+    if (check.owner !== "native") throw new Error("JSC statement record fixtures need their native check owner");
+    return { path: check.path, hostOptions: ["--env", "BUN_WASM_STACK_KIB=192", "--env", "BUNWASM_STATEMENT_RECORDS_EXACT=1"] };
+  });
+}
+
+/**
  * The array literal fixture: the core refuses the literal's 80,016-byte constant buffer during
  * bytecode generation, then the array's own storage on the first call (docs/bun-patches/jsc-array-literal-allocation.md).
  */
@@ -121,6 +135,7 @@ function testFixtures(artifact: string): void {
     const chain = parserChainFixture();
     runFixture(artifact, chain.path, scratch, chain.hostOptions);
     for (const assignments of assignmentChainFixtures()) runFixture(artifact, assignments.path, scratch, assignments.hostOptions);
+    for (const records of statementRecordFixtures()) runFixture(artifact, records.path, scratch, records.hostOptions);
     // The parser reserve at every host budget, its rejected forms and each shipped value (docs/stack-limits.md).
     for (const record of parserReserveControls(nodeHost(artifact))) console.log(JSON.stringify(record));
     console.log("PASS JSC parser reserve tuples");

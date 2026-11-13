@@ -111,6 +111,8 @@ const chains = {
   Block: (depth) => '{'.repeat(depth) + '}'.repeat(depth),
   Call: (depth) => 'var f = function (v) { return v; };\nreturn ' + 'f('.repeat(depth) + '0' + ')'.repeat(depth) + ';',
   Function: (depth) => 'return ' + '(function () { return '.repeat(depth) + '0' + '; })'.repeat(depth) + ';',
+  // An unbraced loop body is a new statement per level: JSC still parses it by recursion.
+  While: (depth) => 'while (0) '.repeat(depth) + ';',
 };
 const chainModes = {};
 function addChainMode(kind, pass, width) {

@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -107,6 +107,14 @@ test("the JSC gate requires the code generator to refuse deep assignment chains 
   expect(assignmentChainFixtures()).toEqual([
     { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("192") },
     { path: "tests/fixtures/assignment-chain-depth", hostOptions: strict("800") },
+  ]);
+});
+
+test("the JSC gate requires the exact statement record limit at the smallest browser budget", () => {
+  const exact = ["--env", "BUN_WASM_STACK_KIB=192", "--env", "BUNWASM_STATEMENT_RECORDS_EXACT=1"];
+  expect(statementRecordFixtures()).toEqual([
+    { path: "tests/fixtures/statement-record-cap", hostOptions: exact },
+    { path: "tests/fixtures/statement-records-async-using", hostOptions: exact },
   ]);
 });
 

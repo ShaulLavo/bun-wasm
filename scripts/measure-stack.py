@@ -15,8 +15,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-# The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
-CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Conditional', 'Block', 'Call', 'Function')
+# The parser chains of tests/stack-depth.js: six shapes, two parser passes, two source widths.
+CHAIN_MODES = [f'chain{kind}{parser_pass}{width}' for kind in ('Assign', 'Conditional', 'Block', 'Call', 'Function', 'While')
                for parser_pass in ('Compile', 'Call') for width in ('8', '16')]
 MODES = ['plain', 'getter', 'computedgetter', 'ajvnames', 'proxy', 'json', 'jsonplain', 'jsonparse', 'reviver', 'parse', 'block', 'arrow', 'unary', 'power',
          'ternary', 'statement', 'awaitchain',

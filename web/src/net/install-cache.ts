@@ -9,7 +9,7 @@ const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
 type CaptureState =
   | { kind: "active"; chunks: Uint8Array[]; bytes: number }
-  | { kind: "completed"; bytes: ArrayBuffer }
+  | { kind: "completed" }
   | { kind: "cancelled" }
   | { kind: "over-budget" };
 
@@ -99,11 +99,11 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     controller?.error(error);
   };
   const finish = () => {
-    const completed = completeCapture(state);
-    if (completed) state = { kind: "completed", bytes: completed };
+    const chunks = state.kind === "active" ? state.chunks : undefined;
+    state = { kind: "completed" };
     release();
     controller?.close();
-    if (state.kind === "completed") publishCapturedResponse(cache, url, response, state.bytes);
+    if (chunks) publishCapturedResponse(cache, url, response, chunks);
   };
   const read = async () => {
     if (!isForwardingState(state)) return;
@@ -145,17 +145,21 @@ function isForwardingState(state: CaptureState): state is Extract<CaptureState, 
   return state.kind === "active" || state.kind === "over-budget";
 }
 
-function completeCapture(state: CaptureState): ArrayBuffer | undefined {
-  if (state.kind !== "active") return undefined;
-  const bytes = new ArrayBuffer(state.bytes);
-  const target = new Uint8Array(bytes);
-  let offset = 0;
-  for (const chunk of state.chunks) {
-    target.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  state.chunks.length = 0;
-  return bytes;
+function capturedBody(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[index];
+      if (!chunk) {
+        chunks.length = 0;
+        controller.close();
+        return;
+      }
+      delete chunks[index++];
+      controller.enqueue(chunk);
+    },
+    cancel() { chunks.length = 0; },
+  });
 }
 
 function responseInit(response: Response): ResponseInit {
@@ -179,13 +183,13 @@ function withResponseMetadata(response: Response, metadata: Pick<Response, "url"
   return response;
 }
 
-function createCachedResponse(response: Response, bytes: ArrayBuffer | null): Response {
+function createCachedResponse(response: Response, body: ReadableStream<Uint8Array> | null): Response {
   const headers = new Headers(response.headers);
   // Cache Storage clones native response fields, not JavaScript property overrides.
   headers.set(CACHE_METADATA_HEADER, encodeURIComponent(JSON.stringify({
     url: response.url, redirected: response.redirected, header: headers.get(CACHE_METADATA_HEADER),
   })));
-  return new Response(bytes, { ...responseInit(response), headers });
+  return new Response(body, { ...responseInit(response), headers });
 }
 
 function readCachedMetadata(encoded: string): (Pick<Response, "url" | "redirected"> & { header: string | null }) | undefined {
@@ -217,6 +221,6 @@ function publishEmptyResponse(cache: Cache, url: string, response: Response): vo
   void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, null))).catch(() => {});
 }
 
-function publishCapturedResponse(cache: Cache, url: string, response: Response, bytes: ArrayBuffer): void {
-  void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, bytes))).catch(() => {});
+function publishCapturedResponse(cache: Cache, url: string, response: Response, chunks: Uint8Array[]): void {
+  void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, capturedBody(chunks)))).catch(() => {});
 }
