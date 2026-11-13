@@ -20,7 +20,7 @@ function workerModule(env: Record<string, string> = {}, execArgv: string[] = [],
     worker_channel: { open: () => ({ send() {} }) },
   };
   const internal = {
-    native: {}, realTimers: { setImmediate() {} }, messagePortRefs: 0, addIoWaiter() {}, workerNoWarnings: false,
+    native: {}, realTimers: { setImmediate() {} }, messagePortRefs: new Set<object>(), addIoWaiter() {}, workerNoWarnings: false,
     require(name: string) { if (!(name in modules)) throw new Error(name); return Reflect.get(modules, name); },
     builtin: () => ({ createRequire: () => (name: string) => preloads.push(name) }),
   };

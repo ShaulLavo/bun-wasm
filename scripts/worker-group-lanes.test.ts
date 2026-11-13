@@ -474,6 +474,53 @@ test("a rescan keeps ports that are open or still in flight", () => {
   expect(holder.child.receiveMessageOnPort(peer)?.message).toBe("after the rescan");
 });
 
+/** Makes the next `Set.prototype[name]` call throw, before or after it took effect, as an engine may. */
+function interruptSet(name: "add" | "delete", after: boolean) {
+  const original = Set.prototype[name] as (this: Set<unknown>, value: unknown) => unknown;
+  Reflect.set(Set.prototype, name, function (this: Set<unknown>, value: unknown) {
+    Reflect.set(Set.prototype, name, original);
+    if (after) original.call(this, value);
+    throw new RangeError("Maximum call stack size exceeded");
+  });
+}
+
+test("a keepalive taken or dropped twice, or across an interruption, never counts twice", () => {
+  const { root } = group();
+  const refs = root.internal.messagePortRefs;
+  const { port1, port2 } = new root.MessageChannel();
+  const base = refs.size;
+  port1.ref(); port1.ref();
+  expect([refs.size - base, port1.hasRef()]).toEqual([1, true]);
+  // An interruption leaves the reference either taken or not, and the port agrees with the set.
+  for (const after of [false, true]) {
+    interruptSet("delete", after);
+    expect(() => port1.unref()).toThrow(RangeError);
+    expect([refs.size - base, port1.hasRef()]).toEqual(after ? [0, false] : [1, true]);
+    port1.unref(); port1.unref();
+    expect([refs.size - base, port1.hasRef()]).toEqual([0, false]);
+    interruptSet("add", after);
+    expect(() => port1.ref()).toThrow(RangeError);
+    expect([refs.size - base, port1.hasRef()]).toEqual(after ? [1, true] : [0, false]);
+    port1.ref();
+    expect([refs.size - base, port1.hasRef()]).toEqual([1, true]);
+  }
+  // A transferred port gives its reference up with its state, and a closed one too.
+  const other = new root.MessageChannel();
+  port2.ref();
+  expect(refs.size - base).toBe(2);
+  other.port1.postMessage(null, [port2]);
+  expect(refs.size - base).toBe(1);
+  port1.close();
+  expect(refs.size - base).toBe(0);
+  const channel = new root.BroadcastChannel("keepalive");
+  channel.ref();
+  expect(refs.size - base).toBe(1);
+  channel.unref(); channel.unref(); channel.ref();
+  channel.close(); channel.ref();
+  expect(refs.size - base).toBe(0);
+  other.port1.close();
+});
+
 test("a synchronous receive never sweeps; the next ordinary step does", () => {
   const { model, root, spawn } = group();
   const { child, port, pipes, pid } = spawn(null, [], true);

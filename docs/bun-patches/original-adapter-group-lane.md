@@ -195,6 +195,10 @@ Ending a guest is not catchable and follows the death rules.
   failure is thrown as the thread's uncaught error. The loop drops a waiter whose step threw,
   so the worker waiter puts itself back: it is the only thing that pumps the thread's lanes
   and channels.
+- A port or broadcast channel keeps the loop alive by being a member of one set
+  (`internal.messagePortRefs`), not by a flag beside a counter. Taking and dropping the hold
+  are each one set operation that does nothing when repeated, so cleanup that is interrupted
+  and run again cannot count a port twice or leave one counted.
 - A slot that names a pin is handed to the group only after the ledger names the pin. Cleaning
   keeps the slot exclusive until unpin settles; a later member recovers a dead cleaner's slot and
   accepts only "bad pin" as already absent.

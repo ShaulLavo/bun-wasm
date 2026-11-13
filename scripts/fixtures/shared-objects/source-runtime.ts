@@ -18,7 +18,7 @@ interface PortsRuntime {
   receiveMessageOnPort(port: SourcePort): { message: unknown } | undefined;
   initialize(): void;
   getEnvironmentData(key: unknown): unknown;
-  BroadcastChannel: new(name: string) => { postMessage(value: unknown): void; close(): void };
+  BroadcastChannel: new(name: string) => { postMessage(value: unknown): void; close(): void; ref(): unknown; unref(): unknown };
   parentPort: SourcePort;
   workerData: SourcePort;
   __fixtureShutdown(): void;
@@ -111,7 +111,7 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts"> = {};
   const internal = Object.assign({
     native: runtimeNative,
-    realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
+    realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },

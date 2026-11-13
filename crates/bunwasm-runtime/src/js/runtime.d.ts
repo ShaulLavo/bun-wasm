@@ -140,7 +140,9 @@ declare namespace BunWasm {
     require(name: "events"): { new(options?: { captureRejections?: boolean }): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
     require(name: "v8"): { serialize(value: unknown): BufferBytes; deserialize(value: unknown): unknown };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
-    messagePortRefs: number;
+    /** The ports and broadcast channels that keep the loop alive. A set, so that taking and
+     * dropping a reference are each one operation that does nothing when repeated. */
+    messagePortRefs: Set<object>;
     isMarkedAsUntransferable?: (value: unknown) => boolean;
   }
 }

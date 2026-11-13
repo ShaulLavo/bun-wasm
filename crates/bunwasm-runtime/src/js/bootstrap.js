@@ -454,19 +454,19 @@
       return 0;
     }
     if (immediates.length > 0 || workerProgress || internal.pendingIo > 0) return 0;
-    if (refedTimers <= 0 && internal.messagePortRefs <= 0) return -1;
+    if (refedTimers <= 0 && !internal.messagePortRefs.size) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
     return timerQueue.length ? Math.max(0.01, timerQueue[0]._when - now) : 1000;
   };
   internal.pendingIo = 0;
-  internal.messagePortRefs = 0;
+  internal.messagePortRefs = new Set();
   internal.loopState = () => ({
     refedTimers,
     immediates: immediates.length,
     ticks: tickQueue.length,
     pendingIo: internal.pendingIo,
-    messagePortRefs: internal.messagePortRefs,
+    messagePortRefs: internal.messagePortRefs.size,
     networkHandles: internal.ioPending(),
   });
   internal.require("exit_provenance");

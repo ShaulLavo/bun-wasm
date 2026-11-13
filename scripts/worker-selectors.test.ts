@@ -35,7 +35,7 @@ function workerModule(self: boolean, control: unknown = { input: 12, output: 15 
       if (!(name in modules)) throw new Error(`Unexpected module ${name}`);
       return modules[name];
     },
-    addIoWaiter() {}, messagePortRefs: 0,
+    addIoWaiter() {}, messagePortRefs: new Set<object>(),
   });
   return { implementation, channels, stop };
 }

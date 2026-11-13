@@ -27,7 +27,7 @@ type WorkerInternal = {
   realTimers: { setImmediate(): void };
   require(name: string): unknown;
   addIoWaiter(): void;
-  messagePortRefs: number;
+  messagePortRefs: Set<object>;
   workerErrorData?: (error: unknown) => WorkerErrorData;
 };
 
@@ -69,7 +69,7 @@ function workerErrorData() {
       return modules[name];
     },
     addIoWaiter() {},
-    messagePortRefs: 0,
+    messagePortRefs: new Set(),
   };
   const workerFactoryValue = runInNewContext(workerSource, context);
   if (!isWorkerFactory(workerFactoryValue)) throw new Error("Worker factory was not emitted");

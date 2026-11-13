@@ -384,7 +384,7 @@
     group: { io: BunWasm.GroupSharedLane; backlog: boolean; terminal: boolean } | null;
     phase: "open" | "closing" | "closed";
     batch: DeliveryBatch | null;
-    started: boolean; ref: boolean; scheduled: boolean;
+    started: boolean; scheduled: boolean;
   }
   class MessagePort extends EventTarget {
     #state: PortState | null;
@@ -399,7 +399,7 @@
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
       this.#state = { id: value.id, peer: value.peer, version: value.version, sent: value.sent, received: value.received, queue: value.queue,
         pending: new Map(value.pending), peerClosing: value.closing, lane: null, group: null,
-        phase: value.closed ? "closed" : "open", batch: null, started: false, ref: false, scheduled: false };
+        phase: value.closed ? "closed" : "open", batch: null, started: false, scheduled: false };
       if (value.lane && !value.closed) this.#openLane(value.lane);
       if (value.groupLane && !value.closed) this.#adoptGroupLane(value.groupLane, value.version);
       localPorts.set(value.id, this);
@@ -612,7 +612,7 @@
         },
         beforeCommit() { value.#attachmentWait?.(); value.#attachmentWait = null; },
         commit(custody) {
-          if (state.ref) { state.ref = false; internal.messagePortRefs--; }
+          internal.messagePortRefs.delete(state);
           // The end goes in flight in the ledger; the frame that carries it is published after.
           state.group?.io.transfer(custody);
           value.#closeLane(false); deleteLocalPort(state.id); value.#state = null;
@@ -773,9 +773,10 @@
       queueMicrotask(() => this.#deliverBatch(state, batch));
     }
     start() { if (this.#state) { this.#state.started = true; this.#schedule(); } }
-    ref() { if (this.#state?.phase === "open" && !this.#state.ref) { this.#state.ref = true; internal.messagePortRefs++; } }
-    unref() { if (this.#state?.ref) { this.#state.ref = false; internal.messagePortRefs--; } }
-    hasRef() { return this.#state?.ref || false; }
+    // A port's state is in the keepalive set exactly while the port is referenced.
+    ref() { if (this.#state?.phase === "open") internal.messagePortRefs.add(this.#state); }
+    unref() { if (this.#state) internal.messagePortRefs.delete(this.#state); }
+    hasRef() { return this.#state ? internal.messagePortRefs.has(this.#state) : false; }
     close(callback?: () => void) {
       if (typeof callback === "function") this.once("close", callback);
       this.#beginClose();
@@ -897,7 +898,7 @@
 
   class BroadcastChannel extends EventTarget {
     readonly name: string;
-    #closed = false; #ref = true; #queue: unknown[] = [];
+    #closed = false; #queue: unknown[] = [];
     onmessage: ((event: MessageEvent) => unknown) | null = null;
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
     constructor(name: string) {
@@ -905,7 +906,7 @@
       if (!arguments.length) throw new TypeError("BroadcastChannel requires a name");
       this.name = String(name);
       const peers = channels.get(this.name) || new Set<BroadcastChannel>();
-      peers.add(this); channels.set(this.name, peers); internal.messagePortRefs++;
+      peers.add(this); channels.set(this.name, peers); internal.messagePortRefs.add(this);
     }
     static receive(channel: BroadcastChannel, value: unknown) {
       if (channel.#closed) return;
@@ -925,8 +926,8 @@
       const peers = channels.get(this.name); peers?.delete(this);
       if (!peers?.size) channels.delete(this.name);
     }
-    ref() { if (!this.#closed && !this.#ref) { this.#ref = true; internal.messagePortRefs++; } return this; }
-    unref() { if (this.#ref) { this.#ref = false; internal.messagePortRefs--; } return this; }
+    ref() { if (!this.#closed) internal.messagePortRefs.add(this); return this; }
+    unref() { internal.messagePortRefs.delete(this); return this; }
     get [Symbol.toStringTag]() { return "BroadcastChannel"; }
   }
 
