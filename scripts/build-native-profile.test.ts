@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildNativeProfile, nativeProfileEngine, spiderMonkeyNativeInputs } from './build-native-profile.ts';
+import { buildNativeProfile, nativeProfileEngine, spiderMonkeyNativeInputs, spiderMonkeySources } from './build-native-profile.ts';
 import { hash } from './guest-source-manifest.ts';
 import { groupFlags } from '../spidermonkey/shared-group.ts';
 import { pin } from '../spidermonkey/native-profile.ts';
@@ -14,6 +14,35 @@ import { appendCustomSection, tagProgramCore } from '../src/engine-kind.ts';
 const text = (value: string) => [value.length].concat(Array.from(value, character => character.charCodeAt(0)));
 const section = (id: number, payload: number[]) => [id, payload.length].concat(payload);
 const header = [0, 97, 115, 109, 1, 0, 0, 0];
+
+test.each(['1', '', 'true'])('normal SM production refuses validation selection %j before reading inputs', async value => {
+  const previous = process.env.SPIDERMONKEY_TRANSFER_FAULT;
+  process.env.SPIDERMONKEY_TRANSFER_FAULT = value;
+  try { await expect(buildNativeProfile('shared-group', '/unused', 'spidermonkey')).rejects.toThrow('SPIDERMONKEY_TRANSFER_FAULT=0'); }
+  finally {
+    if (previous === undefined) delete process.env.SPIDERMONKEY_TRANSFER_FAULT;
+    else process.env.SPIDERMONKEY_TRANSFER_FAULT = previous;
+  }
+});
+
+test('shared SM capture includes each borrowed validation source', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-shared-sources-'));
+  const paths = ['crates/bunwasm-engine-quickjs/build/transfer_fault.rs', 'crates/bunwasm-engine-quickjs/src/transfer_fault.rs', 'scripts/src/transfer-fault.sh'];
+  try {
+    for (const path of paths) {
+      mkdirSync(join(root, path, '..'), { recursive: true });
+      writeFileSync(join(root, path), 'first\n');
+    }
+    execFileSync('git', ['init', '--quiet'], { cwd: root });
+    execFileSync('git', ['add', '.'], { cwd: root });
+    expect(spiderMonkeySources(root).map(source => source.path)).toEqual(paths);
+    for (const path of paths) {
+      const before = spiderMonkeySources(root);
+      writeFileSync(join(root, path), 'changed\n');
+      expect(spiderMonkeySources(root)).not.toEqual(before);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 function archive(shared: boolean): Buffer {
   const features = shared ? ['+atomics', '+bulk-memory', '+mutable-globals'] : ['-shared-mem'];

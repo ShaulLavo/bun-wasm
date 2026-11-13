@@ -40,6 +40,10 @@ side="$out/engine.wasm"
 # shellcheck source=scripts/src/transfer-fault.sh
 source "$root/scripts/src/transfer-fault.sh"
 select_transfer_fault SPIDERMONKEY_TRANSFER_FAULT
+if [[ $transfer_fault == 1 && -e "$out/shared-group-library.json" ]]; then
+  echo "Refusing a validation side beside an existing release record: $out/shared-group-library.json" >&2
+  exit 2
+fi
 sysroot_rust=$($RUSTC --print sysroot)
 $GUEST_CARGO fetch --locked --offline --manifest-path "$sysroot_rust/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
 $GUEST_CARGO build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 -j "$jobs" -p bunwasm-engine-spidermonkey

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, w
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { programProfile, sharedGroupPair, tagProgramCore, verifyProgramSide } from '../src/engine-kind.ts';
-import { captureProgramInputs, parseProgramReceipt, prepareProgramOutputs, record, verifyProgramReceipt } from './guest-core-receipt.ts';
+import { assertQualifiedEnvironment, captureProgramInputs, parseProgramReceipt, prepareProgramOutputs, record, verifyProgramReceipt } from './guest-core-receipt.ts';
 import { hash, sourceOptions } from './guest-source-manifest.ts';
 import { sharedGroupEnvironment, verifySharedSysroot } from './src/program-profile.ts';
 import { nativeProfile } from './test-checks.ts';
@@ -57,10 +57,12 @@ export function spiderMonkeyNativeInputs(native: string, libcxx: string, sysroot
   return { library, receipt: fileIdentity(receiptPath), headers: receipt.headers, confdefsSha256: receipt.confdefsSha256, archives };
 }
 
-function spiderMonkeySources() {
+export function spiderMonkeySources(directory: string = repository) {
   const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts',
-    'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts'], { cwd: repository, encoding: 'utf8' });
-  return paths.split('\0').filter(Boolean).map(path => ({ path, ...fileIdentity(join(repository, path)) }));
+    'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts',
+    'crates/bunwasm-engine-quickjs/build/transfer_fault.rs', 'crates/bunwasm-engine-quickjs/src/transfer_fault.rs',
+    'scripts/src/transfer-fault.sh'], { cwd: directory, encoding: 'utf8' });
+  return paths.split('\0').filter(Boolean).map(path => ({ path, ...fileIdentity(join(directory, path)) }));
 }
 
 /** This experiment consumes the existing common core; it never becomes a publication profile. */
@@ -106,6 +108,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
 export async function buildNativeProfile(profile: unknown, directory: string, selectedEngine: unknown = 'quickjs') {
   const engine = nativeProfileEngine(selectedEngine);
   if (nativeProfile(profile) !== 'shared-group') throw new Error('Split production remains owned by scripts/build.sh');
+  assertQualifiedEnvironment(engine, process.env);
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot || sysroot !== process.env.BUN_WASM_SHARED_SYSROOT) throw new Error('Explicit matching shared-pic sysroot paths are required');
   verifySharedSysroot(sysroot);

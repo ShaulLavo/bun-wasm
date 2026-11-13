@@ -16,6 +16,8 @@ case "$tool" in
     command=\${1:-}; shift || true
     case "$script:$command" in
       program-profile.ts:max-memory) exec "$REAL_BUN" "$RECIPE_ROOT/scripts/src/program-profile.ts" max-memory ;;
+      program-profile.ts:group-address-space) echo 2147483648 ;;
+      spidermonkey-side-core-receipt.ts:convert-side) cp "$1" "$2" ;;
       guest-build-receipt.ts:environment)
         printf 'export GUEST_CARGO=%q RUSTC=%q\\n' "$RECIPE_BIN/selected-cargo" "$RECIPE_BIN/selected-rustc" ;;
       guest-core-receipt.ts:inputs|guest-engine-receipt.ts:inputs)
@@ -38,6 +40,7 @@ case "$tool" in
       printf fixture > "$output/bun.wasm"
       printf fixture > "$output/libbunwasm_engine_jsc.a"
       printf fixture > "$output/libbunwasm_engine_quickjs.a"
+      printf fixture > "$output/libbunwasm_engine_spidermonkey.a"
     fi ;;
   selected-rustc) printf '%s\\n' "$RECIPE_ROOT/rust" ;;
   cargo|rustc) echo 'unselected tool invoked' >&2; exit 96 ;;
@@ -73,7 +76,7 @@ function fixture(run: (root: string, shell: (script: string, env?: Record<string
 
 function prepare(root: string): void {
   for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib", "crates/bunwasm-cli"]) mkdirSync(join(root, directory), { recursive: true });
-  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh",
+  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-spidermonkey-shared.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh",
     "crates/bunwasm-cli/max-memory.txt", "scripts/src/program-profile.ts", "scripts/src/transfer-fault.sh"]) {
     copyFileSync(join(repository, file), join(root, file));
   }
@@ -87,6 +90,7 @@ function prepare(root: string): void {
   writeFileSync(join(root, "native/build/jsc/lib/libJavaScriptCore.a"), "fixture archive\n");
   for (const file of ["sync-crypto.sh", "test-transpiler-example.sh"]) writeFileSync(join(root, "scripts", file), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
   writeFileSync(join(root, "scripts/check-wasi-cmake-cache.sh"), "#!/usr/bin/env bash\nexit 0\n");
+  writeFileSync(join(root, "scripts/src/group-errno-wraps.sh"), "check_group_errno_wraps() { :; }\n");
   for (const file of ["wasi-jsc.cmake", "shim/wasi-compat.h", "shim/wasi-compat.c", "shim/madvise.c"]) writeFileSync(join(root, "jsc", file), "fixture input\n");
 }
 
@@ -312,6 +316,33 @@ test("a receipt's inputs are not captured in an environment that selects or coul
   expect(() => assertQualifiedEnvironment("core", { RUSTFLAGS: "" })).toThrow("RUSTFLAGS");
   // The variable belongs to the QuickJS side: other scopes do not compile that crate.
   expect(() => assertQualifiedEnvironment("core", { BUN_WASM_TRANSFER_FAULT: "1" })).not.toThrow();
+});
+
+test("SpiderMonkey program captures reject validation environments", () => {
+  for (const option of [undefined, "0"]) expect(() => assertQualifiedEnvironment("spidermonkey", option === undefined ? {} : { SPIDERMONKEY_TRANSFER_FAULT: option })).not.toThrow();
+  for (const option of ["", "1", "2", "true"]) expect(() => assertQualifiedEnvironment("spidermonkey", { SPIDERMONKEY_TRANSFER_FAULT: option })).toThrow("SPIDERMONKEY_TRANSFER_FAULT=0");
+  for (const ambient of ["0", "1", ""]) expect(() => assertQualifiedEnvironment("spidermonkey", { BUN_WASM_TRANSFER_FAULT: ambient })).toThrow("BUN_WASM_TRANSFER_FAULT");
+});
+
+test("a SpiderMonkey validation side refuses a retained release record before compilation", () => {
+  fixture((root, shell, log) => {
+    const native = join(root, "sm-native"), libcxx = join(root, "sm-libcxx"), side = join(root, "sm-side");
+    for (const directory of [native, libcxx, side]) mkdirSync(directory);
+    writeFileSync(join(native, "shared-group-library.json"), "native record\n");
+    writeFileSync(join(native, "libspidermonkey_bunwasm.a"), "archive\n");
+    for (const name of ["libc++.a", "libc++abi.a"]) writeFileSync(join(libcxx, name), "archive\n");
+    const env = { SPIDERMONKEY_NATIVE_DIR: native, SPIDERMONKEY_LIBCXX_DIR: libcxx, SPIDERMONKEY_ENGINE_BUILD_DIR: side, SPIDERMONKEY_TRANSFER_FAULT: "1" };
+    success(shell("scripts/build-engine-spidermonkey-shared.sh", env));
+    expect(readdirSync(side)).toContain("engine.wasm");
+    expect(readdirSync(side)).not.toContain("shared-group-library.json");
+    rmSync(join(side, "engine.wasm"));
+    writeFileSync(join(side, "shared-group-library.json"), "retained release record\n");
+    const result = shell("scripts/build-engine-spidermonkey-shared.sh", env);
+    expect(result.exitCode).toBe(2);
+    expect(String(result.stderr)).toContain("validation side beside an existing release record");
+    expect(log().match(/^selected-cargo\|build /gm)).toHaveLength(1);
+    expect(readFileSync(join(side, "shared-group-library.json"), "utf8")).toBe("retained release record\n");
+  });
 });
 
 test("both wrappers compose one common compilation and stage each required side receipt", () => {
