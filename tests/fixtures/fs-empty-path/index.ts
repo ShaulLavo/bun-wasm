@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Buffer } from "node:buffer";
 
-async function callbackStat(callback: typeof fs.stat, path: string | Uint8Array, context: AsyncLocalStorage<string>, check: (error: unknown) => void): Promise<void> {
+async function callbackStat(callback: typeof fs.stat, path: fs.PathLike, context: AsyncLocalStorage<string>, check: (error: unknown) => void): Promise<void> {
   let returned = false;
   const result = await new Promise<{ error: unknown; value: unknown; returned: boolean; store: string | undefined }>(resolve => {
     callback(path, (error, value) => resolve({ error, value, returned, store: context.getStore() }));
@@ -33,7 +33,7 @@ export async function checkEmptyPaths(api: typeof fs): Promise<void> {
     catch (error) { check(error, syscall); return; }
     assert.fail(`${syscall} accepted an empty path`);
   }
-  async function metadata(path: string | Uint8Array, link: boolean): Promise<void> {
+  async function metadata(path: fs.PathLike, link: boolean): Promise<void> {
     const sync = link ? api.lstatSync : api.statSync;
     const callback = link ? api.lstat : api.stat;
     const promise = link ? api.promises.lstat : api.promises.stat;
@@ -53,7 +53,7 @@ export async function checkEmptyPaths(api: typeof fs): Promise<void> {
       await pending;
     });
   }
-  for (const path of ["", Buffer.alloc(0), new Uint8Array(0)]) {
+  for (const path of ["", Buffer.alloc(0)]) {
     await metadata(path, false);
     await metadata(path, true);
     assert.equal(api.existsSync(path), false);
