@@ -181,3 +181,10 @@ module as eager lifecycle control alongside outcome and directory cells. Its rea
 browser bundle must not import the supervisor, registry or Worker service. Unknown
 observation-related modules still fail closed, and observation bytes remain in the
 measured bundle contributions and size totals. No producer implementation is copied.
+
+Waffle 0.0.129's `packages/waffle/proc/exec.ts` at
+`557d0f2502ad2e2d2dd9042486e1b25c101cbcda` contains completion-word helpers
+and the `ProcessReplaced` unwind type. The bundle gate classifies that exact
+module as lifecycle control. A real browser bundle checks its dependency graph
+while supervisor, registry, worker-client and unknown exec service modules remain
+rejected. Its bytes remain in the measured size totals.
