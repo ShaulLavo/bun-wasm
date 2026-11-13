@@ -206,6 +206,7 @@ fn main() {
     }
 
     if target_os == "wasi" {
+        builder.opt_level(2);
         // pretend we're emscripten - there are already ifdefs that match
         // also, wasi doesn't ahve FE_DOWNWARD or FE_UPWARD
         defines.push(("EMSCRIPTEN".into(), Some("1")));
