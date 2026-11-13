@@ -9,6 +9,21 @@ import { oldSelections, proveCheckMigration } from "./migrations/discover-checks
 import { needsRust } from "./ci-changes";
 
 const root = resolve(import.meta.dir, "..");
+
+test("named batches retain their allowed owners and reject malformed names", () => {
+  const path = "scripts/example.test.ts";
+  for (const owner of ["web", "browser-guest", "web-browser"]) {
+    expect(parseCheck({ owner, path, batch: "10-interface" }, `${owner}-example.json`).batch).toBe("10-interface");
+  }
+  for (const owner of ["runtime", "quality", "package-extra", "cmake", "native", "native-probe"]) {
+    const input = owner === "native" ? "tests/fixtures/example" : path;
+    expect(() => parseCheck({ owner, path: input, batch: "10-interface", inputs: [path] }, `${owner}-example.json`)).toThrow("Invalid check batch");
+  }
+  for (const batch of [null, 1, [], {}, "", "interface", "10-", "10-Interface"]) {
+    expect(() => parseCheck({ owner: "web-browser", path, batch }, "web-browser-example.json")).toThrow("Invalid check batch");
+  }
+});
+
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true }); });
 

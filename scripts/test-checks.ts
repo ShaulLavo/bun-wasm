@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
+const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser"]);
 export type NativeProfile = "split" | "shared-group";
 type Check = { path: string; localRuntime: boolean; batch: string; entry?: string } & (
   | { owner: "native-probe"; inputs: string[] }
@@ -77,7 +78,7 @@ export function parseCheck(value: unknown, file: string): Check {
   const localRuntime = "localRuntime" in value ? value.localRuntime : false;
   if (typeof localRuntime !== "boolean" || (localRuntime && owner !== "runtime" && owner !== "web")) throw new Error(`Invalid local runtime selection: ${file}`);
   const batch = "batch" in value ? value.batch : "default";
-  if (typeof batch !== "string" || (batch !== "default" && ((owner !== "web" && owner !== "browser-guest" && owner !== "web-browser") || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
+  if (typeof batch !== "string" || (batch !== "default" && (!batchOwners.has(owner) || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
   if (owner === "browser-guest") {
     const inputs = "inputs" in value ? inputFiles(value.inputs, file) : [];
     if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };
