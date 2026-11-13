@@ -267,5 +267,7 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
     driver::run::<vm::QuickJs>(session)
 }
 
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+mod allocation_probe;
 #[cfg(test)]
 mod native_contract_tests;

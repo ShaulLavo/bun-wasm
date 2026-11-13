@@ -1365,6 +1365,79 @@ mod tests {
         std::mem::forget(transfer);
     }
 
+    /// The whole path a post must cross without failing: from the core's commit check, through
+    /// the detaches, the commit, the native's return, the engine wrapper's release of its
+    /// arguments and the JavaScript function's own return, to the caller's next statement.
+    /// Nothing on it asks the allocator for anything, so no allocation can fail there.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn nothing_is_allocated_from_the_commit_check_to_the_callers_next_statement() {
+        use crate::allocation_probe;
+        use crate::value_natives::transfer;
+        let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
+        let commits = Rc::new(Cell::new(0));
+        let committed = commits.clone();
+        // The check is the last call that may refuse: counting starts as it returns.
+        let word = move |op, _| {
+            if op == CHECK {
+                allocation_probe::arm();
+            } else {
+                committed.set(committed.get() + 1);
+            }
+            0
+        };
+        let names = ["wasm.laneCommitCheck", "wasm.laneCommitStaged"].map(str::to_owned);
+        let global = engine.eval_script("globalThis", "global", 1).unwrap();
+        for (name, function) in transfer::over::<QuickJs>(word, transfer::LaneCommit::find(&names))
+        {
+            engine
+                .set(&global, name, engine.new_function(name, function))
+                .unwrap();
+        }
+        // The caller's next statement: a native that takes no arguments and stops the count.
+        let seen = Rc::new(Cell::new(usize::MAX));
+        let report = seen.clone();
+        let stop: ValueFn<QuickJs> = Rc::new(move |e: &QuickJs, _: &[V]| {
+            report.set(allocation_probe::disarm());
+            Ok(e.undefined())
+        });
+        engine
+            .set(&global, "stop", engine.new_function("stop", stop))
+            .unwrap();
+        // `post` ends as postMessage does, with the transfer call as its last statement. The
+        // list is a temporary, so the wrapper's release of its arguments would free it if
+        // the native did not hold it.
+        let script = "function post(first, second, view) {
+               transferArrayBuffers([first, second, view.buffer], 3, 7, 1, 0, 9);
+             }
+             const buffers = [new ArrayBuffer(64), new ArrayBuffer(0, { maxByteLength: 16 }), new Uint8Array(32)];
+             post(buffers[0], buffers[1], buffers[2]);
+             stop();
+             [buffers[0].detached, buffers[1].detached, buffers[2].buffer.detached].join()";
+        let detached = engine.eval_script(script, "tail", 1).unwrap();
+        assert_eq!(engine.to_val(&detached), text("true,true,true"));
+        assert_eq!(
+            commits.get(),
+            1,
+            "the commit ran inside the counted stretch"
+        );
+        assert_eq!(
+            seen.get(),
+            0,
+            "allocation requests between the check and the next statement"
+        );
+        // The count is live: the same stretch with one allocation in it is seen.
+        allocation_probe::arm();
+        drop(Vec::<u8>::with_capacity(64));
+        assert_eq!(allocation_probe::disarm(), 1);
+        // And it sees the engine's own allocations, not only Rust's.
+        allocation_probe::arm();
+        let strings = engine.eval_script("new Array(100).fill(1).map(String)", "probe", 1);
+        assert!(allocation_probe::disarm() > 0);
+        drop(strings);
+        std::mem::forget(engine);
+    }
+
     #[test]
     fn what_a_transfer_was_given_stays_referenced_until_it_is_settled() {
         let transfer = Transfer::new();

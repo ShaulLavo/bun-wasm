@@ -200,10 +200,21 @@ core's commit, the native wrapper's return and the interpreter's return from `po
   engine and host with the stack and heap probes, and for JSC with a read of the generated
   interpreter and of the bytecode emitted for `postMessage` from the matching build.
 
-Measured so far: the stack probe on a shared-group QuickJS guest on the native launcher, at
-an earlier head of this change that still ran JavaScript after the detach (59,520 attempts,
-no violation). It has to be run again on this path, and has not been run on JSC or
-SpiderMonkey guests or under Waffle.
+Measured so far, on QuickJS only:
+
+- The stack probe on a shared-group guest on the native launcher: a post with a transferred
+  buffer, with and without a carried port, from every stack depth around the limit, sender
+  on the first guest and in a worker. In 59,520 attempts each threw with nothing moved or
+  returned with the whole message received.
+- An allocation count on the host build of the engine (`vm.rs`,
+  `nothing_is_allocated_from_the_commit_check_to_the_callers_next_statement`): from the
+  return of the core's commit check, through the detaches, the commit, the native's return,
+  the wrapper's release of its arguments and the JavaScript function's return, to the
+  caller's next statement, the C allocator is asked for nothing. The test's counter sees the
+  engine's own allocations, and an object made in the native's tail fails it.
+
+Neither has been run on JSC or SpiderMonkey, and the guest has not been run under Waffle. A
+heap-exhaustion probe on a real guest has not been written.
 
 Ending a guest is not catchable and follows the death rules.
 
