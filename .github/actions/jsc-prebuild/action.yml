@@ -111,11 +111,3 @@ runs:
         tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
         ls -l "$bundle" "$transfer"
         echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-    - uses: actions/upload-artifact@v7
-      if: inputs.transfer == 'true'
-      timeout-minutes: 5
-      with:
-        path: ${{ runner.temp }}/jsc-prebuild.tar
-        if-no-files-found: error
-        retention-days: 1
-        archive: false

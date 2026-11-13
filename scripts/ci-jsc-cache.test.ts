@@ -74,10 +74,18 @@ test("the existing key, compatible prefix and run-bound handoff stay intact", ()
   expect(identity.CACHE_PREFIX).toBe(prefix);
   expect(identity.CACHE_KEY).toBe(prefix + "${{ hashFiles('scripts/build-wasi-sysroot.ts') }}");
   expect(step(build, "id", "jsc-artifact").if).toBe("inputs.transfer == 'true'");
-  expect(step(build, "uses", "actions/upload-artifact@v7").if).toBe("inputs.transfer == 'true'");
+  const upload = step(record(ciJobs["jsc-prebuild"]), "uses", "actions/upload-artifact@v7");
+  expect(upload["timeout-minutes"]).toBe(5);
+  expect(record(upload.with).path).toBe("${{ runner.temp }}/jsc-prebuild.tar");
   expect(script(step(build, "id", "jsc-artifact"))).toContain('"$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"');
   const save = step(build, "name", "Save the JSC prebuild cache once per input revision");
   expect(save.if).toBe("${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
+});
+
+test("JSC composite steps use runner-supported metadata", () => {
+  for (const composite of [setup, build]) {
+    for (const item of steps(composite)) expect(item).not.toHaveProperty("timeout-minutes");
+  }
 });
 
 test.each(["", "different-runner-inputs"])("identity guard rejects %j before restoring or building", actual => {

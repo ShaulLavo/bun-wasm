@@ -189,6 +189,13 @@ jobs:
           prefix: ${{ steps.setup.outputs.prefix }}
           expected-key: ${{ needs.jsc-identity.outputs.key }}
           transfer: 'true'
+      - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          path: ${{ runner.temp }}/jsc-prebuild.tar
+          if-no-files-found: error
+          retention-days: 1
+          archive: false
       - uses: ./.github/actions/save-release-downloads
 
   native-quality:
