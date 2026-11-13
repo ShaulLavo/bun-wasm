@@ -143,7 +143,8 @@ test("native and Chromium consumers retain their selection, profile, launcher an
     { name: "Consume the shared JSC feature checks", run: `${common}program-jsc/bun.wasm"\n${launcher}${native}${browser}` },
   ];
   for (const consumer of consumers) {
-    expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: selection, run: consumer.run });
+    const condition = consumer.name === "Consume the shared JSC feature checks" ? "${{ !cancelled() && needs.quality.outputs.shared-native == 'true' }}" : selection;
+    expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: condition, run: consumer.run });
   }
   expect(shared.needs).toEqual(["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
   expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
