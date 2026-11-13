@@ -16,6 +16,11 @@ const files = new Map<string, string>();
 let opened = 0;
 let closed = 0;
 let cleanups = 0;
+async function navigate(url: string, options: { waitUntil: string; timeout: number }): Promise<void> {
+  assert.equal(url, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");
+  assert.deepEqual(options, { waitUntil: "domcontentloaded", timeout: 30_000 });
+}
+
 const browser = {
   browserType: () => ({ name: () => "webkit" }),
   async newContext(options: { userAgent: string }) {
@@ -30,7 +35,7 @@ const browser = {
       },
       async newPage() {
         files.clear();
-        return { async goto(url: string) { assert.equal(url, "https://stack.test/?engine=quickjs&prompt=off&mode=memory"); } };
+        return { goto: navigate };
       },
       async close() { closed++; },
     };

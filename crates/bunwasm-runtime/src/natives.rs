@@ -991,27 +991,19 @@ fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     ok()
 }
 
+mod descriptor_read;
+
 fn read_descriptor(args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
-    let mut buf = vec![0u8; args.num(1)? as usize];
-    let position = args.opt_num(2).filter(|p| *p >= 0.0);
+    let length = args.num(1)? as usize;
+    let position = args
+        .opt_num(2)
+        .filter(|p| *p >= 0.0)
+        .map(|p| p as libc::off_t);
     // Positional reads must not advance the shared open-file cursor.
-    let count = match position {
-        Some(position) => unsafe {
-            libc::pread(
-                fd,
-                buf.as_mut_ptr().cast(),
-                buf.len(),
-                position as libc::off_t,
-            )
-        },
-        None => unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) },
-    };
-    if count < 0 {
-        return Err(io_error(io::Error::last_os_error(), "read", None));
-    }
-    buf.truncate(count as usize);
-    Ok(Val::Bytes(buf))
+    descriptor_read::read(fd, length, position)
+        .map(Val::Bytes)
+        .map_err(|e| io_error(e, "read", None))
 }
 
 fn install_fds(t: &mut Table, state: &Rc<State>) {

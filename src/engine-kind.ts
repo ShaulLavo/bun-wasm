@@ -28,11 +28,9 @@ export function isPairedEngine(value: unknown): value is PairedEngine {
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 
 /**
- * The Waffle group policy a Bun group needs: the 2 GiB group address space every group core and
- * side declares (crates/bunwasm-cli/group-address-space.txt), the 1 GiB guest memory maximum as
- * the pages its members may hold together (crates/bunwasm-cli/max-memory.txt; regions are not
- * counted), and 8 MiB member stacks. This file ships in the package and cannot read the
- * repository, so tests/package/max-memory.test.ts pins both numbers to their authorities.
+ * Browser backing capacity, checked separately from the guest import declaration at staging.
+ * The default stays 2 GiB with a 1 GiB cumulative member allowance and 8 MiB stacks.
+ * Smaller supplied backing policies require their own complete workflow qualification.
  */
 export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } as const;
 

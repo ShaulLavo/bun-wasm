@@ -1,0 +1,1 @@
+regular tail, EOF, stream position and descriptor errors passed

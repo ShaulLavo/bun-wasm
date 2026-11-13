@@ -1,6 +1,9 @@
 (function (internal: BunWasm.Internal) {
   "use strict";
 
+  const savedFrames: unknown = internal.native.engine === "spidermonkey"
+    ? Reflect.get(globalThis, Symbol.for("bunwasm.internal.spidermonkey.errorFrames")) : undefined;
+
   interface OriginSite {
     getFileName(): string | null;
     getLineNumber(): number | null;
@@ -58,11 +61,29 @@
     return null;
   }
 
+  function spiderMonkeyOrigin(error: Error, stack: string | undefined): string | null {
+    if (typeof savedFrames !== "function") return null;
+    const frames: unknown = savedFrames(error, stack, true);
+    if (!Array.isArray(frames)) return null;
+    for (const frame of frames) {
+      if (!frame || typeof frame.file !== "string") return null;
+      const file: string = frame.file;
+      // SavedFrame.source is a display URL or a filename, with no introduction metadata.
+      // A generated label is opaque, including one rooted in a runtime constructor wrapper.
+      if (/ line \d+ > (?:eval|Function|AsyncFunction|GeneratorFunction|AsyncGenerator)$/.test(file)) return null;
+      if (file.startsWith("bun-wasm:")) continue;
+      return originFile(file);
+    }
+    return null;
+  }
+
   return function callerSourceOrigin(): string | null {
     const prepare = Error.prepareStackTrace;
     try {
       Error.prepareStackTrace = internal.hasNativeStackTrace ? structuredOrigin : internal.defaultPrepareStackTrace;
-      const stack = new Error().stack;
+      const error = new Error();
+      const stack = error.stack;
+      if (internal.native.engine === "spidermonkey") return spiderMonkeyOrigin(error, stack);
       return internal.hasNativeStackTrace ? typeof stack === "string" ? stack : null : textOrigin(stack);
     } finally {
       Error.prepareStackTrace = prepare;

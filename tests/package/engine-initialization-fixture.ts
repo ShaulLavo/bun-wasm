@@ -1,4 +1,5 @@
-import { BUN_MEMORY_GROUP_POLICY, tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
+import { tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
+import { sharedGroupMaxPages } from "../../scripts/src/program-profile.ts";
 
 const unsigned = (value: number): number[] => {
   const bytes: number[] = [];
@@ -20,7 +21,7 @@ const copyData = [0x23, 1, 0x41, 0, 0x41, 4, 0xfc, 8, 0, 0, 0xfc, 9, 0];
 const dylink = section(0, name("dylink.0").concat([1, 4, 16, 2, 0, 0]));
 const globals = [imported("env", "__stack_pointer", [3, 0x7f, 1]), imported("env", "__memory_base", [3, 0x7f, 0]), imported("env", "__table_base", [3, 0x7f, 0])];
 // A shared pair declares the group address space, like a produced core and side.
-const memory = (shared: boolean) => imported("env", "memory", [2].concat(shared ? [3, 1].concat(unsigned(BUN_MEMORY_GROUP_POLICY.maximumPages)) : [0, 1]));
+const memory = (shared: boolean) => imported("env", "memory", [2].concat(shared ? [3, 1].concat(unsigned(sharedGroupMaxPages())) : [0, 1]));
 const table = imported("env", "__indirect_function_table", [1, 0x70, 0, 1]);
 
 /** Executable data/relocation fixture, not a qualified production guest. */
