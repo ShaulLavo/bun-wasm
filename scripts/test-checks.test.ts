@@ -2,10 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, parseCheck } from "./test-checks";
+import { dirname, join, relative, resolve } from "node:path";
+import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
+import { needsRust } from "./ci-changes";
 
 const root = resolve(import.meta.dir, "..");
 const scratch: string[] = [];
@@ -153,15 +154,47 @@ test("each discovery group retains one command owner and browser deadlines stay 
   expect(web.match(/bun \.\.\/scripts\/test-checks.ts web\n/g)).toHaveLength(1);
   expect(web).toContain("browser_test bun ../scripts/test-checks.ts web-browser");
   // The rust job bundles one verified site. Browser legs and the shared-profile consumer reuse it.
-  expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest\n/g)).toHaveLength(1);
+  expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest --batch/g)).toHaveLength(1);
   expect(workflow.match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
   expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(3);
   expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
   expect(workflow).not.toContain("web/build.ts");
+  expect(workflow).toContain("bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts");
+  const storage = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
+  expect(storage?.owner).toBe("browser-guest");
+  expect(storage?.inputs).toContain("sandbox/template-sveltekit/src/routes/+page.svelte");
   const runtime = readFileSync(join(root, "scripts/check-runtime.sh"), "utf8");
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(runtime).toContain('bun "$root/scripts/test-checks.ts" local-runtime');
   expect(runtime.indexOf('BUN_WASM_CI_CHECKS')).toBeLessThan(runtime.indexOf('"$root/web/node_modules/.bin/tsc" -p'));
+});
+
+function sandboxPageInputs(): string[] {
+  const pending = [join(root, "sandbox/src/main.ts")];
+  const inputs = new Set<string>();
+  while (pending.length) {
+    const path = pending.pop()!;
+    if (inputs.has(path)) continue;
+    inputs.add(path);
+    if (!/\.[jt]sx?$/.test(path)) continue;
+    const loader = path.endsWith("tsx") ? "tsx" : path.endsWith("js") ? "js" : "ts";
+    const imports = new Bun.Transpiler({ loader }).scan(readFileSync(path, "utf8")).imports;
+    for (const imported of imports) {
+      if (!imported.path.startsWith(".")) continue;
+      const input = Bun.resolveSync(imported.path, dirname(path));
+      if (input.startsWith(`${root}/`) && !input.includes("/node_modules/")) pending.push(input);
+    }
+  }
+  return Array.from(inputs, path => relative(root, path)).sort();
+}
+
+test("every consumed sandbox page input selects its real guest regression", () => {
+  const check = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
+  expect(check?.owner).toBe("browser-guest");
+  for (const path of sandboxPageInputs()) {
+    expect(check?.inputs).toContain(path);
+    expect(needsRust([path])).toBe(true);
+  }
 });
 
 test("Web subprocess boundaries and fail-fast order are preserved by manifest batches", () => {
@@ -181,5 +214,45 @@ test("native-probe inputs are typed and the source utility retains its lightweig
   for (const inputs of invalid) {
     manifest(directory, { owner: "native-probe", path: "scripts/probe.test.ts", inputs }, "native-probe-fixture.json");
     expect(() => discoverChecks(directory)).toThrow("native-probe");
+  }
+});
+
+
+test("Browser guest matrix discovers each profile batch and runs every check exactly once", () => {
+  const batches = namedCheckBatches("browser-guest");
+  expect(batches.map(batch => batch.name)).toEqual(["10-storage", "default"]);
+  const paths = batches.flatMap(batch => selectCheckBatch("browser-guest", batch.name));
+  expect(paths.toSorted()).toEqual(selectChecks("browser-guest").toSorted());
+  expect(new Set(paths).size).toBe(paths.length);
+  expect(selectCheckBatch("browser-guest", "10-storage")).toEqual(["scripts/sandbox-storage-browser.test.ts"]);
+  expect(() => selectCheckBatch("browser-guest", "missing")).toThrow("Unknown check batch");
+  const shared = namedCheckBatches("browser-guest", undefined, "shared-group");
+  expect(shared.flatMap(batch => batch.paths)).toEqual(selectChecks("browser-guest", undefined, "shared-group"));
+  const result = spawnSync("bun", ["./test-checks.ts", "browser-guest", "--batches"], { cwd: import.meta.dir, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual(batches.map(batch => batch.name));
+  expect(checkArguments(["browser-guest", "--batch", "10-storage", "--list"])).toMatchObject({ batch: "10-storage", list: true });
+  for (const args of [["--batch"], ["--batch", "--list"], ["--batch", "default", "--batches"], ["--batches", "--list"]]) {
+    expect(() => checkArguments(["browser-guest"].concat(args))).toThrow();
+  }
+});
+
+test("required Processes gates reject failed or cancelled guest batches and allow only producer-disabled skips", () => {
+  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
+  expect(guest).toContain("batch: ${{ fromJSON(needs.quality.outputs.browser-guest-batches) }}");
+  expect(guest).toContain("fail-fast: false");
+  expect(guest).toContain("timeout-minutes: 10");
+  expect(guest).not.toContain("browser-guest-site.ts build");
+  const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
+  expect(processes).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("always() && !cancelled()");
+  const guard = processes.match(/run: \|\n([\s\S]*?)      - uses:/)?.[1];
+  if (!guard) throw new Error("Missing required guest-result guard");
+  for (const rust of ["success", "skipped", "failure", "cancelled"]) {
+    for (const guest of ["success", "skipped", "failure", "cancelled"]) {
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, RUST_RESULT: rust, GUEST_RESULT: guest } });
+      expect(result.status === 0, `${rust}/${guest}`).toBe(rust === "success" && guest === "success" || rust === "skipped" && guest === "skipped");
+    }
   }
 });
