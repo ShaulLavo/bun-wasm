@@ -87,7 +87,8 @@ test("installer changes retain all nine tarball cases under the single blocking 
   expect(step).not.toMatch(/(?:continue-on-error|if):/);
   expect(step.match(/bun scripts\/test-checks.ts native/g)).toHaveLength(1);
   expect(step).not.toContain("install-tarballs.test.ts");
-  expect(step).toContain("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
+  expect(workflowStep("Build the standard Browser guest once")).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
+  expect(step).not.toContain("ln -s source-cache-browser");
 });
 
 let scratch: string | undefined;
