@@ -11,7 +11,8 @@ CommonJS uses eval in this host, so its caller origin is `null` there. The adapt
 an opaque caller frame instead of reporting a later ES module as the caller. ES modules work
 in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
-SpiderMonkey reads the existing native saved-frame adapter rather than parsing stack
+SpiderMonkey at revision `a5df22d986d4b626f771b4f8885241941601c35c` reads
+the existing native saved-frame adapter rather than parsing stack
 text. This preserves filenames containing `@` and stops at an unavailable user frame.
 Its `js/public/SavedFrameAPI.h` exposes source labels and IDs, but no introduction type
 or eval creation origin. In `js/src/vm/SavedStacks.cpp`, `SavedStacks::getLocation`

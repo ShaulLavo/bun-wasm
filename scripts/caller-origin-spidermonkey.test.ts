@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
+import { pathToFileURL } from "node:url";
 
 const erased = Bun.spawnSync(["node", "--input-type=module", "-e",
   'import { stripTypeScriptTypes } from "node:module"; let text = ""; for await (const chunk of process.stdin) text += chunk; process.stdout.write(stripTypeScriptTypes(text));'],
@@ -14,7 +15,7 @@ function callerOrigin(frames: unknown, engine = "spidermonkey") {
   const factory = runInContext(source, context);
   const origin = factory({
     native: { engine },
-    pathToFileHref: (path: string) => new URL(`file://${path}`).href,
+    pathToFileHref: (path: string) => pathToFileURL(path).href,
   });
   return origin();
 }
@@ -37,7 +38,7 @@ for (const file of ["/helper.mjs", "/name@host.mjs", "/line 13 > eval.mjs",
   "/space # ü.mjs", "file:///eval-created.mjs", "https://example.invalid/eval-created.mjs"]) {
   test(`SpiderMonkey preserves the source filename or sourceURL ${file}`, () => {
     expect(callerOrigin([{ file: "bun-wasm:caller_origin" }, { file }, { file: "/index.js" }]))
-      .toBe(file.startsWith("/") ? new URL(`file://${file}`).href : file);
+      .toBe(file.startsWith("/") ? pathToFileURL(file).href : file);
   });
 }
 
