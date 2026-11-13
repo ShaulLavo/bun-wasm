@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { gunzipSync } from "node:zlib";
 
 type Packet = { id: number; isRequest: boolean; value: unknown };
@@ -35,7 +36,7 @@ function adapt(path: string, source = original): string {
 }
 
 beforeAll(async () => {
-  scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-esbuild-string-"));
+  scratch = mkdtempSync(join(tmpdir(), "bun-wasm-esbuild-string-"));
   const fixture = resolve(import.meta.dir, "fixtures/esbuild-packet-adapter.rs");
   writeFileSync(join(scratch, "Cargo.toml"), `[package]\nname = "esbuild-packet-check"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\nsha2 = "=0.10.9"\n[[bin]]\nname = "esbuild-packet-check"\npath = ${JSON.stringify(fixture)}\n`);
   command(["cargo", "build", "--quiet", "--release", "--manifest-path", join(scratch, "Cargo.toml"), "--target-dir", join(scratch, "target")]);
