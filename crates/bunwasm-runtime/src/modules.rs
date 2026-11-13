@@ -1081,6 +1081,32 @@ mod tests {
         assert!(!state.positions.borrow().contains_key(&path));
     }
 
+    #[test]
+    fn host_esbuild_packet_preparation_adapts_published_source() {
+        use std::io::Read as _;
+
+        let compressed = include_bytes!("../../../scripts/fixtures/esbuild-packet/main.js.gz");
+        let mut source = String::new();
+        flate2::read::GzDecoder::new(compressed.as_slice())
+            .read_to_string(&mut source)
+            .unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let path = "/project/node_modules/esbuild/lib/main.js";
+        let expected = esbuild_packet::adapt(&source, path);
+        assert_ne!(expected, source);
+        let prepared = state
+            .prepare_javascript(&source, path, SourceLoader::Js)
+            .unwrap();
+        assert_eq!(prepared.code, expected);
+        let unrelated = state
+            .prepare_javascript(&source, "/project/main.js", SourceLoader::Js)
+            .unwrap();
+        assert_eq!(unrelated.code, source);
+    }
+
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_esm_cjs_refreshes_with_and_without_source_load() {

@@ -84,3 +84,8 @@ a guest, framework, Safari, or iPhone execution.
 `checks/web-esbuild-string-allocation.json` owns the reduced check under the
 existing Web gate. The optional `BUNWASM_ESBUILD_STRING_RESULT` environment
 variable writes measurements after test cleanup.
+
+The actual `State::prepare_javascript` integration check is in the existing
+`modules::tests::host_` group selected by the native quality gate. It decodes the
+same exact-source fixture and checks both qualified and unrelated paths before
+transpilation.

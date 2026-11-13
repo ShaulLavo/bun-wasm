@@ -21,31 +21,3 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
             .replace("decodeUTF8(bb.read())", "decodeUTF8(bb.read(false))"),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use std::io::Read;
-
-    use super::adapt;
-    use crate::State;
-    use crate::transpiler::{Loader, PassthroughTranspiler};
-
-    #[test]
-    fn state_preparation_adapts_the_published_module_before_transpilation() {
-        let compressed = include_bytes!("../../../scripts/fixtures/esbuild-packet/main.js.gz");
-        let mut source = String::new();
-        flate2::read::GzDecoder::new(compressed.as_slice())
-            .read_to_string(&mut source)
-            .unwrap();
-        let state = State::new(Vec::new(), Box::new(PassthroughTranspiler));
-        let path = "/project/node_modules/esbuild/lib/main.js";
-        let expected = adapt(&source, path);
-        assert_ne!(expected, source);
-        let prepared = state.prepare_javascript(&source, path, Loader::Js).unwrap();
-        assert_eq!(prepared.code, expected);
-        let unrelated = state
-            .prepare_javascript(&source, "/project/main.js", Loader::Js)
-            .unwrap();
-        assert_eq!(unrelated.code, source);
-    }
-}
