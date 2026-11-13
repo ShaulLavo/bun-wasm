@@ -185,9 +185,12 @@ bool error_frames(JSContext* cx, unsigned argc, JS::Value* vp) {
   int32_t order = 0;
   if (!JS_CompareStrings(cx, original, observed, &order)) return false;
   if (order != 0) return true;
+  const bool skipSelfHosted = args.length() > 2 && args[2].isBoolean() && args[2].toBoolean();
   JS::RootedObject frames(cx, JS::NewArrayObject(cx, 0));
   if (!frames) return false;
   for (uint32_t index = 0; frame; ++index) {
+    if (skipSelfHosted) frame = js::GetFirstSubsumedSavedFrame(cx, nullptr, frame, JS::SavedFrameSelfHosted::Exclude);
+    if (!frame) break;
     JS::RootedString cause(cx);
     if (JS::GetSavedFrameAsyncCause(cx, nullptr, frame, &cause) != JS::SavedFrameResult::Ok) return true;
     if (cause) break;

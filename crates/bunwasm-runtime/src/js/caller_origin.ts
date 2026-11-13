@@ -63,7 +63,7 @@
 
   function spiderMonkeyOrigin(error: Error, stack: string | undefined): string | null {
     if (typeof savedFrames !== "function") return null;
-    const frames: unknown = savedFrames(error, stack);
+    const frames: unknown = savedFrames(error, stack, true);
     if (!Array.isArray(frames)) return null;
     for (const frame of frames) {
       if (!frame || typeof frame.file !== "string") return null;
