@@ -7,6 +7,23 @@ import { initializationPair } from "./engine-initialization-fixture.ts";
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
+test("preparation preserves host failures without invoking diagnostic accessors", async () => {
+  let accessorCalls = 0;
+  const accessor = Object.defineProperty(new Error("host failure"), "code", {
+    get() { accessorCalls++; throw new Error("Diagnostic getter must not run"); },
+  });
+  const descriptor = new Proxy(new Error("host descriptor failure"), {
+    getOwnPropertyDescriptor() { throw new Error("Diagnostic descriptor is unavailable"); },
+  });
+  const compile = WebAssembly.compile;
+  for (const failure of [accessor, descriptor]) {
+    WebAssembly.compile = () => Promise.reject(failure);
+    try { await expect(prepareProgram(initializationPair("quickjs"))).rejects.toBe(failure); }
+    finally { WebAssembly.compile = compile; }
+  }
+  expect(accessorCalls).toBe(0);
+});
+
 /** Count real asynchronous compiles while refusing every instantiation and synchronous compile. */
 async function preparingOnly(run: (calls: string[], modules: WebAssembly.Module[]) => Promise<void>): Promise<void> {
   const { compile, Module, Instance, instantiate } = WebAssembly;

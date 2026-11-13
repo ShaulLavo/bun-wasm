@@ -56,6 +56,8 @@ through the public `PreparedLinkPlan.memberModule` accessor before returning
 the plan or publishing program metadata. The side is not separately compiled
 for validation. The initial core inspection, shared/split agreement, pair
 digests and custom section, and ordered memory/constructor stages are unchanged.
+Public `ENOEXEC` errors retain the asset-error brand without importing the process
+service into startup; unknown host errors retain their original identity.
 Receipts bind core and side byte identities to engine origin and compatible
 current inputs. One common core is compiled and optimized before decoration
 in the source recipe. Captured-command controls do not prove that production

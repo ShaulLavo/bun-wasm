@@ -1,6 +1,5 @@
 import { recordProgramMemory } from "./program-memory.ts";
 import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";
-import { ExecutableFormatError } from "waffle/proc";
 import { engineLinkPlan } from "./quickjs-program.ts";
 import { memoryMaximumBytes, parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
 import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
@@ -177,6 +176,13 @@ export interface ProgramMetadata {
 const programs = new WeakMap<WebAssembly.Module, ProgramMetadata>();
 const ordinaryProgram: ProgramMetadata = Object.freeze({ linkPlan: undefined, memoryLimitBytes: null });
 
+/** Match Waffle's public format errno without eagerly loading its process service. */
+function isExecutableFormatFailure(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  try { return Object.getOwnPropertyDescriptor(error, "code")?.value === "ENOEXEC"; }
+  catch { return false; }
+}
+
 export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
   if (files.kind === "single") {
     const source = Uint8Array.from(files.core);
@@ -192,7 +198,7 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;
   } catch (error) {
-    if (error instanceof TypeError || error instanceof WebAssembly.CompileError || error instanceof ExecutableFormatError) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError || isExecutableFormatFailure(error)) {
       throw new BunWasmAssetError(error.message);
     }
     throw error;
