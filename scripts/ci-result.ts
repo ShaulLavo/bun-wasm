@@ -18,7 +18,7 @@ export function requireCiSuccess(value: unknown): void {
   const sharedNative = selected(outputs, "shared-native");
   const shared = selected(outputs, "shared") || sharedNative;
   const expected = {
-    quality: true, "jsc-prebuild": rust, "native-quality": rust, rust,
+    quality: true, "jsc-identity": rust, "jsc-prebuild": rust, "native-quality": rust, rust,
     package: true, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
     "shared-sysroot": shared, web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": rust, "browser-process": true,
   };

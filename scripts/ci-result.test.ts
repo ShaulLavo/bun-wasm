@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { requireCiSuccess } from "./ci-result";
 
 const always = ["quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
-const rustJobs = ["jsc-prebuild", "native-quality", "rust", "browser-guest"];
+const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
 const sharedJobs = ["shared-prebuild", "shared-sysroot"];
 const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
 

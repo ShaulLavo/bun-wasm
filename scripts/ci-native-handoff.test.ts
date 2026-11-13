@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
@@ -5,7 +6,7 @@ function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected workflow object");
   return Object.fromEntries(Object.entries(value));
 }
-const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const source = expandedCiWorkflow();
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
 const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}";
 

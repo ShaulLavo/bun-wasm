@@ -1,12 +1,12 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected workflow object");
   return Object.fromEntries(Object.entries(value));
 }
 
-const workflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
+const workflow = record(Bun.YAML.parse(expandedCiWorkflow()));
 const jobs = record(workflow.jobs);
 
 function admitted(job: Record<string, unknown>, event: string, draft: boolean, ref = "refs/heads/main"): boolean {

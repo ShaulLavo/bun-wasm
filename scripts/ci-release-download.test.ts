@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { spawnSync } from "node:child_process";
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
@@ -89,7 +90,7 @@ test("non-release downloads and local non-CI use do not receive the job token", 
 });
 
 test("CI callers use the downloader and consume a completed cache rather than racing setup", async () => {
-  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  const workflow = expandedCiWorkflow();
   for (const name of ["package", "web-unit", "process-bundles"]) expect(workflow).toContain(`  ${name}:\n    needs: quality`);
   expect(workflow).toContain("Publish the completed dependency cache before consumer jobs");
   expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
@@ -119,7 +120,7 @@ test("connection failures stay bounded and redirect loops cannot run indefinitel
 });
 
 test("the supported Bun cache uses a workspace-relative archive path on both runner layouts", async () => {
-  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  const workflow = expandedCiWorkflow();
   expect(workflow).toContain("BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache");
   expect(workflow).not.toContain("path: ~/.bun/install/cache");
   expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(15);
