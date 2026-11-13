@@ -262,28 +262,48 @@ Measured so far, on QuickJS only:
   post has succeeded for 128 levels. In about 9,200 attempts per run each threw with nothing moved or
   returned with the whole message received. A control that throws after a post returned is
   reported every time.
-- A validation side (`QUICKJS_TRANSFER_FAULT=1` in `scripts/build-engine-quickjs.sh`,
-  `src/transfer_fault.rs`) on the same guest. From a transfer's first detach until the
-  program's next statement it refuses every allocation the side asks for: the C allocator
-  calls of QuickJS and of the side's Rust code, routed with the linker's `--wrap`, and the
-  buffers the side asks the core for. In 12,000 posts, half from the first guest and half
-  from a worker, the stretch asked for nothing and every message arrived whole. A control
-  that allocates a buffer inside the stretch is refused every time, and its message still
-  arrives whole. The side has no receipt, so it cannot be staged as a program, and the
-  module is compiled only for that producer option. The compiler's own switch,
-  `BUN_WASM_TRANSFER_FAULT`, is set by the producer alone: the producer refuses to run when
+- A validation side on the same guest, for each engine (`QUICKJS_TRANSFER_FAULT=1`,
+  `JSC_TRANSFER_FAULT=1` or `SPIDERMONKEY_TRANSFER_FAULT=1` to the side's producer;
+  `scripts/src/transfer-fault.sh`, `crates/bunwasm-engine-quickjs/src/transfer_fault.rs`,
+  shared by the three engine crates). From a transfer's first detach until the program's
+  next statement it refuses every allocation the side asks for: the C allocator calls of
+  the engine and of the side's Rust code, routed with the linker's `--wrap`, and the
+  buffers the side asks the core for. Each engine arms it in its own detach and reports
+  through a native of its own that takes no arguments. In 12,000 posts per engine and
+  tier, half from the first guest and half from a worker, every message arrived whole:
+  - QuickJS and JSC asked for nothing in the stretch.
+  - SpiderMonkey, in both tiers, asked once in about one post in thirty whose buffer had
+    two views: the detach shrinking its view table, a request it makes with failure
+    ignored. It was refused and the post went on. What holds is that a failed allocation
+    cannot produce a transfer that is caught half done, not that nothing is ever asked.
+
+  Controls, in the same thread and engine: an allocation in a stretch that only counts is
+  seen every time on every engine. An allocation inside the refusing stretch is refused
+  and caught every time on QuickJS and SpiderMonkey, with the message whole. JSC cannot
+  survive it: making the error asks for memory again and the engine ends, with the
+  message already whole in the receiver. The probe runs its own statements a few times
+  first with no stretch open, because JSC allocates a call-link record the second time a
+  call site runs: that belongs to the caller's statement, not to the transfer.
+
+  A validation side has no receipt, so it cannot be staged as a program, and the module
+  is compiled only for that producer option. The compiler's own switch,
+  `BUN_WASM_TRANSFER_FAULT`, is set by a producer alone: the producer refuses to run when
   it arrives from outside, whatever its value, the build script refuses any value but the
   producer's, and a receipt's inputs are not captured while either variable selects a
   validation side. The producer's option is `0`, `1` or unset; an empty value is refused by
-  the producer and by the receipt capture alike. It does not intercept the core's own
-  allocator.
+  the producer and by the receipt capture alike. The side does not intercept the core's
+  own allocator.
 
 The heap sweep also showed what the sentence does not cover. A failed allocation in the
 core's Rust code, such as the staging map's node in `laneReserve`, ends the guest instead
 of throwing. The receiver then has nothing of that message, as for any sender that dies.
 
-None of these has been run on JSC or SpiderMonkey, and the guest has not been run under
-Waffle. The heap sweep's sender is a worker: a first guest that ends takes the group with it.
+The validation side has run on all three engines, on the native launcher. The fine heap
+sweep above is QuickJS's; JSC and SpiderMonkey end rather than throw when their own heap
+cannot grow, so their sweeps are coarser and mostly record sender deaths with nothing
+received. None of this has run under Waffle. The heap sweep's sender is a worker: a first
+guest that ends takes the group with it. For JSC the generated interpreter and the bytecode
+of `postMessage` still have to be read from the build that ships.
 
 Ending a guest is not catchable and follows the death rules.
 
