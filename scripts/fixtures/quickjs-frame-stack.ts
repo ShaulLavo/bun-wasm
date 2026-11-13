@@ -236,12 +236,88 @@ report("closures made by inline callees are closed at return", () => {
   return [pairs.length, pairs[0]![0](), pairs[800]![0]()].join();
 });
 
+report("call intrinsic identity", () => [Function.prototype.call.name, Function.prototype.call.length, String(Function.prototype.call).includes("[native code]")].join());
+report("call zero and padded arguments", () => [sloppy.counts.call(), sloppy.counts.call(null), sloppy.counts.call(null, 1), sloppy.counts.call(null, 1, 2, 3), sloppy.counts.call(null, 1, 2, 3, 4, 5), sloppy.none.call()].join(" | "));
+report("call mapped arguments and escaping closures", () => {
+  const [read, count, write] = sloppy.escape.call(null, "before", "b", "extra");
+  write("after");
+  collectGarbage();
+  return [sloppy.mapped.call(sloppy, "a", "b", "c"), read(), count(), sloppy.later.call(null, 4, 5, 6)()].join(" | ");
+});
+report("call primitive receivers", () => {
+  const strict = function (this: unknown): string { "use strict"; return `${typeof this}:${String(this)}`; };
+  return [strict.call(), strict.call(null), strict.call(7), strict.call("x"), sloppy.none.call(7), sloppy.counts.call("x", 1)].join(" | ");
+});
+report("call tail and constructor origin", () => {
+  function Made(this: { result: unknown }): void {
+    const local = 17;
+    this.result = (function (a, b, c, d, e, f) { return [new.target === undefined, a, b, c, d, e, f, arguments.length, local].join(); }).call(null, 1, 2, 3, 4, 5, 6);
+  }
+  // oxlint-disable-next-line no-eval -- Strict source is needed for the tail-call opcode.
+  const tail = (0, eval)("(function f(n) { 'use strict'; return n === 0 ? 7 : f.call(null, n - 1); })");
+  return [new (Made as unknown as new () => { result: unknown })().result, tail(20)].join(" | ");
+});
+report("call throw identity and finally", () => {
+  const error = { tag: "same" };
+  const log: string[] = [];
+  const fail = (): void => { try { throw error; } finally { log.push("inner"); } };
+  try { fail.call(null); } catch (caught) { log.push(String(caught === error)); } finally { log.push("outer"); }
+  return log.join();
+});
+report("call native frames and reentrant stack formatting", () => {
+  // oxlint-disable-next-line no-eval -- CallSite belongs to the engine's structured trace API.
+  return (0, eval)(`(function () {
+    var previous = Error.prepareStackTrace;
+    try {
+      Error.prepareStackTrace = function (error, frames) {
+        return frames.slice(0, 4).map(function (frame) { return frame.getFunctionName() + ':' + frame.isNative(); }).join();
+      };
+      function called() { return new Error('trace').stack; }
+      function outer() { return called.call(null); }
+      return outer();
+    } finally { Error.prepareStackTrace = previous; }
+  })()`);
+});
+report("call nested C entry and recovery", () => {
+  const marker = {};
+  function target(value: number): number {
+    const before = value;
+    const nested = callWith((n: number) => { try { return callWith(() => { throw marker; }, null); } catch (error) { return error === marker ? n : 0; } }, null, value);
+    collectGarbage();
+    return before + Number(nested);
+  }
+  return [target.call(null, 21), target.call(null, 7)].join();
+});
+report("call cross realm and class errors", () => {
+  const foreignCall = otherRealm("Function.prototype.call") as Function;
+  const Foreign = otherRealm("(class Foreign {})") as Function;
+  const foreignType = otherRealm("TypeError.prototype");
+  const results = [foreignCall.call(sloppy.counts, null, 1, 2, 3, 4)];
+  try { Foreign.call(null); } catch (error) { results.push([error instanceof TypeError, Object.getPrototypeOf(error) === foreignType].join()); }
+  return results.join(" | ");
+});
+report("call fallbacks and patched builtin", () => {
+  const ordinary = (n: number): number => n + 1;
+  const proxy = new Proxy(ordinary, { apply(target, receiver, args) { return Reflect.apply(target, receiver, args) + 10; } });
+  const patched = Object.assign((n: number) => n, { call: (receiver: unknown, n: number) => `${receiver}:${n}` });
+  const g = (function* () { yield 9; }).call(null);
+  return [ordinary.bind(null, 2).call(null), proxy.call(null, 2), Math.max.call(null, 2, 7), patched.call("patched", 5), g.next().value, g.next().done, Function.prototype.call.call(ordinary, null, 4)].join();
+});
+report("call collects cyclic and escaped arguments", () => {
+  const object: { self?: unknown; value: number } = { value: 41 };
+  object.self = object;
+  const read = (function (value) { collectGarbage(); return () => value.self.value + 1; }).call(null, object);
+  collectGarbage();
+  return read();
+});
+
 // Asynchronous functions.
 async function asyncCalls(): Promise<void> {
   const log: string[] = [];
   const step = async (value: number): Promise<number> => { await null; return plain(value); };
   async function* stream(): AsyncGenerator<number, void, void> { try { yield await step(1); gcInside(3); yield await step(2); } finally { log.push("closed"); } }
   for await (const value of stream()) { log.push(String(value)); if (value === 20) break; }
+  log.push(String(await step.call(null, 3)));
   try { await (async () => { await null; level(2, log); })(); } catch (error) { log.push((error as Error).message); }
   print("async", "=>", log.join());
 }
