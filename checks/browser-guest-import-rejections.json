@@ -1,0 +1,5 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/browser-import-rejections.test.ts",
+  "inputs": ["web/src/engine-host.js"]
+}
