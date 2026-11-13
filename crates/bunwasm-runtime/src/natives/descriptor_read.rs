@@ -18,7 +18,7 @@ fn read_length(
     let Ok(stat) = metadata else {
         return requested;
     };
-    if stat.st_mode & libc::S_IFMT != libc::S_IFREG || stat.st_size < 0 {
+    if stat.st_mode & libc::S_IFMT != libc::S_IFREG || stat.st_size <= 0 {
         return requested;
     }
     let position = position.unwrap_or_else(|| unsafe { libc::lseek(fd, 0, libc::SEEK_CUR) });

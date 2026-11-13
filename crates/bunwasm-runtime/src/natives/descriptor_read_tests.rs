@@ -68,13 +68,16 @@ fn positioned_reads_leave_advanced_shared_cursor_unchanged() {
 }
 
 #[test]
-fn empty_readonly_file_and_explicit_empty_requests_validate() {
+fn zero_sized_metadata_falls_back_but_explicit_empty_reads_do_not_allocate() {
     let fixture = Fixture::new(b"");
     let file = fixture.open();
-    assert_eq!(read(file.as_raw_fd(), REQUEST, None).unwrap().capacity(), 0);
+    assert_eq!(
+        read(file.as_raw_fd(), REQUEST, None).unwrap().capacity(),
+        REQUEST
+    );
     assert_eq!(
         read(file.as_raw_fd(), REQUEST, Some(0)).unwrap().capacity(),
-        0
+        REQUEST
     );
     let bytes = read_with_metadata(file.as_raw_fd(), 0, None, || {
         panic!("empty read must not query metadata")
@@ -169,7 +172,7 @@ fn unavailable_cursor_keeps_the_single_read_contract() {
     );
     let mut stat = metadata(reader.as_raw_fd()).unwrap();
     stat.st_mode = libc::S_IFREG;
-    stat.st_size = 0;
+    stat.st_size = 1;
     let bytes = read_with_metadata(reader.as_raw_fd(), REQUEST, None, || Ok(stat)).unwrap();
     assert_eq!(bytes, b"abc");
     assert_eq!(bytes.capacity(), REQUEST);
@@ -221,4 +224,18 @@ fn eof_bound_does_not_hide_offset_plus_length_overflow() {
         Some(libc::EINVAL)
     );
     assert_eq!(file.stream_position().unwrap(), libc::off_t::MAX as u64);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn zero_sized_procfs_regular_file_still_returns_data() {
+    let expected = fs::read("/proc/version").unwrap();
+    assert!(!expected.is_empty());
+    let mut file = File::open("/proc/version").unwrap();
+    let stat = metadata(file.as_raw_fd()).unwrap();
+    assert_eq!(stat.st_mode & libc::S_IFMT, libc::S_IFREG);
+    assert_eq!(stat.st_size, 0);
+    assert_eq!(read(file.as_raw_fd(), REQUEST, Some(0)).unwrap(), expected);
+    assert_eq!(file.stream_position().unwrap(), 0);
+    assert_eq!(read(file.as_raw_fd(), REQUEST, None).unwrap(), expected);
 }
