@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runForeground } from "./foreground.ts";
+import { cleanupPlayground } from "./playground-cleanup.ts";
 
 export const web = join(new URL(".", import.meta.url).pathname, "..");
 const playwrightPath =
@@ -19,13 +20,10 @@ export function session(prefix) {
   const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), prefix));
   const children = [];
   const browsers = [];
-  let cleaned = false;
-  async function cleanup() {
-    if (cleaned) return;
-    cleaned = true;
-    for (const b of browsers) await b.close().catch(() => {});
-    for (const c of children) c.kill("SIGKILL");
-    rmSync(scratch, { recursive: true, force: true });
+  let cleanupTask;
+  function cleanup() {
+    cleanupTask ??= cleanupPlayground({ browsers, children, scratch });
+    return cleanupTask;
   }
   for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => void cleanup().then(() => process.exit(130)));
   // A crash (e.g. EPIPE when piped into `head`) skips cleanup(): still kill the servers and drop the scratch.

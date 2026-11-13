@@ -903,6 +903,11 @@ the full sweep with completion metadata. Selected runs print the selected modes,
 settings and a final `stackPartComplete` record only after all their assertions pass.
 A successful part is partial evidence. It does not qualify the full sweep.
 
+Only cold measurements may use separate partial invocations. Warm qualification keeps one
+continuous context for all paths and fixtures. Use the original unsliced warm command, `1/1`,
+or a single full range such as `1-4/4`. Partial warm selections and warm composites from separate
+contexts are rejected because their compilation and state histories differ.
+
 Use the existing runner admission for each independent part. Save one invocation per file,
 using one browser, engine and settings tuple per collection. For example, run `1/4`, `2/4`,
 `3/4` and `4/4` separately, then check their combined coverage:

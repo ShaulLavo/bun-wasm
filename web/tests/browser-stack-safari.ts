@@ -31,7 +31,7 @@ const cold = args.includes("--cold");
 const engines = (process.env.ENGINES ?? "quickjs,jsc,browser").split(",");
 const site = resolve(process.env.ROOT ?? "web/dist");
 let probe: string | undefined;
-const selection = stackSelection(process.env.STACK_SLICE, measure);
+const selection = stackSelection(process.env.STACK_SLICE, measure, cold);
 const fixtureNames = selection.fixtures;
 // As in browser-stack.mjs: unset keys leave the executor's host policy in charge, as for a user.
 const requested: GuestStackSettings = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };

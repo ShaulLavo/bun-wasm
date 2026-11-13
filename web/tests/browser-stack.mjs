@@ -16,7 +16,7 @@ const engines = (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',');
 const args = process.argv.slice(2);
 const measure = args.includes('--measure');
 const cold = args.includes('--cold');
-const selection = stackSelection(process.env.STACK_SLICE, measure);
+const selection = stackSelection(process.env.STACK_SLICE, measure, cold);
 const s = session('bun-wasm-web-stack-');
 const browsers = args.filter((name) => !name.startsWith('--'));
 if (!browsers.length) browsers.push('chromium', 'webkit');

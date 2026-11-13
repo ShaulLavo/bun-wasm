@@ -3,7 +3,7 @@ import { acceptedStackOutcome, stackModeSlice, type GuestStackSettings } from ".
 
 const overflowFixtures = ["stack-overflow", "stack-overflow-console"];
 
-export function stackSelection(slice: string | undefined, measure: boolean) {
+export function stackSelection(slice: string | undefined, measure: boolean, cold = true) {
   if (slice === undefined) {
     const modes = stackModeSlice(0, 1);
     return { slice: null, first: 1, last: 1, count: 1, modeCount: modes.length, modes, fixtures: overflowFixtures };
@@ -16,6 +16,7 @@ export function stackSelection(slice: string | undefined, measure: boolean) {
   stackModeSlice(first - 1, count);
   stackModeSlice(last - 1, count);
   if (last < first) throw new Error(`STACK_SLICE parts run backwards: ${slice}`);
+  if (!cold && (first !== 1 || last !== count)) throw new Error("Warm qualification requires one full sweep");
   const modes = Array.from({ length: last - first + 1 }, (_, offset) => stackModeSlice(first - 1 + offset, count)).flat();
   return { slice, first, last, count, modeCount: modes.length, modes, fixtures: first === 1 ? overflowFixtures : [] };
 }
@@ -60,9 +61,9 @@ function readPart(transcript: string, host: string) {
   equal(header.host, host, "host");
   const raw = object(header.stackSelection);
   if (typeof raw.slice !== "string") throw new Error("Missing explicit stack slice");
-  const selection = stackSelection(raw.slice, true);
-  equal(raw, selection, "selection");
   if (typeof header.cold !== "boolean") throw new Error("Missing cold setting");
+  const selection = stackSelection(raw.slice, true, header.cold);
+  equal(raw, selection, "selection");
   const requested = object(header.requested);
   for (const key of ["budget", "parserReserve"]) {
     if (requested[key] !== null && typeof requested[key] !== "string") throw new Error(`Missing requested ${key}`);

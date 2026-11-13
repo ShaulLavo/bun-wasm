@@ -2,8 +2,11 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { completeStackParts, stackSelection } from "./stack-parts.ts";
 import { stackModeSlice } from "./stack-measurement.ts";
+import { cleanupPlayground } from "../web/tests/playground-cleanup.ts";
 
 const owned: string[] = [];
 afterAll(() => { for (const directory of owned) rmSync(directory, { recursive: true, force: true }); });
@@ -73,15 +76,66 @@ test("default output and fixture-only behavior stay unchanged", () => {
 
 test("selected cold attempts keep independent contexts; warm attempts reuse one", () => {
   for (const cold of [true, false]) {
-    const run = harness("1-2/4", "safe", cold);
+    const slice = cold ? "1-2/4" : "1-4/4";
+    const run = harness(slice, "safe", cold);
     expect(run.result.exitCode).toBe(0);
-    expect(run.rows[0]).toMatchObject({ host, cold, stackSelection: stackSelection("1-2/4", true) });
-    expect(run.rows.filter(row => row.mode).map(row => row.mode)).toEqual(stackSelection("1-2/4", true).modes);
+    expect(run.rows[0]).toMatchObject({ host, cold, stackSelection: stackSelection(slice, true, cold) });
+    expect(run.rows.filter(row => row.mode).map(row => row.mode)).toEqual(stackSelection(slice, true, cold).modes);
     const commands: string[] = readFileSync(join(run.directory, "browser-commands.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     const cleanup = readFileSync(join(run.directory, "cleanup.log"), "utf8").trim().split("\n");
     expect(cleanup.filter(kind => kind === "context").length).toBe(cold ? commands.length + 1 : 1);
     expect(cleanup.filter(kind => kind === "visit").length).toBe(cold ? commands.length + 1 : 1);
     expect(readdirSync(run.directory).sort()).toEqual(["browser-commands.jsonl", "cleanup.log"]);
+  }
+});
+
+test("warm qualification rejects separate contexts and accepts one continuous full sweep", () => {
+  for (const slice of ["1/4", "2-4/4"]) {
+    expect(() => stackSelection(slice, true, false)).toThrow("one full sweep");
+    const run = harness(slice, "safe", false);
+    expect(run.result.exitCode).not.toBe(0);
+    expect(readdirSync(run.directory)).toEqual([]);
+  }
+  const parts = [harness("1/2").stdout, harness("2/2").stdout].map(text => text.replace('"cold":true', '"cold":false'));
+  expect(() => completeStackParts(parts, host)).toThrow("one full sweep");
+  for (const slice of ["1/1", "1-4/4"]) {
+    const run = harness(slice, "safe", false);
+    expect(run.result.exitCode).toBe(0);
+    expect(completeStackParts([run.stdout], host)).toMatchObject({ cold: false, complete: true });
+  }
+});
+
+test("real playground cleanup reaps owned children before resolving or removing scratch", async () => {
+  const directory = mkdtempSync(join(scratch, "real-child-"));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+  const closed = once(child, "close");
+  let reaped = false;
+  child.once("close", () => { reaped = true; });
+  try {
+    await once(child, "spawn");
+    await cleanupPlayground({ browsers: [], children: [child], scratch: directory });
+    expect(reaped).toBe(true);
+    expect(() => process.kill(child.pid!, 0)).toThrow();
+    expect(readdirSync(scratch)).not.toContain(directory.slice(scratch.length + 1));
+    await cleanupPlayground({ browsers: [], children: [child], scratch: directory });
+  } finally {
+    child.kill("SIGKILL");
+    await closed;
+  }
+});
+
+test("a browser cleanup failure still reaps children and rejects completion", async () => {
+  const directory = mkdtempSync(join(scratch, "cleanup-failure-"));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+  const closed = once(child, "close");
+  try {
+    await once(child, "spawn");
+    const browsers = [{ close: async () => { throw new Error("close failed"); } }];
+    await expect(cleanupPlayground({ browsers, children: [child], scratch: directory })).rejects.toThrow("browsers did not close");
+    expect(() => process.kill(child.pid!, 0)).toThrow();
+  } finally {
+    child.kill("SIGKILL");
+    await closed;
   }
 });
 
