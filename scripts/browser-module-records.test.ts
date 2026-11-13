@@ -55,6 +55,7 @@ test("actual createRecords uses import-only resolution for graph preparation and
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-text-records-"));
   let sequence = 0;
   const host = {
+    o: { moduleUrls: "data" },
     exited: false,
     native: {
       resolve() { throw new Error("CommonJS resolver must not receive static tokens"); },
