@@ -234,7 +234,7 @@ Measured so far, on QuickJS only:
 - A heap sweep on a shared-group guest on the native launcher. A worker fills its heap to the
   member limit and keeps it full, leaves one free run that grows by 16 or 24 bytes per level,
   and posts a transferred buffer, with and without a carried port, at each level until every
-  post has succeeded for 128 levels. In 9,198 attempts each threw with nothing moved or
+  post has succeeded for 128 levels. In 9,192 attempts each threw with nothing moved or
   returned with the whole message received. A control that throws after a post returned is
   reported every time.
 - A validation side (`QUICKJS_TRANSFER_FAULT=1` in `scripts/build-engine-quickjs.sh`,
