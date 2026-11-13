@@ -28,7 +28,11 @@ async function checkSource(): Promise<void> {
     open: fs.openSync,
     readlink: fs.readlinkSync,
     symlink: fs.symlinkSync,
-    writeFileFlags: (file: string, bytes: Uint8Array, flags: number, mode: number) => fs.writeFileSync(file, bytes, { flag: flags, mode }),
+    writeFileFlags(file: string, bytes: Uint8Array, flags: number, mode: number) {
+      const descriptor = fs.openSync(file, flags, mode);
+      try { fs.writeFileSync(descriptor, bytes); }
+      finally { fs.closeSync(descriptor); }
+    },
     mkdir: (file: string, recursive: boolean) => fs.mkdirSync(file, { recursive }),
     rm: (file: string, recursive: boolean, force: boolean) => fs.rmSync(file, { recursive, force }),
     rmdir: (file: string) => fs.rmdirSync(file),
