@@ -117,7 +117,7 @@ if (import.meta.main) {
   const [command, path, source] = process.argv.slice(2);
   requireMatch(path, "Usage: jsc-getter-continuations.ts generated BUILD_DIR WEBKIT_DIR | source OUTPUT | bytecode DUMP");
   if (command === "source") {
-    const code = computedWidths.map(({ name, count }) => `${computedReaderSource(count, name)}\nif (${name}({ get value() { return 17; } }, "value") !== ${(count * (count - 1)) / 2 + 17}) throw new Error("${name}");`).join("\n");
+    const code = computedWidths.map(({ name, count }) => `const ${name} = new Function(${JSON.stringify(`return (${computedReaderSource(count, name)});`)})();\nif (${name}({ get value() { return 17; } }, "value") !== ${(count * (count - 1)) / 2 + 17}) throw new Error("${name}");`).join("\n");
     writeFileSync(path, code);
   } else if (command === "bytecode") console.log(JSON.stringify(verifyComputedBytecode(readFileSync(path, "utf8"))));
   else if (command === "generated" && source) {
