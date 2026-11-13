@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,17 +53,24 @@ function runFixture(id: string, directory: string, artifacts: Artifacts, env: No
     if (command.length === 0 || command.some(argument => !argument || argument.includes('\0'))) throw new Error('Invalid profile fixture command');
     const options = tier ? spiderMonkeyTierOptions(tier, env) : { args: [], env };
     const args = ['--wasm', artifacts.program, '--dir', `${scratch}::/`, '--env', 'PWD=/', '--env', 'HOME=/'].concat(options.args, ['--'], command);
+    // Temporary hosted observation: retain the pass deadline while allowing completion evidence.
+    const observe = env.CI === 'true' && artifacts.engine === 'spidermonkey' && tier === 'interp'
+      && id === 'tests/fixtures/shared-wasm-memory#lifetime';
     const started = performance.now();
     // An argument vector, never a shell.
-    const result = spawnSync(artifacts.launcher, args, { env: options.env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 8 << 20 });
-    process.stdout.write(result.stdout ?? '');
-    process.stderr.write(result.stderr ?? '');
+    const result = spawnSync(artifacts.launcher, args, { env: options.env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS * (observe ? 2 : 1), maxBuffer: 8 << 20 });
+    const wallMs = performance.now() - started;
+    writeSync(1, result.stdout ?? '');
+    writeSync(2, result.stderr ?? '');
+    if (observe) writeSync(2, `${JSON.stringify({ lifetimeObservation: 'returned', wallMs, status: result.status, signal: result.signal, error: result.error?.message ?? null })}\n`);
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${id}: guest failed with ${result.signal ?? result.status}`);
     const expected = readFileSync(join(scratch, files.expected), 'utf8');
     if (result.stdout !== expected) throw new Error(`${id}: shared native output differs from ${files.expected}`);
     const qualification = tier ? verifySpiderMonkeyQualification(result.stderr, tier) : undefined;
-    return { id, path, entry: entry ?? null, tier: tier ?? null, wallMs: performance.now() - started, kind: `real-${artifacts.engine}-shared-group-native`, qualification };
+    if (observe) writeSync(2, `${JSON.stringify({ lifetimeObservation: 'qualified', wallMs, passDeadlineMs: COMMAND_TIMEOUT_MS, qualification })}\n`);
+    if (wallMs > COMMAND_TIMEOUT_MS) throw new Error(`${id}: ${tier ?? artifacts.engine} exceeded ${COMMAND_TIMEOUT_MS} ms, completed in ${wallMs} ms`);
+    return { id, path, entry: entry ?? null, tier: tier ?? null, wallMs, kind: `real-${artifacts.engine}-shared-group-native`, qualification };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
