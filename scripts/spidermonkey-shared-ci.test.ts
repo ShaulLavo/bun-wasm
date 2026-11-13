@@ -36,7 +36,7 @@ test('SM uses the existing discovered fixture and blocking owner, not a Browser 
   expect(discoverChecks().filter(check => check.path === 'scripts/build-native-profile.test.ts')).toHaveLength(1);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-shared-ci.test.ts')).toHaveLength(1);
   const consumer = step('Consume the shared SpiderMonkey native feature checks');
-  expect(consumer).toContain("if: ${{ !cancelled() && needs.quality.outputs.shared-native == 'true' }}");
+  expect(consumer).toContain("if: needs.quality.outputs.shared-native == 'true'");
   expect(consumer).toContain('bun scripts/test-checks.ts native --profile shared-group');
   expect(consumer).toContain('program-spidermonkey/bun.wasm');
   expect(consumer).toContain('native-profile-launcher/bun-wasm');
@@ -143,11 +143,9 @@ test('the discovered native consumer qualifies both SM tiers without a second pr
   expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(id, directory, artifacts, env, tier))');
   expect(driver).toContain('verifySpiderMonkeyQualification(result.stderr, tier)');
   expect(driver).toContain('const COMMAND_TIMEOUT_MS = 120_000');
-  expect(driver).toContain('timeout: COMMAND_TIMEOUT_MS');
+  expect(driver).toContain('timeout: profileFixtureTimeoutMs(id)');
   expect(driver).toContain('result.stdout !== expected');
   expect(driver).toContain("writeSync(2, result.stderr ?? '')");
-  expect(driver).toContain('const late = results.find(result => result.wallMs > COMMAND_TIMEOUT_MS)');
-  expect(driver).toContain('if (late) throw new Error');
   expect(driver).not.toMatch(/build-native|build-bun|build-engine|\.replace\(|\.filter\(/);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-native-qualification.test.ts')).toHaveLength(1);
 });

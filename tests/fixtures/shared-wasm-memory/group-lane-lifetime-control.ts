@@ -8,10 +8,8 @@ import { strict as assert } from 'node:assert';
 // launcher must still serve one. It is the `plain-sab` control, which the default command
 // ran after the lane controls before this command existed.
 for (const name of ['group-lane-lifetime', 'plain-sab']) {
-  console.error(JSON.stringify({ lifetimePhase: 'start', name, time: Date.now() }));
   const child = Bun.spawn([process.execPath, 'run', `${import.meta.dir}/${name}.ts`], { stdout: 'pipe', stderr: 'inherit' });
   const [output, status] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-  console.error(JSON.stringify({ lifetimePhase: 'exited', name, status, time: Date.now() }));
   assert.equal(status, 0, name);
   process.stdout.write(output);
 }

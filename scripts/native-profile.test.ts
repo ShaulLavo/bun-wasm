@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkArguments, checkBatches, checkCommand, checkId, discoverChecks, entryFiles, parseCheck, parseCheckId, selectChecks } from './test-checks.ts';
-import { profileArtifacts } from './native-profile-fixtures.ts';
+import { profileArtifacts, profileFixtureTimeoutMs } from './native-profile-fixtures.ts';
 import { needsRust, needsSharedNative, sharedNativeFiles } from './ci-changes.ts';
 
 const split = parseCheck({ owner: 'native', path: 'tests/fixtures/regular' }, 'native-regular.json');
@@ -72,10 +72,20 @@ test('the repository declares the lifetime command beside the default one, each 
   // The run itself is unchanged in size, and the Browser harness still starts it directly.
   expect(read('group-lane-lifetime.ts')).toContain('for (let index = 0; index < 200; index++) {');
   expect(starts('browser-transport-controls.ts', 'group-lane-lifetime')).toBe(1);
-  // Each command keeps the one bound.
+  // The lifetime command's measured bound does not change the default command.
   const runner = readFileSync(join(import.meta.dir, 'native-profile-fixtures.ts'), 'utf8');
   expect(runner).toContain('const COMMAND_TIMEOUT_MS = 120_000;');
-  expect(runner.split('timeout: COMMAND_TIMEOUT_MS').length - 1).toBe(1);
+  expect(runner.split('timeout: profileFixtureTimeoutMs(id)').length - 1).toBe(1);
+});
+
+test('only the measured 200-worker command gets the hosted lifetime bound', () => {
+  expect(profileFixtureTimeoutMs('tests/fixtures/shared-wasm-memory#lifetime')).toBe(158_000);
+  for (const id of ['tests/fixtures/shared-wasm-memory', 'tests/fixtures/regular', 'tests/fixtures/regular#lifetime', 'tests/fixtures/shared-wasm-memory#other']) {
+    expect(profileFixtureTimeoutMs(id)).toBe(120_000);
+  }
+  const runner = readFileSync(join(import.meta.dir, 'native-profile-fixtures.ts'), 'utf8');
+  expect(runner).not.toContain('lifetimeObservation');
+  expect(runner).not.toContain('env.CI');
 });
 
 test('profile manifests reject unknown values and unrelated owners', () => {

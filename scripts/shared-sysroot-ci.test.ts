@@ -212,9 +212,7 @@ test("shared production is fully cached before any of the five blocking consumer
   expect(Math.max(...saves)).toBeLessThan(Math.min(...consumers));
   expect(job).toHaveProperty("timeout-minutes", 30);
   for (const index of consumers) {
-    const step = steps[index]!;
-    const observesRemaining = "name" in step && ["Consume the shared JSC feature checks", "Consume the shared SpiderMonkey native feature checks"].includes(String(step.name));
-    expect(step).toHaveProperty("if", observesRemaining ? "${{ !cancelled() && needs.quality.outputs.shared-native == 'true' }}" : "needs.quality.outputs.shared-native == 'true'");
+    expect(steps[index]).toHaveProperty("if", "needs.quality.outputs.shared-native == 'true'");
     expect(steps[index]).not.toHaveProperty("continue-on-error");
   }
 });

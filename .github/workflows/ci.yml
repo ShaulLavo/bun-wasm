@@ -2069,7 +2069,7 @@ jobs:
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Consume the shared JSC feature checks
-        if: ${{ !cancelled() && needs.quality.outputs.shared-native == 'true' }}
+        if: needs.quality.outputs.shared-native == 'true'
         run: |
           source env.sh
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
@@ -2078,7 +2078,7 @@ jobs:
           bun scripts/test-checks.ts native --profile shared-group
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
       - name: Consume the shared SpiderMonkey native feature checks
-        if: ${{ !cancelled() && needs.quality.outputs.shared-native == 'true' }}
+        if: needs.quality.outputs.shared-native == 'true'
         run: |
           source env.sh
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"

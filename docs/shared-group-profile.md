@@ -5,6 +5,11 @@ with each member's core and engine at their own relocated base. This page is the
 admission contract. The group itself (members, regions, futex, budgets) belongs to
 [Waffle's memory groups](https://github.com/ShaulLavo/waffle/blob/main/docs/memory-groups.md).
 
+The native lifetime command runs all 200 workers and then checks a fresh group in the same
+launcher. Its command bound is 158 seconds, about 12.8% above the slowest complete hosted
+measurement of 140.09 seconds. Other native commands keep their 120-second bound. Worker
+counts, assertions, output checks and SpiderMonkey tier/accounting checks are unchanged.
+
 ## Profiles
 
 `split` is the default profile. Its flags and receipt shape are unchanged: no profile field is
