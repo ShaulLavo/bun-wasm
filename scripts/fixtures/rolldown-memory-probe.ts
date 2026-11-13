@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import Module, { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [tree, mode, adapted] = process.argv.slice(2);
-assert(tree && (mode === "stock" || mode === "small"));
+const [tree, mode, packageRoot, adapted] = process.argv.slice(2);
+assert(tree && packageRoot && isAbsolute(packageRoot) && (mode === "stock" || mode === "small"));
+const manifestPath = join(packageRoot, "package.json");
+const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+assert(manifest && typeof manifest === "object" && "name" in manifest && typeof manifest.name === "string");
+assert.equal(manifest.name, "rolldown");
+const packageEntry = createRequire(manifestPath).resolve(manifest.name);
 const filename = join(tree, "node_modules/@rolldown/binding-wasm32-wasi/rolldown-binding.wasi.cjs");
 const require = createRequire(filename);
 const source = readFileSync(mode === "small" && adapted ? adapted : filename, "utf8");
@@ -68,7 +73,7 @@ assert.deepEqual(await binding.transform("entry.ts", input), transformed);
 assert.deepEqual(await binding.minify("entry.js", "globalThis.answer = 40 + 2;"), minified);
 phases.push("async:return");
 process.env.NAPI_RS_FORCE_WASI = "true";
-const { rolldown } = await import(pathToFileURL(require.resolve("rolldown")).href);
+const { rolldown } = await import(pathToFileURL(packageEntry).href);
 const bundle = await rolldown({ input: "entry.js", plugins: [{
   name: "memory-control",
   resolveId: (id: string) => id === "entry.js" ? id : null,

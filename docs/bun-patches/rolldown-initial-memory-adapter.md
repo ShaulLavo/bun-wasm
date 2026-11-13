@@ -57,6 +57,8 @@ compiles only this adapter, checks qualification, and compares real Node
 synchronous and asynchronous parsing, transformation, minification, bundling,
 caller errors, and disposal. It also checks an 8,000-statement input and the
 binary minimum.
+The Node fixture receives the acquired package root and resolves its declared
+name from that scope, preserving conditional exports without a root dependency.
 
 Set `BUNWASM_ROLLDOWN_BROWSER_RESULT` to an output JSON path to run the browser
 controls from the same test setup. Use the shared runner's browser class for

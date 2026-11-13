@@ -75,8 +75,9 @@ test("Rolldown rejects one page below the real binary minimum before imports run
 test("Rolldown real sync, async, bundling, caller errors and disposal survive the reduction", () => {
   adapt();
   const probe = new URL("./fixtures/rolldown-memory-probe.ts", import.meta.url).pathname;
-  const stock = JSON.parse(command(["node", probe, scratch, "stock"]));
-  const small = JSON.parse(command(["node", probe, scratch, "small", output]));
+  const packageRoot = join(scratch, "node_modules/rolldown");
+  const stock = JSON.parse(command(["node", probe, scratch, "stock", packageRoot]));
+  const small = JSON.parse(command(["node", probe, scratch, "small", packageRoot, output]));
   expect(stock.loadError).toBeUndefined();
   expect(small.loadError).toBeUndefined();
   expect(small.output).toEqual(stock.output);
