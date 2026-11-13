@@ -19,7 +19,7 @@ const fetch = async (url: string) => new Response(url === asset.core.url ? core 
 assert.equal(typeof root.installBunAdapters, "function");
 assert.equal(root.BunWasmAssetError, assets.BunWasmAssetError);
 for (const api of [root, assets]) {
-  await assert.rejects(api.loadBunWasm({ asset, fetch }), error => error instanceof root.BunWasmAssetError && /initializer\/RUN/.test(error.message));
+  await assert.rejects(api.loadBunWasm({ asset, fetch }), error => error instanceof root.BunWasmAssetError && /export quickjs_initialize_memory/.test(error.message));
   await assert.rejects(api.loadBunWasm({ asset: { ...asset, core: { ...asset.core, sha256: "invalid" } }, fetch }), root.BunWasmAssetError);
   const branded = new root.BunWasmAssetError("fetch rejected an asset");
   const failures = [branded, new TypeError("side fetch failed"), new DOMException("cancelled", "AbortError")];

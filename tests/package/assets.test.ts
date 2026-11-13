@@ -179,7 +179,7 @@ test("prepares the verified pair and rejects its naked core override", async () 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} preparation rejects wrong side and snapshots caller buffers`, async () => {
   const { core, side } = quickjsPair(kind);
   const other = quickjsPair(kind === "jsc" ? "quickjs" : "jsc");
-  await expect(prepareProgram({ kind, core, side: other.side })).rejects.toThrow("initializer/RUN");
+  await expect(prepareProgram({ kind, core, side: other.side })).rejects.toThrow(`export ${kind}_initialize_memory`);
   await expect(prepareProgram({ kind: kind === "jsc" ? "quickjs" : "jsc", core, side })).rejects.toThrow("core declaration");
   const pending = prepareProgram({ kind, core, side });
   core.fill(0); side.fill(0);
