@@ -18,7 +18,7 @@ whose worker stack has room for about 45 interpreter activations.
 
 ## The change
 
-When `object.name` (`op_get_by_id`) or `super.name` (`op_get_by_id_with_this`) finds an accessor
+When `object.name` (`op_get_by_id`) or `super.name` (`op_get_by_id_with_this`) or `object[key]` (`op_get_by_val`) finds an accessor
 whose getter is a JavaScript function, the slow path does not call it. It builds the getter's
 call frame on the interpreter's own frame stack and hands the entry point back to the running
 loop, which calls it the way it calls any JavaScript function. A getter level then costs what a
@@ -49,7 +49,7 @@ no pointer to the getter or its result is kept.
 
 ### Three outcomes
 
-The two slow paths keep the signature and the two-word result every slow path has. They end in
+The three slow paths keep the signature and the two-word result every slow path has. They end in
 one of three ways, which `callGetterInLoop` (C++) produces and `callGetByIdSlowPath` (assembly)
 reads:
 
@@ -93,17 +93,28 @@ it reloads the caller's position, stores the result, records the value profile a
 once. A getter that throws unwinds like any callee; the caller's handler is found from the
 stored position of the `get_by_id`.
 
-### Six return labels
+### Generated return labels
 
 A C-loop call site returns to a label declared in `BytecodeList.rb`'s `CLoopReturnHelpers`
-section. The two bytecodes have three operand widths each, so the section gains six labels,
-`llint_cloop_did_return_from_js_38` to `_43`. They are appended after every existing id. They
-are C-loop internals: no bytecode is added or renumbered, and the bytecode cache format is
-unchanged.
+section. The three bytecodes expand once per operand width. Computed reads add three
+continuations, bringing the declared and emitted set to 47. Full offlineasm generation assigns
+the private site numbers, including existing getter, direct-eval and bound-call sites. Their
+numbers can change. The generated definitions and references must agree in both profiles.
+No bytecode is added or renumbered, and the bytecode cache format is unchanged.
+
+### Computed keys
+
+`getByVal` keeps the fast data read, numeric-index path and array profiling, negative-one miss,
+receiver coercibility check and property-key coercion in their original order. Only the final
+generic lookup may return an ordinary JavaScript getter uncalled. Numeric-index accessors,
+host and bound getters, callable proxies, custom accessors and Proxy bases retain their native
+paths. String index keys can use the loop route. Primitive receivers remain primitive until
+the getter applies its strict or sloppy `this` conversion. The common frame staging, exception
+protocol and profiled result dispatch above also serve computed reads.
 
 ## What still enters the interpreter again
 
-Setters, `object[key]`, getters reached from C++ (`JSON.stringify`, `Reflect.get`, spread),
+Setters, numeric-index getters, `super[key]`, enumerator reads, getters reached from C++ (`JSON.stringify`, `Reflect.get`, spread),
 Proxy traps, `toString` and `valueOf`, and bound, host and callable-proxy getters keep their
 path. Their measured depths are unchanged with one exception: a Proxy `get` trap read as
 `proxy.name` passes through the `get_by_id` slow path this change edits, whose frames came out
@@ -165,7 +176,7 @@ per level there.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`jsc/webkit-wasi.patch`, getter calls in the loop](#jsc-getter-calls-inside-the-interpreter-loop) | Port | Call JavaScript getters found by `op_get_by_id` and `op_get_by_id_with_this` from the running C loop. |
+| [`jsc/webkit-wasi.patch`, getter calls in the loop](#jsc-getter-calls-inside-the-interpreter-loop) | Port | Call JavaScript getters found by `op_get_by_id`, `op_get_by_id_with_this` and the generic `op_get_by_val` lookup from the running C loop. |
 | `tests/stack-depth.js`, `ajvnames`; `tests/fixtures/getter-dispatch`, the names walk | Adapted upstream implementation | The recursion of `Node`, `ParentNode`, `BlockNode` and `If` `names` getters from Ajv 8.17.1 `lib/compile/codegen/index.ts` (MIT), reduced to the getters and their counts. |
 | `scripts/jsc-cloop-frame.ts`, `scripts/src/wasm-code.ts` | Original adapter | Read one function's instructions from a linked side and enforce the interpreter frame floor. |
 | `tests/fixtures/getter-dispatch`, the rest | Original adapter | Getter semantics through the guest entry point. |
