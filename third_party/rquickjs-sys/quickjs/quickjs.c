@@ -29327,8 +29327,6 @@ static __exception int js_parse_expr_binary(JSParseState *s, int max_level,
         case TOK_GTE: opcode = OP_gte; level = 4; break;
         case TOK_INSTANCEOF: opcode = OP_instanceof; level = 4; break;
         case TOK_IN:
-            if (!(parse_flags & PF_IN_ACCEPTED))
-                return 0;
             opcode = OP_in;
             level = 4;
             break;
@@ -29342,7 +29340,8 @@ static __exception int js_parse_expr_binary(JSParseState *s, int max_level,
         default:
             return 0;
         }
-        if (level > max_level || level < min_level)
+        if (level > max_level || level < min_level ||
+            (op == TOK_IN && !(parse_flags & PF_IN_ACCEPTED)))
             return 0;
         if (next_token(s))
             return -1;
