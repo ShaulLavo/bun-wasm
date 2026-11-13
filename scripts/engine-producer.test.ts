@@ -202,7 +202,7 @@ test("a directory that holds a release QuickJS side is not reused for a validati
   });
 });
 
-for (const option of [undefined, "0", ""]) {
+for (const option of [undefined, "0"]) {
   test(`a release QuickJS side (QUICKJS_TRANSFER_FAULT ${option === undefined ? "unset" : JSON.stringify(option)}) compiles without the validation flag or wraps and gets its receipt`, () => {
     fixture((root, shell, log) => {
       success(shell("scripts/build-engine-quickjs.sh", option === undefined ? {} : { QUICKJS_TRANSFER_FAULT: option }));
@@ -231,15 +231,23 @@ for (const { ambient, option } of ambientCases) {
   });
 }
 
-for (const option of ["2", "true", "yes", "on", " 1"]) {
+// Empty is refused like any other value that is not 0 or 1. The receipt capture refuses an empty
+// option as well, so the producer and the capture decide alike and no receipt is attempted.
+for (const option of ["", "2", "true", "yes", "on", " 1"]) {
   test(`the QuickJS producer refuses QUICKJS_TRANSFER_FAULT=${JSON.stringify(option)}`, () => {
     fixture((_root, shell, log) => {
       const result = shell("scripts/build-engine-quickjs.sh", { QUICKJS_TRANSFER_FAULT: option });
       expect(result.exitCode).toBe(2);
+      expect(String(result.stderr)).toContain("QUICKJS_TRANSFER_FAULT must be 0, 1 or unset");
       expect(log()).not.toMatch(/selected-cargo\|build |wasm-ld|guest-engine-receipt\.ts (inputs|write)/);
     });
   });
 }
+
+test("the producer and the receipt capture accept the same values of the validation option for a release", () => {
+  for (const option of [undefined, "0"]) expect(() => assertQualifiedEnvironment("quickjs", option === undefined ? {} : { QUICKJS_TRANSFER_FAULT: option })).not.toThrow();
+  for (const option of ["", "1", "2", "true"]) expect(() => assertQualifiedEnvironment("quickjs", { QUICKJS_TRANSFER_FAULT: option })).toThrow("QUICKJS_TRANSFER_FAULT=0");
+});
 
 test("a receipt's inputs are not captured in an environment that selects or could select a validation side", () => {
   const refused = (env: Record<string, string>) => expect(() => assertQualifiedEnvironment("quickjs", env)).toThrow("QUICKJS_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");

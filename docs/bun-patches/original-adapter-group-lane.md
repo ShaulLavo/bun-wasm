@@ -194,18 +194,31 @@ How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
   it at its next version, and its own idle loop reads its lanes without the hint.
 - A post made from a getter of another post commits and is finished before the outer one
   stages anything, because the core remembers one commit, the last.
-- On the receiving side, a graph that is being made into a message owns the ends of the
-  ports it carries, from before the first one is taken until the message is queued. One
-  record made at startup holds it, so owning a graph allocates nothing. A failure in that
-  stretch, also inside a port's constructor after it took its end, loses the message
-  (`messageerror`) and closes everything it carried: a port already built, an end taken by
-  a port that was never finished, and an end still in flight. Closing an end does nothing
-  unless the end is this member's and open, so the cleanup can be repeated. If it cannot
-  finish, the graph stays held, the loop's pump tries again and counts it as progress, and
-  no other graph is taken until it is settled. Without this a taken end with no port stayed
-  open for as long as the receiver lived, because a sweep only reclaims the ends of members
-  that are gone. This is receiver work on later entries: nothing is added to the sender's
-  commit.
+- On the receiving side one record, made at startup, holds the graph that is being made
+  into a message, so taking a graph, keeping one and letting it go are stores. Its phases:
+  - `taken`, set before the graph's first fallible step, its validation included. While it
+    is set no other graph is taken: a receive that begins inside this one, on any port,
+    leaves its own graph pending, so one graph's debt is never written over by another.
+  - back to idle when the graph only waits for an attachment: it is still pending and
+    nothing of it was taken.
+  - `queued`, when the message is in the port's queue. A queue insertion that throws is
+    told apart by looking for that exact message at the end of the queue: if it is there
+    the message was queued and keeps its ports, and no error is reported.
+  - `failed`, for every other failure, also inside a port's constructor after it took its
+    end. The message is lost (`messageerror`, reported once even when the call that
+    reports it fails) and everything it carried is closed.
+
+  Closing is by exact identity. A port built from the graph is discarded only while the
+  local port with that id still has the graph's version. An end is taken if it is still in
+  flight at the graph's epoch, and closed only while the ledger reports it open at the
+  version it was taken at for that flight (`laneEnd`): the ledger records that version with
+  the open epoch. A port that was sent on in the meantime has the next version, on the same
+  end, and is left alone with its broker record and what it carries. Every step does
+  nothing the second time and the record is cleared last, so a settle that is interrupted
+  is run again by the next receive or by the loop's pump, which counts it as progress.
+  Without this a taken end with no port stayed open for as long as the receiver lived,
+  because a sweep only reclaims the ends of members that are gone. This is receiver work on
+  later entries: nothing is added to the sender's commit.
 
 ### Between the first detach and the return
 
@@ -261,7 +274,9 @@ Measured so far, on QuickJS only:
   `BUN_WASM_TRANSFER_FAULT`, is set by the producer alone: the producer refuses to run when
   it arrives from outside, whatever its value, the build script refuses any value but the
   producer's, and a receipt's inputs are not captured while either variable selects a
-  validation side. It does not intercept the core's own allocator.
+  validation side. The producer's option is `0`, `1` or unset; an empty value is refused by
+  the producer and by the receipt capture alike. It does not intercept the core's own
+  allocator.
 
 The heap sweep also showed what the sentence does not cover. A failed allocation in the
 core's Rust code, such as the staging map's node in `laneReserve`, ends the guest instead

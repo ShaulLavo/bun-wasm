@@ -179,42 +179,83 @@
     }
   }
   function discardPendingPort(snapshot: PortMeta) {
-    // A carried end that will never be restored closes, so its peer sees the channel end.
-    if (groupLanes && snapshot.lane) groupLanes.discard({ slot: snapshot.lane[0], generation: snapshot.lane[1], side: snapshot.lane[2], epoch: snapshot.lane[3] }, snapshot.version);
+    // A carried end that will never be restored closes, so its peer sees the channel end. On a
+    // group lane that is the end of this flight and no other: when the port has been sent on
+    // since, the end, the broker's record and what the port carries belong to that transfer.
+    const lane = groupLanes ? snapshot.lane : undefined;
+    if (groupLanes && lane && !groupLanes.discard({ slot: lane[0], generation: lane[1], side: lane[2], epoch: lane[3] }, snapshot.version)) return;
     root({ kind: "closed", id: snapshot.id });
     for (const [, graph] of snapshot.pending) discardPendingTransfers(graph);
   }
   /**
-   * The received graph that is being made into a message, on an engine with group lanes. From
-   * before its first carried end is taken until the message is queued, this record owns those
-   * ends. A failure anywhere in that stretch, also inside a port's constructor after it took
-   * its end, marks the graph failed, and `settleReceived` closes everything it carried. The
-   * record exists from the start, so owning a graph and keeping a failed one allocate nothing.
-   * One graph is taken at a time: the next waits until a failed one is settled.
+   * The one received graph this thread is making into a message, on an engine with group
+   * lanes. The record is made once, so taking a graph, keeping a failed one and letting it go
+   * are stores. Its phases:
+   *
+   * - `idle`: nothing is held.
+   * - `taken`: set before the graph's first fallible step, its validation included. While
+   *   it is set no other graph is taken: a receive that begins inside this one, on any port,
+   *   leaves its own graph pending.
+   * - `queued`: the message is in the port's queue. Only the graph's removal from the pending
+   *   map is left.
+   * - `failed`: the graph will never be a message. Everything it carried is closed, its error
+   *   is reported once, and it leaves the pending map.
+   *
+   * A graph that only waits for an attachment goes back to `idle`: it is still pending and
+   * nothing of it was taken. `settleReceived` finishes `queued` and `failed`. Every step of it
+   * does nothing the second time and the record is cleared last, so a settle that is
+   * interrupted is run again by the next receive or the loop's next pump.
    */
-  const receiving: { graph: Graph | null; failed: boolean } = { graph: null, failed: false };
+  const receiving: {
+    phase: "idle" | "taken" | "queued" | "failed";
+    graph: Graph | null; port: MessagePort | null; state: PortState | null; sequence: number;
+    /** The decoded message, from just before it is pushed: how a push that threw is told from one that did not happen. */
+    packet: unknown; error: unknown; reported: boolean;
+  } = { phase: "idle", graph: null, port: null, state: null, sequence: 0, packet: undefined, error: undefined, reported: false };
+  /** Graphs whose error event was dispatched: a report queued by a call that then failed is not dispatched twice. */
+  const reportedGraphs = new WeakSet<object>();
+  function releaseReceived() {
+    receiving.phase = "idle";
+    receiving.graph = null; receiving.port = null; receiving.state = null;
+    receiving.packet = undefined; receiving.error = undefined; receiving.reported = false;
+  }
   /**
-   * Closes what a failed graph carried: a port already built from it, an end a port took
-   * before its constructor failed, and an end still in flight. A local port with a carried
-   * port's id can only be the one built from this graph, because the end was nowhere else.
-   * Every step does nothing the second time, and the graph is let go last.
+   * Closes what a failed graph carried, by exact identity: the port built from it while it is
+   * still that port, and the end of that flight whether it is still in flight or a port that
+   * was never finished took it. A port or an end at a later version is a newer transfer.
    */
-  function settleReceived() {
-    const graph = receiving.graph;
-    if (!graph || !receiving.failed) return;
+  function closeReceived(graph: Graph) {
     for (const node of graph.nodes) {
       if (node[0] !== "port") continue;
-      const built = localPorts.get(node[1].id);
-      if (built) portOps.discard(built);
+      portOps.discardRestored(node[1].id, node[1].version);
       discardPendingPort(node[1]);
     }
-    receiving.graph = null; receiving.failed = false;
   }
-  /** True when no graph is held. A failed graph whose ends could not be closed yet stays held. */
+  function reportReceived(graph: Graph, port: MessagePort, error: unknown) {
+    if (receiving.reported) return;
+    internal.realTimers.setImmediate(() => {
+      if (reportedGraphs.has(graph)) return;
+      reportedGraphs.add(graph);
+      port.dispatchEvent(new MessageEvent("messageerror", { data: error }));
+    });
+    receiving.reported = true;
+  }
+  function settleReceived() {
+    const { phase, graph, port, state, sequence } = receiving;
+    if (!graph || !port || !state || phase !== "queued" && phase !== "failed") return;
+    if (phase === "failed") {
+      closeReceived(graph);
+      reportReceived(graph, port, receiving.error);
+    }
+    if (state.pending.get(sequence) === graph) state.pending.delete(sequence);
+    if (state.received === sequence) state.received = sequence + 1;
+    releaseReceived();
+  }
+  /** True when no graph is held. One that could not be finished stays held, for the next call. */
   function receivedSettled(): boolean {
     try { settleReceived(); }
     catch { /* still owed */ }
-    return !receiving.graph;
+    return receiving.phase === "idle";
   }
   function routePacket(body: Record<string, unknown>) {
     if (typeof body.id !== "string") return;
@@ -385,8 +426,14 @@
     // owed stays listed for the next step or entry.
     try { settlePosts(); }
     catch { /* still owed */ }
-    // Ends a failed message carried and that could not be closed when it failed.
+    // A received graph that could not be finished when it was taken is finished here, and its
+    // port then goes on with what waited behind it.
+    const held = receiving.port;
     const unsettled = groupLanes !== undefined && !receivedSettled();
+    if (held && !unsettled) {
+      try { portOps.resume(held); }
+      catch { /* the pass over every port below tries again */ }
+    }
     const shared = internal.sharedObjects;
     // Lanes first: a broker close behind lane data must not overtake it. A group lane left with
     // data past its drain quota counts as progress, so the loop steps again before sleeping.
@@ -852,26 +899,57 @@
       this.#maybeClose();
     }
     #acceptNext(state: PortState): boolean {
+      // An earlier graph is still held: one that could not be finished, or the one inside
+      // whose validation or decoding this call was made. It is settled before this port's
+      // head is read, because settling may be what removes that head.
+      if (groupLanes && !receivedSettled()) return false;
       const graph = state.pending.get(state.received);
       if (!graph || state.phase === "closed" || state.phase === "closing" && (state.lane !== null || state.group !== null)) return false;
-      // A graph that failed earlier still has ends to close, or this call comes from inside
-      // another graph's decoding: nothing new is taken until that one is settled.
-      if (groupLanes && !receivedSettled()) return false;
+      return groupLanes ? this.#receiveOwned(state, graph) : this.#receivePlain(state, graph);
+    }
+    #receivePlain(state: PortState, graph: Graph): boolean {
       try {
         this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
         if (this.#attachmentWait) return false;
-        if (groupLanes) receiving.graph = graph;
         const decoded = decodeReceived(graph);
-        if (!decoded) { receiving.graph = null; return false; }
+        if (!decoded) return false;
         state.queue.push(decoded);
-        receiving.graph = null;
-      } catch (error) {
-        // The message is lost, and what it carried goes with it, now or on a later step.
-        if (receiving.graph === graph) { receiving.failed = true; receivedSettled(); }
-        internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error })));
-      }
+      } catch (error) { internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
       state.pending.delete(state.received++);
       return true;
+    }
+    /**
+     * Makes the head graph into a queued message under the `receiving` record (see there). True
+     * when the graph is done with, queued or failed, and nothing of it is still owed.
+     */
+    #receiveOwned(state: PortState, graph: Graph): boolean {
+      receiving.graph = graph; receiving.port = this; receiving.state = state; receiving.sequence = state.received;
+      receiving.phase = "taken";
+      try {
+        this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
+        if (this.#attachmentWait) { releaseReceived(); return false; }
+        const decoded = decodeReceived(graph);
+        if (!decoded) { releaseReceived(); return false; }
+        receiving.packet = decoded;
+        state.queue.push(decoded);
+        receiving.phase = "queued";
+      } catch (error) {
+        // Only stores here. A push that threw after it took effect has queued the message, and
+        // the message keeps its ports. Anything else loses the message and what it carried.
+        const queued = receiving.packet !== undefined && state.queue[state.queue.length - 1] === receiving.packet;
+        receiving.error = error;
+        receiving.phase = queued ? "queued" : "failed";
+      }
+      return receivedSettled();
+    }
+    /** After the loop finished a graph this port could not finish itself: go on with the rest. */
+    static #resume(port: MessagePort) {
+      if (port.#state?.phase === "open") port.#accept();
+    }
+    /** Closes the port built from a received graph, unless a later transfer has that id by now. */
+    static #discardRestored(id: string, version: number) {
+      const port = localPorts.get(id);
+      if (port && port.#state?.version === version) MessagePort.#discard(port);
     }
     #retryAttachments() {
       if (this.#state?.phase !== "open") return;
@@ -1109,7 +1187,7 @@
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
-        prepare: MessagePort.#prepare, retry: MessagePort.#retry, discard: MessagePort.#discard, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
+        prepare: MessagePort.#prepare, retry: MessagePort.#retry, discard: MessagePort.#discard, discardRestored: MessagePort.#discardRestored, resume: MessagePort.#resume, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
         isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }

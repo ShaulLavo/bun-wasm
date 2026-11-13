@@ -1856,6 +1856,34 @@ fn relay(ports: usize) -> Relay {
     }
 }
 
+/// What `discard` in `worker_lane.ts` relies on to close the end of one flight and never the
+/// end of a later one: an open end reports the version it was taken at, for that open epoch.
+#[test]
+fn an_open_end_reports_the_version_of_the_flight_it_was_taken_from() {
+    let group = Group::new(128);
+    let root = Peer::root(&group);
+    let member = root.child();
+    let (r, m) = (root.lanes(), member.lanes());
+    let lane = r.create_lane().unwrap();
+    let first = r.transfer_epoch(lane, 1).unwrap();
+    r.transfer(lane, 1, Custody::Tag(root.tag));
+    assert!(m.adopt(lane, 1, first, 2));
+    assert_eq!(m.end_state(lane, 1), (end::OPEN, 2));
+    // The member sends the end on to itself: a later flight, taken at the next version.
+    let second = m.transfer_epoch(lane, 1).unwrap();
+    m.transfer(lane, 1, Custody::Tag(member.tag));
+    assert_eq!(m.end_state(lane, 1).0, end::IN_FLIGHT);
+    assert!(m.adopt(lane, 1, second, 3));
+    // The first flight cannot be taken again, and the end no longer reports its version, so a
+    // cleanup that is owed for the first flight finds nothing of its own to close.
+    assert!(!m.adopt(lane, 1, first, 2));
+    assert_eq!(m.end_state(lane, 1), (end::OPEN, 3));
+    // Closed, it reports no version at all.
+    m.close_read(lane, 1);
+    m.close_end(lane, 1);
+    assert_eq!(m.end_state(lane, 1).0, end::CLOSED);
+}
+
 /// Stages a message that carries two ports, hands its commit to `measured`, then checks that
 /// the commit happened. `wasm/lane_allocation_tests.rs` counts allocations around it: this
 /// file also builds on its own, where the crate's counting allocator does not exist.

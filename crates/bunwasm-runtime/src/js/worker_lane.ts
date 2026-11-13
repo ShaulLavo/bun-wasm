@@ -10,8 +10,11 @@
 (function (internal: BunWasm.Internal): BunWasm.GroupLanes {
   "use strict";
   const native = internal.native.wasm;
-  /** The closed end state in lane.rs. */
+  /** End states in lane.rs. `laneEnd` gives the state plus sixteen times the recorded version. */
+  const OPEN = 1;
+  const IN_FLIGHT = 2;
   const CLOSED = 3;
+  const END_VERSION = 16;
   const DRAIN_LIMIT = 1024;
   /** A refusable word native's refused result. */
   const REFUSED = -1;
@@ -124,13 +127,22 @@
     open,
     adopt,
     discard(lane, version) {
-      // The end is still in flight, or a port that was never finished took it and left it
-      // open. Taking it does nothing in the second case, and neither close does anything to
-      // an end that is not this thread's and open, so every step can be repeated.
+      // The end of this flight is still in flight, or a port that was never finished took it
+      // and left it open. Taking it settles the first case and does nothing in the second.
+      // It is then closed only while it is open at the version it was taken at for this
+      // flight: the ledger records that version with the open epoch, so an end the same port
+      // holds again after a later transfer has another one and is left alone. The closes do
+      // nothing to an end that is not this thread's. Every step can be repeated.
       const io = open({ slot: lane.slot, generation: lane.generation }, lane.side);
       adopt(lane, version);
-      io.closeRead();
-      io.closeEnd();
+      let state = native.laneEnd(lane.slot, lane.generation, lane.side);
+      if (state === OPEN + version * END_VERSION) {
+        io.closeRead();
+        io.closeEnd();
+        state = native.laneEnd(lane.slot, lane.generation, lane.side);
+      }
+      const kind = state % END_VERSION;
+      return kind !== OPEN && kind !== IN_FLIGHT;
     },
     cell() {
       ensureLedger();

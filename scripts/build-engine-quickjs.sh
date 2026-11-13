@@ -54,14 +54,15 @@ if [[ -n "${BUN_WASM_TRANSFER_FAULT+set}" ]]; then
   echo 'error: unset BUN_WASM_TRANSFER_FAULT; this producer sets it itself for QUICKJS_TRANSFER_FAULT=1' >&2
   exit 2
 fi
-case "${QUICKJS_TRANSFER_FAULT:-0}" in
+# Unset is 0. An empty value is not: the receipt capture refuses it too, and one rule is kept.
+case "${QUICKJS_TRANSFER_FAULT-0}" in
   0) ;;
   1)
     unreceipted='a transfer-fault side'
     export BUN_WASM_TRANSFER_FAULT=1
     fault_wraps=(malloc calloc realloc posix_memalign bun_core_alloc bun_shared_buffer_alloc)
     ;;
-  *) echo 'error: QUICKJS_TRANSFER_FAULT must be 0 or 1' >&2; exit 2 ;;
+  *) echo 'error: QUICKJS_TRANSFER_FAULT must be 0, 1 or unset' >&2; exit 2 ;;
 esac
 if [[ -n "$unreceipted" ]]; then
   if [[ -e "$out/engine.wasm.engine.json" ]]; then
