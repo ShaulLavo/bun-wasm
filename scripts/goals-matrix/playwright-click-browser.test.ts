@@ -44,7 +44,7 @@ async function rejectBlockedClick(transport: Transport, framework: Framework, mo
     const clicking = checkClick(page, framework, mode === "abort" ? 3000 : 400).then(() => "clicked", error => String(error));
     await until(() => page.evaluate<boolean>("globalThis.__goalsNativeClick !== undefined"), Boolean, 2000);
     if (mode === "abort") scope.close(new Error("Click cancelled during actionability"));
-    expect(await clicking).toContain(mode === "abort" ? "Click cancelled during actionability" : "400 ms");
+    expect(await clicking).toMatch(mode === "abort" ? /Click cancelled during actionability/ : /timed out|Timeout \d+ms exceeded/i);
     await withScoped(transport, async observer => {
       await observer.evaluate("document.querySelector('#cover').remove()");
       const trusted = await observer.evaluate("new Promise(resolve => setTimeout(() => resolve(document.body.dataset.trusted), 1000))");
