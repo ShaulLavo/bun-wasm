@@ -1361,7 +1361,7 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
  #include "ProxyObject.h"
 
  #include "GetterSetter.h"
-@@ -152,44 +153,23 @@ void ProxyObject::clearHandlerTrapsOffsetsCache()
+@@ -152,44 +153,24 @@ void ProxyObject::clearHandlerTrapsOffsetsCache()
 
  static const ASCIILiteral s_proxyAlreadyRevokedErrorMessage { "Proxy has already been revoked. No more operations are allowed to be performed on it"_s };
 
@@ -1379,6 +1379,7 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
 +    PropertySlot slot(receiver, PropertySlot::InternalMethodType::Get);
 +    bool hasProperty = target->getPropertySlot(globalObject, propertyName, slot);
 +    EXCEPTION_ASSERT(!scope.exception() || !hasProperty);
++    RETURN_IF_EXCEPTION(scope, { });
 +    if (hasProperty)
 +        RELEASE_AND_RETURN(scope, slot.getValue(globalObject, propertyName));
 
@@ -1418,7 +1419,7 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
      auto arguments = WTF::toArray<EncodedJSValue>({
          JSValue::encode(target),
          JSValue::encode(identifierToSafePublicJSValue(vm, Identifier::fromUid(vm, propertyName.uid()))),
-@@ -206,6 +186,62 @@ static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyO
+@@ -206,6 +187,62 @@ static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyO
      return trapResult;
  }
 

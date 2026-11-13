@@ -120,6 +120,10 @@ for (let level = 0; level < 50; level++) {
 }
 check("handler exception at depth", thrown(() => (throwing as { value: number }).value), lookupFailure);
 
+const throwingPrototype = new Proxy({}, { get(): undefined { throw lookupFailure; } });
+const withThrowingPrototype = chain(Object.create(throwingPrototype) as { value: number }, 50);
+check("default lookup exception at depth", thrown(() => withThrowingPrototype.value), lookupFailure);
+
 const mutableHandler: ProxyHandler<object> = {};
 const mutableInner = new Proxy({ value: "default" }, mutableHandler);
 let mutationPass = 0;
