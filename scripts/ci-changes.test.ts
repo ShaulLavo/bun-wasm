@@ -227,7 +227,7 @@ function commitInput(path: string, content = "changed input\n"): string {
   return git(["rev-parse", "HEAD"]);
 }
 
-for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
+for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${needsJsc([path])}`);
   });

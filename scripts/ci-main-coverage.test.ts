@@ -67,6 +67,13 @@ test("pending native followed by several docs replacements retains every owed fa
   expect(result).toMatchObject({ kind: "verified", base, head, run: 1, edges: 4, selection: all });
 }));
 
+test.each([".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"])("JSC coordination change %s selects PR validation and survives pending main replacement", path => fixture(async base => {
+  const action = change(path, "changed JSC action");
+  expect(selectChanges(base, action, true)).toEqual({ ...none, rust: true, jsc: true });
+  const head = change("docs/after-action.md", "docs");
+  expect(await mainCoverage(api(head, [run(base)], [quality(base)]))).toMatchObject({ kind: "verified", selection: { ...none, rust: true, jsc: true } });
+}));
+
 test("reverted native paths, package inputs and manifests retain historical families", () => fixture(async base => {
   change("jsc/changed.c", "native");
   rmSync("jsc/changed.c");
