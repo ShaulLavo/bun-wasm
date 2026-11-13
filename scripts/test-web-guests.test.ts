@@ -105,8 +105,8 @@ test("the existing native producer owns each guest group once, after completed c
   expect(rust.split("CARGO_BUILD_JOBS=2 bash scripts/build.sh")).toHaveLength(2);
   const wrapper = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
   expect(wrapper).toContain('guest-build-receipt.ts" write "$root/dist/bun.wasm" "$guest_inputs"');
-  expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
-  expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json");
+  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
+  expect(rust).not.toContain("ln -s source-cache-browser");
   expect(rust).toContain("name: web-guest-fixture-receipts");
   expect(rust).toContain("if-no-files-found: error");
   expect(rust).not.toContain("continue-on-error");
@@ -174,7 +174,7 @@ test("the prebuild job saves its completed cache, and the native job imports it 
   expect(producer.indexOf("Save the JSC prebuild cache once per input revision")).toBe(producer.indexOf(owner) + 1);
   expect(producer.indexOf("Package the verified prebuild and sysroot")).toBe(producer.indexOf(owner) + 2);
   expect(names).not.toContain(owner);
-  const later = ["Blocking native quality checks", "Blocking JSC embedding and allocation checks", "Build one host-engine guest for real-browser source cache acceptance", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
+  const later = ["Blocking native quality checks", "Blocking JSC embedding and allocation checks", "Build the standard Browser guest once", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
   expect(names.filter(value => value === importer)).toHaveLength(2);
   for (const step of later) {
     expect(names.filter(value => value === step)).toHaveLength(1);
