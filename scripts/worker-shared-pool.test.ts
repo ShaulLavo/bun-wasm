@@ -11,6 +11,83 @@ import { createSharedObjects } from "../web/src/shared-objects/service";
 import { sharedPoolClasses, sharedPoolControlWords, sharedPoolLanes, type SharedPoolGrant, type SharedPort, type SharedResponse } from "../web/src/shared-objects/protocol";
 import { sourcePorts } from "./fixtures/shared-objects/source-runtime";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
+import { brokerClients, testCleanup } from "./fixtures/shared-objects/broker-clients";
+import { overflowBudget, overflowLimit, poolChargedWord } from "../web/src/shared-objects/lane-overflow";
+
+const cleanup = testCleanup();
+
+async function dynamicLanePair() {
+  const { broker, client } = brokerClients(cleanup, { lanes: true });
+  let grant: SharedPoolGrant | undefined;
+  const owner = client({ grant(value) { grant = value; return value; } }), peer = client();
+  await Promise.all([owner.service.ready, peer.service.ready]);
+  const lanes = owner.service.lanes!;
+  const pooled = lanes.create();
+  for (let index = 1; index < sharedPoolLanes; index++) lanes.create();
+  const backing = lanes.create(), publication = owner.service.begin();
+  const reference = publication.reference(backing.buffer);
+  publication.publish(); publication.commit();
+  await new Promise<void>(resolve => { if (!peer.service.wait([reference], resolve)) resolve(); });
+  if (!grant) throw new Error("Missing pool grant");
+  expect(backing.poolIndex).toBeNull();
+  expect(broker.inspectPool().lanes).toBe(sharedPoolLanes);
+  return { broker, owner, peer, lanes, backing, reference, control: new Int32Array(grant.control),
+    pooled: lanes.open(pooled, 0), sender: lanes.open(backing, 0),
+    receiver: peer.service.lanes!.open({ poolIndex: null, buffer: peer.service.read(reference) }, 1) };
+}
+
+test("post-pool slots publish atomically, abort, share the pooled budget and reuse only their own extent", async () => {
+  const { lanes, sender, receiver, pooled, control } = await dynamicLanePair();
+  const text = "x".repeat(2 * 1024 * 1024);
+  const aborted = sender.reserve(text)!;
+  expect(receiver.drain(() => { throw new Error("Uncommitted frame"); })).toBe(0);
+  aborted.abort();
+  const charged = Atomics.load(control, poolChargedWord);
+  expect(charged).toBe(text.length);
+  pooled.reserve(text)!.commit();
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged * 2);
+  sender.reserve(text)!.commit();
+  expect(() => sender.reserve(text)).toThrow("busy");
+  expect(receiver.drain(value => expect(value).toBe(text))).toBe(1);
+  Atomics.store(control, poolChargedWord, overflowBudget);
+  const fresh = lanes.open(lanes.create(), 0);
+  expect(() => fresh.reserve(text)).toThrow("budget exceeded");
+  sender.reserve(text)!.commit();
+  expect(receiver.drain(value => expect(value).toBe(text))).toBe(1);
+  expect(Atomics.load(control, poolChargedWord)).toBe(overflowBudget);
+  fresh.reserve("inline still works")!.commit();
+});
+
+test("post-pool lanes retain the inclusive encoded cap", async () => {
+  const { sender, receiver } = await dynamicLanePair();
+  const text = "x".repeat(overflowLimit);
+  sender.reserve(text)!.commit();
+  expect(receiver.drain(value => expect(value).toBe(text))).toBe(1);
+  expect(() => sender.reserve(text + "x")).toThrow("encoded limit");
+  sender.reserve("next")!.commit();
+  expect(receiver.drain(value => expect(value).toBe("next"))).toBe(1);
+});
+
+test("post-pool close keeps stale identities closed, and runtime death rejects every lane", async () => {
+  const { broker, peer, lanes, backing, reference, sender, receiver, control } = await dynamicLanePair();
+  sender.reserve("x".repeat(1100000))!.commit();
+  const charged = Atomics.load(control, poolChargedWord);
+  receiver.close();
+  expect(() => sender.reserve("closed")).toThrow("closed");
+  const stale = peer.service.lanes!.open({ poolIndex: null, buffer: peer.service.read(reference) }, 1);
+  expect(stale.drain(() => { throw new Error("Stale endpoint delivered"); })).toBe(0);
+  const next = lanes.create();
+  expect(next.buffer).not.toBe(backing.buffer);
+  const publication = peer.service.begin();
+  expect(publication.reference(next.buffer).id).not.toBe(reference.id);
+  publication.abort();
+  expect(Atomics.load(control, poolChargedWord)).toBe(charged);
+  const live = lanes.open(next, 0);
+  broker.dispose();
+  expect(() => live.reserve("after death")).toThrow("runtime is closed");
+  expect(() => stale.drain(() => {})).toThrow("runtime is closed");
+  expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+});
 
 test("first-party host code allocates only through the captured native constructor", () => {
   // After the guest realm installs its constructor, a bare `new SharedArrayBuffer` in host code

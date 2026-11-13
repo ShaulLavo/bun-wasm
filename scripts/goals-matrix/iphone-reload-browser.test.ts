@@ -68,10 +68,16 @@ async function holdCurrentPoll(request: Request, nonce: string | undefined, held
   await release;
 }
 
-function previewFrame(page: Page): Frame {
-  const iframe = page.frames().find(frame => frame.url().endsWith("/preview"));
-  if (!iframe) throw new Error("Missing preview frame");
-  return iframe;
+async function previewFrame(page: Page): Promise<Frame> {
+  const element = await page.locator("#__goalsIphonePreview").elementHandle({ timeout: 3000 });
+  try {
+    const iframe = await element?.contentFrame();
+    if (!iframe) throw new Error("Missing preview frame");
+    await iframe.waitForURL(url => url.href.endsWith("/preview"), { timeout: 3000 });
+    return iframe;
+  } finally {
+    await element?.dispose();
+  }
 }
 
 async function capturePreviewIdentity(frame: Frame) {
@@ -90,7 +96,7 @@ function matchesPreviewIdentity(identity: PreviewIdentity): Promise<boolean> {
 
 async function htmlFetch(bus: IphoneBus, page: Page, varyClock = false): Promise<void> {
   const before = bus.state("preview");
-  const iframe = previewFrame(page);
+  const iframe = await previewFrame(page);
   const identity = await capturePreviewIdentity(iframe);
   try {
     expect(await iframe.evaluate(async () => (await fetch(location.href)).status)).toBe(200);
@@ -104,7 +110,7 @@ async function htmlFetch(bus: IphoneBus, page: Page, varyClock = false): Promise
 }
 
 async function identityControls(page: Page): Promise<void> {
-  const iframe = previewFrame(page);
+  const iframe = await previewFrame(page);
   const url = iframe.url();
   const identity = await capturePreviewIdentity(iframe);
   try {
@@ -128,7 +134,37 @@ async function identityControls(page: Page): Promise<void> {
   }
 }
 
+async function heldPreviewNavigation(engine: BrowserType): Promise<void> {
+  const release = Promise.withResolvers<void>();
+  const owner = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/preview") await release.promise;
+    return new Response("<!doctype html><html><body>preview</body></html>", { headers: { "content-type": "text/html" } });
+  } });
+  let browser: Browser | undefined;
+  try {
+    browser = await engine.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto(owner.url.href);
+    const url = owner.url.origin + "/preview";
+    const requested = page.waitForRequest(url, { timeout: 3000 });
+    await page.evaluate(presentIphonePreview, url);
+    await requested;
+    expect(page.frames().some(frame => frame.url() === url)).toBe(false);
+    const pending = previewFrame(page);
+    await Promise.all([
+      pending.then(frame => expect(frame.url()).toBe(url)),
+      page.evaluate(() => document.querySelector("iframe")?.isConnected).then(attached => {
+        expect(attached).toBe(true);
+        release.resolve();
+      }),
+    ]);
+  } finally {
+    release.resolve(); await browser?.close(); await owner.stop(true);
+  }
+}
+
 for (const engine of [chromium, webkit]) {
+  test(`preview frame waits for held navigation in ${engine.name()}`, () => heldPreviewNavigation(engine), 15000);
   test(`document identity rejects observer replacement, same-URL navigation and iframe replacement in ${engine.name()}`, () => reviewControl(engine, "identity"), 15000);
   test(`non-navigation fetch preserves document identity with a changed clock read in ${engine.name()}`, () => reviewControl(engine, "fetch-clock"), 15000);
   test(`rapid preview reloads reject the superseded attaching document in ${engine.name()}`, () => reviewControl(engine, "rapid"), 15000);

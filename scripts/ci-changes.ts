@@ -92,7 +92,7 @@ const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-ordinary-jsc-program.ts",
@@ -115,6 +115,7 @@ const jscFiles = new Set([
   "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
   "web/tests/browser-jsc-parser-reserve.ts", "web/tests/parser-reserve-ownership.ts", "scripts/jsc-parser-reserve-browser.test.ts",
   "checks/browser-guest-jsc-parser-reserve.json", "checks/native-parser-chain-stack.json", "checks/native-assignment-chain-depth.json",
+  "checks/native-statement-record-cap.json", "checks/native-statement-records-async-using.json",
   // The interpreter frame gate the JSC side producer runs, and the getter fixture the embedding gate runs.
   "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts", "checks/native-getter-dispatch.json",
 ]);

@@ -3,7 +3,7 @@
 Classification: original adapter. No upstream implementation is copied or patched.
 
 `web/src/launch-failure.ts` projects the admitted process context and the existing
-Waffle 0.0.123 service and runtime snapshots into bounded scalar facts. The Bun
+Waffle 0.0.126 service and runtime snapshots into bounded scalar facts. The Bun
 launcher records these immediately after `service.launchWorker` throws and before
 its own cleanup. This is after any rollback performed inside that service call.
 It preserves `refusal.cause` separately from the outer error. If cleanup throws,
@@ -23,6 +23,26 @@ truncation are explicit. Text is capped at 192 UTF-16 code units, error messages
 at 384 and stacks at 768. Each table retains at most eight rows and 2048 UTF-8
 bytes of row JSON. A detached fact is capped at 32768 UTF-8 bytes, with two facts
 per telemetry identity. Error accessors and coercion hooks are never called.
+
+Before holder detail truncation, all returned ledger holders contribute to a
+fixed set of shape categories and ledger-state counts. The aggregate separates
+fixed buffers, growable buffers, request arenas, fixed and growable group
+backings, shared guest backings, guest declarations, admission headroom, and
+filesystem capacity promises. Shared-guest alias metadata is not another backing.
+Declared bytes are ledger accounting. Maximum bytes are sums of explicit shape
+lengths or maxima, not measured WebKit cage occupancy. Unknown current lengths
+have a separate count. Missing or invalid declared or maximum sizes produce null
+sums. Current bytes sum known lengths; `unknownCurrentCount` marks an incomplete
+subtotal. Overflow produces a null sum.
+Unknown shapes and states are counted, and unavailable differs from observed empty.
+The aggregate is detached along with the detail rows and fits the same fact bound.
+
+Ledger state does not identify request-arena pool activity. In the current Waffle
+source, retained idle arenas can remain ledger-live. The aggregate reports that
+activity as unavailable. Neither ledger insertion order nor these grouped counts
+establish constructor order, backing identity across snapshots, fast-slot
+assignment, garbage collection, process-wide capacity, or RSS. Guest declarations
+and capacity promises are not observations of constructed backing.
 
 These are reconciled API bookkeeping samples, not a native object census,
 physical-memory measurement or a historical holder/group join. There is no new

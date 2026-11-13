@@ -16,7 +16,7 @@ const slotEmpty = 0, slotReserved = 1, slotPublished = 2, slotCopying = 3, slotC
  * and WebKit takes it from the fixed cage that Wasm memories also need.
  */
 export interface OverflowGrant { readonly arena: SharedArrayBuffer; }
-export interface LaneOverflow { readonly control: Int32Array; readonly arena: SharedArrayBuffer | null; readonly index: number; }
+export interface LaneOverflow { readonly control: Int32Array; readonly arena: SharedArrayBuffer | null; readonly slots: Int32Array; }
 const NativeBytes = Uint8Array;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const load = Atomics.load, store = Atomics.store, cas = Atomics.compareExchange, or = Atomics.or;
@@ -29,8 +29,8 @@ export function createOverflowGrant(): OverflowGrant | null {
   catch { return null; }
 }
 export function slotWord(index: number, side: 0 | 1) { return poolSlotStart + (index * 2 + side) * poolSlotWords; }
-export function closeOverflow(control: Int32Array, index: number, side: 0 | 1) {
-  or(control, slotWord(index, side), slotClosed);
+export function closeOverflow(slots: Int32Array, side: 0 | 1) {
+  or(slots, side * poolSlotWords, slotClosed);
 }
 function transition(control: Int32Array, word: number, from: number, to: number) {
   for (;;) {
@@ -80,8 +80,8 @@ function refund(control: Int32Array, arena: SharedArrayBuffer, from: number, to:
  * lengthen in place is left charged and unused, and its replacement takes at least twice its size
  * so that slowly growing frames do not strand one extent each.
  */
-function claimExtent(control: Int32Array, word: number, arena: SharedArrayBuffer, length: number) {
-  const offset = load(control, word + slotOffset), capacity = load(control, word + slotCapacity);
+function claimExtent(control: Int32Array, slots: Int32Array, word: number, arena: SharedArrayBuffer, length: number) {
+  const offset = load(slots, word + slotOffset), capacity = load(slots, word + slotCapacity);
   if (offset < 0 || capacity < 0 || capacity > overflowLimit || offset > overflowBudget - capacity) throw laneError("Invalid large-message extent");
   if (length <= capacity) return offset;
   const target = Math.ceil(length / overflowPage) * overflowPage;
@@ -90,49 +90,49 @@ function claimExtent(control: Int32Array, word: number, arena: SharedArrayBuffer
   const start = moved?.start ?? offset, size = moved?.size ?? target;
   try { back(control, arena, start + size); }
   catch (error) { refund(control, arena, moved ? start : offset + capacity, start + size); throw error; }
-  store(control, word + slotOffset, start); store(control, word + slotCapacity, size);
+  store(slots, word + slotOffset, start); store(slots, word + slotCapacity, size);
   return start;
 }
 export function reserveOverflow(overflow: LaneOverflow, side: 0 | 1, bytes: Uint8Array) {
-  const { control, arena, index } = overflow;
+  const { control, arena, slots } = overflow;
   assertPoolActive(control);
   if (!arena) throw laneError("Large-message overflow is unavailable");
   if (bytes.byteLength > overflowLimit) throw laneError(`Message exceeds the ${overflowLimit} byte encoded limit between processes`);
-  const word = slotWord(index, side);
-  const state = load(control, word);
+  const word = side * poolSlotWords;
+  const state = load(slots, word);
   if (state & slotClosed) throw laneError("MessagePort peer is closed");
-  if (state !== slotEmpty || cas(control, word, slotEmpty, slotReserved) !== slotEmpty) throw laneError("Large-message overflow slot is busy");
+  if (state !== slotEmpty || cas(slots, word, slotEmpty, slotReserved) !== slotEmpty) throw laneError("Large-message overflow slot is busy");
   let settled = false;
   function abort() {
     if (settled) return;
-    settled = true; store(control, word + 2, 0); transition(control, word, slotReserved, slotEmpty);
+    settled = true; store(slots, word + 2, 0); transition(slots, word, slotReserved, slotEmpty);
   }
   try {
-    const previous = load(control, word + 1) >>> 0;
+    const previous = load(slots, word + 1) >>> 0;
     if (previous === 0xffffffff) throw laneError("Large-message generation exhausted");
     const generation = previous + 1;
-    store(control, word + 1, generation);
-    new NativeBytes(arena, claimExtent(control, word, arena, bytes.byteLength), bytes.byteLength).set(bytes);
-    store(control, word + 2, bytes.byteLength);
+    store(slots, word + 1, generation);
+    new NativeBytes(arena, claimExtent(control, slots, word, arena, bytes.byteLength), bytes.byteLength).set(bytes);
+    store(slots, word + 2, bytes.byteLength);
     assertPoolActive(control);
-    if (load(control, word) & slotClosed) throw laneError("MessagePort peer is closed");
-    return { generation, abort, commit() { if (settled) return; settled = true; transition(control, word, slotReserved, slotPublished); } };
+    if (load(slots, word) & slotClosed) throw laneError("MessagePort peer is closed");
+    return { generation, abort, commit() { if (settled) return; settled = true; transition(slots, word, slotReserved, slotPublished); } };
   } catch (error) { abort(); throw error; }
 }
 export function copyOverflow(overflow: LaneOverflow, side: 0 | 1, generation: number, length: number): string {
-  const { control, arena, index } = overflow, word = slotWord(index, side);
-  const offset = load(control, word + slotOffset);
-  if (!arena || generation === 0 || (load(control, word + 1) >>> 0) !== generation || load(control, word + 2) !== length || length > overflowLimit
-    || length > load(control, word + slotCapacity) || offset < 0 || offset > nativeSharedLength(arena) - length) throw laneError("Invalid large-message descriptor");
-  transition(control, word, slotPublished, slotCopying);
+  const { arena, slots } = overflow, word = side * poolSlotWords;
+  const offset = load(slots, word + slotOffset);
+  if (!arena || generation === 0 || (load(slots, word + 1) >>> 0) !== generation || load(slots, word + 2) !== length || length > overflowLimit
+    || length > load(slots, word + slotCapacity) || offset < 0 || offset > nativeSharedLength(arena) - length) throw laneError("Invalid large-message descriptor");
+  transition(slots, word, slotPublished, slotCopying);
   try {
     const copy = new NativeBytes(length);
     copy.set(new NativeBytes(arena, offset, length));
     return decoder.decode(copy);
-  } catch (error) { transition(control, word, slotCopying, slotPublished); throw error; }
+  } catch (error) { transition(slots, word, slotCopying, slotPublished); throw error; }
 }
 export function creditOverflow(overflow: LaneOverflow, side: 0 | 1) {
-  const word = slotWord(overflow.index, side);
-  store(overflow.control, word + 2, 0);
-  transition(overflow.control, word, slotCopying, slotEmpty);
+  const word = side * poolSlotWords;
+  store(overflow.slots, word + 2, 0);
+  transition(overflow.slots, word, slotCopying, slotEmpty);
 }
