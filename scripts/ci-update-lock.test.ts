@@ -67,7 +67,7 @@ async function fixture(root: string) {
       if (!bytes) throw new Error(`Unexpected source download: ${url}`);
       return new Response(bytes);
     };
-    return { source, manifest, lock, packages, download, requests, server, installing, rangedIntegrity };
+    return { source, manifest, lock, download, requests, server, installing, rangedIntegrity };
   } catch (error) { server.stop(true); throw error; }
 }
 
@@ -81,7 +81,7 @@ test("existing Git and release pins update through real Bun without refreshing u
     process.env.BUN_INSTALL_CACHE_DIR = join(root, "cache");
     await updateReleaseLock(f.source, f.download);
     const updated = await readFile(join(f.source, "bun.lock"), "utf8");
-    expect(Bun.JSONC.parse(updated).packages).toEqual(f.packages);
+    expect(Bun.JSONC.parse(updated)).toEqual(Bun.JSONC.parse(f.lock));
     expect(updated).not.toContain(root);
     expect(f.requests).toEqual([]);
     expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(f.manifest);
