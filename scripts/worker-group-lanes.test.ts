@@ -383,6 +383,100 @@ for (const recoverInCatch of [false, true]) {
 }
 
 /**
+ * A port whose handler for "first" failed to send the port itself, with "second" still queued:
+ * the rollback has to queue the delivery of "second" again. `timers` are the runtime's, so a
+ * case can make the call that queues a delivery fail.
+ */
+function selfTransferRefused() {
+  const failure = new RangeError("Maximum call stack size exceeded");
+  let fail = false;
+  const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
+  const { port: sender } = made.spawn();
+  const { port1, port2 } = new made.root.MessageChannel();
+  const delivered: unknown[] = [];
+  port2.on("message", value => {
+    delivered.push(value);
+    if (value !== "first") return;
+    fail = true;
+    try { sender.postMessage({ port: port2 }, [port2]); } catch { /* the case checks what follows */ }
+  });
+  const timers: { setImmediate(callback: () => void): unknown } = made.root.internal.realTimers;
+  return { made, port1, port2, delivered, timers };
+}
+const loopTurn = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test("a rollback that cannot queue the delivery it resumes still owes it, and the loop queues it", async () => {
+  const { made, port1, port2, delivered, timers } = selfTransferRefused();
+  port1.postMessage("first"); port1.postMessage("second");
+  await loopTurn(); await loopTurn();
+  expect(delivered).toEqual(["first"]);
+  // The engine refuses the call that would queue the callback: nothing is queued.
+  const queue = timers.setImmediate;
+  let refused = 0;
+  timers.setImmediate = () => { timers.setImmediate = queue; refused++; throw new RangeError("Maximum call stack size exceeded"); };
+  // Only the loop runs from here. No port method is called and no further message arrives.
+  made.root.step();
+  expect(refused).toBe(1);
+  made.root.step();
+  await loopTurn(); await loopTurn();
+  expect(delivered).toEqual(["first", "second"]);
+  port1.postMessage("third");
+  await loopTurn(); await loopTurn();
+  expect(delivered).toEqual(["first", "second", "third"]);
+  expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
+});
+
+test("a delivery callback queued by a call that then failed is overtaken by the retry and delivers nothing twice", async () => {
+  const { made, port1, port2, delivered, timers } = selfTransferRefused();
+  port1.postMessage("first"); port1.postMessage("second"); port1.postMessage("third");
+  await loopTurn(); await loopTurn();
+  // Every callback queued from here on is counted, with how many messages it delivered.
+  const queue = timers.setImmediate;
+  const work: number[] = [];
+  const counted = (callback: () => void) => queue(() => {
+    const before = delivered.length;
+    callback();
+    work.push(delivered.length - before);
+  });
+  // The first call queues its callback and then fails, as when the wake after it cannot be made.
+  timers.setImmediate = callback => { timers.setImmediate = counted; counted(callback); throw new RangeError("Maximum call stack size exceeded"); };
+  // Two steps before any callback runs: the second retries the rollback and queues another.
+  made.root.step(); made.root.step();
+  for (let turn = 0; turn < 4; turn++) await loopTurn();
+  timers.setImmediate = queue;
+  // Both callbacks ran. The overtaken one did nothing, and the other started the delivery.
+  expect(work.slice(0, 2)).toEqual([0, 1]);
+  expect(delivered).toEqual(["first", "second", "third"]);
+  expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
+});
+
+test("a delivery batch that cannot queue its next step ends, and the loop delivers the rest in order", async () => {
+  const { made, port1, port2, delivered, timers } = selfTransferRefused();
+  // Errors a delivery callback throws are kept here instead of ending the test process.
+  const queue = timers.setImmediate, thrown: unknown[] = [];
+  timers.setImmediate = callback => queue(() => { try { callback(); } catch (error) { thrown.push(error); } });
+  const microtask = globalThis.queueMicrotask, failure = new RangeError("Maximum call stack size exceeded");
+  port2.on("message", value => {
+    if (value !== "second") return;
+    // The step that would continue the batch after this handler cannot be queued.
+    globalThis.queueMicrotask = () => { globalThis.queueMicrotask = microtask; throw failure; };
+  });
+  try {
+    port1.postMessage("first"); port1.postMessage("second"); port1.postMessage("third"); port1.postMessage("fourth");
+    await loopTurn(); await loopTurn();
+    made.root.step();
+    for (let turn = 0; turn < 4; turn++) await loopTurn();
+    expect(thrown).toEqual([failure]);
+    expect(delivered).toEqual(["first", "second"]);
+    // Nothing but the loop: its pump finds the delivery owed and queues it.
+    made.root.step();
+    for (let turn = 0; turn < 4; turn++) await loopTurn();
+    expect(delivered).toEqual(["first", "second", "third", "fourth"]);
+    expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
+  } finally { globalThis.queueMicrotask = microtask; timers.setImmediate = queue; }
+});
+
+/**
  * A transfer call the engine refuses to enter never runs the native, so nothing calls the
  * rollback. The post is still registered, and whatever enters the runtime next rolls it back
  * before doing its own work. Each case below is one kind of next entry.

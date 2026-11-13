@@ -172,6 +172,15 @@ How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
   delivery survives the gap. A delivery step that finds the port's state taken off it stops
   its batch, and the rollback schedules what is still queued, so each message is delivered
   once and in order, including when the port tried to send itself from its own handler.
+- Queuing a delivery can itself fail (the immediate's allocation, the call's own entry). A
+  port therefore records a delivery callback only after the call that queues it has returned,
+  and whether delivery is owed is read from the port's state: open, started, messages queued,
+  no batch running, no callback recorded. A failed call leaves that state, and the rollback's
+  retry or the loop's next pump queues the delivery. Every attempt has a turn number and a
+  callback runs only while its turn is the latest, so a callback that a failed call did queue
+  is overtaken by the retry and does nothing. A batch that cannot queue its next step ends,
+  and what it had left is owed the same way. The pump counts an owed delivery as progress,
+  so the loop steps again instead of sleeping.
 - What a committed post owes others is sent at that same next entry or step: the broker's
   record that a port is moving, the publication's commit, the wake hint. None of it is needed
   for the message to be whole. The receiver adopts a carried end from the ledger and binds

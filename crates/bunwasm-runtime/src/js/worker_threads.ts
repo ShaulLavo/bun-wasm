@@ -367,8 +367,9 @@
     }
     const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => mailboxDelivery(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
     if (drained) shared?.routes?.credit();
-    for (const port of localPorts.values()) portOps.retry(port);
-    let progress = Boolean(drained) || lanes;
+    let owed = false;
+    for (const port of localPorts.values()) owed = portOps.retry(port) || owed;
+    let progress = Boolean(drained) || lanes || owed;
     progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
     if (failed) throw failed.error;
@@ -389,7 +390,14 @@
     group: { io: BunWasm.GroupSharedLane; backlog: boolean; terminal: boolean } | null;
     phase: "open" | "closing" | "closed";
     batch: DeliveryBatch | null;
-    started: boolean; scheduled: boolean;
+    started: boolean;
+    /**
+     * `scheduled` is the turn of the delivery callback known to be queued, or 0. It is set only
+     * after the call that queues the callback has returned, so a call that failed leaves no
+     * claim that a callback exists. `turn` numbers every attempt: a callback runs only while its
+     * turn is the latest, so one queued by a call that then failed is overtaken by the retry.
+     */
+    scheduled: number; turn: number;
   }
   /**
    * A post over a group lane. It commits in one native call, the last thing `postMessage` does:
@@ -526,7 +534,7 @@
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
       this.#state = { id: value.id, peer: value.peer, version: value.version, sent: value.sent, received: value.received, queue: value.queue,
         pending: new Map(value.pending), peerClosing: value.closing, lane: null, group: null,
-        phase: value.closed ? "closed" : "open", batch: null, started: false, scheduled: false };
+        phase: value.closed ? "closed" : "open", batch: null, started: false, scheduled: 0, turn: 0 };
       if (value.lane && !value.closed) this.#openLane(value.lane);
       if (value.groupLane && !value.closed) this.#adoptGroupLane(value.groupLane, value.version);
       localPorts.set(value.id, this);
@@ -820,6 +828,20 @@
       if (this.#state?.phase !== "open") return;
       this.#accept();
     }
+    /**
+     * The pump's pass over a port: frames that waited for an attachment are decoded, and
+     * delivery that could not be queued when it was due is queued. True while delivery is still
+     * owed, so the loop steps again instead of sleeping on a queue nothing will deliver.
+     */
+    static #retry(port: MessagePort): boolean {
+      const state = port.#state;
+      if (state?.phase !== "open") return false;
+      try {
+        if (state.pending.size && !port.#attachmentWait) port.#accept();
+        else port.#schedule();
+      } catch { /* still owed */ }
+      return state.started && !state.scheduled && !state.batch && state.queue.length > 0;
+    }
     #maybeClose() {
       const state = this.#state;
       if (!state || state.phase !== "open" || state.peerClosing === null || state.received < state.peerClosing) return;
@@ -891,13 +913,21 @@
       finally { restoringLocally = false; }
     }
 
+    /**
+     * Queues the delivery of what is in the queue. Whether delivery is owed is read from the
+     * port's state alone (open, started, messages queued, no batch, no callback known), so a
+     * call that fails here leaves the debt in place: the caller's retry, the next message or the
+     * loop's next pump (`retry`) queues it then.
+     */
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
-      state.scheduled = true; internal.realTimers.setImmediate(() => this.#deliver(state));
+      const turn = ++state.turn;
+      internal.realTimers.setImmediate(() => { if (state.turn === turn) this.#deliver(state); });
+      state.scheduled = turn;
     }
     #deliver(state: PortState) {
-      state.scheduled = false;
+      state.scheduled = 0;
       if (this.#state !== state || state.phase !== "open" || !state.started || !state.queue.length) return;
       const batch = { queue: state.queue, remaining: state.queue.length };
       state.batch = batch;
@@ -909,10 +939,10 @@
      * schedules the messages still queued, in order, and none is delivered twice because each
      * left the queue as it was dispatched. A batch left set here would block that for ever.
      */
-    #stopBatch(state: PortState) { state.batch = null; state.scheduled = false; }
+    #stopBatch(state: PortState) { state.batch = null; state.scheduled = 0; }
     #deliverBatch(state: PortState, batch: DeliveryBatch) {
       if (this.#state !== state) { this.#stopBatch(state); return; }
-      state.scheduled = false;
+      state.scheduled = 0;
       if (!batch.remaining || !batch.queue.length) { this.#continueBatch(state, batch); return; }
       batch.remaining--;
       const packet = messagePacket(batch.queue.shift());
@@ -926,8 +956,15 @@
         if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
-      state.scheduled = true;
-      queueMicrotask(() => this.#deliverBatch(state, batch));
+      const turn = ++state.turn;
+      try { queueMicrotask(() => { if (state.turn === turn) this.#deliverBatch(state, batch); }); }
+      catch (error) {
+        // A batch with no continuation would hold the queue for ever. It ends here, a callback
+        // the failed call may still have queued is overtaken, and the rest is owed as above.
+        state.turn++; state.batch = null;
+        throw error;
+      }
+      state.scheduled = turn;
     }
     // Each of these first settles earlier posts: a post that was refused beyond its own cleanup
     // has left this port detached or counted, and is rolled back before the port is used.
@@ -1023,7 +1060,7 @@
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
-        prepare: MessagePort.#prepare, retry: (port: MessagePort) => { if (port.#state?.phase === "open" && port.#state.pending.size && !port.#attachmentWait) port.#accept(); }, discard: MessagePort.#discard, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
+        prepare: MessagePort.#prepare, retry: MessagePort.#retry, discard: MessagePort.#discard, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
         isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }
