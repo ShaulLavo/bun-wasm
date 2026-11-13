@@ -34,7 +34,7 @@ function requirePairInventory(identity: SiteIdentity | string): void {
 }
 
 for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
-  test(`${name}: real split/interpreter SpiderMonkey retains synchronous-child libc observations`, async () => {
+  test(`${name}: real split/default-PBL SpiderMonkey retains synchronous-child libc observations`, async () => {
     const provided = process.env.BUN_WASM_BROWSER_SITE;
     const localPrepared = process.env.BUN_WASM_MEMORY_PREPARED_SITE;
     if (process.env.CI && (!provided || localPrepared)) throw Error("CI must consume BUN_WASM_BROWSER_SITE from the existing Rust producer");
