@@ -89,7 +89,7 @@ async function readBody(response: Response): Promise<Uint8Array> {
   return bytes;
 }
 
-function bytes(size: number, seed = 0): Uint8Array {
+function bytes(size: number, seed = 0): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(size);
   for (let index = 0; index < result.length; index++) result[index] = (index + seed) % 251;
   return result;
@@ -191,6 +191,43 @@ test("cache persistence obeys the four MiB boundary and keeps over-budget bodies
     await Bun.sleep(0);
     expect(publications).toEqual(size <= CACHE_LIMIT ? [size] : []);
   }
+});
+
+test("cache publication streams owned chunks without assembling a second full body", async () => {
+  const published = deferred<Response>();
+  const cache = cacheDouble({ async put(_url, response) { published.resolve(response); } });
+  const first = bytes(4096, 17);
+  const second = bytes(8192, 23);
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(first);
+      controller.enqueue(second);
+      controller.close();
+    },
+  });
+  await withEnvironment(cache, async () => new Response(source), async () => {
+    const response = await installFetch("https://registry.invalid/chunks.tgz", requestOptions());
+    const reader = response.body!.getReader();
+    try {
+      const forwardedFirst = await reader.read();
+      forwardedFirst.value!.fill(0);
+      const forwardedSecond = await reader.read();
+      forwardedSecond.value!.fill(0);
+      expect((await reader.read()).done).toBe(true);
+    } finally {
+      reader.releaseLock();
+    }
+    const stored = await observeBeforeDeadline(published.promise, "cache publication did not start");
+    const storedReader = stored.body!.getReader();
+    try {
+      expect((await storedReader.read()).value).toEqual(bytes(4096, 17));
+      expect((await storedReader.read()).value).toEqual(bytes(8192, 23));
+      expect((await storedReader.read()).done).toBe(true);
+    } finally {
+      await storedReader.cancel();
+      storedReader.releaseLock();
+    }
+  });
 });
 
 test("the sequential synthetic corpus records only bounded cache-owned payloads", async () => {
