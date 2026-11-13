@@ -66,7 +66,7 @@ function readUnsigned(cursor: Cursor): number {
 function readName(cursor: Cursor): string {
   const length = readUnsigned(cursor);
   cursor.at += length;
-  return new TextDecoder().decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
 }
 
 /** Read section names only; preparation still validates and compiles the complete module. */

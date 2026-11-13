@@ -148,3 +148,18 @@ test("source markers match compiled custom sections without reading other sectio
   expect(() => programEngineDeclaration(decorated.slice(0, -1))).toThrow("Truncated");
   expect(() => isSharedGroupCore(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 0, 0x80]))).toThrow("Truncated");
 });
+
+test("BOM-prefixed custom names remain distinct during native and preliminary preparation checks", async () => {
+  for (const shared of [false, true]) {
+    const pair = initializationPair("jsc", shared);
+    const tagged = appendCustomSection(pair.core, `\uFEFF${ENGINE_SECTION}`, new TextEncoder().encode("jsc"));
+    const core = appendCustomSection(tagged, "\uFEFFdylink.0", new Uint8Array());
+    const native = await WebAssembly.compile(core);
+    expect(WebAssembly.Module.customSections(native, `\uFEFF${ENGINE_SECTION}`)).toHaveLength(1);
+    expect(WebAssembly.Module.customSections(native, "\uFEFFdylink.0")).toHaveLength(1);
+    expect(programEngineDeclaration(core)).toBe("jsc");
+    expect(isSharedGroupCore(core)).toBe(isSharedGroupCore(native));
+    const prepared = await prepareProgram({ ...pair, core });
+    expect(programMetadata(prepared).linkPlan).toBeDefined();
+  }
+});
