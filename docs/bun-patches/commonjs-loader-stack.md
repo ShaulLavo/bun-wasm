@@ -16,9 +16,9 @@ levels fit. `prompts` 2.4.2, which Astro loads, could not load at all.
 ## Change
 
 `requireFunction` builds both `Module.prototype.require` and each module's own
-`require` from one function body. That function resolves the request, checks the
-cache, compiles the module and then runs the module body directly, so one loader
-frame stays under each nested level instead of six. Steps that finish before the
+`require` from one function body. A module's own `require` calls `owner.require(spec)`.
+The prototype method resolves the request, checks the cache, compiles the module
+and runs its body directly. Steps that finish before the
 body runs (`resolveFrom`, `moduleWrapper`, `wrapperArguments`) remain ordinary
 calls. `evaluateModule` keeps the same sequence for the two entry points outside
 `require`: the main module and ES module imports.
@@ -26,8 +26,8 @@ calls. `evaluateModule` keeps the same sequence for the two entry points outside
 Behavior the adapter preserves:
 
 - A replaced `Module.prototype.require`, or a `require` set on one module, is still
-  called. A module's own `require` compares its module's method with the original
-  and calls the replacement when they differ. An accessor method is read once,
+  called. A module's own `require` looks up its module's current method on each call.
+  An accessor method is read once,
   and that exact returned callable receives the module as its receiver.
 - A module enters the cache before its body runs, so cycles see partial exports.
   A body that throws leaves the cache.
@@ -39,6 +39,13 @@ Behavior the adapter preserves:
 
 The wrapper is entered through `Reflect.apply`, captured before application code.
 Module loading does not consult mutable `call` or `apply` properties on a wrapper.
+A require hook uses ordinary method dispatch. This adds an ordinary bytecode frame
+on the default path, which QuickJS stores outside the native stack after PR 597,
+and removes a native `Reflect.apply` entry on the hooked path. At the unchanged
+32 KiB budget, Next 15.5.6's stock require hook and webpack config loader previously
+refused while compiling `bundle5.js`. Direct dispatch gets past that compilation.
+The 24-module hooked chain regression also loads, catches an overflow in a longer
+chain, clears failed cache entries and loads another hooked chain.
 The initial one-frame measurement used `Function.prototype.apply`; its native
 call accounted for about 510 of 1,217 bytes per level. Those measurements precede
 the captured-intrinsic and single-accessor-read corrections. The discovered
@@ -50,8 +57,8 @@ different wrapper source shape and is outside this change.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| `src/js/bootstrap.js`, `requireFunction`, `moduleWrapper`, `wrapperArguments`, `evaluateModule` | Host feature | Original adapter: one loader frame per nested `require`. |
-| `tests/fixtures/require-chain-stack` | Host feature | Original regression: a 16-module chain in a child with `BUN_WASM_STACK_KIB=32`, a caught overflow inside a nested module, and a clean cache afterwards. |
+| `src/js/bootstrap.js`, `requireFunction`, `moduleWrapper`, `wrapperArguments`, `evaluateModule` | Host feature | Original adapter: direct module-method dispatch and one body-running loader frame per nested `require`. |
+| `tests/fixtures/require-chain-stack` | Host feature | Original regression: 16 ordinary modules and 24 hooked modules in a child with `BUN_WASM_STACK_KIB=32`, caught overflows and clean caches afterwards. |
 | `tests/stack-depth.js` `require` mode, `scripts/measure-stack.py` `--leaf-root` and `--leaf` | Host feature | Original measurement control for nested `require` capacity, alone or above a real package. |
 | `scripts/measure-require-depth.ts` | Host feature | Original Node preload that prints the CommonJS chain above a named module. |
 
