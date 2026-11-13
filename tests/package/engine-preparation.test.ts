@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { adoptLinkPlan, prepareLinkPlan } from "waffle/link";
 import { BunWasmAssetError, prepareProgram, programMetadata } from "../../src/assets.ts";
-import { appendCustomSection, pairedEngineKinds } from "../../src/engine-kind.ts";
+import { appendCustomSection, ENGINE_SECTION, isSharedGroupCore, pairedEngineKinds, programEngineDeclaration } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { initializationPair } from "./engine-initialization-fixture.ts";
 
@@ -43,7 +43,7 @@ async function preparingOnly(run: (calls: string[], modules: WebAssembly.Module[
 
 for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
   const label = `${kind} ${shared ? "shared" : "private"}`;
-  test(`${label} snapshots inputs and compiles its exact side once before publishing`, async () => {
+  test(`${label} snapshots inputs and compiles its decorated core and exact side once before publishing`, async () => {
     const pair = initializationPair(kind, shared);
     const coreHash = digest(pair.core);
     const sideHash = digest(pair.side);
@@ -52,6 +52,7 @@ for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
     expected.set(new TextEncoder().encode(kind));
     expected.set(Buffer.from(coreHash, "hex"), identity);
     expected.set(Buffer.from(sideHash, "hex"), identity + 32);
+    const decoratedHash = digest(appendCustomSection(pair.core, "bun-wasm-pair", expected));
     await preparingOnly(async calls => {
       const pending = prepareProgram(pair);
       pair.core.fill(0); pair.side.fill(0);
@@ -60,7 +61,8 @@ for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
       expect(metadata.linkPlan).toBeDefined();
       expect(metadata.memoryLimitBytes).toBe(shared ? 2 ** 31 : null);
       expect(calls.filter(hash => hash === sideHash)).toHaveLength(1);
-      expect(calls.filter(hash => hash === coreHash)).toHaveLength(1);
+      expect(calls.filter(hash => hash === coreHash)).toHaveLength(0);
+      expect(calls.filter(hash => hash === decoratedHash)).toHaveLength(1);
       expect(WebAssembly.Module.customSections(module, "bun-wasm-pair")).toEqual([expected.buffer]);
     });
   });
@@ -76,6 +78,22 @@ for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
       expect(adoptLinkPlan(plan.shared).memberModule(kind)).toBe(side);
       expect(calls.filter(hash => hash === sideHash)).toHaveLength(1);
       expect(calls).toHaveLength(count);
+    });
+  });
+
+  test(`${label} checks the compiled bind function after the preliminary tag check`, async () => {
+    const pair = initializationPair(kind, shared);
+    const bytes = Buffer.from(pair.core.buffer, pair.core.byteOffset, pair.core.byteLength);
+    const offset = bytes.indexOf("bun_core_bind_engine");
+    expect(offset).toBeGreaterThan(0);
+    bytes[offset + "bun_core_bind_engine".length - 1] = "X".charCodeAt(0);
+    expect(programEngineDeclaration(pair.core)).toBe(kind);
+    await preparingOnly(async (_calls, modules) => {
+      await expect(prepareProgram(pair)).rejects.toThrow("bind function");
+      const core = modules.find(module => WebAssembly.Module.customSections(module, "bun-wasm-pair").length > 0);
+      expect(core).toBeDefined();
+      if (!core) throw new Error("Missing compiled invalid core");
+      expect(() => programMetadata(core)).toThrow("bind function");
     });
   });
 
@@ -116,3 +134,17 @@ for (const kind of pairedEngineKinds) for (const shared of [false, true]) {
     expect(WebAssembly.Module.customSections(first, "bun-wasm-pair")).not.toEqual(WebAssembly.Module.customSections(second, "bun-wasm-pair"));
   });
 }
+
+test("source markers match compiled custom sections without reading other section bodies", () => {
+  const pair = initializationPair("jsc", true);
+  const decorated = appendCustomSection(pair.core, "ignored", new Uint8Array([0, 1, 2]));
+  expect(isSharedGroupCore(decorated)).toBe(isSharedGroupCore(new WebAssembly.Module(decorated)));
+  expect(programEngineDeclaration(decorated)).toBe("jsc");
+  const duplicated = appendCustomSection(decorated, "dylink.0", new Uint8Array());
+  expect(isSharedGroupCore(duplicated)).toBe(false);
+  expect(isSharedGroupCore(new WebAssembly.Module(duplicated))).toBe(false);
+  const duplicateEngine = appendCustomSection(decorated, ENGINE_SECTION, new TextEncoder().encode("jsc"));
+  expect(() => programEngineDeclaration(duplicateEngine)).toThrow("exactly one");
+  expect(() => programEngineDeclaration(decorated.slice(0, -1))).toThrow("Truncated");
+  expect(() => isSharedGroupCore(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 0, 0x80]))).toThrow("Truncated");
+});

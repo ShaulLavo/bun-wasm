@@ -38,12 +38,13 @@ export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 32768, memberPages: 16384
 export const SHARED_GROUP_CORE_INITIALIZE_MEMORY = ["core_initialize_memory", "__wasm_apply_data_relocs"] as const;
 
 /** A relocatable core runs only as a memory group member. */
-export function isSharedGroupCore(core: WebAssembly.Module): boolean {
+export function isSharedGroupCore(core: WebAssembly.Module | Uint8Array): boolean {
+  if (core instanceof Uint8Array) return customSections(core, "dylink.0").length === 1;
   return WebAssembly.Module.customSections(core, "dylink.0").length === 1;
 }
 
 /** A shared-group pair is a relocatable core and a side that imports a shared memory. Mixed halves are refused. */
-export function sharedGroupPair(core: WebAssembly.Module, side: Uint8Array): boolean {
+export function sharedGroupPair(core: WebAssembly.Module | Uint8Array, side: Uint8Array): boolean {
   const group = isSharedGroupCore(core);
   if (group !== (importedMemory(side)?.shared ?? false)) throw new TypeError("Core and engine side were built for different program profiles");
   return group;
@@ -66,6 +67,30 @@ function readName(cursor: Cursor): string {
   const length = readUnsigned(cursor);
   cursor.at += length;
   return new TextDecoder().decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
+}
+
+/** Read section names only; preparation still validates and compiles the complete module. */
+function customSections(bytes: Uint8Array, name: string): Uint8Array[] {
+  const module: Cursor = { bytes, at: 8 };
+  const sections: Uint8Array[] = [];
+  while (module.at < bytes.length) {
+    const id = bytes[module.at++];
+    const size = readUnsigned(module);
+    const end = module.at + size;
+    if (end > bytes.length) throw new TypeError("Truncated Wasm module");
+    const section: Cursor = { bytes: bytes.subarray(module.at, end), at: 0 };
+    if (id === 0 && readName(section) === name) sections.push(section.bytes.subarray(section.at));
+    module.at = end;
+  }
+  return sections;
+}
+
+/** Preliminary tag check only; the prepared module still requires its matching bind function. */
+export function programEngineDeclaration(bytes: Uint8Array): PairedEngine | undefined {
+  const sections = customSections(bytes, ENGINE_SECTION);
+  if (sections.length === 0) return undefined;
+  if (sections.length !== 1) throw new TypeError("Paired core requires exactly one bun-wasm-engine section and bind function");
+  return engineSectionKind(sections[0]!);
 }
 
 function readMemoryLimits(cursor: Cursor): { initial: number; shared: boolean; maximum: number | undefined } {
@@ -166,7 +191,10 @@ export function programKind(module: WebAssembly.Module): ProgramKind {
   const binding = WebAssembly.Module.exports(module).find(entry => entry.name === "bun_core_bind_engine");
   if (!sections.length && !binding) return "single";
   if (sections.length !== 1 || binding?.kind !== "function") throw new TypeError("Paired core requires exactly one bun-wasm-engine section and bind function");
-  const bytes = new Uint8Array(sections[0]!);
+  return engineSectionKind(new Uint8Array(sections[0]!));
+}
+
+function engineSectionKind(bytes: Uint8Array): PairedEngine {
   const kind = pairedEngineKinds.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
   if (kind) return kind;
   throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc or spidermonkey");
