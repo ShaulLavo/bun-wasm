@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
 import { nativePlatformBlocker, blockedCell } from "./platform";
-import { combine, collectNativeReport } from "./fleet";
+import { combine, collectNativeReport, cleanupStaging } from "./fleet";
+import { options } from "./run";
 import { initialCells, finish, phases, type Report, type Attempt } from "./model";
 function report(): Report { return { schema: 2, run: "unit", createdAt: "unit", command: "unit", deadlines: deadlinePolicy(180_000), source: { commit: "unit", dirty: false, assets: {} }, cells: initialCells() }; }
 test("merging disjoint shards retains failures and all pending and unavailable boxes", () => {
@@ -93,4 +94,57 @@ test("zero attempted cells still require the native cleanup receipt", async () =
     await rm(join(collected, "native-cleanup.json"));
     await expect(collectNativeReport(collected, output)).rejects.toThrow("ENOENT");
   });
+});
+
+const meshFixture = `import { cpSync, existsSync, rmSync } from "node:fs";
+const args = process.argv.slice(2);
+const remote = process.env.SAFARI_SALVAGE_REMOTE;
+if (!remote) throw new Error("Missing fixture root");
+if (args[0] === "cp") cpSync(args[2].replace(/^mac:/, ""), args[3], { recursive: true });
+else if (args[0] === "ssh" && args[4] === "-lc") {
+  if (args[5].includes("queue-exit")) console.log(JSON.stringify({ holder: null, waiting: [] }));
+  else console.log(JSON.stringify({ workloadStarted: true, capture: null, cleanup: { driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" } }));
+} else if (args[3] === "rm") rmSync(remote, { recursive: true });
+else if (args[3] === "test") process.exitCode = existsSync(remote) ? 1 : 0;
+else throw new Error("Unexpected fixture operation");
+`;
+
+async function salvageFixture(mode: "interrupted" | "copy-failed" | "incomplete"): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-salvage-"));
+  const remote = join(root, "remote"), output = join(root, "output"), bin = join(root, "bin");
+  const originalPath = process.env.PATH, originalRemote = process.env.SAFARI_SALVAGE_REMOTE;
+  try {
+    await mkdir(bin); await mkdir(output); await mkdir(join(remote, "report/logs"), { recursive: true });
+    await writeFile(join(root, "mesh.ts"), meshFixture);
+    await writeFile(join(bin, "mesh"), `#!/bin/sh\nexec '${process.execPath}' '${join(root, "mesh.ts")}' "$@"\n`);
+    await chmod(join(bin, "mesh"), 0o755);
+    process.env.PATH = `${bin}:${originalPath}`;
+    process.env.SAFARI_SALVAGE_REMOTE = remote;
+    const native = report();
+    native.cells[0] = finish(native.cells[0]!, { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "startup", status: "fail", error: "native result", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] });
+    await writeFile(join(output, "TABLE.json"), JSON.stringify(report()));
+    await writeFile(join(remote, "report/TABLE.json"), JSON.stringify(native));
+    await writeFile(join(remote, "report/logs/owned.jsonl"), "final acknowledgement\n");
+    if (mode !== "incomplete") await writeFile(join(remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true }));
+    const config = options(["--asset-source=fixture", "--safari-ownership", `--output=${output}`]);
+    const cleanup = cleanupStaging(remote, true, config, new Error(mode));
+    if (mode === "incomplete") { await expect(cleanup).rejects.toThrow(); expect(await Bun.file(join(remote, "report/TABLE.json")).exists()).toBe(true); return; }
+    await cleanup;
+    expect(await Bun.file(join(remote, "report/TABLE.json")).exists()).toBe(false);
+    expect(JSON.parse(await readFile(join(output, "TABLE.json"), "utf8")).cells[0].attempts).toEqual(native.cells[0]!.attempts);
+    expect(await Bun.file(join(output, "TABLE.md")).exists()).toBe(true);
+    expect(await readFile(join(output, "logs/owned.jsonl"), "utf8")).toContain("final acknowledgement");
+    expect(JSON.parse(await readFile(join(output, "native-cleanup.json"), "utf8"))).toEqual({ driverExited: true });
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalRemote === undefined) delete process.env.SAFARI_SALVAGE_REMOTE;
+    else process.env.SAFARI_SALVAGE_REMOTE = originalRemote;
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("exceptional native collection preserves TABLE history, logs and cleanup before removing staging", async () => {
+  await salvageFixture("interrupted");
+  await salvageFixture("copy-failed");
+  await salvageFixture("incomplete");
 });

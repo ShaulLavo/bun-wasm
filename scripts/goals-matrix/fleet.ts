@@ -10,6 +10,7 @@ import { buildAngularDiagnosticSource } from "./angular-diagnostic";
 import { buildNextBuildReaderSource } from "./next-build-observer";
 import { CommandExitError, ownedCommand, withSignals } from "./lifetime";
 import { quote, admission, nativeQueueScript } from "./mac-queue";
+import { settlementFile } from "./safari-causal-capture";
 class NativeUnavailable extends Error {}
 async function discoverMac(signal: AbortSignal): Promise<string> {
   try {
@@ -48,7 +49,7 @@ async function bundle(destination: string, source: Report["source"]): Promise<vo
   await writeFile(join(destination, "source.json"), JSON.stringify(source));
   await writeFile(join(destination, "package.json"), JSON.stringify({ private: true, type: "module", dependencies: { playwright: "1.64.1" } }));
 }
-async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): Promise<boolean> {
+async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean, capture = false): Promise<boolean> {
   const acknowledgement = waitForQueueExit ? "while [ ! -s queue-exit ]; do sleep 0.1; done; " : "";
   const script = `set -eu; cd ${quote(remote)}; ${acknowledgement}code=$(cat queue-exit); case "$code" in ''|*[!0-9]*) exit 75;; esac; "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status`;
   const status: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
@@ -57,20 +58,28 @@ async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean): P
   for (const ticket of tickets) {
     if (!ticket || typeof ticket !== "object" || !("task" in ticket) || typeof ticket.task !== "string" || ticket.task === `bun-wasm goals ${remote}`) throw new Error("Remote queue shutdown is unproved; retaining staging");
   }
-  return verifyNativeStopped(remote);
+  return verifyNativeStopped(remote, capture);
 }
-async function verifyNativeStopped(remote: string): Promise<boolean> {
-  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; printf '{"workloadStarted":%s,"cleanup":%s}\n' "$started" "$cleanup"`;
+async function verifyNativeStopped(remote: string, capture: boolean): Promise<boolean> {
+  const settlement = `report/logs/${settlementFile}`;
+  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; capture=null; if [ -e ${settlement} ]; then capture=$(cat ${settlement}); fi; printf '{"workloadStarted":%s,"cleanup":%s,"capture":%s}\n' "$started" "$cleanup" "$capture"`;
   const proof: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
-  if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
+  if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof) || !("capture" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
+  if (capture) requireCaptureSettled(proof.capture);
   if (proof.cleanup === null && !proof.workloadStarted) return false;
   const cleanup = proof.cleanup;
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
     || !("safariExited" in cleanup) || cleanup.safariExited !== true || !("admissionOwner" in cleanup) || cleanup.admissionOwner !== "installed-mac-queue") throw new Error("Remote native shutdown is unproved; retaining staging");
   return true;
 }
+/** No receipt means the capture never opened, so it created no children. An open or unproved one is not settled. */
+export function requireCaptureSettled(receipt: unknown): void {
+  if (receipt === null) return;
+  if (!receipt || typeof receipt !== "object" || !("state" in receipt) || receipt.state !== "settled" || !("childrenJoined" in receipt) || receipt.childrenJoined !== true
+    || !("writersClosed" in receipt) || receipt.writersClosed !== true) throw new Error("Safari causal capture settlement is unproved; retaining staging");
+}
 export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
-  if (started) await verifyRemoteStopped(remote, waitForQueueExit);
+  if (started) await verifyRemoteStopped(remote, waitForQueueExit, config.safariCausalCapture);
   await removeSettledStaging(remote, config);
 }
 async function removeSettledStaging(remote: string, config: Options): Promise<void> {
@@ -81,7 +90,7 @@ async function removeSettledStaging(remote: string, config: Options): Promise<vo
 export function nativeRunnerArgs(config: Options, remote: string): string[] {
   const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
   const queue = admission(config);
-  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.nextBuildObservation ? ["--next-build-observation"] : [], config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : [], config.safariOwnership ? ["--safari-ownership"] : []);
+  return [`--profile=${config.profile ?? "split"}`, `--mac-lane=${queue.lane}`, `--mac-thread=${queue.thread}`, `--mac-expected-seconds=${queue.expectedSeconds}`, `--mac-wait-seconds=${queue.waitSeconds}`, `--mac-timeout-seconds=${queue.timeoutSeconds}`, `--root=${remote}/dist`, `--output=${remote}/report`, `--browsers=${config.browsers.join(",")}`, `--engines=${config.engines.join(",")}`, `--frameworks=${config.frameworks.join(",")}`, `--asset-source=${config.assetSource}`, `--source-file=${remote}/source.json`].concat(config.nextBuildObservation ? ["--next-build-observation"] : [], config.timeoutMs === undefined ? [] : [`--timeout-ms=${config.timeoutMs}`], installs ? [`--install-timeout-ms=${installs}`] : [], config.deviceUDID ? [`--device-udid=${config.deviceUDID}`] : [], config.resume ? ["--resume"] : [], config.retryFailures ? ["--retry-failures"] : [], config.safariOwnership ? ["--safari-ownership"] : [], config.safariCausalCapture ? ["--safari-causal-capture"] : []);
 }
 async function mac(config: Options, source: Report["source"], local: string, signal: AbortSignal): Promise<Report> {
   admission(config);
@@ -126,15 +135,36 @@ async function collectFailedOwnership(remote: string, output: string): Promise<v
     await cp(join(scratch, "logs"), join(output, "logs"), { recursive: true });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
+async function collectFailedReport(remote: string, output: string): Promise<void> {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-report-salvage-"));
+  try {
+    const collected = join(scratch, "report");
+    await ownedCommand(["mesh", "cp", "-r", `mac:${remote}/report`, collected], undefined, 30_000);
+    const native = await collectNativeReport(collected, output);
+    const local = await existingReport(output);
+    await saveReport(output, local ? combine(local, native) : native);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+async function existingReport(output: string): Promise<Report | undefined> {
+  let text: string;
+  try { text = await readFile(join(output, "TABLE.json"), "utf8"); }
+  catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+  const report: unknown = JSON.parse(text);
+  validateReport(report);
+  return report;
+}
 async function cleanupWitnessStaging(remote: string, config: Options): Promise<void> {
   let workloadStarted: boolean;
-  try { workloadStarted = await verifyRemoteStopped(remote, true); }
+  try { workloadStarted = await verifyRemoteStopped(remote, true, config.safariCausalCapture); }
   catch (settlementError) {
     try { await collectFailedOwnership(remote, config.output); }
     catch (collectionError) { throw new AggregateError([settlementError, collectionError], `${String(settlementError)}; snapshot: ${String(collectionError)}`); }
     throw settlementError;
   }
-  if (workloadStarted) await collectFailedOwnership(remote, config.output);
+  if (workloadStarted) await collectFailedReport(remote, config.output);
   await removeSettledStaging(remote, config);
 }
 export async function cleanupStaging(remote: string, started: boolean, config: Options, failure: unknown): Promise<void> {
