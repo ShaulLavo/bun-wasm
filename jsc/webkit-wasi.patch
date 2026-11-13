@@ -3049,3 +3049,227 @@ diff --git a/Source/JavaScriptCore/parser/Parser.h b/Source/JavaScriptCore/parse
      ScopeStack m_scopeStack;
  
      static void verifyLayout();
+diff --git a/Source/JavaScriptCore/bytecode/BytecodeList.rb b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+index fab0e74..79215b0 100644
+--- a/Source/JavaScriptCore/bytecode/BytecodeList.rb
++++ b/Source/JavaScriptCore/bytecode/BytecodeList.rb
+@@ -1554,6 +1554,7 @@ op :wasm_trampoline_wasm_ipint_tail_call
+ op :wasm_throw_from_slow_path_trampoline
+ op :wasm_throw_from_fault_handler_trampoline_reg_instance
+ op :wasm_ipint_call_return_location
++op :llint_bound_function_call_trampoline
+ 
+ end_section :NativeHelpers
+ 
+@@ -1605,5 +1606,6 @@ op :llint_cloop_did_return_from_js_40
+ op :llint_cloop_did_return_from_js_41
+ op :llint_cloop_did_return_from_js_42
+ op :llint_cloop_did_return_from_js_43
++op :llint_cloop_did_return_from_js_44
+ 
+ end_section :CLoopReturnHelpers
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index 1eec7af..0f2d00c 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -51,6 +51,7 @@
+ #include "JSAsyncFunction.h"
+ #include "JSAsyncGenerator.h"
+ #include "JSAsyncGeneratorFunction.h"
++#include "JSBoundFunctionInlines.h"
+ #include "JSCInlines.h"
+ #include "JSCJSValue.h"
+ #include "JSGeneratorFunction.h"
+@@ -766,6 +767,86 @@ extern "C" UGPRPair SYSV_ABI llint_polymorphic_call(CallFrame* calleeFrame, Call
+     return encodeResult(callTarget, nullptr);
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++// The C++ half of llint_bound_function_call_trampoline (LowLevelInterpreter64.asm), which is the
++// call entry of a bound function whose target is a JSFunction. The bound function's frame stays
++// where its caller built it, a native frame with no code block, as upstream's JIT thunk for
++// BoundFunctionCallIntrinsic leaves it. This builds the target's frame below it, and the trampoline
++// calls the target inside the running C loop instead of through boundThisNoArgsFunctionCall and
++// a new CLoop::execute.
++//
++// The trampoline has made the bound frame the VM's top call frame and published it as the frame
++// stack's pointer. The bound frame has no code block, so the VM and the realms come from its callee
++// and the target. The result is one of two, and the trampoline tests the exception signal first:
++//   threw: (returnToThrow(vm), exceptionSignal()), the exception pending on the VM
++//   call:  (the target's entry point, the stack pointer for the target's frame)
++extern "C" UGPRPair SYSV_ABI llint_set_up_bound_function_call(CallFrame* boundFrame, const JSInstruction*)
++{
++    auto* boundFunction = uncheckedDowncast<JSBoundFunction>(boundFrame->jsCallee());
++    auto* target = uncheckedDowncast<JSFunction>(boundFunction->targetFunction());
++    VM& vm = boundFunction->vm();
++    auto throwScope = DECLARE_THROW_SCOPE(vm);
++
++    // Every refusal comes before a pointer to the frame is formed or anything is written, and is
++    // the stack overflow RangeError of the target's realm, which the C++ path throws for both
++    // (Interpreter::executeCall's argument limit, then the VM entry's stack check).
++    unsigned boundArguments = boundFunction->boundArgsLength();
++    CheckedUint32 explicitArguments = boundFrame->argumentCount();
++    explicitArguments += boundArguments;
++    if (explicitArguments.hasOverflowed() || explicitArguments.value() > maxArguments) [[unlikely]] {
++        throwStackOverflowError(target->realm(), throwScope);
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    }
++    unsigned argumentCountIncludingThis = explicitArguments.value() + 1;
++    // calleeFrameForVarargs() with no used slots: the frame starts this far below the bound frame.
++    size_t frameBytes = WTF::roundUpToMultipleOf(stackAlignmentRegisters(), static_cast<size_t>(argumentCountIncludingThis) + CallFrame::headerSizeInRegisters) * sizeof(Register);
++    if (frameBytes >= reinterpret_cast<uintptr_t>(boundFrame->registers())) [[unlikely]] {
++        throwStackOverflowError(target->realm(), throwScope);
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    }
++    CallFrame* targetFrame = calleeFrameForVarargs(boundFrame, 0, argumentCountIncludingThis);
++    if (!vm.ensureJSStackCapacityFor(targetFrame->registers())) [[unlikely]] {
++        throwStackOverflowError(target->realm(), throwScope);
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    }
++
++    // Nothing allocates from here to the published frame. Every value copied is also held by
++    // the bound function, the callee of the bound frame, or by the bound frame's own arguments.
++    targetFrame->setCallerFrame(boundFrame);
++    targetFrame->clearReturnPC();
++    targetFrame->setCodeBlock(nullptr);
++    targetFrame->setArgumentCountIncludingThis(argumentCountIncludingThis);
++    targetFrame->setCallee(target);
++    targetFrame->setThisValue(boundFunction->boundThis());
++    unsigned argument = 0;
++    boundFunction->forEachBoundArg([&](JSValue value) -> IterationStatus {
++        targetFrame->setArgument(argument++, value);
++        return IterationStatus::Continue;
++    });
++    for (unsigned passed = 0; passed < boundFrame->argumentCount(); ++passed)
++        targetFrame->setArgument(argument++, boundFrame->uncheckedArgument(passed));
++
++    // A host function, another bound function included, is entered through its executable as a
++    // bytecode call would be. A function with a body may be compiled first. A collection scans
++    // the frame stack from its published pointer, clears what lies below it
++    // (CLoopStack::sanitizeStack) and cannot see wasm locals, so the finished frame is published
++    // while firstCallToJSFunction() runs, and the bound frame's pointer is put back before any
++    // way out. Nothing allocates after that before the trampoline enters the target.
++    ExecutableBase* executable = target->executable();
++    if (executable->isHostFunction())
++        return encodeResult(executable->entrypointFor(CodeSpecializationKind::CodeForCall, ArityCheckMode::MustCheckArity).taggedPtr(), targetFrame + CallerFrameAndPC::sizeInRegisters);
++    CLoopStack& stack = vm.cloopStack();
++    void* boundStackPointer = stack.currentStackPointer();
++    stack.setCurrentStackPointer(targetFrame);
++    void* entry = firstCallToJSFunction(vm, targetFrame, CodeSpecializationKind::CodeForCall);
++    stack.setCurrentStackPointer(boundStackPointer);
++    if (throwScope.exception()) [[unlikely]]
++        LLINT_RETURN_TWO(returnToThrow(vm), exceptionSignal());
++    RELEASE_ASSERT(entry);
++    return encodeResult(entry, targetFrame + CallerFrameAndPC::sizeInRegisters);
++}
++#endif
++
+ LLINT_SLOW_PATH_DECL(slow_path_new_object)
+ {
+     LLINT_BEGIN();
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.h b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+index 4c6effe..bf13e7d 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.h
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.h
+@@ -44,6 +44,9 @@ extern "C" UGPRPair SYSV_ABI llint_unlinked_call(CallFrame*, CallLinkInfo*) REFE
+ void* handleUnlinkedCall(VM&, CallFrame* calleeFrame);
+ extern "C" UGPRPair SYSV_ABI llint_virtual_call(CallFrame*, CallLinkInfo*) REFERENCED_FROM_ASM WTF_INTERNAL;
+ extern "C" UGPRPair SYSV_ABI llint_polymorphic_call(CallFrame*, CallLinkInfo*) REFERENCED_FROM_ASM WTF_INTERNAL;
++#if ENABLE(C_LOOP) && OS(WASI)
++extern "C" UGPRPair SYSV_ABI llint_set_up_bound_function_call(CallFrame* boundFrame, const JSInstruction* unused) REFERENCED_FROM_ASM WTF_INTERNAL;
++#endif
+ extern "C" void SYSV_ABI llint_write_barrier_slow(CallFrame*, JSCell*) REFERENCED_FROM_ASM WTF_INTERNAL;
+ 
+ #define LLINT_SLOW_PATH_DECL(name) \
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index 4367c72..15d2be3 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -2720,6 +2720,15 @@ op(llint_internal_function_construct_trampoline, macro ()
+     internalFunctionCallTrampoline(InternalFunction::m_functionForConstruct)
+ end)
+ 
++# Declared for every build; only the WASI C loop's VM.cpp selects it.
++op(llint_bound_function_call_trampoline, macro ()
++    if C_LOOP and WASI
++        boundFunctionCallTrampoline()
++    else
++        crash()
++    end
++end)
++
+ # t0 is callee
+ # t2 is CallLinkInfo*
+ # The C++ function's frame goes where the last callee at this depth had its own, and clears only what is below itself: see
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index f78f579..239fe22 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -2866,6 +2866,44 @@ macro nativeCallTrampoline(executableOffsetToFunction)
+     jmp _llint_throw_from_slow_path_trampoline
+ end
+ 
++if C_LOOP and WASI
++    # The call entry of a bound function whose target is a JSFunction. It links the bound frame
++    # as nativeCallTrampoline does, then llint_set_up_bound_function_call (LLIntSlowPaths.cpp)
++    # builds the target's frame below it, and the target is called in this loop, not from C++.
++    # The bound frame stays, with no code block, as upstream's JIT thunk leaves it. The exception
++    # signal is tested before either result register is used as a pointer:
++    #   r1 is LLInt::exceptionSignal (all ones): an exception is pending, thrown from this frame.
++    #   otherwise: r0 is the target's entry point and r1 the stack pointer for its frame.
++    macro boundFunctionCallTrampoline()
++        functionPrologue()
++        storep 0, CodeBlock[cfr]
++        storei 0, CallSiteIndex[cfr]
++        loadp Callee[cfr], t3
++        loadp JSCallee::m_scope[t3], t3
++        loadp JSGlobalObject::m_vm[t3], t3
++        storep cfr, VM::topCallFrame[t3]
++        storep lr, ReturnPC[cfr]
++        checkStackPointerAlignment(t3, 0xdead0001)
++        move cfr, a0
++        cCall2(_llint_set_up_bound_function_call)
++        bpeq r1, -1, .handleException
++        move r1, sp
++        cloopCallJSFunction r0
++        # The target's epilogue made this frame cfr again and left sp at its own frame.
++        # restoreStackPointerAfterCall() would read this frame's null code block.
++        move cfr, sp
++        functionEpilogue()
++        ret
++
++    .handleException:
++        loadp Callee[cfr], t3
++        loadp JSCallee::m_scope[t3], t3
++        loadp JSGlobalObject::m_vm[t3], t3
++        storep cfr, VM::topCallFrame[t3]
++        jmp _llint_throw_from_slow_path_trampoline
++    end
++end
++
+ macro internalFunctionCallTrampoline(offsetOfFunction)
+     functionPrologue()
+     storep 0, CodeBlock[cfr]
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index 0409be0..907158a 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -959,6 +959,18 @@ static Ref<NativeJITCode> jitCodeForCallTrampoline(Intrinsic intrinsic)
+         });
+         return result.get();
+     }
++#endif
++#if ENABLE(C_LOOP) && OS(WASI)
++    // A bound function whose target is a JSFunction is called inside the running C loop
++    // (llint_bound_function_call_trampoline). Its construct entry stays the native one.
++    case BoundFunctionCallIntrinsic: {
++        static LazyNeverDestroyed<Ref<NativeJITCode>> result;
++        static std::once_flag onceKey;
++        std::call_once(onceKey, [&] {
++            result.construct(adoptRef(*new NativeJITCode(LLInt::getCodeRef<JSEntryPtrTag>(llint_bound_function_call_trampoline), JITType::HostCallThunk, intrinsic)));
++        });
++        return result.get();
++    }
+ #endif
+     default: {
+         static LazyNeverDestroyed<Ref<NativeJITCode>> result;

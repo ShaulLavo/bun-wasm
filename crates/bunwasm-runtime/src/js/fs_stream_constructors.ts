@@ -72,10 +72,12 @@
   }
 
   interface Dependencies {
-    Buffer: { allocUnsafe(length: number): Uint8Array };
+    read(fd: number | null, length: number, position: number): Uint8Array;
+    asBuffer(bytes: Uint8Array): Uint8Array;
+    readPieceSize: number;
+    isRegularReadFd(fd: number | null): boolean;
     openSync(path: unknown, flags: Flags, mode?: number): number;
     closeSync(fd: number): void;
-    readSync(fd: number | null, buffer: Uint8Array, offset: number, length: number, position: number | undefined): number;
     writeSync(fd: number | null, bytes: Uint8Array, offset: number, length: number, position: number | undefined): number;
     toPath(path: unknown): string;
     validateFd(fd: unknown): void;
@@ -85,7 +87,7 @@
   }
 
   return function createFileStreams(deps: Dependencies) {
-    const { Buffer, openSync, closeSync, readSync, writeSync, toPath, validateFd, readRange, invalidArg } = deps;
+    const { read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg } = deps;
     let fileStreams: StreamModule | undefined;
 
     function initializeFileStreams() {
@@ -174,15 +176,19 @@
     WriteStream.prototype._destroy = destroyFileStream;
 
     ReadStream.prototype._read = function (this: ReadFileStream, size: number) {
-      const length = Math.min(Math.max(size, 1), this.end - (this.pos === undefined ? this.bytesRead : this.pos) + 1);
+      let length = Math.min(Math.max(size, 1), this.end - (this.pos === undefined ? this.bytesRead : this.pos) + 1);
       if (length <= 0) { this.push(null); return; }
-      const chunk = Buffer.allocUnsafe(length);
-      let count;
-      try { count = readSync(this.fd, chunk, 0, length, this.pos); }
+      let chunk;
+      try {
+        validateFd(this.fd);
+        if (length > deps.readPieceSize && deps.isRegularReadFd(this.fd)) length = deps.readPieceSize;
+        chunk = asBuffer(read(this.fd, length, this.pos ?? -1));
+      }
       catch (error) { this.destroy(error); return; }
+      const count = chunk.length;
       this.bytesRead += count;
       if (this.pos !== undefined) this.pos += count;
-      this.push(count === 0 ? null : chunk.subarray(0, count));
+      this.push(count === 0 ? null : chunk);
     };
 
     function writeFileStreamStep(stream: WriteFileStream, chunk: Uint8Array, offset: number) {

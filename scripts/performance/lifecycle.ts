@@ -79,7 +79,7 @@ async function campaign(config: Config, signal: AbortSignal) {
 }
 async function campaignLocked(config: Config, signal: AbortSignal) {
   const host = object(JSON.parse(await readFile(join(config.host, "lifecycle-host.json"), "utf8")));
-  if (host.waffle !== "0.0.126") throw new Error("Prepared host must assert Waffle 0.0.126");
+  if (host.waffle !== "0.0.127") throw new Error("Prepared host must assert Waffle 0.0.127");
   await preflight(config.host, ["browser", "quickjs", "jsc", "spidermonkey"]);
   const inputs = { mode: config.mode, timeoutMs: config.timeoutMs, host: await assetIdentity(config.host),
     drivers: lifecycleDriverInputs(process.cwd()), execution: await executionIdentity(), templates: { next: treeInventory("sandbox/template-next"), vite: treeInventory("sandbox/template") },

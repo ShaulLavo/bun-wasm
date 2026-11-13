@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { Browser, Page } from "playwright";
-import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { playwright, run, session, writeFile } from "./playground.mjs";
+import { openQuickjsStackPage } from "./quickjs-stack-navigation";
 
 const task = session("bun-wasm-quickjs-stack-");
 const probe = readFileSync(new URL("../../tests/stack-depth.js", import.meta.url), "utf8");
@@ -34,8 +35,7 @@ async function opened(browser: Browser, url: string, check: (page: Page) => Prom
       });
     });
     const page = await context.newPage();
-    await page.goto(`${url}?engine=quickjs&prompt=off&mode=memory`);
-    await ready(page, 90_000);
+    await openQuickjsStackPage(page, url);
     await writeFile(page, "/home/user/depth.js", probe);
     if (desktopPolicy) {
       const selected = await run(page, 'bun -e "console.log(process.env.BUN_WASM_STACK_KIB)"', 90_000);

@@ -863,7 +863,8 @@
   let fileStreamAdapter;
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
-      Buffer, openSync, closeSync, readSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      readPieceSize: kReadPiece, isRegularReadFd,
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;

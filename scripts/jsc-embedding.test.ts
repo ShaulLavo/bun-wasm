@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -154,4 +154,44 @@ test("in-loop getter calls are limited to the WASI C loop and to the two named b
   expect(helper.indexOf("stack.setCurrentStackPointer(callerStackPointer);")).toBeGreaterThan(helper.indexOf("setUpCall(calleeFrame"));
   expect(helper.indexOf("if (throwScope.exception()) [[unlikely]]")).toBeGreaterThan(helper.indexOf("stack.setCurrentStackPointer(callerStackPointer);"));
   expect(helper.indexOf("ensureJSStackCapacityFor")).toBeLessThan(helper.indexOf("calleeFrame->setCallerFrame"));
+});
+
+test("the JSC gate runs bound call semantics at the smallest browser budget, past the old printer depth", () => {
+  expect(boundCallDispatchFixture()).toEqual({
+    path: "tests/fixtures/bound-call-dispatch",
+    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "BOUND_CALL_BABEL_DEPTH=2000", "--env", "BOUND_CALL_WIDE_LOCALS=33000"],
+  });
+});
+
+test("bound calls run in the WASI C loop through their own call entry, after the getter hunks", () => {
+  const lastSection = (file: string) => patch.split(`diff --git a/Source/JavaScriptCore/${file}`).at(-1)?.split("diff --git")[0] ?? "";
+  const vm = lastSection("runtime/VM.cpp");
+  expect(vm).toMatch(/^\+#if ENABLE\(C_LOOP\) && OS\(WASI\)\n(?:\+[^\n]*\n)*?\+    case BoundFunctionCallIntrinsic: \{\n(?:\+[^\n]*\n)*?\+[^\n]*llint_bound_function_call_trampoline[^\n]*\n/m);
+  expect(vm.match(/^\+(?!\+\+ )/gm)).toHaveLength(12);
+  // One helper entry and one return label, each appended after everything its section had.
+  const list = lastSection("bytecode/BytecodeList.rb");
+  expect(list).toContain(" op :wasm_ipint_call_return_location\n+op :llint_bound_function_call_trampoline\n \n end_section :NativeHelpers\n");
+  expect(list).toContain(" op :llint_cloop_did_return_from_js_43\n+op :llint_cloop_did_return_from_js_44\n \n end_section :CLoopReturnHelpers\n");
+  expect(lastSection("llint/LowLevelInterpreter.asm")).toMatch(/^\+op\(llint_bound_function_call_trampoline, macro \(\)\n\+    if C_LOOP and WASI\n\+        boundFunctionCallTrampoline\(\)\n\+    else\n\+        crash\(\)\n/m);
+  // The exception signal is tested before either word is used, and sp returns to the bound frame
+  // without reading its null code block.
+  const entry = lastSection("llint/LowLevelInterpreter64.asm").split("+    macro boundFunctionCallTrampoline()")[1] ?? "";
+  const at = (line: string) => entry.indexOf(`\n+        ${line}\n`);
+  expect(at("cCall2(_llint_set_up_bound_function_call)")).toBeGreaterThan(at("storep cfr, VM::topCallFrame[t3]"));
+  expect(at("bpeq r1, -1, .handleException")).toBeGreaterThan(at("cCall2(_llint_set_up_bound_function_call)"));
+  expect(at("move r1, sp")).toBeGreaterThan(at("bpeq r1, -1, .handleException"));
+  expect(at("move cfr, sp")).toBeGreaterThan(at("cloopCallJSFunction r0"));
+  expect(at("functionEpilogue()")).toBeGreaterThan(at("move cfr, sp"));
+  expect(entry).not.toMatch(/^\+\s+restoreStackPointerAfterCall\(\)$/m);
+  // Refusals before the frame exists, capacity before any write, and the published frame put back
+  // before the exception is read.
+  const helper = lastSection("llint/LLIntSlowPaths.cpp").split("+extern \"C\" UGPRPair SYSV_ABI llint_set_up_bound_function_call(")[1] ?? "";
+  const step = (text: string) => helper.indexOf(text);
+  expect(step("> maxArguments")).toBeGreaterThan(0);
+  expect(step("targetFrame = calleeFrameForVarargs(")).toBeGreaterThan(step("frameBytes >= "));
+  expect(step("frameBytes >= ")).toBeGreaterThan(step("> maxArguments"));
+  expect(step("ensureJSStackCapacityFor")).toBeLessThan(step("targetFrame->setCallerFrame"));
+  expect(step("stack.setCurrentStackPointer(targetFrame);")).toBeLessThan(step("entry = firstCallToJSFunction("));
+  expect(step("stack.setCurrentStackPointer(boundStackPointer);")).toBeGreaterThan(step("entry = firstCallToJSFunction("));
+  expect(step("if (throwScope.exception()) [[unlikely]]")).toBeGreaterThan(step("stack.setCurrentStackPointer(boundStackPointer);"));
 });

@@ -19,6 +19,15 @@ type Streams = typeof import("node:stream");
 
 function productionFilesystem(root: string) {
   const descriptors = new Set<number>();
+  const destinations: number[] = [];
+  const readBuffers: Uint8Array[] = [];
+  const requests: number[] = [];
+  const buffers = new Proxy(Buffer, {
+    get(target, key) {
+      if (key !== "allocUnsafe") return Reflect.get(target, key);
+      return (length: number) => { destinations.push(length); return Buffer.allocUnsafe(length); };
+    },
+  });
   const context = {
     self: { AbortController, AbortSignal }, AbortController, AbortSignal,
     Uint8Array, ArrayBuffer, DataView, URL, Buffer, queueMicrotask, DOMException,
@@ -41,14 +50,18 @@ function productionFilesystem(root: string) {
       },
       close(fd: number) { hostFs.closeSync(fd); descriptors.delete(fd); },
       read(fd: number, length: number, position: number) {
+        requests.push(length);
         const bytes = Buffer.alloc(length);
-        return bytes.subarray(0, hostFs.readSync(fd, bytes, 0, length, position < 0 ? null : position));
+        const chunk = bytes.subarray(0, hostFs.readSync(fd, bytes, 0, length, position < 0 ? null : position));
+        readBuffers.push(chunk);
+        return chunk;
       },
       write: (fd: number, bytes: Uint8Array, position: number) => hostFs.writeSync(fd, bytes, 0, Math.min(bytes.length, 2), position < 0 ? null : position),
       readFile: hostFs.readFileSync,
       fstat: hostFs.fstatSync,
     },
     require(name: string): unknown {
+      if (name === "buffer") return { Buffer: buffers };
       if (name === "fs_watch") return () => ({});
       if (name === "fs_options") return optionsFactory({});
       if (name === "fs_stream_constructors") return helperFactory();
@@ -63,7 +76,7 @@ function productionFilesystem(root: string) {
   const fs = runtime.fs as Filesystem;
   const streams = core.Stream as Streams;
   return {
-    fs, streams,
+    fs, streams, destinations, readBuffers, requests,
     cleanup() {
       for (const fd of descriptors) hostFs.closeSync(fd);
       hostFs.rmSync(root, { recursive: true, force: true });
@@ -99,6 +112,45 @@ test("production fs streams preserve the Node constructor and descriptor contrac
   try {
     await verifyFilesystemStreams(runtime.fs, root, runtime.streams);
     expect(isReadStream(undefined, runtime.fs.ReadStream)).toBe(false);
+  } finally { runtime.cleanup(); }
+});
+
+test("tiny tails and EOF use native stream buffers without destination allocations", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-tail-"));
+  const runtime = productionFilesystem(root);
+  try {
+    const path = join(root, "tail");
+    hostFs.writeFileSync(path, "abcdef");
+    const fd = runtime.fs.openSync(path, "r");
+    runtime.fs.readSync(fd, Buffer.alloc(3), 0, 3, null);
+    runtime.readBuffers.length = 0;
+    const stream = runtime.fs.createReadStream(path, { fd });
+    const done = closed(stream);
+    const chunks: Buffer[] = [];
+    stream.on("data", chunk => { assert.ok(Buffer.isBuffer(chunk)); chunks.push(chunk); });
+    await done;
+    expect(Buffer.concat(chunks).toString()).toBe("def");
+    expect(runtime.readBuffers.map(bytes => bytes.length)).toEqual([3, 0]);
+    expect(runtime.destinations).toEqual([]);
+    expect(chunks[0]?.buffer).toBe(runtime.readBuffers[0]?.buffer);
+    expect(chunks[0]?.byteOffset).toBe(runtime.readBuffers[0]?.byteOffset);
+  } finally { runtime.cleanup(); }
+});
+
+test("large regular stream buffers retain the existing native read piece limit", async () => {
+  const root = hostFs.mkdtempSync(join(tmpdir(), "bun-wasm-fsstream-pieces-"));
+  const runtime = productionFilesystem(root);
+  try {
+    const path = join(root, "large");
+    hostFs.writeFileSync(path, Buffer.alloc(2 * 1024 * 1024 + 3, 65));
+    const stream = runtime.fs.createReadStream(path, { highWaterMark: 4 * 1024 * 1024 });
+    const done = closed(stream);
+    let count = 0;
+    stream.on("data", chunk => { count += chunk.length; });
+    await done;
+    expect(count).toBe(2 * 1024 * 1024 + 3);
+    expect(runtime.requests.every(length => length <= 1024 * 1024)).toBe(true);
+    expect(runtime.destinations).toEqual([]);
   } finally { runtime.cleanup(); }
 });
 
