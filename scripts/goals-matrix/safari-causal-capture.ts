@@ -178,7 +178,11 @@ class CaptureController {
     if (this.loss || this.readFailed) return;
     try {
       const reading = this.native.read(target.pid);
-      if (reading?.birth === target.birth) { this.lastConfirmed = clock(); return; }
+      if (reading?.birth === target.birth) {
+        this.lastConfirmed = clock();
+        this.append("native", { kind: "identity", target, reading, at: this.lastConfirmed });
+        return;
+      }
       this.loss = { at: clock(), reason: reading ? "birth-changed" : "exited" };
       this.append("native", { kind: "identity-lost", target, ...this.loss });
     } catch (error) {

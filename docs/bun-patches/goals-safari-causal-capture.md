@@ -4,16 +4,20 @@ Class **Host feature**, **original test adapter** in
 `scripts/goals-matrix/safari-causal-native.ts`, `safari-causal-capture.ts` and
 `safari-protocol.ts`. No upstream source is copied.
 
-The adapter reads three fields of macOS `rusage_info_v4` through
+The adapter reads four fields of macOS `rusage_info_v4` through
 `proc_pid_rusage(pid, RUSAGE_INFO_V4, ...)` in `/usr/lib/libproc.dylib`: user time
-(offset 16), system time (offset 24) and `ri_proc_start_abstime` (offset 80). The
+(offset 16), system time (offset 24), `ri_phys_footprint` (offset 72) and
+`ri_proc_start_abstime` (offset 80). The
 layout comes from the public `<sys/resource.h>` header in the macOS SDK and the
 XNU source (`bsd/sys/resource.h`, apple-oss-distributions/xnu, main as of
 2026-11). CPU times are Mach ticks and are converted with `mach_timebase_info`.
 The same layout was first used in a report-only preflight script
 (`collector-hint-first-unit/shared-existing-preflight/scripts/macos.ts`). This
-maintained version drops its footprint, resident, virtual-size and `proc_taskinfo`
-reads.
+maintained version drops its resident, virtual-size and `proc_taskinfo` reads.
+The existing bound-identity poll retains CPU time and physical footprint only
+while the pinned PID still has the associated kernel birth. Footprint uses the
+same rusage buffer and adds no native call or process search. It is a process
+measurement, not a breakdown of guest and host allocations.
 
 The log adapter parses `/usr/bin/log show --style json` records from launchd
 (PID 1). It accepts only a subject of exactly `<service> [<pid>]`, from either the
@@ -22,6 +26,12 @@ message classes are normalized: `signal service: caller = <name>[<pid>], value =
 and `exited due to <SIGNAL> | sent by <name>[<pid>]` (or `exited with exit code`).
 Message text is never retained. The format was taken from a 2026-11-12 desktop
 Safari record. Every capture qualifies it again with a task-owned launchd job.
+
+The November 13, 2026 macOS 26.4 native control also emitted caller ancestry,
+`launchctl[pid]<-bun[pid]<-bash[pid]`, before the signal value. The signal parser
+validates that optional chain but retains only the immediate caller. An ancestor
+must never satisfy the control's expected launchctl caller. The native CPU/start
+reader passed unchanged; this was a log-format rejection, not an FFI layout error.
 
 Reasons: identify the owned page's WebContent process without process-growth
 heuristics, and record the initiating native event only when a public record

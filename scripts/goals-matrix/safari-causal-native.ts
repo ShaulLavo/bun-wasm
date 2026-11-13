@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { ownedCommand } from "./lifetime";
 import { clock, type Clock } from "./safari-protocol";
 
-export type ProcessClock = Readonly<{ cpuMs: number; birth: string }>;
+export type ProcessClock = Readonly<{ cpuMs: number; birth: string; footprintBytes: number }>;
 export type NativeService = "webcontent" | "control";
 export type NativeEvent = Readonly<{
   kind: "signal-service" | "exit"; eventTime: string; eventUtc: string | null; reporter: "launchd"; reporterPid: number;
@@ -44,7 +44,7 @@ function loadLibproc(): Libproc {
 // errno of the last failed read, or 0 when the kernel returned a zero start time.
 let lastReadErrno: number | null = null;
 // rusage_info_v4 is 296 bytes; the buffer is larger. Offsets: user time 16, system time 24 (Mach ticks),
-// proc_start_abstime 80. Only these three fields are read.
+// phys_footprint 72, proc_start_abstime 80.
 const usage = new BigUint64Array(48);
 function readProcess(pid: number): ProcessClock | null {
   const lib = libproc ??= loadLibproc();
@@ -54,7 +54,7 @@ function readProcess(pid: number): ProcessClock | null {
   const birth = usage[10] ?? 0n;
   if (birth === 0n) { lastReadErrno = 0; return null; }
   const nanoseconds = ((usage[2] ?? 0n) + (usage[3] ?? 0n)) * lib.numer / lib.denom;
-  return { cpuMs: Number(nanoseconds) / 1e6, birth: String(birth) };
+  return { cpuMs: Number(nanoseconds) / 1e6, birth: String(birth), footprintBytes: Number(usage[9] ?? 0n) };
 }
 
 /** Desktop WebContent PIDs by executable name only. Simulator runtimes are excluded. */
@@ -102,9 +102,11 @@ function subject(entry: Entry): Subject | undefined {
   if (fromMessage?.[1] && fromMessage[2] && fromMessage[3] !== undefined) return { service: fromMessage[1], pid: Number(fromMessage[2]), message: fromMessage[3] };
 }
 
-const callerName = "([A-Za-z0-9_.-][A-Za-z0-9_. -]{0,63})";
+const callerToken = "[A-Za-z0-9_.-][A-Za-z0-9_. -]{0,63}";
+const callerName = `(${callerToken})`;
+const callerAncestry = `(?:<-${callerToken}\\[\\d+\\])*`;
 function classify(message: string): Classified | undefined {
-  const service = new RegExp(`^signal service: caller = ${callerName}\\[(\\d+)\\], value = 0x([0-9a-fA-F]{1,2})$`).exec(message);
+  const service = new RegExp(`^signal service: caller = ${callerName}\\[(\\d+)\\]${callerAncestry}, value = 0x([0-9a-fA-F]{1,2})$`).exec(message);
   if (service?.[1] && service[2] && service[3]) return { kind: "signal-service", signal: parseInt(service[3], 16), exitCode: null, caller: { name: service[1], pid: Number(service[2]) } };
   const signalled = new RegExp(`^exited due to (SIG[A-Z0-9]+)(?: \\| sent by ${callerName}\\[(\\d+)\\])?`).exec(message);
   if (signalled?.[1]) return { kind: "exit", signal: signals[signalled[1]] ?? null, exitCode: null, caller: signalled[2] && signalled[3] ? { name: signalled[2], pid: Number(signalled[3]) } : null };
