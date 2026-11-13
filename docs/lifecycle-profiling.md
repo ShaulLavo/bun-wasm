@@ -4,7 +4,7 @@ The lifecycle profiler extends the saved-worker boundary reader in `scripts/perf
 
 Capture support is conditional on an executable control in the selected browser and guest engine. A child worker must start and exit inside the capture window and retain identifiable computation samples. Failure leaves attribution unavailable without invalidating baseline timings.
 
-Source `env.sh` before preparation or execution. Prepare a private current-source Waffle 0.0.122 host from frozen guests with `scripts/performance/prepare-lifecycle.ts`, as described in [lifecycle measurements](performance-lifecycle.md). Keep host and guest sources separate. The native prepared fixture supplies its frozen dependency lock; the profiler never changes that fixture.
+Source `env.sh` before preparation or execution. Prepare a private current-source Waffle 0.0.126 host from frozen guests with `scripts/performance/prepare-lifecycle.ts`, as described in [lifecycle measurements](performance-lifecycle.md). Keep host and guest sources separate. The native prepared fixture supplies its frozen dependency lock; the profiler never changes that fixture.
 
 Run each command through the machine's workload runner. These commands name already prepared inputs and new output directories:
 
