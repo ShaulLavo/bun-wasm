@@ -145,7 +145,8 @@ test('the discovered native consumer qualifies both SM tiers without a second pr
   expect(driver).toContain('const COMMAND_TIMEOUT_MS = 120_000');
   expect(driver).toContain('timeout: COMMAND_TIMEOUT_MS');
   expect(driver).toContain('result.stdout !== expected');
-  expect(driver).toContain("process.stderr.write(result.stderr ?? '')");
+  expect(driver).toContain("writeSync(2, result.stderr ?? '')");
+  expect(driver).toContain('if (wallMs > COMMAND_TIMEOUT_MS) throw new Error');
   expect(driver).not.toMatch(/build-native|build-bun|build-engine|\.replace\(|\.filter\(/);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-native-qualification.test.ts')).toHaveLength(1);
 });
