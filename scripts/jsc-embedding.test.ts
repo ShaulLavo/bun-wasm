@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, proxyGetForwardingFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -123,6 +123,29 @@ test("JSC stack controls use their discovered fixture with a small real host sta
     path: "tests/fixtures/stack-getter-headroom",
     hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
   });
+});
+
+test("the JSC gate runs Proxy forwarding semantics and recovery on a small host stack", () => {
+  expect(proxyGetForwardingFixture()).toEqual({
+    path: "tests/fixtures/proxy-get-forwarding",
+    hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192"],
+  });
+});
+
+test("WASI Proxy forwarding charges each iterative level before its guard", () => {
+  const section = patch.split("diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp")[1]?.split("diff --git")[0] ?? "";
+  const loop = section.split("+#if OS(WASI)")[1]?.split("+#else")[0] ?? "";
+  const next = loop.indexOf("+        auto* next = dynamicDowncast<ProxyObject>(target);");
+  const fallback = loop.indexOf("performDefaultProxyGet(globalObject, target, receiver, propertyName)", next);
+  const reserve = loop.indexOf("+        WASM_RESERVE_STACK(512);", fallback);
+  const guard = loop.indexOf("+        if (!vm.isSafeToRecurseSoft())", reserve);
+  expect(loop).toContain("for (ProxyObject* current = proxyObject;;)");
+  expect(next).toBeGreaterThanOrEqual(0);
+  expect(fallback).toBeGreaterThan(next);
+  expect(reserve).toBeGreaterThan(fallback);
+  expect(guard).toBeGreaterThan(reserve);
+  expect(loop).toContain("+        current = next;");
+  expect(loop).not.toContain("performProxyGet(globalObject, next");
 });
 
 test("the JSC gate runs getter semantics at the smallest browser budget, past the old getter depth", () => {
