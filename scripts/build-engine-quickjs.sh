@@ -40,9 +40,20 @@ inputs=''
 trap 'if [[ -n "$inputs" ]]; then rm -f -- "$inputs"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
+# QUICKJS_TRANSFER_FAULT=1: a validation side that refuses every allocation from a transfer's
+# first detach on (crates/bunwasm-engine-quickjs/src/transfer_fault.rs). Never a release: like
+# a smoke side it gets no receipt, so no program can be staged from it.
+unreceipted=''
+fault_wraps=()
+if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then unreceipted='smoke exports'; fi
+if [[ "${QUICKJS_TRANSFER_FAULT:-0}" == 1 ]]; then
+  unreceipted='a transfer-fault side'
+  export BUN_WASM_TRANSFER_FAULT=1
+  fault_wraps=(malloc calloc realloc posix_memalign bun_core_alloc bun_shared_buffer_alloc)
+fi
+if [[ -n "$unreceipted" ]]; then
   if [[ -e "$out/engine.wasm.engine.json" ]]; then
-    echo 'error: use a separate QUICKJS_BUILD_DIR for smoke exports' >&2
+    echo "error: use a separate QUICKJS_BUILD_DIR for $unreceipted" >&2
     exit 1
   fi
 else
@@ -79,6 +90,7 @@ else
 fi
 args=()
 for name in "${exports[@]}"; do args+=("--export=$name"); done
+for name in "${fault_wraps[@]}"; do args+=("--wrap=$name"); done
 "$WASI_SDK_PATH/bin/wasm-ld" --shared "${link_profile[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined "${args[@]}" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "${group_objects[@]}" "$archive"

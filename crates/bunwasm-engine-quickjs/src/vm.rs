@@ -296,6 +296,8 @@ impl Engine for QuickJs {
             install_shared_buffer_storage(runtime_raw);
         };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::install(&ctx);
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),
@@ -531,6 +533,9 @@ impl Engine for QuickJs {
     }
 
     fn detach_buffer(&self, v: &V) {
+        // A validation build refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { qjs::JS_DetachArrayBuffer(self.raw(), v.as_raw()) }
     }

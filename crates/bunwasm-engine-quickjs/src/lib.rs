@@ -271,3 +271,5 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
 mod allocation_probe;
 #[cfg(test)]
 mod native_contract_tests;
+#[cfg(bun_wasm_transfer_fault)]
+mod transfer_fault;
