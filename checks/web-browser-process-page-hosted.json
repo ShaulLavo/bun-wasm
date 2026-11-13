@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/process-page-hosted.test.ts"
+  "path": "scripts/process-page-hosted.test.ts",
+  "batch": "30-lifecycle"
 }

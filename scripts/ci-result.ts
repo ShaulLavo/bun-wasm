@@ -20,7 +20,7 @@ export function requireCiSuccess(value: unknown): void {
   const expected = {
     quality: true, "jsc-prebuild": rust, "native-quality": rust, rust,
     package: true, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
-    "shared-sysroot": shared, web: true, "web-unit": true, "process-bundles": true, "browser-guest": rust, "browser-process": true,
+    "shared-sysroot": shared, web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": rust, "browser-process": true,
   };
   for (const [name, required] of Object.entries(expected)) {
     const result = object(results[name]).result;

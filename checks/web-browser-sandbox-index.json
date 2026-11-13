@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/sandbox-storage-index.test.ts"
+  "path": "scripts/sandbox-storage-index.test.ts",
+  "batch": "20-preview"
 }

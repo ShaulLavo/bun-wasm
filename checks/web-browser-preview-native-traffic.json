@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/preview-native-traffic.test.ts"
+  "path": "scripts/preview-native-traffic.test.ts",
+  "batch": "20-preview"
 }
