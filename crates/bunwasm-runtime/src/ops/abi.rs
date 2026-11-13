@@ -193,7 +193,8 @@ impl Transport {
         if Rc::strong_count(&frame_owner) != 2 {
             return Err(Status::BadCall);
         }
-        let mut frame_bytes = frame_owner.copy()?;
+        let mut frame_bytes = [0; Frame::SIZE];
+        frame_bytes.copy_from_slice(frame_owner.bytes());
         let frame = Frame::decode(&frame_bytes)?;
         frame.request(frame_ptr, memory_len())?;
         // Decode the request where the engine wrote it; a copy would hold the payload twice.

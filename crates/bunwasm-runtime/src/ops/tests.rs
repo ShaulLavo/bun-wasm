@@ -527,6 +527,49 @@ fn physical_nested_calls_can_grow_allocations_without_borrowing_outer_memory() {
 }
 
 #[test]
+fn physical_frame_snapshot_survives_native_mutation_for_success_and_error() {
+    for error in [false, true] {
+        let transport = Rc::new(abi::Transport::default());
+        let native_transport = transport.clone();
+        let pointer = Rc::new(Cell::new(0));
+        let native_pointer = pointer.clone();
+        let dispatch = dispatcher(move |_| {
+            native_transport
+                .write(native_pointer.get(), &[0xab; Frame::SIZE])
+                .unwrap();
+            if error {
+                return Err(NativeError::range_error("failure"));
+            }
+            Ok(Val::from("success"))
+        });
+        let frame = allocated_frame(&transport, dispatch.op(), vec![]);
+        pointer.set(frame.0);
+        let mut expected = abi::frame_bytes(dispatch.op(), 1, frame.1, frame.2);
+        let status = transport.dispatch(&dispatch, frame.0);
+        assert_eq!(
+            status,
+            if error {
+                Status::NativeError
+            } else {
+                Status::Ok
+            }
+        );
+        let actual = transport.read(frame.0, Frame::SIZE as u32).unwrap();
+        let decoded = Frame::decode(&actual).unwrap();
+        expected[16..20].copy_from_slice(&decoded.reply_ptr.to_le_bytes());
+        expected[20..24].copy_from_slice(&decoded.reply_len.to_le_bytes());
+        assert_eq!(actual, expected);
+        let reply = release_frame(&transport, frame.0, frame.1, frame.2);
+        if error {
+            assert_eq!(decode_error(&reply).unwrap().kind, ErrorKind::RangeError);
+        } else {
+            assert_eq!(codec::decode(&reply).unwrap(), Val::from("success"));
+        }
+        assert_eq!(transport.live_allocations(), 0);
+    }
+}
+
+#[test]
 fn physical_native_error_and_wrong_free_sizes_release_every_allocation() {
     let transport = abi::Transport::default();
     let dispatch = dispatcher(|_| Err(NativeError::range_error("failure")));
