@@ -4,7 +4,7 @@
 
 | Source | Class | Change |
 | --- | --- | --- |
-| `crates/bunwasm-runtime/src/rolldown_memory.rs` | Host feature | Original adapter for two byte-identified published Rolldown loaders. |
+| `crates/bunwasm-runtime/src/rolldown_memory.rs` and its call in `modules.rs` | Host feature | Original adapter for two byte-identified published Rolldown loaders. |
 | `scripts/rolldown-memory.test.ts`, `scripts/rolldown-memory-browser.ts`, and `scripts/fixtures/rolldown-memory-{adapter.rs,probe.ts}` | Host feature | Original real-package controls for the compiled adapter. |
 
 ## Upstream identities
@@ -42,10 +42,12 @@ and the presence of the debug binary leave the source borrowed and unchanged.
 Binary hashing streams through `std::io::copy`; it does not copy the whole
 binary. A successful adaptation allocates only the replacement loader string.
 
-`depends_on_binary` identifies both paths for the module preparation cache.
-Integrations must requalify them on every load, including when the JavaScript
-is unchanged or disappears. A cached reduction must not survive a changed or
-missing binary or a newly selected debug binary.
+Module preparation runs the adapter before transpilation. `depends_on_binary`
+excludes both paths from prepared-source reuse, while preserving the Oxc
+exclusion. They requalify on every load, including when the JavaScript is
+unchanged or disappears. A cached reduction cannot survive a changed or missing
+binary or a newly selected debug binary. The integrated Rust cache regression
+exercises these external changes after warming both loader paths.
 
 ## Controls and limits
 
