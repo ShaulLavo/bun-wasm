@@ -5,7 +5,12 @@ Class **Host feature**, **original test adapter** in
 copied or adapted, so there is no upstream path or revision.
 
 The Chrome and Firefox goals transports implement the existing `nativeClick`
-capability with Playwright's locator click. The selected host or preview page
+capability with Playwright's mouse input. A trial locator click waits for
+actionability without sending the click. Admission is checked again before
+mouse input, so a cancelled actionability wait cannot send a late click.
+The first selector match is used consistently with the witness's
+`querySelector`, including pages that add an unrelated Dev Tools button.
+The selected host or preview page
 receives browser input instead of the playground's DOM `.click()` fallback.
 
 The shared witness was moved from `safari-click.ts` without weakening its

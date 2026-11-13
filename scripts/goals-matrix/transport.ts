@@ -23,11 +23,17 @@ async function clickPage(page: Page, button: string, clicked: string, admission:
   const arm = `(${armNativeClick.toString()})(${JSON.stringify(input)})`;
   const before = await until(() => evaluatePage<ReturnType<typeof armNativeClick>>(page, arm, admit(admission), admission), value => value.ready, admit(admission));
   if (!before.ready) throw new Error("Counter is not ready");
-  await page.locator(button).click({ timeout: admit(admission) });
+  const target = page.locator(button).first();
+  await target.click({ trial: true, timeout: admit(admission) });
+  admit(admission);
+  const box = await target.boundingBox({ timeout: admit(admission) });
+  if (!box) throw new Error("Counter has no visible bounds");
+  admit(admission);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   const observation = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
   const expected = before.before.replace(/\b0\b/, "1");
   const after = await until(() => evaluatePage<ReturnType<typeof observeNativeClick>>(page, observation, admit(admission), admission), value => value.trusted && value.after === expected, admit(admission));
-  return { before: before.before, after: after.after, trusted: true, inputMethod: "Playwright locator click" };
+  return { before: before.before, after: after.after, trusted: true, inputMethod: "Playwright mouse click" };
 }
 export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;

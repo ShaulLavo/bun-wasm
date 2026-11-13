@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { frameworks, type Framework } from "./catalog";
-import { checkClick } from "./playground";
+import { checkClick, until } from "./playground";
 import { withScoped } from "./scope-fixture";
-import { createPlaywrightTransport, type ScopedTransport } from "./transport";
+import { createPlaywrightTransport, scoped, type ScopedTransport, type Transport } from "./transport";
+import { Scope } from "./scope";
 import { armNativeClick, observeNativeClick } from "./native-click";
 
 const framework = frameworks.find(row => row.id === "vite-react");
@@ -34,6 +35,34 @@ async function rejectInvalidClicks(page: ScopedTransport, framework: Framework):
   await expect(page.evaluate(`(${observeNativeClick.toString()})(${JSON.stringify(input)})`)).rejects.toThrow("trusted event");
 }
 
+async function rejectBlockedClick(transport: Transport, framework: Framework, mode: "abort" | "deadline"): Promise<void> {
+  const scope = Scope.open(5000);
+  const page = scoped(transport, scope);
+  try {
+    await page.navigate(counter);
+    await page.evaluate(`document.body.insertAdjacentHTML('beforeend', '<div id="cover" style="position:fixed;inset:0;z-index:100;background:white"></div>')`);
+    const clicking = checkClick(page, framework, mode === "abort" ? 3000 : 400).then(() => "clicked", error => String(error));
+    await until(() => page.evaluate<boolean>("globalThis.__goalsNativeClick !== undefined"), Boolean, 2000);
+    if (mode === "abort") scope.close(new Error("Click cancelled during actionability"));
+    expect(await clicking).toContain(mode === "abort" ? "Click cancelled during actionability" : "400 ms");
+    await withScoped(transport, async observer => {
+      await observer.evaluate("document.querySelector('#cover').remove()");
+      const trusted = await observer.evaluate("new Promise(resolve => setTimeout(() => resolve(document.body.dataset.trusted), 1000))");
+      expect(trusted).toBeUndefined();
+      expect(await observer.evaluate("document.querySelector('button').textContent")).toBe("count is 0");
+      expect(await checkClick(observer, framework, 3000)).toMatchObject({ trusted: true, after: "count is 1" });
+    });
+  } finally { scope.close(); }
+}
+
+async function clickFirstCounter(page: ScopedTransport, framework: Framework): Promise<void> {
+  await page.navigate(counter);
+  await page.evaluate(`document.body.insertAdjacentHTML('beforeend', '<button id="devtools">Dev tools</button>'); document.querySelector('#devtools').onclick = () => { document.body.dataset.wrongTarget = 'true'; }`);
+  const genericCounter = { ...framework, button: "button", clicked: "button" };
+  expect(await checkClick(page, genericCounter, 3000)).toMatchObject({ trusted: true, after: "count is 1" });
+  expect(await page.evaluate("document.body.dataset.wrongTarget")).toBeUndefined();
+}
+
 for (const kind of ["chrome", "firefox"] as const) {
   test(`checkClick delivers trusted input to the selected ${kind} page`, async () => {
     const transport = await createPlaywrightTransport(kind, 5000, 5000, true);
@@ -54,7 +83,10 @@ for (const kind of ["chrome", "firefox"] as const) {
         await page.closePreview();
         expect(await page.evaluate("document.body.dataset.trusted")).toBe("true");
         await rejectInvalidClicks(page, framework);
+        await clickFirstCounter(page, framework);
       });
+      await rejectBlockedClick(transport, framework, "abort");
+      await rejectBlockedClick(transport, framework, "deadline");
       console.info(JSON.stringify({ browser: transport.capabilities, trusted: true, pages: ["preview", "host"] }));
     } finally {
       await transport.close();
