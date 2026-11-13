@@ -439,6 +439,28 @@ change and is not fixed here.
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.
 
+### Proxy forwarding without native recursion
+
+On WASI, a Proxy with no `get` trap now forwards to a Proxy target in a loop rather than through
+another native property lookup ([record](bun-patches/jsc-proxy-get-forwarding.md)). Each forward
+still reserves 512 shadow bytes and checks the existing soft guard. Actual JavaScript `get` traps
+keep their native call path.
+
+Measured on November 14, 2026 on the native launcher, with the split pair from this change and the
+same pair before the engine hunk. A number is the deepest chain that completed; one level more threw
+a catchable `RangeError`.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `proxychain` | 197 | 369 | 214 | 401 | 846 | 1,585 |
+| `proxy` | 29 | 30 | 32 | 32 | 125 | 125 |
+
+The forwarding row gains capacity because it retains only the explicit 512-byte charge per level,
+not the old recursive frames. The trap row differs by one level at 192 KiB and is identical at the
+other budgets. Both rows throw and continue at 200,000 levels. On the Node host with a 320 KiB
+worker stack and an 800 KiB diagnostic guest budget, the old engine traps in the recursive property
+lookup cycle; the iterative pair catches the error and completes a later read.
+
 ### Bound functions called in the loop
 
 Until November 12, 2026 a bound function called from JavaScript entered the interpreter
