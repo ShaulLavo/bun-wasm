@@ -3,6 +3,7 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { runInNewContext } from "node:vm";
 import { checkEmptyPaths } from "../tests/fixtures/fs-empty-path/index.ts";
+import { checkStatMissing } from "../tests/fixtures/fs-stat-missing/index.ts";
 
 // Run the shipped path adapter over real host filesystem calls. The test creates
 // only a mkdtemp directory, which the shared regression fixture removes.
@@ -14,12 +15,20 @@ async function checkSource(): Promise<void> {
   const native = {
     hostCaps: { proc_spawn: false },
     utf8Decode: (bytes: Uint8Array) => Buffer.from(bytes).toString(),
-    stat(file: string, link: boolean, bigint = false) { return link ? fs.lstatSync(file, { bigint }) : fs.statSync(file, { bigint }); },
+    stat(file: string, link: boolean, bigint = false, allowMissing = false) {
+      try { return link ? fs.lstatSync(file, { bigint }) : fs.statSync(file, { bigint }); }
+      catch (error) {
+        if (allowMissing && error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+        throw error;
+      }
+    },
     exists: fs.existsSync,
     readFile: fs.readFileSync,
     readdir: fs.readdirSync,
     open: fs.openSync,
     readlink: fs.readlinkSync,
+    symlink: fs.symlinkSync,
+    writeFileFlags: (file: string, bytes: Uint8Array, flags: number, mode: number) => fs.writeFileSync(file, bytes, { flag: flags, mode }),
     mkdir: (file: string, recursive: boolean) => fs.mkdirSync(file, { recursive }),
     rm: (file: string, recursive: boolean, force: boolean) => fs.rmSync(file, { recursive, force }),
     rmdir: (file: string) => fs.rmdirSync(file),
@@ -37,6 +46,7 @@ async function checkSource(): Promise<void> {
     },
   });
   await checkEmptyPaths(module.fs);
+  await checkStatMissing(module.fs);
 }
 
 await checkSource();

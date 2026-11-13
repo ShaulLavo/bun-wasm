@@ -81,7 +81,7 @@
 
   // --- Stats / Dirent ---------------------------------------------------------
 
-  const { Stats, flagsNumber, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute);
+  const { Stats, flagsNumber, cpSync: copySync, cp: copyAsync, statIfPresent } = internal.require("fs_options")(native, absolute);
 
   class Dirent {
     constructor(name, kind, parentPath) {
@@ -319,21 +319,13 @@
   }
 
   function statSync(path, options) {
-    try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, false, Boolean(options && options.bigint))), Boolean(options && options.bigint));
-    } catch (err) {
-      if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
-      throw err;
-    }
+    if (options && options.throwIfNoEntry === false) return statIfPresent(path, options, false, withPath);
+    return new Stats(withPath(path, (abs) => native.stat(abs, false, Boolean(options && options.bigint))), Boolean(options && options.bigint));
   }
 
   function lstatSync(path, options) {
-    try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, true, Boolean(options && options.bigint))), Boolean(options && options.bigint));
-    } catch (err) {
-      if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
-      throw err;
-    }
+    if (options && options.throwIfNoEntry === false) return statIfPresent(path, options, true, withPath);
+    return new Stats(withPath(path, (abs) => native.stat(abs, true, Boolean(options && options.bigint))), Boolean(options && options.bigint));
   }
 
   function mkdirSync(path, options) {

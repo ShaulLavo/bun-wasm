@@ -38,4 +38,13 @@ prefixes still acquire their random suffix before path resolution. The
 `fs-empty-path` fixture and source-boundary check exercise these contracts; this
 is an original adapter correction, with no copied upstream code.
 
+The original stat adapter forwards explicit `throwIfNoEntry: false` to its
+native metadata call. A missing entry returns `undefined` before constructing
+or encoding a native error or creating a JavaScript Error object. This includes
+empty paths and dangling links followed by stat. Lstat still reports a dangling
+link. Other failures retain the normal Error conversion, including `ENOTDIR`.
+Successful numeric and bigint Stats use the same serializer and constructor.
+The callback and promise wrappers keep their existing scheduling and error
+objects. `fs-stat-missing` checks these cases through the public filesystem API.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

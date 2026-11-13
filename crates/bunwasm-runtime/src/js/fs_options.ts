@@ -1,6 +1,7 @@
 (function () {
   return function createFsOptions(native: {
     stat(path: string, link: boolean): { mode: number };
+    stat(path: string, link: boolean, bigint: boolean, allowMissing: boolean): Record<string, number | bigint | string> | undefined;
     readdir(path: string): [string, string][];
     mkdir(path: string, recursive: boolean): unknown;
     copyFile(from: string, to: string, mode: number): void;
@@ -41,6 +42,12 @@
       isCharacterDevice() { return (Number(this.mode) & 0o170000) === 0o020000; }
       isFIFO() { return (Number(this.mode) & 0o170000) === 0o010000; }
       isSocket() { return (Number(this.mode) & 0o170000) === 0o140000; }
+    }
+
+    function statIfPresent(path: unknown, options: { bigint?: unknown }, link: boolean,
+      withPath: (path: unknown, operation: (absolute: string) => Record<string, number | bigint | string> | undefined) => Record<string, number | bigint | string> | undefined) {
+      const raw = withPath(path, absolute => native.stat(absolute, link, Boolean(options.bigint), true));
+      return raw === undefined ? undefined : new Stats(raw, Boolean(options.bigint));
     }
 
     type CopyOptions = { recursive?: boolean; force?: boolean; errorOnExist?: boolean; filter?: (from: string, to: string) => boolean | Promise<boolean> };
@@ -84,6 +91,6 @@
       if (!accepted || !copyEntry(from, to, options)) return;
       for (const [name] of native.readdir(absolute(from))) await cp(childPath(from, name), childPath(to, name), options);
     }
-    return { flagsNumber, Stats, cpSync, cp };
+    return { flagsNumber, Stats, cpSync, cp, statIfPresent };
   };
 })

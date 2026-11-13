@@ -35,7 +35,13 @@ function fixture() {
     writeFileFlags(file: string, bytes: string | Uint8Array, flags: number, mode: number) { const fd = host.openSync(file, flags, mode); try { host.writeFileSync(fd, bytes); } finally { host.closeSync(fd); } },
     readFile: host.readFileSync,
     exists: host.existsSync,
-    stat(file: string, link: boolean, bigint = false) { return metadata(link ? host.lstatSync(file, { bigint }) : host.statSync(file, { bigint })); },
+    stat(file: string, link: boolean, bigint = false, allowMissing = false) {
+      try { return metadata(link ? host.lstatSync(file, { bigint }) : host.statSync(file, { bigint })); }
+      catch (error) {
+        if (allowMissing && error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+        throw error;
+      }
+    },
     fstat(fd: number, bigint = false) { return metadata(host.fstatSync(fd, { bigint })); },
     mkdir(file: string, recursive: boolean) { return host.mkdirSync(file, { recursive }); },
     readdir(file: string) { return host.readdirSync(file, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : "file"]); },

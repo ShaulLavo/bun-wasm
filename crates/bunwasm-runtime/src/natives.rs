@@ -675,10 +675,13 @@ fn install_fs(t: &mut Table) {
     });
     t.add("stat", |a| {
         let lstat = a.bool(1);
-        let path = required_path(a.str(0)?, if lstat { "lstat" } else { "stat" })?;
-        let stat = path_metadata(path, lstat)
-            .map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
-        Ok(stat_record(&stat, a.bool(2)))
+        let path = a.str(0)?;
+        let metadata = fs_path::required(path).and_then(|_| path_metadata(path, lstat));
+        match metadata {
+            Ok(stat) => Ok(stat_record(&stat, a.bool(2))),
+            Err(error) if a.bool(3) && error.kind() == io::ErrorKind::NotFound => Ok(Val::Undefined),
+            Err(error) => Err(io_error(error, if lstat { "lstat" } else { "stat" }, Some(path))),
+        }
     });
     t.add("mkdir", |a| {
         let path = required_path(a.str(0)?, "mkdir")?;
@@ -1762,6 +1765,26 @@ mod builtin_tests {
             .find(|(key, _)| *key == name)
             .expect("shared data native");
         function(Args(args))
+    }
+
+    #[test]
+    fn filesystem_stat_suppresses_only_requested_missing_entries() {
+        let mut table = Table::default();
+        install_fs(&mut table);
+        for link in [false, true] {
+            let args = ["".into(), link.into(), false.into(), true.into()];
+            assert_eq!(call(&table, "stat", &args).unwrap(), Val::Undefined);
+            let error = call(&table, "stat", &args[..3]).unwrap_err();
+            assert!(error.props.contains(&("code".into(), "ENOENT".into())));
+            assert!(error.props.contains(&("path".into(), "".into())));
+        }
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml/child");
+        let error = call(&table, "stat", &[path.into(), false.into(), false.into(), true.into()]).unwrap_err();
+        assert!(error.props.contains(&("code".into(), "ENOTDIR".into())));
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        let value = call(&table, "stat", &[path.into(), false.into(), true.into(), true.into()]).unwrap();
+        let Val::Object(fields) = value else { panic!("stat record") };
+        assert!(fields.iter().any(|(key, value)| key == "size" && matches!(value, Val::BigUint(_))));
     }
 
     #[test]
