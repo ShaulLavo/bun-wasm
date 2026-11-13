@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/esbuild-string-allocation.test.ts",
+  "localRuntime": true
+}
