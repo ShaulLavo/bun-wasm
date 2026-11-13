@@ -1701,12 +1701,23 @@ fn atomic64(memory: &SharedMemory, addr: u32) -> Result<u64, Errno> {
 }
 
 fn zero_chunk(memory: &SharedMemory, chunk: Chunk) {
-    for page in 0..chunk.pages {
-        let base = (chunk.page + page) * PAGE_BYTES;
-        for offset in (0..PAGE_BYTES).step_by(4) {
-            let cell = atomic32_cell(memory, base + offset).expect("allocated chunk is in bounds");
-            cell.store(0, Ordering::Relaxed);
-        }
+    let start = (chunk.page as usize)
+        .checked_mul(PAGE_BYTES as usize)
+        .expect("allocated chunk is in bounds");
+    let len = (chunk.pages as usize)
+        .checked_mul(PAGE_BYTES as usize)
+        .expect("allocated chunk is in bounds");
+    let end = start
+        .checked_add(len)
+        .expect("allocated chunk is in bounds");
+    let bytes = memory
+        .data()
+        .get(start..end)
+        .expect("allocated chunk is in bounds");
+    for word in bytes.as_chunks::<4>().0 {
+        // SAFETY: the checked chunk is page-aligned within stable shared backing.
+        let cell = unsafe { &*word[0].get().cast::<AtomicU32>() };
+        cell.store(0, Ordering::Relaxed);
     }
 }
 

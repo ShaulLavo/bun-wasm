@@ -528,6 +528,38 @@ for (const { name, install } of waitFailures) {
   });
 }
 
+function failReceivedRegistration(child: Runtime): () => void {
+  const set = Map.prototype.set;
+  return replaced(Map.prototype, "set", function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+    if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
+    throw new RangeError("out of memory");
+  });
+}
+
+function receiveDuringValidation(child: Runtime, routed: SourcePort) {
+  const wait = child.codec.wait, every = Array.prototype.every;
+  const { natives } = (child.internal.sharedObjects as unknown as { groupLanes: { natives: { laneCloseEnd(...words: number[]): number } } }).groupLanes;
+  const close = natives.laneCloseEnd;
+  let nested: unknown = "not entered";
+  const reenter = function (this: unknown[], ...args: Parameters<typeof every>) {
+    Array.prototype.every = every;
+    const restoreSet = failReceivedRegistration(child);
+    natives.laneCloseEnd = () => { throw new RangeError("out of memory"); };
+    try { nested = child.receiveMessageOnPort(routed); }
+    finally { restoreSet(); natives.laneCloseEnd = close; }
+    return every.apply(this, args);
+  };
+  child.codec.wait = (...args: Parameters<typeof wait>) => {
+    child.codec.wait = wait;
+    Array.prototype.every = reenter as typeof every;
+    return wait(...args);
+  };
+  return {
+    nested: () => nested,
+    restore() { child.codec.wait = wait; Array.prototype.every = every; natives.laneCloseEnd = close; },
+  };
+}
+
 test("a receive begun inside another graph's validation takes nothing, so neither graph's ends can be lost", async () => {
   const made = group();
   const { child, port } = made.spawn();
@@ -541,30 +573,12 @@ test("a receive begun inside another graph's validation takes nothing, so neithe
   // While the outer graph is validated, the program receives on the other port. There the
   // port's constructor would fail after taking its end and the end could not be closed, which
   // is the debt the outer receive used to overwrite.
-  const wait = child.codec.wait, every = Array.prototype.every, set = Map.prototype.set;
-  const { natives } = (child.internal.sharedObjects as unknown as { groupLanes: { natives: { laneCloseEnd(...words: number[]): number } } }).groupLanes;
-  const close = natives.laneCloseEnd;
-  let nested: unknown = "not entered";
-  child.codec.wait = (...args: Parameters<typeof wait>) => {
-    child.codec.wait = wait;
-    Array.prototype.every = function (this: unknown[], ...everyArgs: Parameters<typeof every>) {
-      Array.prototype.every = every;
-      Map.prototype.set = function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
-        if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
-        throw new RangeError("out of memory");
-      };
-      natives.laneCloseEnd = () => { throw new RangeError("out of memory"); };
-      try { nested = child.receiveMessageOnPort(routed); }
-      finally { Map.prototype.set = set; natives.laneCloseEnd = close; }
-      return every.apply(this, everyArgs);
-    } as typeof every;
-    return wait(...args);
-  };
+  const hooks = receiveDuringValidation(child, routed);
   let delivered: { message: unknown } | undefined;
   try { delivered = child.receiveMessageOnPort(child.parentPort); }
-  finally { child.codec.wait = wait; Array.prototype.every = every; Map.prototype.set = set; natives.laneCloseEnd = close; }
+  finally { hooks.restore(); }
   // The nested receive found the record taken and left its graph pending, whole.
-  expect(nested).toBeUndefined();
+  expect(hooks.nested()).toBeUndefined();
   const outerPort = carried(delivered?.message);
   const innerPort = carried(child.receiveMessageOnPort(routed)?.message);
   inner.port1.postMessage("to the inner port"); outer.port1.postMessage("to the outer port");
@@ -572,8 +586,7 @@ test("a receive begun inside another graph's validation takes nothing, so neithe
   expect(child.receiveMessageOnPort(outerPort)?.message).toBe("to the outer port");
 });
 
-for (const failOuter of [false, true]) {
-  test(`a port sent on while its message was still being made is not closed when that message fails${failOuter ? " at its registration" : " later"}`, async () => {
+async function sentOnDuringReceive(failOuter: boolean): Promise<void> {
     const made = group();
     const { child, port } = made.spawn();
     const extra = new made.root.MessageChannel();
@@ -609,7 +622,9 @@ for (const failOuter of [false, true]) {
     expect(child.receiveMessageOnPort(clone)?.message).toBe("to the clone");
     clone.postMessage("from the clone");
     expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("from the clone");
-  });
+}
+for (const failOuter of [false, true]) {
+  test(`a port sent on while its message was still being made is not closed when that message fails${failOuter ? " at its registration" : " later"}`, () => sentOnDuringReceive(failOuter));
 }
 
 test("a message whose queueing throws after it took effect is delivered with its ports alive and reports no error", async () => {
@@ -634,35 +649,45 @@ test("a message whose queueing throws after it took effect is delivered with its
   expect(run.spawned.child.receiveMessageOnPort(port)?.message).toBe("to the carried port");
 });
 
-for (const queued of [false, true]) {
-  test(`a failed message's error is reported once when the call that reports it fails ${queued ? "after" : "before"} queuing the report`, async () => {
+type ReportTimers = { setImmediate(callback: () => void): unknown };
+
+function failOneReport(timers: ReportTimers, queued: boolean, refused: () => void): () => void {
+  const schedule = timers.setImmediate;
+  timers.setImmediate = callback => {
+    timers.setImmediate = schedule;
+    refused();
+    if (queued) schedule(callback);
+    throw new RangeError("Maximum call stack size exceeded");
+  };
+  return () => { timers.setImmediate = schedule; };
+}
+
+function failReceiverAndReport(child: Runtime, failure: Error, queued: boolean, refused: () => void): () => void {
+  const set = Map.prototype.set;
+  const timers: ReportTimers = child.internal.realTimers;
+  let restoreTimer = () => {};
+  const restoreSet = replaced(Map.prototype, "set", function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+    if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
+    Map.prototype.set = set;
+    restoreTimer = failOneReport(timers, queued, refused);
+    throw failure;
+  });
+  return () => { restoreSet(); restoreTimer(); };
+}
+
+async function interruptedErrorReport(queued: boolean): Promise<void> {
     const failure = new RangeError("out of memory");
     let refusedReports = 0;
-    const run = carriedToFailingReceiver(child => {
-      const set = Map.prototype.set;
-      const timers: { setImmediate(callback: () => void): unknown } = child.internal.realTimers;
-      const schedule = timers.setImmediate;
-      // The constructor fails after taking its end, and then the report cannot be scheduled.
-      const restoreSet = replaced(Map.prototype, "set", function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
-        if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
-        Map.prototype.set = set;
-        timers.setImmediate = callback => {
-          timers.setImmediate = schedule;
-          refusedReports++;
-          if (queued) schedule(callback);
-          throw new RangeError("Maximum call stack size exceeded");
-        };
-        throw failure;
-      });
-      return () => { restoreSet(); timers.setImmediate = schedule; };
-    });
+    const run = carriedToFailingReceiver(child => failReceiverAndReport(child, failure, queued, () => { refusedReports++; }));
     expect(run.received).toBeUndefined();
     expect(refusedReports).toBe(1);
     expect(run.end().state).toBe("closed");
     await run.settle();
     expect(run.errors).toEqual([failure]);
     expect(run.peerClosed()).toBe(1);
-  });
+}
+for (const queued of [false, true]) {
+  test(`a failed message's error is reported once when the call that reports it fails ${queued ? "after" : "before"} queuing the report`, () => interruptedErrorReport(queued));
 }
 
 test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
