@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"quality":{"result":"success","outputs":{"rust":"true","shared":"true"}},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-sysroot":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"quality":{"result":"success","outputs":{"rust":"true","shared":"true"}},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-sysroot":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -46,7 +46,7 @@ while IFS='|' read -r context job selection; do
   run_report
   grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
 done <<'CASES'
-Code quality|quality|
+Code quality|ci-result|
 JSC C/C++ prebuild|jsc-prebuild|rust
 Native quality checkpoint|native-quality|rust
 Rust workspace tests (QuickJS host)|rust|rust
@@ -58,7 +58,7 @@ Processes (chromium)|browser-process|
 Processes (firefox)|browser-process|
 Processes (webkit)|browser-process|
 CASES
-RESULTS=$(jq 'del(.quality)' <<< "$baseline")
+RESULTS=$(jq 'del(."ci-result")' <<< "$baseline")
 if bash -euo pipefail "$scratch/report.sh"; then
   echo 'Missing CI result was accepted' >&2; exit 1
 fi
