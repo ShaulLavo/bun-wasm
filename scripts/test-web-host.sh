@@ -3,9 +3,9 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 browser_test() { node "$root/scripts/run-with-timeout.mts" "${BROWSER_TEST_TIMEOUT_SECONDS:-300}" "$@"; }
 phase="${1:-all}"
-case "$phase" in --setup|--unit|--browser|all) ;; *) echo "usage: $0 [--setup|--unit|--browser]" >&2; exit 2 ;; esac
+case "$phase" in --setup|--unit|--browser|--smoke|all) ;; *) echo "usage: $0 [--setup|--unit|--browser|--smoke]" >&2; exit 2 ;; esac
 
-if [[ "$phase" != --browser ]]; then
+if [[ "$phase" != --browser && "$phase" != --smoke ]]; then
   # Release archives already contain prepared Node modules and network assets.
   (cd "$root" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)
   (cd "$root/web" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)
@@ -29,7 +29,9 @@ if [[ "$phase" != --unit ]]; then
   export SMOKE_PORT="${SMOKE_PORT:-4179}"
   listeners=$(ss -H -ltn "sport = :$SMOKE_PORT")
   test -z "$listeners"
-  browser_test bun ../scripts/test-checks.ts web-browser
+  if [[ "$phase" != --smoke ]]; then
+    browser_test bun ../scripts/test-checks.ts web-browser
+  fi
   browser_test bun run test:browser
   browser_test env SPLIT_SMOKE_PORT="${SPLIT_SMOKE_PORT:-4180}" bun tests/browser-splitting.mjs
   browser_test env PLAYWRIGHT="$root/web/node_modules/playwright/index.mjs" node ../scripts/test-native-stream-interop.mjs

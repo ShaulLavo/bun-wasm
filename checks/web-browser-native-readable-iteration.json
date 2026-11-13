@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/native-readable-iteration-browser.test.ts"
+  "path": "scripts/native-readable-iteration-browser.test.ts",
+  "batch": "20-preview"
 }

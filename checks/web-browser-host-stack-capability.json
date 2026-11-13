@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/host-stack-capability.test.ts"
+  "path": "scripts/host-stack-capability.test.ts",
+  "batch": "20-preview"
 }

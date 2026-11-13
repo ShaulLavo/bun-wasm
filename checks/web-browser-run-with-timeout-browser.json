@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/run-with-timeout-browser.test.ts"
+  "path": "scripts/run-with-timeout-browser.test.ts",
+  "batch": "30-lifecycle"
 }

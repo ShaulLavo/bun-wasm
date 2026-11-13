@@ -34,6 +34,7 @@ jobs:
       shared: ${{ steps.changes.outputs.shared }}
       shared-native: ${{ steps.changes.outputs.shared_native }}
       browser-guest-batches: ${{ steps.browser-guest-batches.outputs.batches }}
+      web-browser-shards: ${{ steps.web-browser-shards.outputs.matrix }}
     steps:
       - name: Require a ready PR
         if: github.event_name == 'pull_request' && github.event.pull_request.draft
@@ -78,6 +79,9 @@ jobs:
         run: |
           batches=$(bun scripts/test-checks.ts browser-guest --batches)
           echo "batches=$batches" >> "$GITHUB_OUTPUT"
+      - name: Discover Web browser shards from feature manifests
+        id: web-browser-shards
+        run: echo "matrix=$(bun scripts/ci-web-browser-shards.ts)" >> "$GITHUB_OUTPUT"
       - name: Feature PRs preserve current package and workspace versions
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
         env:
@@ -2093,7 +2097,7 @@ jobs:
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
 
   web:
-    needs: [quality, web-unit]
+    needs: [quality, web-unit, web-browser]
     if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: ubuntu-latest
@@ -2104,10 +2108,11 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - name: Require all Web host unit gates
+      - name: Require all Web host unit and browser gates
         env:
           WEB_UNIT_RESULT: ${{ needs.web-unit.result }}
-        run: test "$WEB_UNIT_RESULT" = success
+          WEB_BROWSER_RESULT: ${{ needs.web-browser.result }}
+        run: test "$WEB_UNIT_RESULT" = success && test "$WEB_BROWSER_RESULT" = success
       - uses: ./.github/actions/release-downloads
         with:
           scope: web
@@ -2129,7 +2134,7 @@ jobs:
       - name: Web host browser gates
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bash ../scripts/test-web-host.sh --browser
+        run: bash ../scripts/test-web-host.sh --smoke
       - uses: ./.github/actions/save-release-downloads
 
   web-unit:
@@ -2189,6 +2194,47 @@ jobs:
           path: ${{ runner.temp }}/c1-webkit-failures
           if-no-files-found: ignore
           retention-days: 7
+      - uses: ./.github/actions/save-release-downloads
+
+  web-browser:
+    needs: quality
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web browser (${{ matrix.batch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.quality.outputs.web-browser-shards) }}
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install Web host browser test dependencies
+        run: bash ../scripts/test-web-host.sh --setup
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
+      - name: Run the discovered Web browser shard
+        env:
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+          WEB_BROWSER_BATCH: ${{ matrix.batch }}
+          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
+        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
       - uses: ./.github/actions/save-release-downloads
 
   process-bundles:
@@ -2371,7 +2417,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process]
+    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2388,7 +2434,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

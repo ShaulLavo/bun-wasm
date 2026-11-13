@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/persistence-quota.test.ts"
+  "path": "scripts/persistence-quota.test.ts",
+  "batch": "20-preview"
 }

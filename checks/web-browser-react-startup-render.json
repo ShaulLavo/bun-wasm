@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/react-startup-render.test.ts"
+  "path": "scripts/react-startup-render.test.ts",
+  "batch": "20-preview"
 }

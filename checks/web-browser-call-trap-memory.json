@@ -1,1 +1,1 @@
-{ "owner": "web-browser", "path": "scripts/browser-call-trap-memory.test.ts" }
+{ "owner": "web-browser", "path": "scripts/browser-call-trap-memory.test.ts" , "batch": "30-lifecycle"}

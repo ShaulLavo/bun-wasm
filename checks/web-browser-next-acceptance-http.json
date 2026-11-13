@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/next-acceptance-http.test.ts"
+  "path": "scripts/next-acceptance-http.test.ts",
+  "batch": "20-preview"
 }

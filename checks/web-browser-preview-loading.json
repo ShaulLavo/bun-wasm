@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/browser-preview-loading.test.ts"
+  "path": "scripts/browser-preview-loading.test.ts",
+  "batch": "20-preview"
 }
