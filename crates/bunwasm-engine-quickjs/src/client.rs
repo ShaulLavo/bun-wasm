@@ -4,6 +4,10 @@ use crate::transport::{
     TransportBuffer, bun_core_dispatch, bun_core_exit, bun_core_idle, bun_core_poll,
 };
 
+#[path = "client/tick.rs"]
+mod tick;
+pub(crate) use tick::TickRequest;
+
 #[derive(Clone, Copy)]
 pub(crate) struct CoreClient {
     pub(crate) session: u32,
@@ -221,10 +225,10 @@ impl CoreClient {
         Ok(string(self.call(crate::split_api::MAIN_PATH, vec![])?)? == name)
     }
 
-    pub(crate) fn take_tick(self) -> bool {
-        self.call(crate::split_api::TAKE_TICK, vec![])
-            .expect("take nextTick")
-            == Val::Bool(true)
+    pub(crate) fn take_tick(self, request: &mut Option<TickRequest>) -> bool {
+        request
+            .get_or_insert_with(TickRequest::new)
+            .take(self.session)
     }
 
     pub(crate) fn flush(self) {

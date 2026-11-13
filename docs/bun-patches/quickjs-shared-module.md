@@ -195,6 +195,15 @@ Tool selection replaces both the selected Module and its prepared plan.
 
 ## Shared producer source
 
+The original shared engine driver retains its encoded empty `TAKE_TICK` request
+and 24-byte frame for the process. Each probe still dispatches the existing
+operation, resets both reply words, decodes the current boolean and frees the
+reply. The request and frame remain separate core-owned allocations, as the
+existing transport requires. QuickJS, JSC and SpiderMonkey compile the same
+client. This internal allocation reuse changes no operation, import or event-loop
+checkpoint. `tests/controls/tick-dispatch.rs` exercises the actual codec and
+allocation-checked dispatcher and compares probe counts with generic dispatch.
+
 The common-core producer now emits one optimized, tag-free `bun-core.wasm`
 with a verified core receipt. It never invokes an engine producer. Both command
 wrappers reuse that core and add the selected `bun-wasm-engine` section before

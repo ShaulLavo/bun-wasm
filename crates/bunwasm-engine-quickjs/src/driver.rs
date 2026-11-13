@@ -4,7 +4,7 @@ use std::io::Write;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::client::CoreClient;
+use crate::client::{CoreClient, TickRequest};
 use crate::engine::{Engine, NativeError};
 use crate::natives;
 use crate::program::run_in_engine;
@@ -20,6 +20,7 @@ pub(crate) fn run<E: Engine>(session: u32) -> i32 {
     let (entry, main) = client.entry().expect("core entry description");
     let core = Rc::new(Core::<E> {
         client,
+        tick_request: RefCell::new(None),
         internal: RefCell::new(None),
         handoffs: RefCell::new(HashMap::new()),
         flushed: Cell::new(Instant::now()),
@@ -38,6 +39,7 @@ type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
     pub(crate) client: CoreClient,
+    tick_request: RefCell<Option<TickRequest>>,
     pub(crate) internal: RefCell<Option<E::Value>>,
     /// Exports objects of wrapper modules, until their `import.meta` is set.
     pub(crate) handoffs: ModuleHandoffs<E::Value>,
@@ -58,7 +60,7 @@ impl<E: Engine> Core<E> {
     }
 
     pub(crate) fn take_tick(&self) -> bool {
-        self.client.take_tick()
+        self.client.take_tick(&mut self.tick_request.borrow_mut())
     }
     pub(crate) fn flush(&self) {
         self.client.flush();
