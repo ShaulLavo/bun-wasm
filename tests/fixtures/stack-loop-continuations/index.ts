@@ -35,7 +35,40 @@ function main(depth: number): void {
   if (!(caught instanceof RangeError)) throw new Error("unbounded CALL did not throw RangeError");
   console.log("unbounded CALL caught");
   if (visit(depth) !== depth + 1) throw new Error("CALL failed after overflow");
+  reduceChecks(depth);
   console.log("continued");
+}
+
+function reduceChecks(depth: number): void {
+  function nested(a: number, n: number): number { return n === 0 ? 0 : 1 + [n - 1].reduce(nested, 0); }
+  function right(a: number, n: number): number { return n === 0 ? 0 : 1 + [n - 1, ,].reduceRight(right, 0); }
+  if (nested(0, depth) !== depth || right(0, depth) !== depth) throw new Error("nested reduce changed its result");
+  console.log("nested reduce and reduceRight completed");
+  type Node = { nodes: Node[]; value: number };
+  let tree: Node = { nodes: [], value: 1 };
+  const walkDepth = Math.min(depth, 2000);
+  for (let i = 0; i < walkDepth; i++) tree = { nodes: [tree], value: 1 };
+  function names(node: Node): number { return node.nodes.reduce((a, child) => a + names(child), node.value); }
+  if (names(tree) !== walkDepth + 1) throw new Error("Ajv-shaped reduce walk changed its result");
+  console.log("Ajv-shaped callback walk completed");
+  const marker = {};
+  let finallyCount = 0;
+  function fail(a: number, n: number): number {
+    try {
+      if (n === 0) throw marker;
+      return [n - 1].reduce(fail, 0);
+    } finally { finallyCount++; }
+  }
+  let caught: unknown;
+  try { fail(0, depth); } catch (error) { caught = error; }
+  if (caught !== marker || finallyCount !== depth + 1) throw new Error("reduce changed throw identity or finally");
+  console.log("reduce exception and finally preserved");
+  function overflow(): number { return 1 + [1].reduce(overflow, 0); }
+  caught = undefined;
+  try { overflow(); } catch (error) { caught = error; }
+  if (!(caught instanceof RangeError)) throw new Error("unbounded reduce did not throw RangeError");
+  console.log("unbounded reduce caught");
+  if (nested(0, depth) !== depth || [1, 2].reduce((a, v) => a + v, 0) !== 3) throw new Error("reduce failed after overflow");
 }
 
 if (process.argv[2] === "run") {

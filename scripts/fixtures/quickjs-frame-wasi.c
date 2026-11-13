@@ -242,6 +242,18 @@ static void frame_segments(JSRuntime *rt, JSContext *ctx)
     check(watch.cold == 0 && watch.warm == 64 && memory_bytes() == before, "from storage the allocator kept, without growing memory");
     check(watch.peak_declared == DEFAULT_LIMIT, "and every reused segment is still charged in full");
     check(evaluate(ctx, SHALLOW) == 42, "a call works after the refusals");
+    JS_SetMaxStackSize(rt, 32 * 1024);
+    check(evaluate(ctx, "(function f(a, n) { return n === 0 ? 0 : 1 + [n - 1].reduce(f, 0); })(0, 5000)") == 5000,
+          "wasm32 reduce callbacks complete 5000 levels at 32 KiB");
+    check(evaluate(ctx, "(function f(a, n) { return n === 0 ? 0 : 1 + [n - 1,,].reduceRight(f, 0); })(0, 5000)") == 5000,
+          "wasm32 sparse reduceRight callbacks complete 5000 levels at 32 KiB");
+    check(evaluate(ctx, "(function f() { return [1].reduce(f, 0); })()") == -1,
+          "wasm32 unbounded reduce is caught by the unchanged frame limit");
+    check(evaluate(ctx, "[20,22].reduce(function (a, b) { return a + b; }, 0)") == 42,
+          "wasm32 reduce recovers after frame refusal");
+    JS_GetFrameStackUsage(rt, &live, &committed, &limit);
+    check(live == 0 && committed <= PAGE, "wasm32 reduce releases its live frames and keeps at most one spare");
+    JS_SetMaxStackSize(rt, 1024 * 1024);
 }
 
 int main(void)
