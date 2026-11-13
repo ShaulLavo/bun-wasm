@@ -1,5 +1,9 @@
 name: JSC build environment
 description: Prepare the pinned toolchain and resolve the existing effective JSC cache identity
+inputs:
+  sysroot:
+    description: Build locally, or verify and import this run's sysroot using its SHA256 digest
+    default: build
 outputs:
   key:
     description: Complete existing JSC cache key
@@ -120,18 +124,32 @@ runs:
         echo "hash=$inputs" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@v4
       id: sysroot-cache
+      if: inputs.sysroot == 'build'
       with:
         path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
         key: wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
         restore-keys: |
           wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-
+    - name: Import this run's prepared sysroot
+      if: inputs.sysroot != 'build'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      env:
+        SYSROOT_SHA256: ${{ inputs.sysroot }}
+      run: |
+        source env.sh
+        transfer="$RUNNER_TEMP/jsc-identity-sysroot.tar.zst"
+        [[ "$SYSROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+        printf '%s  %s\n' "$SYSROOT_SHA256" "$transfer" | sha256sum --check
+        [[ ! -e "$BUN_WASM_SYSROOT" && ! -L "$BUN_WASM_SYSROOT" ]]
+        zstd -dc "$transfer" | tar --posix -C "$WASM_TOOLS" -xf -
+        rm -- "$transfer"
     - name: Build patched WASI sysroot
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         time bun scripts/build-wasi-sysroot.ts
     - name: Save the verified sysroot cache
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
+      if: inputs.sysroot == 'build' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched

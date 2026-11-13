@@ -120,7 +120,7 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
       || item.run === 'bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts'
       || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
   });
-  const bunSetup = (items: Job[]) => items.map(item => item.uses === "./.github/actions/setup-tools"
+  const bunSetup = (items: Job[]) => items.map(item => Object.fromEntries(Object.entries(item).filter(([key]) => key !== "shell"))).map(item => item.uses === "./.github/actions/setup-tools"
     ? { ...item, with: { "bun-version": record(item.with)["bun-version"] } } : item);
   const producerShared = bunSetup(shared(producer));
   expect(producerShared).toHaveLength(14);

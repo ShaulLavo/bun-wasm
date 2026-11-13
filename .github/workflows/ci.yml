@@ -128,7 +128,6 @@ jobs:
   # because the tools fixture links JSC even when the JSC engine gates are off. It owns
   # the run's one sysroot and one prebuild (built, or restored and verified), their
   # caches and the hand-off artifact.
-  # Boat's public-repository allowlist cannot admit the built-in GitHub Actions bot.
 
   jsc-identity:
     name: Resolve effective JSC inputs
@@ -138,10 +137,26 @@ jobs:
     timeout-minutes: 15
     outputs:
       key: ${{ steps.setup.outputs.key }}
+      sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/jsc-setup
         id: setup
+      - name: Package this run's prepared sysroot
+        id: sysroot
+        shell: bash
+        run: |
+          source env.sh
+          transfer="$RUNNER_TEMP/jsc-identity-sysroot.tar.zst"
+          tar --posix -C "$WASM_TOOLS" -cf - bun-wasm-sysroot-patched | zstd -T0 -q -o "$transfer"
+          echo "sha256=$(sha256sum "$transfer" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          path: ${{ runner.temp }}/jsc-identity-sysroot.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          archive: false
       - uses: ./.github/actions/save-release-downloads
 
   jsc-prebuild:
@@ -158,8 +173,15 @@ jobs:
       manifest-sha256: ${{ steps.prebuild.outputs.manifest-sha256 }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: jsc-identity-sysroot.tar.zst
+          path: ${{ runner.temp }}
       - uses: ./.github/actions/jsc-setup
         id: setup
+        with:
+          sysroot: ${{ needs.jsc-identity.outputs.sysroot-sha256 }}
       - uses: ./.github/actions/jsc-prebuild
         id: prebuild
         with:

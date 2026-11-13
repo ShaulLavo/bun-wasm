@@ -55,9 +55,10 @@ test("native-only selections provision the tools JSC prerequisite without enabli
   }
   expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
   expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}");
-  for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps), byId("jsc-artifact", producerSteps)]) {
+  for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
+  expect(field(byId("jsc-artifact", producerSteps), "if")).toBe("inputs.transfer == 'true'");
   for (const prerequisite of [named("Require the JSC prebuild job's output"), named("Configure private JSC build paths"), named("Import the verified JSC prebuild and sysroot"), byId("jsc-inputs")]) {
     expect(prerequisite).not.toHaveProperty("if");
   }

@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -239,8 +240,8 @@ test.each(["pull_request", "push"])("shared proof changes select only the dedica
     .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
 });
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n")[0]!;
+const workflow = expandedCiWorkflow();
+const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n")[0]!;
 
 for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs"]) {
   test.each(["pull_request", "push"])(`${path} selects the blocking EncodedSlice native proof for %s`, event => {
