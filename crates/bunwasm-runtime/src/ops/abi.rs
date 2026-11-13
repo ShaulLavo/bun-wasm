@@ -17,6 +17,7 @@ struct Allocation {
 }
 
 impl Allocation {
+    #[cfg(any(test, not(feature = "engine-split"), bun_wasm_shared_group))]
     fn copy(&self) -> Result<Vec<u8>, Status> {
         let mut bytes = Vec::new();
         bytes
