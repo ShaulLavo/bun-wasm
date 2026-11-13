@@ -58,6 +58,11 @@ Its public readSync and callback read validate buffer/offset/length arguments, t
 invoking the native for a zero-byte request, as native Node and Bun do even on a closed descriptor.
 A zero-byte request allows an offset beyond the buffer, and follows Bun in ignoring its position.
 Direct native empty reads still validate the descriptor.
+The original `natives/descriptor_read.rs` helper bounds scratch capacity by a regular
+file's current size and explicit position or shared cursor. It still performs one
+read or pread at EOF so descriptor rights and offsets reach syscall validation.
+Missing metadata or cursor rights and nonregular descriptors retain the requested
+capacity and single-read behavior. No upstream implementation is copied.
 FileHandle.read checks the handle's closed state first, so closing a handle cannot be hidden by that
 public short-circuit. A parity table distinguishes these reads from empty writes, which still fail
 with EBADF. These are original adapters, not copied Node or Bun implementations.

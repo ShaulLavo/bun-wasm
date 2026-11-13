@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/descriptor-read.test.ts",
+  "localRuntime": true
+}
