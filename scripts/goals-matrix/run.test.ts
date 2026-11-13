@@ -1,6 +1,6 @@
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
-import { mkdtemp, mkdir, access, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, access, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { options, run, playgroundURL } from "./run";
@@ -48,12 +48,14 @@ test("React Router acceptance opens origin-root previews so server and browser r
   expect(url.searchParams.get("mode")).toBe("memory");
 });
 
-const loopControls: { browser: Browser; cleanupFails: boolean; firstError: string; stop: boolean }[] = [
+const loopControls: { browser: Browser; cleanupFails: boolean; firstError: string; stop: boolean; visibleIphone?: boolean; timeoutMs?: number }[] = [
   { browser: "safari", cleanupFails: true, firstError: "Original native phase error", stop: true },
   { browser: "iphone-safari", cleanupFails: true, firstError: "Original native phase error", stop: true },
   { browser: "safari", cleanupFails: false, firstError: "Independent framework phase error", stop: false },
   { browser: "chrome", cleanupFails: true, firstError: "Independent framework phase error", stop: false },
   { browser: "iphone-safari", cleanupFails: false, firstError: "T3 device command failed: fixture", stop: true },
+  { browser: "iphone-safari", cleanupFails: true, firstError: "Original native phase error", stop: true, visibleIphone: true },
+  { browser: "iphone-safari", cleanupFails: true, firstError: "Original native phase error", stop: true, visibleIphone: true, timeoutMs: 1000 },
 ];
 test.each(loopControls)("two selected cells preserve evidence and resource teardown for %j", async control => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-loop-"));
@@ -73,6 +75,7 @@ test.each(loopControls)("two selected cells preserve evidence and resource teard
     if (control.stop && !control.cleanupFails) expect(outcome).toBe(`Error: Error: ${control.firstError}`);
     const stored: unknown = await Bun.file(join(scratch, "report/TABLE.json")).json();
     validateReport(stored);
+    if (control.visibleIphone) expect(await Bun.file(join(scratch, "factory.json")).json()).toEqual({ timeoutMs: control.timeoutMs ?? 90_000, cleanupTimeoutMs: stored.deadlines.cleanupTimeoutMs });
     const first = stored.cells.find(cell => cell.browser === control.browser && cell.engine === "browser" && cell.framework === "nuxt");
     expect(first).toMatchObject({ status: "fail", phase: "startup", error: `Error: ${control.firstError}` });
     expect(first?.attempts).toHaveLength(1);
@@ -82,6 +85,9 @@ test.each(loopControls)("two selected cells preserve evidence and resource teard
     if (control.stop) expect(stored.cells.filter(cell => cell !== first)).toEqual(untouched);
     if (!control.stop) expect(stored.cells.find(cell => cell.browser === control.browser && cell.engine === "browser" && cell.framework === "astro")).toMatchObject({ status: "fail", attempts: expect.any(Array) });
     expect(await Bun.file(join(scratch, "report/logs/nuxt-" + control.browser + "-browser.log")).text()).toContain("Fixture observation unavailable");
+    const ownershipFiles = (await readdir(join(scratch, "report/logs"))).filter(name => name.includes(".ownership-"));
+    expect(ownershipFiles).toHaveLength(control.browser === "chrome" || control.visibleIphone ? 0 : control.stop ? 1 : 2);
+    if (ownershipFiles[0]) expect(JSON.parse((await Bun.file(join(scratch, "report/logs", ownershipFiles[0])).text()).trim())).toMatchObject({ schema: 1, run: stored.run, source: { commit: stored.source.commit, dirty: stored.source.dirty }, attempt: 1, operation: { kind: "session-create" }, outcome: { state: "intent" } });
     expect(stored.resources).toHaveLength(1);
     for (const resource of stored.resources ?? []) {
       expect(resource.stopped).toBe(true);
@@ -103,6 +109,7 @@ const source = ${JSON.stringify(import.meta.dir)};
 const root = ${JSON.stringify(scratch)};
 const control = ${JSON.stringify(control)};
 const scoped = await import(source + "/scoped-transport.ts");
+const iphone = await import(source + "/iphone-transport.ts");
 const createTransport = async (): Promise<Transport> => ({
   capabilities: { browserName: control.browser, transport: "local-control" },
   navigate: async url => { await appendFile(root + "/entered", new URL(url).searchParams.get("template") + "\\n"); throw new Error(control.firstError); },
@@ -112,10 +119,13 @@ const createTransport = async (): Promise<Transport> => ({
 });
 mock.module(source + "/discovery.ts", () => ({ prerequisites: () => undefined }));
 mock.module(source + "/transport.ts", () => ({ ...scoped, createPlaywrightTransport: createTransport }));
-mock.module(source + "/safari-transport.ts", () => ({ createSafariTransport: createTransport }));
+mock.module(source + "/safari-transport.ts", () => ({ createSafariTransport: async options => { options.ownershipSink?.({ sequence: 1, event: 1, at: new Date().toISOString(), sessionId: null, hostHandle: null, admission: "unscoped", operation: { kind: "session-create" }, outcome: { state: "intent" } }); return createTransport(); } }));
+mock.module(source + "/iphone-transport.ts", () => ({ ...iphone, createIphoneTransport: async options => { await Bun.write(root + "/factory.json", JSON.stringify({ timeoutMs: options.timeoutMs, cleanupTimeoutMs: options.cleanupTimeoutMs })); return createTransport(); } }));
 const { run, options } = await import(source + "/run.ts");
+const native = control.visibleIphone ? ["--iphone-control-url=http://127.0.0.1:1/__goals_iphone/" + "a".repeat(64), "--iphone-agent-command=/bound/agent-device", "--device-udid=fixture"] : ["--safari-endpoint=http://127.0.0.1:1", "--iphone-endpoint=http://127.0.0.1:1"];
+if (control.timeoutMs !== undefined) native.push("--timeout-ms=" + control.timeoutMs);
 let failure = "";
-try { await run(options(["--root=" + root + "/site", "--output=" + root + "/report", "--asset-source=local-control-no-assets", "--browsers=" + control.browser, "--engines=browser", "--frameworks=nuxt,astro", "--safari-endpoint=http://127.0.0.1:1", "--iphone-endpoint=http://127.0.0.1:1"])); }
+try { await run(options(["--root=" + root + "/site", "--output=" + root + "/report", "--asset-source=local-control-no-assets", "--safari-ownership", "--browsers=" + control.browser, "--engines=browser", "--frameworks=nuxt,astro"].concat(native))); }
 catch (error) { failure = String(error); }
 await Bun.write(root + "/outcome", failure);
 `;

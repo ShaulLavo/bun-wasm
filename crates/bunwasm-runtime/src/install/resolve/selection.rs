@@ -33,9 +33,23 @@ pub(crate) fn order(a: &str, b: &str) -> Ordering {
 }
 
 pub(super) fn select<'a>(versions: &'a Map<String, Value>, range: &str) -> Option<&'a str> {
+    let range_bytes = range.as_bytes();
+    let group = query::parse(range_bytes, SlicedString::init(range_bytes, range_bytes)).ok()?;
+    if group.has_skipped() {
+        return None;
+    }
     versions
         .keys()
-        .filter(|version| matches(version, range))
+        .filter(|version| {
+            let bytes = version.as_bytes();
+            let Some(version) = Version::parse_exact(SlicedString::init(bytes, bytes)) else {
+                return false;
+            };
+            match group.get_exact_version() {
+                Some(exact) => version.eql(exact),
+                None => group.satisfies(version, range_bytes, bytes),
+            }
+        })
         .max_by(|a, b| is_release(a).cmp(&is_release(b)).then_with(|| order(a, b)))
         .map(String::as_str)
 }

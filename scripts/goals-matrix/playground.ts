@@ -64,14 +64,28 @@ function shellState(token: string): { done: boolean; code: number | null; error:
   if (!current || current.token !== token) throw new Error("Command token differs");
   return { done: current.done, code: current.code, error: current.error };
 }
-/** Runs one foreground command to its exit, whatever its code. Throws ObservationTimeout when it is still running at the deadline. */
-export async function foreground(transport: ScopedTransport, text: string, timeoutMs: number): Promise<ReturnType<typeof shellState>> {
-  await transport.useHost();
-  const token = await transport.evaluate<string>(expression(launch, text));
-  return until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
+export interface ForegroundObservation {
+  readonly expression: string;
+  dispatched(at: number): void;
+  pending(value: unknown): Promise<boolean>;
 }
-export async function command(transport: ScopedTransport, text: string, timeoutMs: number): Promise<unknown> {
-  const result = await foreground(transport, text, timeoutMs);
+/** Runs one foreground command to its exit, whatever its code. Throws ObservationTimeout when it is still running at the deadline. */
+export async function foreground(transport: ScopedTransport, text: string, timeoutMs: number, observation?: ForegroundObservation): Promise<ReturnType<typeof shellState>> {
+  await transport.useHost();
+  const dispatchedAt = observation ? Date.now() : 0;
+  const token = await transport.evaluate<string>(expression(launch, text));
+  if (!observation) return until(() => transport.evaluate<ReturnType<typeof shellState>>(expression(shellState, token)), state => state.done, timeoutMs);
+  observation.dispatched(dispatchedAt);
+  const poll = expression(shellState, token);
+  const observedPoll = `(() => { const state = ${poll}; let observation = null; if (!state.done) { try { observation = ${observation.expression}; } catch (error) { observation = { unavailable: String(error) }; } } return { state, observation }; })()`;
+  return until(async () => {
+    const value = await transport.evaluate<{ state: ReturnType<typeof shellState>; observation: unknown }>(observedPoll);
+    if (!value.state.done && await observation.pending(value.observation)) return transport.evaluate<ReturnType<typeof shellState>>(poll);
+    return value.state;
+  }, state => state.done, timeoutMs);
+}
+export async function command(transport: ScopedTransport, text: string, timeoutMs: number, observation?: ForegroundObservation): Promise<unknown> {
+  const result = await foreground(transport, text, timeoutMs, observation);
   const output = await terminal(transport);
   if (result.code !== 0 || result.error) throw new Error(`${text} exited ${result.code}: ${result.error ?? output.slice(-6000)}`);
   return { ...result, output };

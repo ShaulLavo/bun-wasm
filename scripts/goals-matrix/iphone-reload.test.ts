@@ -82,7 +82,7 @@ test("host replacement and unannounced preview identity changes remain rejected"
 test("an undelivered replacement observation still expires under its original timer", async () => {
   const { bus, key } = attached();
   try {
-    const pending = bus.execute("preview", "document.title", 30, true, Date.now() + 30);
+    const pending = bus.execute("preview", "document.title", 30, true, Date.now() + 1000);
     const rejected = pending.catch((error: unknown) => error);
     bus.poll("preview", key, origin);
     bus.script(url, endpoint);

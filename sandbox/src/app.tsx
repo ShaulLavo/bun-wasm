@@ -9,7 +9,7 @@ import { templates } from "./template-catalog";
 type Props = { sandbox: Sandbox };
 
 const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS"], ["jsc", "JSC"]] as const;
-const RELOAD_TITLES = { construction: "Retry sandbox startup", startup: "Open the latest saved workspace" };
+const RELOAD_TITLES = { construction: "Retry sandbox startup", startup: "Open the latest saved workspace", storage: "Retry saving and starting without leaving this page" };
 
 export function App(handle: Handle<Props>) {
   const { sandbox } = handle.props;
@@ -17,6 +17,7 @@ export function App(handle: Handle<Props>) {
   return () => (
     <>
       <Header sandbox={sandbox} />
+      {sandbox.storageNotice && <p id="storage-status" role="status">{sandbox.storageNotice}</p>}
       <main>
         <FileTree sandbox={sandbox} />
         <EditorPane sandbox={sandbox} />
@@ -59,7 +60,7 @@ function Header(handle: Handle<Props>) {
         </label>
         <button id="reset" type="button" title="Discard this workspace and restore its template" disabled={locked} mix={reset}>Reset template</button>
         {failure
-          ? <button id="restart" type="button" title={RELOAD_TITLES[failure]} mix={restart}>Reload</button>
+          ? <button id="restart" type="button" title={RELOAD_TITLES[failure]} mix={restart}>{failure === "storage" ? "Retry" : "Reload"}</button>
           : <button id="restart" type="button" title="Restart the dev server" disabled={resetting} mix={restart}>↻ Restart</button>}
       </header>
     );

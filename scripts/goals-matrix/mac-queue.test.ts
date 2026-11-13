@@ -198,7 +198,7 @@ async function localMesh(f: Fixture, operation: () => Promise<void>, entered?: s
   const previous = process.env.PATH;
   await mkdir(join(f.home, "bin"));
   const mesh = join(f.home, "bin/mesh");
-  await writeFile(mesh, `#!/bin/sh\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\n${entered ? `printf entered > ${quote(entered)}\n` : ""}exec "$@"\n`);
+  await writeFile(mesh, `#!/bin/sh\nif [ "$1" = cp ]; then shift; shift; source=\${1#mac:}; exec cp -R "$source" "$2"; fi\nshift 3\nexport HOME=${quote(f.home)}\nexport MACHINE_FLEET_STATE_DIR=${quote(f.env.MACHINE_FLEET_STATE_DIR ?? "")}\n${entered ? `printf entered > ${quote(entered)}\n` : ""}exec "$@"\n`);
   await chmod(mesh, 0o755);
   process.env.PATH = join(f.home, "bin") + ":" + previous;
   try { await operation(); }
@@ -336,3 +336,84 @@ test.each([false, true])("direct Mac CLI uses the same admission route with an e
   expect(called.slice(0, 13)).toEqual(queuedNativeCommand(config(), [], `bun-wasm goals ${f.remote}/report`, f.home).slice(2, 15));
   expect(called.slice(-args.length)).toEqual(args);
 }, `if(process.argv[2]==='status')console.log(JSON.stringify({holder:null,waiting:[]}));else{await Bun.write(process.env.EVENTS,JSON.stringify(process.argv.slice(2)));process.exitCode=75;}`));
+
+test("ownership capture forwards through ordinary run and fleet CLI options", () => {
+  const request = { ...config(), safariOwnership: true };
+  expect(options(nativeRunnerArgs(request, "/Users/fixture/task")).safariOwnership).toBe(true);
+  expect(options(nativeRunnerArgs(config(), "/Users/fixture/task")).safariOwnership).toBe(false);
+  expect(options(["--asset-source=test", "--safari-ownership=true"]).safariOwnership).toBe(true);
+  expect(() => options(["--asset-source=test", "--safari-ownership=false"])).toThrow("accepts only true");
+});
+
+test.each([false, true])("failed native run collects ownership before staging disposition, native stopped = %j", nativeStopped => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  const name = "vite-react-safari-spidermonkey.ownership-capture.jsonl";
+  const retained = '{"sessionId":"exact-session","outcome":{"state":"request-failed","effect":"unknown"}}\n';
+  await writeFile(join(f.remote, "report/logs", name), retained);
+  await writeFile(join(f.remote, "queue-exit"), "1\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: nativeStopped, safariExited: nativeStopped, admissionOwner: "installed-mac-queue" }));
+  const request = { ...config(), output: f.home, safariOwnership: true };
+  const original = new Error("original cell cleanup failed");
+  if (nativeStopped) await cleanupStaging(f.remote, true, request, original);
+  else await expect(cleanupStaging(f.remote, true, request, original)).rejects.toThrow("original cell cleanup failed; cleanup:");
+  expect(await readFile(join(f.home, "logs", name), "utf8")).toBe(retained);
+  expect(existsSync(f.remote)).toBe(!nativeStopped);
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("failure to collect ownership retains staging and preserves the original failure", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/ownership.jsonl"), "own receipt\n");
+  const mesh = join(f.home, "bin/mesh");
+  await writeFile(mesh, "#!/bin/sh\nexit 7\n");
+  const original = new Error("original operation failed");
+  const request = { ...config(), output: f.home, safariOwnership: true };
+  let error: unknown;
+  try { await cleanupStaging(f.remote, true, request, original); }
+  catch (caught) { error = caught; }
+  expect(error).toBeInstanceOf(AggregateError);
+  if (!(error instanceof AggregateError)) throw error;
+  expect(error.errors[0]).toBe(original);
+  expect(await readFile(join(f.remote, "report/logs/ownership.jsonl"), "utf8")).toBe("own receipt\n");
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("final ownership collection follows writer settlement before staging removal", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/own.jsonl"), "session created\n");
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, new Error("controller interrupted"));
+  expect(await readFile(join(f.home, "logs/own.jsonl"), "utf8")).toBe("session created\nsession deletion acknowledged\n");
+  expect(existsSync(f.remote)).toBe(false);
+}), "import {appendFileSync} from 'node:fs'; appendFileSync('report/logs/own.jsonl','session deletion acknowledged\\n'); console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("ownership cancellation before workload start removes settled staging without logs", () => fixture(f => localMesh(f, async () => {
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, new Error("cancelled while queued"));
+  expect(existsSync(f.remote)).toBe(false);
+  expect(existsSync(join(f.home, "logs"))).toBe(false);
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ consumersStopped: true, stagingRemoved: true });
+}), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+test("failed final ownership copy retains settled staging and its complete receipt", () => fixture(f => localMesh(f, async () => {
+  await mkdir(join(f.remote, "report/logs"), { recursive: true });
+  await writeFile(join(f.remote, "report/logs/own.jsonl"), "complete receipt\n");
+  await writeFile(join(f.remote, "queue-exit"), "130\n");
+  await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+  await writeFile(join(f.remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+  const mesh = join(f.home, "bin/mesh");
+  const shim = await readFile(mesh, "utf8");
+  await writeFile(mesh, shim.replace('if [ "$1" = cp ]; then', 'if [ "$1" = cp ]; then exit 7;'));
+  const original = new Error("controller interrupted");
+  let failure: unknown;
+  try { await cleanupStaging(f.remote, true, { ...config(), output: f.home, safariOwnership: true }, original); }
+  catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(AggregateError);
+  if (!(failure instanceof AggregateError)) throw failure;
+  expect(failure.errors[0]).toBe(original);
+  expect(await readFile(join(f.remote, "proof-seen"), "utf8")).toBe("yes");
+  expect(await readFile(join(f.remote, "report/logs/own.jsonl"), "utf8")).toBe("complete receipt\n");
+  expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: false });
+}), "await Bun.write('proof-seen','yes'); console.log(JSON.stringify({holder:null,waiting:[]}));"));
