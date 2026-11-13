@@ -569,8 +569,10 @@
     /** Takes this end of a group lane in decode: memory only. An end closed first restores closed. */
     #adoptGroupLane(lane: BunWasm.GroupPortLane, version: number) {
       const state = this.#value();
-      const io = groupLanes?.adopt(lane, version);
-      if (io) state.group = { io, backlog: false, terminal: false };
+      if (!groupLanes) { state.phase = "closed"; return; }
+      // The end's wrapper and record are made before the end is taken.
+      const group = { io: groupLanes.open({ slot: lane.slot, generation: lane.generation }, lane.side), backlog: false, terminal: false };
+      if (groupLanes.adopt(lane, version)) state.group = group;
       else state.phase = "closed";
     }
     /** Stops reading the lane: for good when the port closes, or until a transferred port's next owner reads it. */
@@ -605,9 +607,13 @@
     static #ensureGroupLane(state: PortState, other: MessagePort | undefined) {
       const peer = other ? other.#state : null;
       if (state.group || !peer || peer.group || !groupLanes) return;
-      const ref = groupLanes.create();
-      state.group = { io: groupLanes.open(ref, 0), backlog: false, terminal: false };
-      peer.group = { io: groupLanes.open(ref, 1), backlog: false, terminal: false };
+      // Both ends and their records exist before the lane does. A failure up to `create` leaves
+      // no lane, and after it there are two stores: never a lane with one end, or with none.
+      const ref = { slot: 0, generation: 0 };
+      const mine = { io: groupLanes.open(ref, 0), backlog: false, terminal: false };
+      const theirs = { io: groupLanes.open(ref, 1), backlog: false, terminal: false };
+      groupLanes.create(ref);
+      state.group = mine; peer.group = theirs;
     }
     static #lanePacket(state: PortState, text: string) {
       const body = record(JSON.parse(text));

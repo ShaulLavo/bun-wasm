@@ -181,6 +181,13 @@ How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
   is overtaken by the retry and does nothing. A batch that cannot queue its next step ends,
   and what it had left is owed the same way. The pump counts an owed delivery as progress,
   so the loop steps again instead of sleeping.
+- A channel gets its lane when one of its ports is first prepared for transfer. The ledger
+  keeps a lane whether or not the thread that made it can then remember it, so everything
+  that can fail is made first: both ends are opened over a blank name and their records are
+  built, `laneCreate` runs last and fills the name in, and only two stores follow. A failure
+  before it leaves no lane, and there is never a lane with one end or none. A worker's cell
+  and the wrapper of a carried end taken in decode are made in the same order. Found by the
+  heap sweep on a real guest: with the old order, 512 failed posts filled the ledger.
 - What a committed post owes others is sent at that same next entry or step: the broker's
   record that a port is moving, the publication's commit, the wake hint. None of it is needed
   for the message to be whole. The receiver adopts a carried end from the ledger and binds

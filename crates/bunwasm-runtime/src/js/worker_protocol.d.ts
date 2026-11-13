@@ -58,9 +58,15 @@ declare namespace BunWasm {
   interface GroupLanes {
     ledger(): number;
     join(ledger: number, cell: LaneCell): boolean;
-    create(): GroupLaneRef;
+    /**
+     * Makes a lane and writes its name into `ref`. The caller opens both ends over `ref` and
+     * makes whatever will hold them first: after this returns it may only store them.
+     */
+    create(ref: GroupLaneRef): void;
+    /** An end of the lane `ref` names, or will name once `create` has filled it in. Changes nothing in the ledger. */
     open(ref: GroupLaneRef, side: 0 | 1): GroupSharedLane;
-    adopt(lane: GroupPortLane, version: number): GroupSharedLane | null;
+    /** Takes a carried end for this thread: true when it was still in flight at that epoch. The caller opens the end first. */
+    adopt(lane: GroupPortLane, version: number): boolean;
     /** Closes a carried end that will never be restored. */
     discard(lane: GroupPortLane, version: number): void;
     cell(): LaneCell;

@@ -30,10 +30,6 @@
     if (result !== REFUSED) return result;
     throw cloneError(refusing(() => native.laneRefusal()));
   }
-  function pair(result: number): [number, number] {
-    const low = result % PAIR;
-    return [(result - low) / PAIR, low];
-  }
   function ensureLedger() {
     if (!ledger) ledger = refusing(() => native.laneLedger());
     return ledger;
@@ -43,16 +39,16 @@
     if (custody.kind === "cell") return [1, custody.cell[0], custody.cell[1], 0];
     return [2, 0, 0, 0];
   }
+  // An end reads `ref` at each call: `create` fills it in after both ends were opened over it.
   function open(ref: BunWasm.GroupLaneRef, side: 0 | 1): BunWasm.GroupSharedLane {
-    const { slot, generation } = ref;
     return {
       ref, side,
       reserve(text) {
         // The frame is staged under this end, not under an id the reply carries: a reply lost
         // after staging leaves a frame the abort below still finds.
-        try { native.laneReserve(slot, generation, side, text); }
+        try { native.laneReserve(ref.slot, ref.generation, side, text); }
         catch (error) {
-          native.laneAbort(slot, generation, side);
+          native.laneAbort(ref.slot, ref.generation, side);
           throw cloneError(error);
         }
         let settled = false;
@@ -60,41 +56,41 @@
           commit() {
             if (settled) return false;
             settled = true;
-            return native.laneCommit(slot, generation, side) === 1;
+            return native.laneCommit(ref.slot, ref.generation, side) === 1;
           },
           abort() {
             if (settled) return;
             settled = true;
-            native.laneAbort(slot, generation, side);
+            native.laneAbort(ref.slot, ref.generation, side);
           },
         };
       },
       drain(limit = DRAIN_LIMIT) {
         // The core keeps the frames it read until told this thread has them, so a call that
         // throws on its way back returns the same frames next time.
-        const [frames, more, terminal] = native.laneDrain(slot, generation, side, limit);
-        if (frames.length) native.laneDrained(slot, generation, side);
+        const [frames, more, terminal] = native.laneDrain(ref.slot, ref.generation, side, limit);
+        if (frames.length) native.laneDrained(ref.slot, ref.generation, side);
         return { frames, more, terminal };
       },
-      closeRead() { native.laneCloseRead(slot, generation, side); },
-      closeEnd() { return native.laneCloseEnd(slot, generation, side) === 1; },
-      peerClosed() { return native.lanePeerClosed(slot, generation, side) === 1; },
-      transferEpoch() { return accepted(native.laneTransferEpoch(slot, generation, side)); },
+      closeRead() { native.laneCloseRead(ref.slot, ref.generation, side); },
+      closeEnd() { return native.laneCloseEnd(ref.slot, ref.generation, side) === 1; },
+      peerClosed() { return native.lanePeerClosed(ref.slot, ref.generation, side) === 1; },
+      transferEpoch() { return accepted(native.laneTransferEpoch(ref.slot, ref.generation, side)); },
       transfer(custody) {
         const [kind, first, second, third] = custodyArguments(custody);
-        native.laneTransfer(slot, generation, side, kind, first, second, third);
+        native.laneTransfer(ref.slot, ref.generation, side, kind, first, second, third);
       },
       // A staged post: the frame and the ends it carries stay under this end until the engine's
       // transfer native commits them, or `abort` drops them. Nothing moves before that commit.
       stage(text) {
-        try { native.laneReserve(slot, generation, side, text); }
+        try { native.laneReserve(ref.slot, ref.generation, side, text); }
         catch (error) {
-          native.laneAbort(slot, generation, side);
+          native.laneAbort(ref.slot, ref.generation, side);
           throw cloneError(error);
         }
       },
-      stageEnd(carried) { return accepted(native.laneStageEnd(slot, generation, side, carried.slot, carried.generation, carried.side)); },
-      abort() { native.laneAbort(slot, generation, side); },
+      stageEnd(carried) { return accepted(native.laneStageEnd(ref.slot, ref.generation, side, carried.slot, carried.generation, carried.side)); },
+      abort() { native.laneAbort(ref.slot, ref.generation, side); },
     };
   }
   /** The last staged commit of this thread: its nonce, and whether its reader was due a wake. */
@@ -104,10 +100,12 @@
     const wake = word % 2;
     return [(word - wake) / 2, wake === 1];
   }
+  // The ledger keeps what `laneCreate`, `laneCell` and `laneAdopt` did whether or not this thread
+  // can then remember it. So each is the last thing that can fail: what holds its result is
+  // made first, and after the native there are only stores. A lane, a cell or an end taken with
+  // nothing left to refer to it would stay in the ledger for good.
   function adopt(lane: BunWasm.GroupPortLane, version: number) {
-    if (!ledger) return null;
-    const ref = { slot: lane.slot, generation: lane.generation };
-    return native.laneAdopt(lane.slot, lane.generation, lane.side, lane.epoch, version) === 1 ? open(ref, lane.side) : null;
+    return ledger !== 0 && native.laneAdopt(lane.slot, lane.generation, lane.side, lane.epoch, version) === 1;
   }
   return {
     ledger: ensureLedger,
@@ -116,22 +114,29 @@
       ledger = address;
       return registered;
     },
-    create() {
+    create(ref) {
       ensureLedger();
-      const [slot, generation] = pair(accepted(native.laneCreate()));
-      return { slot, generation };
+      const word = native.laneCreate();
+      if (word === REFUSED) throw cloneError(refusing(() => native.laneRefusal()));
+      ref.generation = word % PAIR;
+      ref.slot = (word - ref.generation) / PAIR;
     },
     open,
     adopt,
     discard(lane, version) {
-      const io = adopt(lane, version);
-      if (!io) return;
+      const io = open({ slot: lane.slot, generation: lane.generation }, lane.side);
+      if (!adopt(lane, version)) return;
       io.closeRead();
       io.closeEnd();
     },
     cell() {
       ensureLedger();
-      return pair(accepted(native.laneCell()));
+      const cell: BunWasm.LaneCell = [0, 0];
+      const word = native.laneCell();
+      if (word === REFUSED) throw cloneError(refusing(() => native.laneRefusal()));
+      cell[1] = word % PAIR;
+      cell[0] = (word - cell[1]) / PAIR;
+      return cell;
     },
     exited(cell) { if (ledger) native.laneExited(cell[0], cell[1]); },
     sweep(full) { if (ledger) native.laneSweep(full); },

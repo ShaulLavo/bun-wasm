@@ -337,6 +337,39 @@ function postRefusedOnEntry() {
   return { made, spawned, extra, buffer };
 }
 
+// The ledger keeps a lane, or an end taken from it, whether or not the thread that asked can
+// then remember it. Found on a real guest: with its heap full, a post that carried a port made
+// the port's lane and then failed to make the lane's two ends, and after 512 such posts no port
+// in the group could be sent ("MessagePort lane ledger is full").
+for (const failing of [1, 2]) {
+  test(`a lane whose ${failing === 1 ? "first" : "second"} end cannot be opened is never made, and its channel is whole for the next post`, () => {
+    const made = group();
+    const spawned = made.spawn();
+    const extra = new made.root.MessageChannel();
+    const lanes = made.model.lanes.length;
+    const open = made.rootLanes.open, failure = new RangeError("out of memory");
+    let opened = 0;
+    made.rootLanes.open = (ref, side) => {
+      if (++opened === failing) throw failure;
+      return open(ref, side);
+    };
+    try { expect(() => spawned.port.postMessage({ port: extra.port2 }, [extra.port2])).toThrow(failure); }
+    finally { made.rootLanes.open = open; }
+    // No lane exists that no port refers to.
+    expect(made.model.lanes.length).toBe(lanes);
+    expect(made.model.control.staged).toBe(0);
+    // Still one channel with two local ends, which then moves and carries a message each way.
+    extra.port2.postMessage("local");
+    expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("local");
+    spawned.port.postMessage({ port: extra.port2 }, [extra.port2]);
+    expect(made.model.lanes.length).toBe(lanes + 1);
+    const moved = carried(spawned.child.receiveMessageOnPort(spawned.child.parentPort)?.message);
+    moved.postMessage("from the child"); extra.port1.postMessage("to the child");
+    expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("from the child");
+    expect(spawned.child.receiveMessageOnPort(moved)?.message).toBe("to the child");
+  });
+}
+
 test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
   const { made, spawned, extra, buffer } = postRefusedOnEntry();
   // The call never ran, so nothing could undo the local steps taken before it. The next entry
