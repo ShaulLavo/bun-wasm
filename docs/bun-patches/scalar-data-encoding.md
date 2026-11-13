@@ -8,7 +8,7 @@ The encoder writes the root value directly. For arrays and objects, it writes
 scalar prefixes directly and queues the remaining values at the first nested
 container. Nested traversal remains iterative. This removes temporary traversal
 allocations for scalar results and flat argument lists while preserving field
-order, byte encoding, allocation failures, and structural nesting support.
+order, byte encoding, checked allocations, and structural nesting support.
 
 The existing codec and operation tests cover every tag, malformed inputs,
 transport ownership, and nested calls. Codec regressions additionally check exact
