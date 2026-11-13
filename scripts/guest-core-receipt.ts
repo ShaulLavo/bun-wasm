@@ -186,9 +186,21 @@ export function engineEnvironment(kind: SupportedPairedEngine, sysroot: string, 
   return flags;
 }
 
+/**
+ * A receipt names a release. An environment that selects something else, or that could change
+ * what the compiler builds without this capture seeing it, is refused before anything is read.
+ */
+export function assertQualifiedEnvironment(scope: ProgramInputSnapshot["scope"], env: Record<string, string | undefined>): void {
+  if (env.RUSTFLAGS !== undefined || env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
+  if (scope !== "quickjs") return;
+  if ((env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
+  // The validation side (crates/bunwasm-engine-quickjs/src/transfer_fault.rs) is never a release.
+  // The compiler's own variable is refused whatever it holds: only the producer sets it.
+  if ((env.QUICKJS_TRANSFER_FAULT ?? "0") !== "0" || env.BUN_WASM_TRANSFER_FAULT !== undefined) throw new Error("Qualified QuickJS program receipts require QUICKJS_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+}
+
 export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputSnapshot["scope"], selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
-  if (process.env.RUSTFLAGS !== undefined || process.env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
-  if (scope === "quickjs" && (process.env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
+  assertQualifiedEnvironment(scope, process.env);
   run(["bash", join(options.repository, "scripts/sync-bun.sh"), "--check"], options.repository);
   const core = scope === "core" ? coreSelection(selection) : undefined;
   const profile = core ? core.profile ?? "split" : engineProfile;

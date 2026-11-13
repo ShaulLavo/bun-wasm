@@ -273,3 +273,6 @@ mod allocation_probe;
 mod native_contract_tests;
 #[cfg(bun_wasm_transfer_fault)]
 mod transfer_fault;
+#[cfg(test)]
+#[path = "../build/transfer_fault.rs"]
+mod transfer_fault_option;

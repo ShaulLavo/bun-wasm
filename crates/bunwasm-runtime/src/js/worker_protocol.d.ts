@@ -67,7 +67,7 @@ declare namespace BunWasm {
     open(ref: GroupLaneRef, side: 0 | 1): GroupSharedLane;
     /** Takes a carried end for this thread: true when it was still in flight at that epoch. The caller opens the end first. */
     adopt(lane: GroupPortLane, version: number): boolean;
-    /** Closes a carried end that will never be restored. */
+    /** Closes a carried end that will never be delivered: one still in flight, or one this thread took for a port it never finished. Repeating it changes nothing. */
     discard(lane: GroupPortLane, version: number): void;
     cell(): LaneCell;
     exited(cell: LaneCell): void;

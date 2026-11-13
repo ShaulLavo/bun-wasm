@@ -370,6 +370,132 @@ for (const failing of [1, 2]) {
   });
 }
 
+/**
+ * A message that carries a port to a child, read there while `failing` is installed. Returns
+ * what the child's read did and the carried end as the ledger model has it.
+ */
+function carriedToFailingReceiver(failing: (child: Runtime) => () => void) {
+  const made = group();
+  const spawned = made.spawn();
+  const extra = new made.root.MessageChannel();
+  const errors: unknown[] = [];
+  let peerClosed = 0;
+  spawned.child.parentPort.on("messageerror", (error: unknown) => errors.push(error));
+  extra.port1.on("close", () => { peerClosed++; });
+  spawned.port.postMessage({ port: extra.port2 }, [extra.port2]);
+  const lane = made.model.lanes.at(-1)!;
+  const side = lane.ends.findIndex(end => end.state === "in-flight");
+  expect(side).not.toBe(-1);
+  const restore = failing(spawned.child);
+  let received: unknown;
+  try { received = spawned.child.receiveMessageOnPort(spawned.child.parentPort); }
+  finally { restore(); }
+  /** Loop steps of both threads, and the turns their callbacks need. */
+  const settle = async () => {
+    for (let turn = 0; turn < 4; turn++) {
+      spawned.child.step(); made.root.step();
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  };
+  return { made, spawned, extra, errors, received, end: () => lane.ends[side]!, peerClosed: () => peerClosed, settle };
+}
+/** Replaces `target[name]` until the returned function is called. */
+function replaced<T extends object, K extends keyof T>(target: T, name: K, value: T[K]) {
+  const original = target[name];
+  target[name] = value;
+  return () => { target[name] = original; };
+}
+
+// A received message owns the ends of the ports it carries until it is queued. The cases fail
+// its making at each kind of place: inside a port's constructor after the end was taken, after
+// every port was built, and then while the cleanup itself is running.
+test("a port whose constructor fails after taking its end has the end closed, and the peer sees the channel close", async () => {
+  const failure = new RangeError("out of memory");
+  const run = carriedToFailingReceiver(child => {
+    const set = Map.prototype.set;
+    return replaced(Map.prototype, "set", function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
+      Map.prototype.set = set;
+      throw failure;
+    });
+  });
+  expect(run.received).toBeUndefined();
+  // The end was taken by a port that never existed, and is closed all the same.
+  expect(run.end().state).toBe("closed");
+  await run.settle();
+  expect(run.errors).toEqual([failure]);
+  expect(run.peerClosed()).toBe(1);
+  // The receiver's port still works for the next message.
+  run.spawned.port.postMessage("next");
+  expect(run.spawned.child.receiveMessageOnPort(run.spawned.child.parentPort)?.message).toBe("next");
+});
+
+test("a port whose constructor fails before taking its end has the end taken and closed by the cleanup", async () => {
+  const failure = new RangeError("out of memory");
+  const run = carriedToFailingReceiver(child => {
+    const { natives } = (child.internal.sharedObjects as unknown as { groupLanes: { natives: { laneAdopt(...words: number[]): number } } }).groupLanes;
+    const adopt = natives.laneAdopt;
+    // The call that would take the end fails on entry: the end is still in flight.
+    return replaced(natives, "laneAdopt", () => { natives.laneAdopt = adopt; throw failure; });
+  });
+  expect(run.received).toBeUndefined();
+  expect(run.end().state).toBe("closed");
+  await run.settle();
+  expect(run.errors).toEqual([failure]);
+  expect(run.peerClosed()).toBe(1);
+});
+
+test("a message that cannot be queued after its ports were built has those ports closed", async () => {
+  const failure = new RangeError("out of memory");
+  const run = carriedToFailingReceiver(() => {
+    const push = Array.prototype.push;
+    return replaced(Array.prototype, "push", function (this: unknown[], ...items: unknown[]) {
+      const packet = items[0];
+      if (!packet || typeof packet !== "object" || !("data" in packet) || !("ports" in packet)) return push.apply(this, items);
+      Array.prototype.push = push;
+      throw failure;
+    });
+  });
+  expect(run.received).toBeUndefined();
+  expect(run.end().state).toBe("closed");
+  await run.settle();
+  expect(run.errors).toEqual([failure]);
+  expect(run.peerClosed()).toBe(1);
+});
+
+test("ends a failed message carried stay owed while they cannot be closed, and the loop closes them", async () => {
+  const failure = new RangeError("out of memory");
+  let closes = 0;
+  const run = carriedToFailingReceiver(child => {
+    const set = Map.prototype.set;
+    // The child's lane natives: the table its `worker_lane.ts` calls, which the model keeps on the lanes object.
+    const { natives } = (child.internal.sharedObjects as unknown as { groupLanes: { natives: { laneCloseEnd(slot: number, generation: number, side: number): number } } }).groupLanes;
+    const close = natives.laneCloseEnd;
+    // The constructor fails after taking its end, and then the first attempt to close that
+    // end fails too, before it did anything.
+    natives.laneCloseEnd = (...words) => {
+      if (closes++ === 0) throw failure;
+      return close(...words);
+    };
+    const restoreSet = replaced(Map.prototype, "set", function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (!(value instanceof child.MessagePort)) return set.call(this, key, value);
+      Map.prototype.set = set;
+      throw failure;
+    });
+    return () => { restoreSet(); };
+  });
+  expect(run.received).toBeUndefined();
+  expect(closes).toBe(1);
+  // Still this member's open end: nothing has closed it yet.
+  expect(run.end().state).toBe("open");
+  // A message that arrives meanwhile waits: nothing new is taken while ends are owed.
+  run.spawned.port.postMessage("next");
+  await run.settle();
+  expect(run.end().state).toBe("closed");
+  expect(run.peerClosed()).toBe(1);
+  expect(run.spawned.child.receiveMessageOnPort(run.spawned.child.parentPort)?.message).toBe("next");
+});
+
 test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
   const { made, spawned, extra, buffer } = postRefusedOnEntry();
   // The call never ran, so nothing could undo the local steps taken before it. The next entry

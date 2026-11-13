@@ -124,8 +124,11 @@
     open,
     adopt,
     discard(lane, version) {
+      // The end is still in flight, or a port that was never finished took it and left it
+      // open. Taking it does nothing in the second case, and neither close does anything to
+      // an end that is not this thread's and open, so every step can be repeated.
       const io = open({ slot: lane.slot, generation: lane.generation }, lane.side);
-      if (!adopt(lane, version)) return;
+      adopt(lane, version);
       io.closeRead();
       io.closeEnd();
     },

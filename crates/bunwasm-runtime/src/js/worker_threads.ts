@@ -184,6 +184,38 @@
     root({ kind: "closed", id: snapshot.id });
     for (const [, graph] of snapshot.pending) discardPendingTransfers(graph);
   }
+  /**
+   * The received graph that is being made into a message, on an engine with group lanes. From
+   * before its first carried end is taken until the message is queued, this record owns those
+   * ends. A failure anywhere in that stretch, also inside a port's constructor after it took
+   * its end, marks the graph failed, and `settleReceived` closes everything it carried. The
+   * record exists from the start, so owning a graph and keeping a failed one allocate nothing.
+   * One graph is taken at a time: the next waits until a failed one is settled.
+   */
+  const receiving: { graph: Graph | null; failed: boolean } = { graph: null, failed: false };
+  /**
+   * Closes what a failed graph carried: a port already built from it, an end a port took
+   * before its constructor failed, and an end still in flight. A local port with a carried
+   * port's id can only be the one built from this graph, because the end was nowhere else.
+   * Every step does nothing the second time, and the graph is let go last.
+   */
+  function settleReceived() {
+    const graph = receiving.graph;
+    if (!graph || !receiving.failed) return;
+    for (const node of graph.nodes) {
+      if (node[0] !== "port") continue;
+      const built = localPorts.get(node[1].id);
+      if (built) portOps.discard(built);
+      discardPendingPort(node[1]);
+    }
+    receiving.graph = null; receiving.failed = false;
+  }
+  /** True when no graph is held. A failed graph whose ends could not be closed yet stays held. */
+  function receivedSettled(): boolean {
+    try { settleReceived(); }
+    catch { /* still owed */ }
+    return !receiving.graph;
+  }
   function routePacket(body: Record<string, unknown>) {
     if (typeof body.id !== "string") return;
     const endpoint = owners.get(body.id);
@@ -353,6 +385,8 @@
     // owed stays listed for the next step or entry.
     try { settlePosts(); }
     catch { /* still owed */ }
+    // Ends a failed message carried and that could not be closed when it failed.
+    const unsettled = groupLanes !== undefined && !receivedSettled();
     const shared = internal.sharedObjects;
     // Lanes first: a broker close behind lane data must not overtake it. A group lane left with
     // data past its drain quota counts as progress, so the loop steps again before sleeping.
@@ -369,7 +403,7 @@
     if (drained) shared?.routes?.credit();
     let owed = false;
     for (const port of localPorts.values()) owed = portOps.retry(port) || owed;
-    let progress = Boolean(drained) || lanes || owed;
+    let progress = Boolean(drained) || lanes || owed || unsettled;
     progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
     if (failed) throw failed.error;
@@ -820,13 +854,22 @@
     #acceptNext(state: PortState): boolean {
       const graph = state.pending.get(state.received);
       if (!graph || state.phase === "closed" || state.phase === "closing" && (state.lane !== null || state.group !== null)) return false;
+      // A graph that failed earlier still has ends to close, or this call comes from inside
+      // another graph's decoding: nothing new is taken until that one is settled.
+      if (groupLanes && !receivedSettled()) return false;
       try {
         this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
         if (this.#attachmentWait) return false;
+        if (groupLanes) receiving.graph = graph;
         const decoded = decodeReceived(graph);
-        if (!decoded) return false;
+        if (!decoded) { receiving.graph = null; return false; }
         state.queue.push(decoded);
-      } catch (error) { internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+        receiving.graph = null;
+      } catch (error) {
+        // The message is lost, and what it carried goes with it, now or on a later step.
+        if (receiving.graph === graph) { receiving.failed = true; receivedSettled(); }
+        internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error })));
+      }
       state.pending.delete(state.received++);
       return true;
     }

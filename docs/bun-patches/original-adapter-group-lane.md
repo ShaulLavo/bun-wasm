@@ -194,6 +194,18 @@ How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
   it at its next version, and its own idle loop reads its lanes without the hint.
 - A post made from a getter of another post commits and is finished before the outer one
   stages anything, because the core remembers one commit, the last.
+- On the receiving side, a graph that is being made into a message owns the ends of the
+  ports it carries, from before the first one is taken until the message is queued. One
+  record made at startup holds it, so owning a graph allocates nothing. A failure in that
+  stretch, also inside a port's constructor after it took its end, loses the message
+  (`messageerror`) and closes everything it carried: a port already built, an end taken by
+  a port that was never finished, and an end still in flight. Closing an end does nothing
+  unless the end is this member's and open, so the cleanup can be repeated. If it cannot
+  finish, the graph stays held, the loop's pump tries again and counts it as progress, and
+  no other graph is taken until it is settled. Without this a taken end with no port stayed
+  open for as long as the receiver lived, because a sweep only reclaims the ends of members
+  that are gone. This is receiver work on later entries: nothing is added to the sender's
+  commit.
 
 ### Between the first detach and the return
 
@@ -245,8 +257,11 @@ Measured so far, on QuickJS only:
   from a worker, the stretch asked for nothing and every message arrived whole. A control
   that allocates a buffer inside the stretch is refused every time, and its message still
   arrives whole. The side has no receipt, so it cannot be staged as a program, and the
-  module is compiled only for that producer option. It does not intercept the core's own
-  allocator.
+  module is compiled only for that producer option. The compiler's own switch,
+  `BUN_WASM_TRANSFER_FAULT`, is set by the producer alone: the producer refuses to run when
+  it arrives from outside, whatever its value, the build script refuses any value but the
+  producer's, and a receipt's inputs are not captured while either variable selects a
+  validation side. It does not intercept the core's own allocator.
 
 The heap sweep also showed what the sentence does not cover. A failed allocation in the
 core's Rust code, such as the staging map's node in `laneReserve`, ends the guest instead

@@ -43,14 +43,26 @@ trap 'exit 143' TERM
 # QUICKJS_TRANSFER_FAULT=1: a validation side that refuses every allocation from a transfer's
 # first detach on (crates/bunwasm-engine-quickjs/src/transfer_fault.rs). Never a release: like
 # a smoke side it gets no receipt, so no program can be staged from it.
+#
+# The compiler reads BUN_WASM_TRANSFER_FAULT (crates/bunwasm-engine-quickjs/build.rs), and only
+# this script may set it. One that arrives from outside, whatever its value, would decide what
+# is compiled without deciding the wraps and the receipt here, so it is refused.
 unreceipted=''
 fault_wraps=()
 if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then unreceipted='smoke exports'; fi
-if [[ "${QUICKJS_TRANSFER_FAULT:-0}" == 1 ]]; then
-  unreceipted='a transfer-fault side'
-  export BUN_WASM_TRANSFER_FAULT=1
-  fault_wraps=(malloc calloc realloc posix_memalign bun_core_alloc bun_shared_buffer_alloc)
+if [[ -n "${BUN_WASM_TRANSFER_FAULT+set}" ]]; then
+  echo 'error: unset BUN_WASM_TRANSFER_FAULT; this producer sets it itself for QUICKJS_TRANSFER_FAULT=1' >&2
+  exit 2
 fi
+case "${QUICKJS_TRANSFER_FAULT:-0}" in
+  0) ;;
+  1)
+    unreceipted='a transfer-fault side'
+    export BUN_WASM_TRANSFER_FAULT=1
+    fault_wraps=(malloc calloc realloc posix_memalign bun_core_alloc bun_shared_buffer_alloc)
+    ;;
+  *) echo 'error: QUICKJS_TRANSFER_FAULT must be 0 or 1' >&2; exit 2 ;;
+esac
 if [[ -n "$unreceipted" ]]; then
   if [[ -e "$out/engine.wasm.engine.json" ]]; then
     echo "error: use a separate QUICKJS_BUILD_DIR for $unreceipted" >&2

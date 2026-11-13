@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { assertQualifiedEnvironment } from "./guest-core-receipt.ts";
 import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const repository = resolve(import.meta.dir, "..");
@@ -31,6 +32,7 @@ case "$tool" in
   selected-cargo)
     if [[ $1 == tree ]]; then echo "\${RECIPE_DEPENDENCY:-bunwasm-cli v0.0.0}"; fi
     if [[ $1 == build ]]; then
+      printf 'transfer-fault|%s\\n' "\${BUN_WASM_TRANSFER_FAULT-unset}" >> "$RECIPE_LOG"
       output="$CARGO_TARGET_DIR/wasm32-wasip1/release"
       mkdir -p "$output"
       printf fixture > "$output/bun.wasm"
@@ -170,6 +172,87 @@ test("QuickJS smoke mode retains its alternate exports without writing a product
     expect(log()).not.toContain("guest-engine-receipt.ts inputs");
     expect(log()).not.toContain("guest-engine-receipt.ts write");
   });
+});
+
+// The validation side (crates/bunwasm-engine-quickjs/src/transfer_fault.rs) is chosen by the
+// producer's option alone. What the compiler is told, the allocation wraps and the absence of a
+// receipt go together, and the compiler's own variable is never taken from outside.
+const FAULT_WRAPS = ["malloc", "calloc", "realloc", "posix_memalign", "bun_core_alloc", "bun_shared_buffer_alloc"];
+
+test("QuickJS validation mode tells the compiler, wraps the allocators and writes no receipt", () => {
+  fixture((root, shell, log) => {
+    success(shell("scripts/build-engine-quickjs.sh", { QUICKJS_TRANSFER_FAULT: "1" }));
+    expect(log()).toContain("transfer-fault|1\n");
+    for (const name of FAULT_WRAPS) expect(log()).toContain(`--wrap=${name} `);
+    expect(log()).toContain("--export=quickjs_register --export=quickjs_run");
+    expect(log()).not.toContain("guest-engine-receipt.ts inputs");
+    expect(log()).not.toContain("guest-engine-receipt.ts write");
+    expect(readdirSync(join(root, "quickjs"))).not.toContain("engine.wasm.engine.json");
+  });
+});
+
+test("a directory that holds a release QuickJS side is not reused for a validation side", () => {
+  fixture((_root, shell, log) => {
+    success(shell("scripts/build-engine-quickjs.sh"));
+    const result = shell("scripts/build-engine-quickjs.sh", { QUICKJS_TRANSFER_FAULT: "1" });
+    expect(result.exitCode).toBe(1);
+    expect(String(result.stderr)).toContain("use a separate QUICKJS_BUILD_DIR for a transfer-fault side");
+    expect(log().match(/^selected-cargo\|build /gm)?.length).toBe(1);
+    expect(log()).not.toContain("transfer-fault|1");
+  });
+});
+
+for (const option of [undefined, "0", ""]) {
+  test(`a release QuickJS side (QUICKJS_TRANSFER_FAULT ${option === undefined ? "unset" : JSON.stringify(option)}) compiles without the validation flag or wraps and gets its receipt`, () => {
+    fixture((root, shell, log) => {
+      success(shell("scripts/build-engine-quickjs.sh", option === undefined ? {} : { QUICKJS_TRANSFER_FAULT: option }));
+      expect(log()).toContain("transfer-fault|unset\n");
+      expect(log()).not.toContain("transfer-fault|1");
+      expect(log()).not.toContain("--wrap=malloc");
+      expect(log()).toContain("guest-engine-receipt.ts write");
+      expect(readFileSync(join(root, "quickjs/engine.wasm.engine.json"), "utf8")).toBe("fixture\n");
+    });
+  });
+}
+
+const ambientCases = ["0", "1", "", "true"].flatMap(ambient => [undefined, "0", "1"].map(option => ({ ambient, option })));
+for (const { ambient, option } of ambientCases) {
+  test(`the QuickJS producer refuses an ambient BUN_WASM_TRANSFER_FAULT=${JSON.stringify(ambient)} with its option ${option ?? "unset"}`, () => {
+    fixture((root, shell, log) => {
+      const env: Record<string, string> = { BUN_WASM_TRANSFER_FAULT: ambient };
+      if (option !== undefined) env.QUICKJS_TRANSFER_FAULT = option;
+      const result = shell("scripts/build-engine-quickjs.sh", env);
+      expect(result.exitCode).toBe(2);
+      expect(String(result.stderr)).toContain("unset BUN_WASM_TRANSFER_FAULT");
+      // Nothing was compiled or linked, and no receipt was captured or written.
+      expect(log()).not.toMatch(/selected-cargo\|build |wasm-ld|guest-engine-receipt\.ts (inputs|write)/);
+      expect(readdirSync(join(root, "quickjs"))).toEqual([]);
+    });
+  });
+}
+
+for (const option of ["2", "true", "yes", "on", " 1"]) {
+  test(`the QuickJS producer refuses QUICKJS_TRANSFER_FAULT=${JSON.stringify(option)}`, () => {
+    fixture((_root, shell, log) => {
+      const result = shell("scripts/build-engine-quickjs.sh", { QUICKJS_TRANSFER_FAULT: option });
+      expect(result.exitCode).toBe(2);
+      expect(log()).not.toMatch(/selected-cargo\|build |wasm-ld|guest-engine-receipt\.ts (inputs|write)/);
+    });
+  });
+}
+
+test("a receipt's inputs are not captured in an environment that selects or could select a validation side", () => {
+  const refused = (env: Record<string, string>) => expect(() => assertQualifiedEnvironment("quickjs", env)).toThrow("QUICKJS_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+  expect(() => assertQualifiedEnvironment("quickjs", {})).not.toThrow();
+  expect(() => assertQualifiedEnvironment("quickjs", { QUICKJS_TRANSFER_FAULT: "0", QUICKJS_SMOKE_EXPORTS: "0" })).not.toThrow();
+  refused({ QUICKJS_TRANSFER_FAULT: "1" });
+  refused({ QUICKJS_TRANSFER_FAULT: "true" });
+  for (const ambient of ["0", "1", ""]) refused({ BUN_WASM_TRANSFER_FAULT: ambient });
+  // The earlier refusals are unchanged.
+  expect(() => assertQualifiedEnvironment("quickjs", { QUICKJS_SMOKE_EXPORTS: "1" })).toThrow("QUICKJS_SMOKE_EXPORTS=0");
+  expect(() => assertQualifiedEnvironment("core", { RUSTFLAGS: "" })).toThrow("RUSTFLAGS");
+  // The variable belongs to the QuickJS side: other scopes do not compile that crate.
+  expect(() => assertQualifiedEnvironment("core", { BUN_WASM_TRANSFER_FAULT: "1" })).not.toThrow();
 });
 
 test("both wrappers compose one common compilation and stage each required side receipt", () => {
