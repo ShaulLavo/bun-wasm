@@ -152,14 +152,14 @@ const JSClass nativeClass = {"BunNative", JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLAS
 const JSClass frameClass = {"BunAsyncFrame", JSCLASS_HAS_RESERVED_SLOTS(1), nullptr, nullptr, nullptr, nullptr};
 const JSClass globalClass = {"Bun", JSCLASS_GLOBAL_FLAGS, &JS::DefaultGlobalClassOps, nullptr, nullptr, nullptr};
 
-JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame) {
+JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFrameSelfHosted selfHosted) {
   JS::RootedString source(cx), name(cx);
   uint32_t line = 0;
   JS::TaggedColumnNumberOneOrigin column;
-  if (JS::GetSavedFrameSource(cx, nullptr, frame, &source) != JS::SavedFrameResult::Ok ||
-      JS::GetSavedFrameFunctionDisplayName(cx, nullptr, frame, &name) != JS::SavedFrameResult::Ok ||
-      JS::GetSavedFrameLine(cx, nullptr, frame, &line) != JS::SavedFrameResult::Ok ||
-      JS::GetSavedFrameColumn(cx, nullptr, frame, &column) != JS::SavedFrameResult::Ok) return nullptr;
+  if (JS::GetSavedFrameSource(cx, nullptr, frame, &source, selfHosted) != JS::SavedFrameResult::Ok ||
+      JS::GetSavedFrameFunctionDisplayName(cx, nullptr, frame, &name, selfHosted) != JS::SavedFrameResult::Ok ||
+      JS::GetSavedFrameLine(cx, nullptr, frame, &line, selfHosted) != JS::SavedFrameResult::Ok ||
+      JS::GetSavedFrameColumn(cx, nullptr, frame, &column, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
   JS::RootedObject result(cx, JS_NewPlainObject(cx));
   if (!result) return nullptr;
   JS::RootedValue field(cx, name ? JS::StringValue(name) : JS::NullValue());
@@ -171,6 +171,11 @@ JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame) {
   field.setNumber(column.oneOriginValue());
   if (!JS_DefineProperty(cx, result, "column", field, JSPROP_ENUMERATE)) return nullptr;
   return result;
+}
+
+bool has_saved_frame(JSContext* cx, JS::HandleObject frame, JS::SavedFrameSelfHosted selfHosted) {
+  uint32_t sourceId = 0;
+  return JS::GetSavedFrameSourceId(cx, nullptr, frame, &sourceId, selfHosted) == JS::SavedFrameResult::Ok;
 }
 
 bool error_frames(JSContext* cx, unsigned argc, JS::Value* vp) {
@@ -185,17 +190,20 @@ bool error_frames(JSContext* cx, unsigned argc, JS::Value* vp) {
   int32_t order = 0;
   if (!JS_CompareStrings(cx, original, observed, &order)) return false;
   if (order != 0) return true;
+  const bool skipSelfHosted = args.length() > 2 && args[2].isBoolean() && args[2].toBoolean();
+  const auto selfHosted = skipSelfHosted ? JS::SavedFrameSelfHosted::Exclude : JS::SavedFrameSelfHosted::Include;
   JS::RootedObject frames(cx, JS::NewArrayObject(cx, 0));
   if (!frames) return false;
   for (uint32_t index = 0; frame; ++index) {
+    if (skipSelfHosted && !has_saved_frame(cx, frame, selfHosted)) break;
     JS::RootedString cause(cx);
     if (JS::GetSavedFrameAsyncCause(cx, nullptr, frame, &cause) != JS::SavedFrameResult::Ok) return true;
     if (cause) break;
-    JS::RootedObject item(cx, saved_frame_object(cx, frame));
+    JS::RootedObject item(cx, saved_frame_object(cx, frame, selfHosted));
     if (!item) return !JS_IsExceptionPending(cx);
     if (!JS_SetElement(cx, frames, index, item)) return false;
     JS::RootedObject parent(cx);
-    if (JS::GetSavedFrameParent(cx, nullptr, frame, &parent) != JS::SavedFrameResult::Ok) return true;
+    if (JS::GetSavedFrameParent(cx, nullptr, frame, &parent, selfHosted) != JS::SavedFrameResult::Ok) return true;
     frame = parent;
   }
   args.rval().setObject(*frames);

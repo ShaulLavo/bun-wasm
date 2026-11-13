@@ -1,6 +1,6 @@
 import { sourceLane } from "./fixtures/shared-objects/source-lane";
 import { poolChargedWord, overflowBudget, slotWord } from "../web/src/shared-objects/lane-overflow";
-import { sharedPoolLaneCursor } from "../web/src/shared-objects/protocol";
+import { sharedPoolLaneCursor, sharedPoolLanes, type SharedReference } from "../web/src/shared-objects/protocol";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -19,10 +19,11 @@ async function restore(graph: Graph, receiver: Client): Promise<SourcePort> {
   return port;
 }
 
-async function connection(options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {}) {
+async function connection(options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {}, exhaustPool = false) {
   const { client } = brokerClients(cleanup, { lanes: true });
   const sender = client(options), receiver = client(options);
   await Promise.all([sender.service.ready, receiver.service.ready]);
+  if (exhaustPool) for (let index = 0; index < sharedPoolLanes; index++) sender.service.lanes!.create();
   const channel = new sender.runtime.MessageChannel();
   cleanup.add(() => channel.port1.close());
   const graph = sender.runtime.codec.encode(channel.port2, [channel.port2]);
@@ -30,6 +31,58 @@ async function connection(options: Parameters<ReturnType<typeof brokerClients>["
   await Promise.all([sender.settleRoutes(), receiver.settleRoutes()]);
   return { client, sender, receiver, source: channel.port1, target, graph };
 }
+
+test("a post-pool lane preserves large frames, atomic rejection, transfers and synchronous FIFO", async () => {
+  const published: SharedReference[] = [];
+  const { sender, receiver, source, target } = await connection({ observe(packet) {
+    if (packet.kind === "publish") published.push(...packet.attachments);
+  } }, true);
+  const carried = new sender.runtime.MessageChannel();
+  cleanup.add(() => { carried.port1.close(); carried.port2.close(); });
+  const buffer = new ArrayBuffer(8);
+  const text = "λ".repeat(1024 * 1024);
+  source.postMessage("before"); source.postMessage(text); source.postMessage("after");
+  expect(() => source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2])).toThrow("slot is busy");
+  expect(buffer.byteLength).toBe(8);
+  carried.port2.postMessage("still owned");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "still owned" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: text });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
+  source.postMessage({ text, buffer, port: carried.port2 }, [buffer, carried.port2]);
+  expect(buffer.byteLength).toBe(0);
+  await new Promise<void>(resolve => { if (!receiver.service.wait(published, resolve)) resolve(); });
+  const received = receiver.runtime.receiveMessageOnPort(target)?.message;
+  if (!received || typeof received !== "object" || !("port" in received) || !(received.port instanceof receiver.runtime.MessagePort)) throw new Error("Missing transferred port");
+  const moved = received.port;
+  cleanup.add(() => moved.close());
+  expect("text" in received && received.text).toBe(text);
+  expect("buffer" in received && received.buffer).toEqual(new ArrayBuffer(8));
+  moved.postMessage("same-turn reply");
+  expect(sender.runtime.receiveMessageOnPort(carried.port1)).toEqual({ message: "same-turn reply" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+});
+
+test("post-pool endpoint moves retain unread bytes and survive the former services closing", async () => {
+  const { client, sender, receiver, source, target } = await connection({}, true);
+  const nextReader = client(), nextWriter = client();
+  await Promise.all([nextReader.service.ready, nextWriter.service.ready]);
+  const text = "A".repeat(1100000);
+  source.postMessage("before"); source.postMessage(text); source.postMessage("after");
+  const reader = await restore(receiver.runtime.codec.encode(target, [target]), nextReader);
+  const writer = await restore(sender.runtime.codec.encode(source, [source]), nextWriter);
+  await Promise.all([sender.settleRoutes(), receiver.settleRoutes(), nextReader.settleRoutes(), nextWriter.settleRoutes()]);
+  sender.service.close(); receiver.service.close();
+  expect(() => writer.postMessage(text)).toThrow("slot is busy");
+  expect(nextReader.runtime.receiveMessageOnPort(reader)).toEqual({ message: "before" });
+  expect(nextReader.runtime.receiveMessageOnPort(reader)).toEqual({ message: text });
+  expect(nextReader.runtime.receiveMessageOnPort(reader)).toEqual({ message: "after" });
+  writer.postMessage(text);
+  expect(nextReader.runtime.receiveMessageOnPort(reader)).toEqual({ message: text });
+  reader.postMessage("synchronous reply");
+  expect(nextWriter.runtime.receiveMessageOnPort(writer)).toEqual({ message: "synchronous reply" });
+  expect(nextReader.runtime.receiveMessageOnPort(reader)).toBeUndefined();
+});
 
 test("large text crosses a runtime lane once, between its preceding and following messages", async () => {
   const { receiver, source, target } = await connection();
@@ -261,10 +314,10 @@ test("explicit unread receiver close rejects the next transfer before detachment
   expect(sender.service.inspect().staged).toBe(0);
 });
 
-for (const failure of ["unpooled", "budget", "grow", "full-ring"] as const) test(`${failure} admission preserves transfers, sequence and publication state`, async () => {
+for (const failure of ["unpooled-unavailable", "budget", "grow", "full-ring"] as const) test(`${failure} admission preserves transfers, sequence and publication state`, async () => {
   const realm = await sourceLane({ grow() { throw new RangeError("native grow rejected"); } });
   const options: Parameters<ReturnType<typeof brokerClients>["client"]>[0] = {};
-  if (failure === "unpooled") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, 32); return grant; };
+  if (failure === "unpooled-unavailable") options.grant = grant => { Atomics.store(new Int32Array(grant.control), sharedPoolLaneCursor, sharedPoolLanes); return { ...grant, overflow: null }; };
   if (failure === "budget") options.grant = grant => { Atomics.store(new Int32Array(grant.control), poolChargedWord, overflowBudget); return grant; };
   if (failure === "grow") options.lane = (backing, side, grant) => {
     const overflow = backing.poolIndex === null || !grant ? undefined : { control: new Int32Array(grant.control), index: backing.poolIndex, arena: grant.overflow?.arena ?? null };

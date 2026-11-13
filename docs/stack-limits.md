@@ -439,6 +439,42 @@ change and is not fixed here.
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.
 
+### Bound functions called in the loop
+
+Until November 12, 2026 a bound function called from JavaScript entered the interpreter
+again from C++, and the `bound` row measured that. Babel's code printer calls
+`printMethod.bind(this, node, parent)` once per nesting level, and the real
+`@babel/generator` 7.29.14 printed 30 nested JSX elements at 192 KiB and 146 at 800 KiB.
+
+A bound function whose target is a `JSFunction` now calls its target from the running loop
+when bytecode calls it ([record](bun-patches/jsc-bound-call-dispatch.md)). The same printer
+prints 2,048 levels, the deepest tried, at both budgets. `bound`, a chain of functions
+bound to each other, no longer measures reentry on JSC, and `boundcall`, a function
+recursing through a bound copy of itself with two bound arguments, measures the new path.
+A bound function called from C++, used as a getter or constructed with `new` still reenters.
+
+Measured on November 12, 2026 on the native launcher: the READY split core `13b54255…` with
+main's side at `e12e307e` and with a side built from this change. The other 48 paths of the
+sweep, the 20 parser chains among them, gave identical results at 192, 208, 208 with reserve
+960, and 800 KiB, and no attempt trapped or timed out on either pair.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bound`, 2,000 tried | 72 | completes | 78 | completes | 304 | completes |
+| `boundcall` | 36 | 35,493 | 39 | 35,493 | 152 | 35,493 |
+| Real Babel printer, nested JSX, 2,048 tried | 30 | completes | not run | not run | 146 | completes |
+
+With the host stack cut to 256 and 512 KiB on Wasmtime and to 1 MiB on V8, the guard out
+of the way, the other 16 reentry paths reached the same depth on both pairs:
+
+| Path | Wasmtime 256 KiB before | After | 512 KiB before | After | V8 1 MiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bound`, 2,000 tried | 396, trap | completes | 806, trap | completes | 1,558 | completes |
+| `boundcall` | 202, trap | 35,493 | 406, trap | 35,493 | 779 | 35,493 |
+
+One level past 35,493, `boundcall` stops at the C-loop frame stack's own check with a
+catchable `RangeError`, at every budget and on every host.
+
 ### The interpreter frame floor
 
 The guard counts shadow bytes, and `CLoop::execute` supplies 4,896 of the roughly 5.8 KB
@@ -462,7 +498,7 @@ through a local that was overwritten on some path, a tail call, an unknown instr
 a missing stack pointer export, or more than one such function.
 
 The two builds differ, which is why the check follows paths and does not match a fixed
-prologue. The split side allocates once at entry and releases once at its end: 683 calls,
+prologue. The split side allocates once at entry and releases once at its end: 684 calls,
 all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
 own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
 function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
@@ -493,6 +529,16 @@ three parser frames and three parser reservations, and the code generator stops 
 targets at 192 KiB, so the parser reserve no longer moves that limit. A nest with one assignment
 operator per level, such as `a = f(b = f(…))`, keeps upstream's two frames and two reservations
 per level. The measurements below predate that change.
+
+Nests of blocks and `if` statements no longer recurse in the parser or the code generator either
+([JSC block and `if` nests](bun-patches/jsc-statement-records.md),
+[the code generator's loop](bun-patches/jsc-statement-spine.md)). Up to 10,000 open blocks and
+`if`s in one parse load at every budget and reserve, and past that the parser throws `RangeError`.
+Next 15.5.6's `bundle5.js` now loads alone at 176 and 192 KiB with the default reserve. A nest
+that passes through another statement per level, such as a braced loop, `switch`, `with`, `try`
+or label, still recurses through `parseStatement` with its reservation per level. The gate's
+statement witness is therefore an unbraced `while` nest, and block nests must load the deepest
+nest tried at every setting.
 
 `BUN_WASM_JSC_PARSER_RESERVE` is the number of shadow bytes those functions reserve
 (`parseStatement`, `parseAssignmentExpression` and its two chain functions). The

@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/esbuild-packet-diagnostic.test.ts",
+  "localRuntime": true
+}

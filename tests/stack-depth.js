@@ -23,6 +23,9 @@ const actions = {
   parse() { (0, eval)(nest('[', ']')); },
   proxychain() { let p = { v: 1 }; for (let i = 0; i < n; i++) p = new Proxy(p, {}); void p.v; },
   bound() { let f = function () { return 1; }; for (let i = 0; i < n; i++) f = f.bind(null); f(); },
+  // A function recursing through a bound copy of itself with two bound arguments, as Babel's
+  // printer calls `printMethod.bind(this, node, parent)` (docs/bun-patches/jsc-bound-call-dispatch.md).
+  boundcall() { let d = 0; const f = function (a, b) { return ++d === n ? a - b : 1 + g(); }; const g = f.bind(null, 1, 1); g(); },
   join() { String(deepArray()); },
   flat() { deepArray().flat(Infinity); },
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
@@ -108,6 +111,8 @@ const chains = {
   Block: (depth) => '{'.repeat(depth) + '}'.repeat(depth),
   Call: (depth) => 'var f = function (v) { return v; };\nreturn ' + 'f('.repeat(depth) + '0' + ')'.repeat(depth) + ';',
   Function: (depth) => 'return ' + '(function () { return '.repeat(depth) + '0' + '; })'.repeat(depth) + ';',
+  // An unbraced loop body is a new statement per level: JSC still parses it by recursion.
+  While: (depth) => 'while (0) '.repeat(depth) + ';',
 };
 const chainModes = {};
 function addChainMode(kind, pass, width) {

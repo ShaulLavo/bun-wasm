@@ -1,27 +1,28 @@
-// The parser chains of tests/stack-depth.js: five shapes, two parser passes, two source widths.
-export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function"].flatMap(kind =>
+// The parser chains of tests/stack-depth.js: six shapes, two parser passes, two source widths.
+export const chainModes = ["Assign", "Conditional", "Block", "Call", "Function", "While"].flatMap(kind =>
   ["Compile", "Call"].flatMap(pass => ["8", "16"].map(width => `chain${kind}${pass}${width}`)));
 /**
  * The chains that recurse through exactly one of JSC's two reserved parser functions per level:
- * a conditional branch is a new assignment expression, and a block is a new statement.
+ * a conditional branch is a new assignment expression, and an unbraced loop body is a new statement.
  */
-export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Conditional|Block)/.test(mode));
+export const reserveSiteChains = chainModes.filter(mode => /^chain(?:Conditional|While)/.test(mode));
 /**
- * JSC parses a chain of assignment targets without recursion (docs/bun-patches/jsc-assignment-chains.md),
- * so the syntax-check pass loads every depth tried.
+ * JSC parses a chain of assignment targets (docs/bun-patches/jsc-assignment-chains.md) and a nest of
+ * blocks (docs/bun-patches/jsc-statement-records.md) without recursion, so the syntax-check pass of
+ * an assignment chain and both passes of a block nest load every depth tried.
  */
-export const iterativeChains = chainModes.filter(mode => /^chainAssignCompile/.test(mode));
+export const iterativeChains = chainModes.filter(mode => /^chain(?:AssignCompile|Block)/.test(mode));
 /** The full parse of an assignment chain stops in the code generator, so the parser reserve does not move it. */
 export const generatorChains = chainModes.filter(mode => /^chainAssignCall/.test(mode));
 /** The deepest chain tried: far past any budget's capacity, and small enough to stay a parser test. */
 export const chainMaximum = 4096;
 const stackModes = [
   "plain", "getter", "computedgetter", "ajvnames", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
-  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
+  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "boundcall", "join", "flat", "tostring",
   "async", "promise", "console",
 ].concat(chainModes);
 // Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
-const searched = new Set(["plain", "getter", "computedgetter", "proxy", "json", "parse", "promise"].concat(chainModes));
+const searched = new Set(["plain", "getter", "computedgetter", "boundcall", "proxy", "json", "parse", "promise"].concat(chainModes));
 const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead"].concat(chainModes));
 
 function deepestAttempt(mode: string): number {

@@ -1391,7 +1391,7 @@ jobs:
           TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh
       # PR-scoped archives cannot be shared with other PRs and evict main's warm builds.
       - name: Save the refined native Cargo cache once per input revision
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@v4
         with:
           path: |

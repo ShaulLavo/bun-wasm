@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/caller-origin-spidermonkey.test.ts",
+  "localRuntime": true
+}
