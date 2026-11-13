@@ -101,7 +101,8 @@ test("cached terminal telemetry stays newer than delayed messages while retainin
   const initial = retainedMemorySnapshots().find(value => value.id === id);
   if (!initial) throw Error("Missing initial snapshot");
   const frozen = (bytes: number): FrozenAllocatorFailure => ({ bytes, category: "libc.malloc", previousUsableBytes: 0,
-    allocatorLiveBytes: bytes, allocatorPeakBytes: bytes, wasmCapacityBeforeBytes: 65536, wasmCapacityAfterBytes: 65536, reason: "unknown" });
+    allocatorLiveBytes: bytes, allocatorPeakBytes: bytes, wasmCapacityBeforeBytes: 65536, wasmCapacityAfterBytes: 65536, reason: "unknown",
+    growth: { kind: "not-attempted" } });
   const old = { ...initial, time: initial.time + 60_000, engineCounters: { browserCallTrapIndex: 7, browserCallTrapCapacityBytes: 65536 }, frozenAllocatorFailure: frozen(111) };
   const newer = { ...old, time: old.time + 60_000, engineCounters: { browserCallTrapIndex: 9, browserCallTrapCapacityBytes: 131072 }, frozenAllocatorFailure: frozen(222) };
   const latest = { ...newer, time: newer.time + 1, engineCounters: { browserCallTrapIndex: 11, browserCallTrapCapacityBytes: 262144 }, frozenAllocatorFailure: frozen(333) };

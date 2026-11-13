@@ -278,14 +278,14 @@ test("a root scope with a missing opaque member or a broken parent edge stays un
 
 function frozenFixture(limitBytes: number | null = LIMIT_BYTES) {
   const f = fixture("quickjs");
-  for (let index = 0; index < 9; index++) f.put(512, index, 0xffffffffffffffffn);
-  f.put(512, 0, 1n); f.put(512, 1, 72n); f.put(512, 3, 0n);
+  for (let index = 0; index < 13; index++) f.put(512, index, 0xffffffffffffffffn);
+  f.put(512, 0, 2n); f.put(512, 1, 104n); f.put(512, 3, 0n);
   const core = { exports: { ...f.core.exports, bun_memory_failure_telemetry: () => 512 } };
   return { ...f, core, reader: createMemoryReader("quickjs", core, f.side, limitBytes) };
 }
 
 function latchFrozen(f: ReturnType<typeof frozenFixture>) {
-  [1n, 72n, 100000n, 3n, 40012n, 80024n, 160048n, 196608n, 196608n]
+  [2n, 104n, 100000n, 3n, 40012n, 80024n, 160048n, 196608n, 196608n, 0n, 1n, 131072n, 131072n]
     .forEach((value, index) => f.put(512, index, value));
 }
 
@@ -299,7 +299,8 @@ test("frozen allocator state is cached separately from current allocator and eng
   const snapshot = f.reader.sample(true);
   expect(snapshot.frozenAllocatorFailure).toEqual({ bytes: 100000, category: "libc.realloc",
     previousUsableBytes: 40012, allocatorLiveBytes: 80024, allocatorPeakBytes: 160048,
-    wasmCapacityBeforeBytes: 196608, wasmCapacityAfterBytes: 196608, reason: "unknown" });
+    wasmCapacityBeforeBytes: 196608, wasmCapacityAfterBytes: 196608, reason: "unknown",
+    growth: { kind: "attempted", successfulAttempts: 0, failedAttempts: 1, lastIncrementBytes: 131072, firstFailedIncrementBytes: 131072 } });
   expect(snapshot.allocatorFailure).toEqual({ bytes: 100000, category: "libc.realloc" });
   expect(snapshot.engineFailure).toEqual({ bytes: 99999, category: "quickjs.realloc" });
   expect(snapshot.allocatorLiveBytes).toBe(10000);
@@ -333,7 +334,8 @@ test("frozen unknown and unsafe u64 values stay null without a rejection reason"
   f.put(512, 6, 9007199254740991n); f.put(512, 7, 0xffffffffffffffffn);
   expect(f.reader.sample().frozenAllocatorFailure).toEqual({ bytes: null, category: "unknown.999",
     previousUsableBytes: null, allocatorLiveBytes: 0, allocatorPeakBytes: Number.MAX_SAFE_INTEGER,
-    wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 196608, reason: "unknown" });
+    wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 196608, reason: "unknown",
+    growth: { kind: "attempted", successfulAttempts: 0, failedAttempts: 1, lastIncrementBytes: 131072, firstFailedIncrementBytes: 131072 } });
   expect(f.reader.sample(true).engineFailure).toBeNull();
   expect(f.refreshes()).toBe(0);
   expect(fixture("quickjs").reader.sample().frozenAllocatorFailure).toBeNull();
@@ -341,14 +343,29 @@ test("frozen unknown and unsafe u64 values stay null without a rejection reason"
 
 test("frozen reader rejects unsupported ABI and malformed pointers without wrapping them", () => {
   const f = frozenFixture();
-  f.put(512, 0, 2n);
+  f.put(512, 0, 1n);
   expect(() => f.reader.sample()).toThrow("ABI");
-  f.put(512, 0, 1n); f.put(512, 1, 80n);
+  f.put(512, 0, 2n); f.put(512, 1, 80n);
   expect(() => f.reader.sample()).toThrow("ABI");
   for (const pointer of [0, -1, -2147483649, 4294967808, 512.5, NaN, Infinity, 516, 65528]) {
     const core = { exports: { ...f.core.exports, bun_memory_failure_telemetry: () => pointer } };
     expect(() => createMemoryReader("quickjs", core, f.side, LIMIT_BYTES).sample()).toThrow();
   }
+});
+
+test("frozen growth reader rejects invalid counts, missing increments and truncated records", () => {
+  const f = frozenFixture();
+  for (const [index, value] of [[9, 0xffffffffffffffffn], [10, 9007199254740992n], [11, 0n],
+    [11, 0xffffffffffffffffn], [12, 0n], [12, 0xffffffffffffffffn]] as const) {
+    latchFrozen(f);
+    f.put(512, index, value);
+    expect(() => f.reader.sample()).toThrow("growth");
+  }
+  latchFrozen(f);
+  f.put(512, 10, 0n);
+  expect(() => f.reader.sample()).toThrow("growth");
+  const core = { exports: { ...f.core.exports, bun_memory_failure_telemetry: () => 65440 } };
+  expect(() => createMemoryReader("quickjs", core, f.side, LIMIT_BYTES).sample()).toThrow("bounds");
 });
 
 test("frozen record survives channel teardown and validates at the host boundary", () => {
@@ -380,7 +397,10 @@ test("frozen record survives channel teardown and validates at the host boundary
     expect(recordMemorySnapshot({ type: "bun-memory", snapshot: terminal })).toBe(true);
     for (const invalid of [undefined, {}, { ...initial?.frozenAllocatorFailure, reason: "limit" },
       { ...initial?.frozenAllocatorFailure, previousUsableBytes: -1 },
-      { ...initial?.frozenAllocatorFailure, bytes: Number.MAX_SAFE_INTEGER + 1 }]) {
+      { ...initial?.frozenAllocatorFailure, bytes: Number.MAX_SAFE_INTEGER + 1 },
+      { ...initial?.frozenAllocatorFailure, growth: undefined },
+      { ...initial?.frozenAllocatorFailure, growth: { kind: "attempted", successfulAttempts: 1,
+        failedAttempts: -1, lastIncrementBytes: 65536, firstFailedIncrementBytes: null } }]) {
       expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { ...terminal, frozenAllocatorFailure: invalid } }, transport.id)).not.toThrow();
       expect(retainedMemoryProcesses().processes.find(row => row.id === transport.id)?.status).toBe("invalid");
     }

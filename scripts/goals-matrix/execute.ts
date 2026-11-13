@@ -23,6 +23,8 @@ export interface Execution {
   saveLog(text: string): Promise<void>;
   signal?: AbortSignal;
   nextBuildObservation?: (value: NextBuildObservation) => void;
+  /** Runs after the playground is ready, inside the startup phase and its admission. A rejection fails startup, so install never runs. */
+  observeStartup?: (page: ScopedTransport, admission: Admission) => Promise<void>;
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type LogObservation = { terminal: TerminalCapture; diagnostic: string };
@@ -61,7 +63,9 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       capabilities = transport.capabilities;
       const page = scoped(transport, admission);
       await page.navigate(options.url);
-      return ready(page, options.box.engine, options.timeoutMs, options.profile);
+      const evidence = await ready(page, options.box.engine, options.timeoutMs, options.profile);
+      await options.observeStartup?.(page, admission);
+      return evidence;
     }, options.signal);
     if (!transport) throw new Error("Transport not created");
     await lifecycle(transport, options, results);

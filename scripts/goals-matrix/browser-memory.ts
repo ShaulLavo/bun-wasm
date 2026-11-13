@@ -1,5 +1,5 @@
 import type { ScopedTransport } from "./transport";
-import type { MemoryProcessEnvelope, MemoryProcessRow, MemoryCensus, MemoryOutcome, FailedAllocation, FrozenAllocatorFailure } from "../../web/src/memory-telemetry";
+import type { MemoryProcessEnvelope, MemoryProcessRow, MemoryCensus, MemoryOutcome, FailedAllocation, FrozenAllocatorFailure, AllocatorGrowth } from "../../web/src/memory-telemetry";
 
 async function browserTrapFacts(): Promise<string> {
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
@@ -48,9 +48,25 @@ function allocation(value: unknown): value is FailedAllocation | null {
   return value === null || record(value) && nullableCounter(value.bytes) && typeof value.category === "string"
     && /^(none|unknown|libc\.(malloc|calloc|realloc|aligned_alloc|posix_memalign))$/.test(value.category);
 }
+function isAllocatorGrowth(value: unknown): value is AllocatorGrowth {
+  if (!record(value)) return false;
+  if (value.kind === "not-attempted") return !("successfulAttempts" in value || "failedAttempts" in value
+    || "lastIncrementBytes" in value || "firstFailedIncrementBytes" in value);
+  if (value.kind !== "attempted" || !counter(value.successfulAttempts) || !counter(value.failedAttempts)
+    || !counter(value.lastIncrementBytes) || value.lastIncrementBytes === 0) return false;
+  const attempts = value.successfulAttempts + value.failedAttempts;
+  if (!Number.isSafeInteger(attempts) || attempts === 0) return false;
+  return value.failedAttempts === 0 ? value.firstFailedIncrementBytes === null
+    : counter(value.firstFailedIncrementBytes) && value.firstFailedIncrementBytes > 0;
+}
+function projectAllocatorGrowth(value: AllocatorGrowth): AllocatorGrowth {
+  return value.kind === "not-attempted" ? { kind: value.kind } : { kind: value.kind,
+    successfulAttempts: value.successfulAttempts, failedAttempts: value.failedAttempts,
+    lastIncrementBytes: value.lastIncrementBytes, firstFailedIncrementBytes: value.firstFailedIncrementBytes };
+}
 function frozenAllocation(value: unknown): value is FrozenAllocatorFailure | null {
   if (value === null) return true;
-  if (!record(value) || !allocation(value) || value.reason !== "unknown") return false;
+  if (!record(value) || !allocation(value) || value.reason !== "unknown" || !isAllocatorGrowth(value.growth)) return false;
   return [value.previousUsableBytes, value.allocatorLiveBytes, value.allocatorPeakBytes, value.wasmCapacityBeforeBytes, value.wasmCapacityAfterBytes].every(nullableCounter);
 }
 function outcome(value: unknown): value is MemoryOutcome {
@@ -129,7 +145,7 @@ function projectSample(value: MemoryProcessRow["sample"]): MemoryProcessRow["sam
     allocatorFailure: value.allocatorFailure ? { bytes: value.allocatorFailure.bytes, category: value.allocatorFailure.category } : null,
     frozenAllocatorFailure: frozen ? { bytes: frozen.bytes, category: frozen.category, previousUsableBytes: frozen.previousUsableBytes,
       allocatorLiveBytes: frozen.allocatorLiveBytes, allocatorPeakBytes: frozen.allocatorPeakBytes, wasmCapacityBeforeBytes: frozen.wasmCapacityBeforeBytes,
-      wasmCapacityAfterBytes: frozen.wasmCapacityAfterBytes, reason: "unknown" } : null,
+      wasmCapacityAfterBytes: frozen.wasmCapacityAfterBytes, reason: "unknown", growth: projectAllocatorGrowth(frozen.growth) } : null,
     libcTelemetry: value.libcTelemetry ? { allocator: value.libcTelemetry.allocator, failure: value.libcTelemetry.failure } : undefined };
 }
 function projectCensus(value: MemoryCensus): MemoryCensus {
