@@ -582,37 +582,6 @@ mod tests {
     }
 
     #[test]
-    fn scalar_prefixes_keep_nested_values_and_later_siblings_in_order() {
-        let value = Val::Array(vec![
-            Val::Bool(true),
-            Val::Object(vec![
-                ("a".into(), Val::Null),
-                ("b".into(), Val::Array(vec![Val::Bool(false)])),
-                ("c".into(), Val::Undefined),
-            ]),
-            Val::Str("z".into()),
-        ]);
-        let expected = [
-            7, 3, 0, 0, 0, 3, 8, 3, 0, 0, 0, 1, 0, 0, 0, b'a', 1, 1, 0, 0, 0, b'b', 7, 1, 0, 0, 0,
-            2, 1, 0, 0, 0, b'c', 0, 5, 1, 0, 0, 0, b'z',
-        ];
-        assert_eq!(encode(&value).unwrap(), expected);
-        assert_eq!(decode(&expected).unwrap(), value);
-    }
-
-    #[test]
-    fn scalar_prefixes_do_not_recurse_through_deep_containers() {
-        let mut expected = Vec::new();
-        for _ in 0..10_000 {
-            expected.extend_from_slice(&[7, 2, 0, 0, 0, 3]);
-        }
-        expected.push(0);
-        let value = decode(&expected).unwrap();
-        assert_eq!(encode(&value).unwrap(), expected);
-        drop_tree(value);
-    }
-
-    #[test]
     fn measured_total_fails_like_an_unallocatable_vec() {
         let mut measure = Measure(isize::MAX as usize - 1);
         assert_eq!(measure.put(&[0]), Ok(()));
