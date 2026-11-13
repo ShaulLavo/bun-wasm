@@ -30,7 +30,7 @@ performance benchmark. Each hosted shard gets its own Ubuntu runner.
 | Batch | Files | Full PC command seconds | Results | CI deadline seconds |
 | --- | ---: | ---: | --- | ---: |
 | `10-interface` | 10 | 92.058 | 89 pass, 1 existing skip | 126 |
-| `20-preview` | 18 | 67.026 | 70 pass | 104 |
+| `20-preview` | 18 | 67.026 | 70 pass | 123 |
 | `30-lifecycle` | 5 | 78.146 | 24 pass | 98 |
 
 All commands exited zero. Sandbox readiness completed all twelve checks. Its
@@ -54,7 +54,7 @@ remain unchanged.
 | Batch | Hosted job | Log interval seconds | Reference seconds | Bound seconds | Margin |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `10-interface` | [132034773867](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773867) | 111.683085 | 111.684 | 126 | 12.82% |
-| `20-preview` | [132034773910](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773910) | 92.312170 | 92.313 | 104 | 12.66% |
+| `20-preview` | [132034773910](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773910) | 92.312170 | See slower observation below | 123 | See below |
 | `30-lifecycle` | [132034773941](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773941) | 86.501588 | 86.502 | 98 | 13.29% |
 
 The raw hosted logs are retained as `hosted-interface.log`, `hosted-preview.log`
@@ -63,6 +63,18 @@ measurements replace the initial references assembled from the interrupted
 batch's file intervals and local completions. They are observations from one
 normal run, not a controlled performance benchmark or a guarantee of future
 runner speed.
+
+The next [preview job](https://github.com/ShaulLavo/bun-wasm/actions/runs/43469715842/job/132041820362)
+hit its 104-second command limit without a failed assertion. WebKit's `failures`
+check passed at 10.647 seconds, but its final `deadlines` check and the storage
+file had not completed. The previous complete hosted sample measured those
+remaining checks at 1.793 and 2.777 seconds. Add them to the observed 104-second
+lower bound, then round up to 109 seconds for startup and cleanup. The preview
+bound is now `ceil(109 * 1.125) = 123` seconds. This reference combines the slow
+observation with measured remaining work; it is not another complete shard
+measurement. Retain the failed run as evidence and confirm a complete hosted
+pass with the new bound. Its raw log is `calibrated-preview-failure.log` in the
+report directory. Other shard references remain unchanged.
 
 ## Reproduction and cleanup
 
