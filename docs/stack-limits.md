@@ -895,6 +895,35 @@ ROOT=$PWD/site ENGINES=jsc bun stack.js --measure                               
 ROOT=$PWD/site ENGINES=jsc STACK_KIB=240 JSC_PARSER_RESERVE=832 STACK_SLICE=10/12 bun stack.js --measure --cold
 ```
 
+Playwright also accepts `STACK_SLICE=PART/COUNT` or `FIRST-LAST/COUNT` with `--measure`.
+Parts keep the original path order and each cold attempt still opens a fresh context.
+Part 1 runs both overflow fixtures after its measurements. Other parts omit those fixtures.
+An unset `STACK_SLICE` preserves the full sweep and its output. An explicit `1/1` measures
+the full sweep with completion metadata. Selected runs print the selected modes, part count,
+settings and a final `stackPartComplete` record only after all their assertions pass.
+A successful part is partial evidence. It does not qualify the full sweep.
+
+Only cold measurements may use separate partial invocations. Warm qualification keeps one
+continuous context for all paths and fixtures. Use the original unsliced warm command, `1/1`,
+or a single full range such as `1-4/4`. Partial warm selections and warm composites from separate
+contexts are rejected because their compilation and state histories differ.
+
+Use the existing runner admission for each independent part. Save one invocation per file,
+using one browser, engine and settings tuple per collection. For example, run `1/4`, `2/4`,
+`3/4` and `4/4` separately, then check their combined coverage:
+
+```sh
+ENGINES=jsc STACK_KIB=240 JSC_PARSER_RESERVE=832 STACK_SLICE=2/4 node web/tests/browser-stack.mjs --measure --cold chromium > part-2.jsonl
+bun scripts/stack-parts.ts chromium/jsc part-1.jsonl part-2.jsonl part-3.jsonl part-4.jsonl
+```
+
+The completion check requires every part and original mode exactly once, both successful
+overflow fixtures, matching settings and cold mode, and a completion record in each file.
+Missing reports, duplicate parts or modes, failed rows and incomplete runs fail the check.
+Run it separately for each required browser, engine, budget and parser reserve tuple.
+The checker verifies coverage and recorded assertions; artifact identity and the qualification
+matrix remain the caller's responsibility. It starts no work and changes no deadlines.
+
 The `require` path writes its chain of modules into a private scratch directory and
 removes it. `--leaf-root` and `--leaf` end the chain in a real installed package, and
 the result is how many levels fit above it. A package that cannot load alone is
