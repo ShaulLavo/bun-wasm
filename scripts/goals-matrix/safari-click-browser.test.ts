@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { chromium, webkit, type BrowserType } from "playwright";
-import { armSafariClick, observeSafariClick } from "./safari-click";
+import { armNativeClick, observeNativeClick } from "./native-click";
 
 async function control(engine: BrowserType): Promise<void> {
   const browser = await engine.launch({ headless: true });
@@ -8,8 +8,8 @@ async function control(engine: BrowserType): Promise<void> {
     const page = await browser.newPage();
     await page.setContent('<button onclick="document.querySelector(\'output\').textContent=\'1\'">Increment</button><output>0</output>');
     const input = { button: "button", clicked: "output", token: "trusted-control" };
-    const arm = `(${armSafariClick.toString()})(${JSON.stringify(input)})`;
-    const observe = `(${observeSafariClick.toString()})(${JSON.stringify(input)})`;
+    const arm = `(${armNativeClick.toString()})(${JSON.stringify(input)})`;
+    const observe = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
     expect(await page.evaluate(arm)).toEqual({ ready: true, before: "0" });
     await page.getByRole("button", { name: "Increment" }).click();
     expect(await page.evaluate(observe)).toEqual({ trusted: true, after: "1" });
