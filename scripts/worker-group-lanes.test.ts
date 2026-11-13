@@ -81,7 +81,7 @@ function spawnPipes(pid: number, trace: Trace, direct: boolean, parentOpen: Retu
 
 type Runtime = ReturnType<typeof sourcePorts>;
 /** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
-function group(options: { realLoop?: boolean } & TransferHooks = {}) {
+function group(options: { realLoop?: boolean; child?: TransferHooks } & TransferHooks = {}) {
   const model = createGroupLaneModel();
   const trace: Trace = [];
   const rootLanes = model.member(1);
@@ -100,7 +100,7 @@ function group(options: { realLoop?: boolean } & TransferHooks = {}) {
     const plan = root.codec.prepare([data, [], port2], transfer.concat([port2]), [], { kind: "cell", cell });
     plan.commit();
     root.__fixtureChild(pipes.parent, plan.graph, id);
-    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), core: lanes.natives, channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell }, realLoop: options.realLoop });
+    const child: Runtime = sourcePorts({ ...options.child, sharedObjects: groupSharedObjects(lanes), core: lanes.natives, channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell }, realLoop: options.realLoop });
     cleanup.add(() => child.__fixtureShutdown());
     child.initialize();
     return { child, port: port1, pipes, cell, pid };
@@ -339,6 +339,150 @@ test("a transfer call that throws on entry has moved nothing, and the port it ca
   expectNothingMoved(made, spawned, extra, buffer);
 });
 
+for (const recoverInCatch of [false, true]) {
+  test(`a port that fails to send itself from its own message handler keeps delivering${recoverInCatch ? " when the handler touches it again" : " with no further call from the program"}`, async () => {
+    const failure = new RangeError("Maximum call stack size exceeded");
+    let fail = false;
+    const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
+    const { child, port: sender } = made.spawn();
+    const { port1, port2 } = new made.root.MessageChannel();
+    const turn = () => new Promise<void>(resolve => setImmediate(resolve));
+    const delivered: unknown[] = [];
+    let caught: unknown;
+    port2.on("message", value => {
+      delivered.push(value);
+      if (value !== "first") return;
+      fail = true;
+      // The transfer call throws on entry, after the port's state was taken off it and while
+      // this handler's batch still has "second" to deliver.
+      try { sender.postMessage({ port: port2 }, [port2]); }
+      catch (error) { caught = error; if (recoverInCatch) port2.hasRef(); }
+    });
+    port1.postMessage("first"); port1.postMessage("second");
+    await turn(); await turn();
+    expect(caught).toBe(failure);
+    // Only the loop runs from here: its step rolls the post back, and delivery goes on.
+    made.root.step();
+    await turn(); await turn();
+    expect(delivered).toEqual(["first", "second"]);
+    port1.postMessage("third");
+    await turn(); await turn();
+    // In order, once each, and nothing was left for a synchronous receive to find.
+    expect(delivered).toEqual(["first", "second", "third"]);
+    expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
+    expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+    expect(made.model.control.staged).toBe(0);
+    expect(port2.hasRef()).toBe(true);
+  });
+}
+
+/**
+ * A transfer call the engine refuses to enter never runs the native, so nothing calls the
+ * rollback. The post is still registered, and whatever enters the runtime next rolls it back
+ * before doing its own work. Each case below is one kind of next entry.
+ */
+type Refused = { made: ReturnType<typeof group>; spawned: ReturnType<ReturnType<typeof group>["spawn"]>; extra: { port1: SourcePort; port2: SourcePort }; buffer: ArrayBuffer };
+const entries: { name: string; enter(refused: Refused): void; closes?: boolean }[] = [
+  { name: "a loop step", enter: ({ made }) => { made.root.step(); } },
+  { name: "a synchronous receive on another port", enter: ({ made, extra }) => { made.root.receiveMessageOnPort(extra.port1); } },
+  { name: "a post on the sender", enter: ({ spawned }) => { spawned.port.postMessage("next"); } },
+  { name: "a reference query on the carried port", enter: ({ extra }) => { extra.port2.hasRef(); } },
+  { name: "the carried port sent again", enter: ({ spawned, extra }) => { spawned.port.postMessage({ again: extra.port2 }, [extra.port2]); }, closes: true },
+  { name: "the carried port closed", enter: ({ extra }) => { extra.port2.close(); }, closes: true },
+];
+for (const entry of entries) {
+  test(`after a transfer call that throws on entry, ${entry.name} first puts everything back`, async () => {
+    const failure = new RangeError("Maximum call stack size exceeded");
+    let fail = true, settled = 0;
+    const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } }, settled: () => { settled++; } });
+    const spawned = made.spawn();
+    const extra = new made.root.MessageChannel();
+    const buffer = new ArrayBuffer(32);
+    const got: unknown[] = [];
+    extra.port2.on("message", value => got.push(value));
+    extra.port1.postMessage("queued before");
+    expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(failure);
+    expect(settled).toBe(0);
+    entry.enter({ made, spawned, extra, buffer });
+    // The rollback ran once, before the entry's own work, and left nothing staged.
+    expect(settled).toBeGreaterThanOrEqual(1);
+    expect(buffer.byteLength).toBe(32);
+    expect(made.model.control.staged).toBe(0);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    // A port that then left or closed took its queue with it; otherwise the message queued
+    // for the carried port before the failed post is delivered, once.
+    if (!entry.closes) expect(got).toEqual(["queued before"]);
+    // The receiver saw nothing of the failed post, and the sender's sequence has no gap.
+    spawned.port.postMessage("last");
+    const seen: unknown[] = [];
+    for (let item = spawned.child.receiveMessageOnPort(spawned.child.parentPort); item; item = spawned.child.receiveMessageOnPort(spawned.child.parentPort)) seen.push(item.message);
+    expect(seen.at(-1)).toBe("last");
+    expect(seen.some(message => typeof message === "object" && message !== null && "buffer" in message)).toBe(false);
+  });
+}
+
+const interruptible: [object, string][] = [[Set.prototype, "add"], [Set.prototype, "delete"], [Map.prototype, "set"], [Map.prototype, "delete"]];
+/** Runs `action` with its `stop`th collection call throwing, before or after it took effect. False when it made fewer. */
+function interruptedAt(stop: number, after: boolean, action: () => void): boolean {
+  let seen = 0, hit = false;
+  const originals = interruptible.map(([target, name]) => Reflect.get(target, name) as (...args: unknown[]) => unknown);
+  interruptible.forEach(([target, name], index) => Reflect.set(target, name, function (this: unknown, ...args: unknown[]) {
+    if (seen++ !== stop) return Reflect.apply(originals[index]!, this, args);
+    hit = true;
+    if (after) Reflect.apply(originals[index]!, this, args);
+    throw new RangeError("Maximum call stack size exceeded");
+  }));
+  try { action(); }
+  catch (error) { if (!hit) throw error; }
+  finally { interruptible.forEach(([target, name], index) => Reflect.set(target, name, originals[index])); }
+  return hit;
+}
+
+for (const after of [false, true]) {
+  test(`a rollback interrupted ${after ? "after" : "before"} any of its collection calls is finished by the next step`, () => {
+    let stops = 0;
+    for (let stop = 0; ; stop++) {
+      const failure = new RangeError("Maximum call stack size exceeded");
+      let fail = true;
+      const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
+      const spawned = made.spawn();
+      const extra = new made.root.MessageChannel();
+      const buffer = new ArrayBuffer(32);
+      extra.port2.ref();
+      expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(failure);
+      // The first attempt at the rollback is cut short somewhere; the step after it finishes.
+      const reached = interruptedAt(stop, after, () => { made.root.step(); });
+      made.root.step();
+      expect(extra.port2.hasRef(), `stop ${stop}`).toBe(true);
+      expect(made.root.internal.messagePortRefs.size, `stop ${stop}`).toBe(1);
+      expectNothingMoved(made, spawned, extra, buffer);
+      for (const close of cleanup) close();
+      cleanup.clear();
+      if (!reached) break;
+      stops++;
+    }
+    expect(stops).toBeGreaterThan(3);
+  });
+}
+
+test("a worker that exits after a refused post reports only the messages it sent", () => {
+  const failure = new RangeError("Maximum call stack size exceeded");
+  let fail = false;
+  const made = group({ child: { beforeTransfer: () => { if (fail) { fail = false; throw failure; } } } });
+  const { child, port, pid } = made.spawn();
+  child.parentPort.postMessage("sent");
+  fail = true;
+  expect(() => child.parentPort.postMessage("refused on entry")).toThrow(failure);
+  // The exit report counts the parent port's messages. The refused post took a sequence
+  // before its call and gives it back before the report is made.
+  child.internal.workerExit?.(0);
+  const exiting = made.trace.filter(item => item.from === `child ${pid}` && item.text.includes('"exiting"')).map(item => item.text).join("");
+  expect(exiting).toContain('"messages":1');
+  expect(made.root.receiveMessageOnPort(port)?.message).toBe("sent");
+  expect(made.root.receiveMessageOnPort(port)).toBeUndefined();
+});
+
 test("a commit the core refuses throws DataCloneError with everything put back before the throw", () => {
   let stale = true;
   const made = group({ beforeTransfer: () => {
@@ -409,10 +553,11 @@ test("what a post owes is retried when settling it fails, and the failure is not
   const { child, port } = made.spawn();
   const extra = new made.root.MessageChannel();
   port.postMessage({ port: extra.port2 }, [extra.port2]);
-  fail = 2;
+  fail = 3;
   // The next call into the runtime finds the debt first and fails before doing its own work.
   expect(() => port.postMessage("second")).toThrow(failure);
-  // A loop step meets the same failure, keeps it to itself and leaves the debt for the next.
+  // A loop step meets the same failure twice, when it settles and when it pumps. It keeps
+  // both to itself and leaves the debt for the next step.
   expect(() => made.root.step()).not.toThrow();
   expect(settled).toBe(0);
   made.root.step();

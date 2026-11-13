@@ -348,6 +348,11 @@
     return shared?.routes?.enabled ? shared.lanes : undefined;
   }
   function pump() {
+    // The loop also pumps outside the waiter's step, and a frame handled here may name a port
+    // that a refused post has not put back yet. A failure to settle is not the pump's: what is
+    // owed stays listed for the next step or entry.
+    try { settlePosts(); }
+    catch { /* still owed */ }
     const shared = internal.sharedObjects;
     // Lanes first: a broker close behind lane data must not overtake it. A group lane left with
     // data past its drain quota counts as progress, so the loop steps again before sleeping.
@@ -750,10 +755,13 @@
               internal.messagePortRefs.delete(state);
               value.#closeLane(false); deleteLocalPort(state.id); value.#state = null;
             },
+            // Everything the port was doing resumes: its keepalive, the delivery of what is
+            // queued, and the wait for an attachment that staging cancelled.
             restore() {
               value.#state = state; state.group = held; localPorts.set(state.id, value);
               if (referenced) internal.messagePortRefs.add(state);
-              value.#schedule();
+              if (state.phase === "open") value.#accept();
+              else value.#schedule();
             },
             moved,
           };
@@ -895,8 +903,15 @@
       state.batch = batch;
       this.#deliverBatch(state, batch);
     }
+    /**
+     * A delivery step that finds the port's state taken off it stops the batch for good. The
+     * port has moved, or a post that carried it is about to be rolled back: `restore` then
+     * schedules the messages still queued, in order, and none is delivered twice because each
+     * left the queue as it was dispatched. A batch left set here would block that for ever.
+     */
+    #stopBatch(state: PortState) { state.batch = null; state.scheduled = false; }
     #deliverBatch(state: PortState, batch: DeliveryBatch) {
-      if (this.#state !== state) return;
+      if (this.#state !== state) { this.#stopBatch(state); return; }
       state.scheduled = false;
       if (!batch.remaining || !batch.queue.length) { this.#continueBatch(state, batch); return; }
       batch.remaining--;
@@ -905,7 +920,7 @@
       finally { this.#continueBatch(state, batch); }
     }
     #continueBatch(state: PortState, batch: DeliveryBatch) {
-      if (this.#state !== state) return;
+      if (this.#state !== state) { this.#stopBatch(state); return; }
       if (!batch.remaining || !batch.queue.length) {
         state.batch = null;
         if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
@@ -1286,6 +1301,7 @@
   }
   function moveMessagePortToContext(port: unknown, _context: unknown): never {
     if (!(port instanceof MessagePort)) throw invalidPort();
+    settlePosts();
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
   }
@@ -1365,6 +1381,9 @@
     if (config.web) internal.require("bun").isMainThread = false;
     root({ kind: "member", path: route, group: envGroup });
     internal.workerExit = code => {
+      // The count below must not include a post that was refused and not rolled back yet, and
+      // what a committed post still owes goes out with the frames drained here.
+      settleOwed();
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
       parentChannel?.drain();
     };

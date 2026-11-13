@@ -137,7 +137,7 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
     ["worker_channel", { open: () => options.channel }],
     ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
-  const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts"> = {};
+  const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts" | "workerExit"> = {};
   const internal = Object.assign({
     native: runtimeNative,
     realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,

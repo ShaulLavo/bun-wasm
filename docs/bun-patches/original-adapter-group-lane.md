@@ -157,7 +157,15 @@ How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
 - A post is listed in a registry from the start of its gather. If an exception keeps the
   rollback from running or finishing, the post is still listed, and the next entry into the
   module or the next loop step finishes it: the core says whether the post's nonce was
-  committed. Every port method settles earlier posts first.
+  committed. Every port method settles earlier posts first, and so do the pump, a
+  synchronous receive, the preparation of any port for transfer and a worker's exit report.
+- The engine can refuse the transfer call before it enters the native (stack exhaustion at
+  the call). Then no callback runs and the local steps taken before the call stand until
+  that next entry. Nothing depends on the program making one: the loop's waiter stays
+  referenced while a post is listed, and its step rolls the post back. A carried port's
+  delivery survives the gap. A delivery step that finds the port's state taken off it stops
+  its batch, and the rollback schedules what is still queued, so each message is delivered
+  once and in order, including when the port tried to send itself from its own handler.
 - What a committed post owes others is sent at that same next entry or step: the broker's
   record that a port is moving, the publication's commit, the wake hint. None of it is needed
   for the message to be whole. The receiver adopts a carried end from the ledger and binds
