@@ -43,7 +43,7 @@
   }
 
   function absolute(p) {
-    if (p.startsWith("/")) return p;
+    if (p === "" || p.startsWith("/")) return p;
     return internal.require("path").resolve(p);
   }
 
@@ -393,7 +393,7 @@
   }
 
   function realpathSync(path) {
-    return withPath(path, (abs) => native.realpath(abs));
+    return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
   }
   realpathSync.native = realpathSync;
 
@@ -863,7 +863,8 @@
   let fileStreamAdapter;
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
-      Buffer, openSync, closeSync, readSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      readPieceSize: kReadPiece, isRegularReadFd,
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;

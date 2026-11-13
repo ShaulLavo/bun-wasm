@@ -24,4 +24,18 @@ descriptor, and bigint Stats through the public filesystem APIs.
 
 The reference contracts are Node's `lib/fs.js`, `lib/internal/fs/utils.js` and `lib/internal/fs/cp/{cp,cp-sync}.js` at Node v24.22.1, and Bun 1.4.4's public filesystem APIs, observed as executable controls rather than copied source. Supplied reproductions audited bun-wasm `72d1394484dcd64b051f63f230ad70bfaf2769ae`; this change starts at `114b84c3a7b0f9c57df5e2daff5aa9d4d645ea3f`.
 
+The filesystem path resolver preserves an empty caller path instead of resolving
+it to the working directory before the Rust native call. Rust's filesystem
+bindings use the original `src/natives/fs_path.rs` guard and existing `io_error` conversion to reject empty required paths
+before WASI can resolve them to a preopened directory. This covers `stat`,
+`lstat` and related file operations, including fresh errors and deferred callback
+and promise delivery. Existence checks return false, and forced removal of an
+empty missing path remains a no-op. The guard applies to required filesystem
+paths, not lexical path operations or temporary-directory prefixes.
+The existing synchronous and callback `realpath` behavior still resolves an
+empty path to the working directory, as Node v26.12.1 does. Empty `mkdtemp`
+prefixes still acquire their random suffix before path resolution. The
+`fs-empty-path` fixture and source-boundary check exercise these contracts; this
+is an original adapter correction, with no copied upstream code.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

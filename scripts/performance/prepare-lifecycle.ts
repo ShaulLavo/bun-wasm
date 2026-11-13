@@ -19,7 +19,7 @@ async function prepareLifecycle(canonical: string, scratch: string, spidermonkey
     await cp("web/dist", join(scratch, "host"), { recursive: true });
     await verifyPreparedSiteInventory(join(scratch, "host"));
     const waffle = object(JSON.parse(await readFile("web/node_modules/waffle/package.json", "utf8")));
-    if (waffle.version !== "0.0.126") throw new Error("Lifecycle host requires Waffle 0.0.126");
+    if (waffle.version !== "0.0.127") throw new Error("Lifecycle host requires Waffle 0.0.127");
     await writeFile(join(scratch, "host/lifecycle-host.json"), JSON.stringify({ waffle: waffle.version, canonicalManifest: manifest,
       guestSource: string(guestSource.head), hostSource: JSON.parse(await readFile("web/dist/goals-host-source.json", "utf8")) }));
     await writePreparedSiteInventory(join(scratch, "host"));

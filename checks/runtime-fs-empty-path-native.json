@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/fs-empty-path-native.test.ts",
+  "localRuntime": true
+}
