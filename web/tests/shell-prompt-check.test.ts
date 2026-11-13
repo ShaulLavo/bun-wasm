@@ -113,7 +113,7 @@ const transcriptCallers = [
   "web/tests/bench-engines.mjs", "web/tests/bench-memory.mjs", "web/tests/browser-async-context-runtime.ts",
   "web/tests/browser-crypto.mjs", "web/tests/browser-engine.mjs", "web/tests/browser-install.mjs",
   "web/tests/browser-installer-links.ts", "web/tests/browser-jsc-parser-reserve.ts", "web/tests/browser-memory.mjs", "web/tests/browser-module-records.ts", "web/tests/browser-module-retry.ts",
-  "web/tests/browser-prepare-context.ts", "web/tests/browser-quickjs-stack.ts", "web/tests/browser-solid-stack.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
+  "web/tests/browser-prepare-context.ts", "web/tests/browser-solid-stack.ts", "web/tests/browser-stack.mjs", "web/tests/browser-subprocess.ts",
   "web/tests/browser-tools.ts", "web/tests/browser-worker-modules.ts", "web/tests/next-framework-browser.ts",
   "web/tests/browser-playground-stdin.ts", "web/tests/browser-vite-react.ts", "web/tests/browser-next-dev.ts", "web/tests/browser-next-production.ts",
   "web/tests/shell-stop-check.ts",
@@ -125,10 +125,12 @@ const nonTranscriptCallers = [
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
+  // The stack navigation helper reads runtime publication, not a terminal transcript.
+  "web/tests/quickjs-stack-navigation.ts",
   // Storage checks use only the server/browser lifecycle, never a terminal transcript.
   "scripts/sandbox-storage-browser.test.ts",
 ];
-const inheritedTranscriptCallers = ["web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
+const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 
 test("every playground helper reader has a maintained transcript or public-state classification", async () => {
   const root = new URL("../../", import.meta.url).pathname;
