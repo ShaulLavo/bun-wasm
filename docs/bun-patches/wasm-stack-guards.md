@@ -163,7 +163,7 @@ declares the one setter, `setWasmParserReserve`, which takes the reserve in byte
 through 2048 in multiples of 16 and stores the discount. The recursive path loads the variable and
 subtracts. It reads no environment, allocates nothing and initializes nothing lazily.
 
-Nothing else in the patch moves. The other 20 `WASM_RESERVE_STACK` sites keep their constants,
+Nothing else in the patch moves. The other 21 `WASM_RESERVE_STACK` sites keep their constants,
 including `parseAwaitExpression`. `StackBounds.cpp`, the hard and soft limits, the 128 KiB
 exception reserve, the regexp matching errors and every budget are unchanged, and no upstream
 algorithm changes. Non-WASI builds compile as before: the macro discards its argument there.
