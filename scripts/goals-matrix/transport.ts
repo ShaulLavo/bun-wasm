@@ -29,7 +29,19 @@ async function clickPage(page: Page, button: string, clicked: string, admission:
   const box = await target.boundingBox({ timeout: admit(admission) });
   if (!box) throw new Error("Counter has no visible bounds");
   admit(admission);
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  const left = Math.max(0, box.x), right = Math.min(viewport.width, box.x + box.width);
+  const top = Math.max(0, box.y), bottom = Math.min(viewport.height, box.y + box.height);
+  if (right <= left || bottom <= top) throw new Error("Counter is outside the viewport");
+  const point = { x: (left + right) / 2, y: (top + bottom) / 2 };
+  admit(admission);
+  const actionable = await target.evaluate((element, point) => {
+    const hit = element.ownerDocument.elementFromPoint(point.x, point.y);
+    return hit !== null && element.contains(hit);
+  }, point);
+  if (!actionable) throw new Error("Counter visible point is not actionable");
+  admit(admission);
+  await page.mouse.click(point.x, point.y);
   const observation = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
   const expected = before.before.replace(/\b0\b/, "1");
   const after = await until(() => evaluatePage<ReturnType<typeof observeNativeClick>>(page, observation, admit(admission), admission), value => value.trusted && value.after === expected, admit(admission));

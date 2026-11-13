@@ -63,6 +63,14 @@ async function clickFirstCounter(page: ScopedTransport, framework: Framework): P
   expect(await page.evaluate("document.body.dataset.wrongTarget")).toBeUndefined();
 }
 
+async function clickPartiallyVisibleCounter(page: ScopedTransport, framework: Framework): Promise<void> {
+  for (const position of ["right:-90px;top:40px", "left:-90px;top:40px", "left:40px;top:-30px"]) {
+    await page.navigate(counter);
+    await page.evaluate(`document.querySelector('button').style.cssText = ${JSON.stringify(`position:fixed;width:100px;height:40px;${position}`)}`);
+    expect(await checkClick(page, framework, 3000)).toMatchObject({ trusted: true, after: "count is 1" });
+  }
+}
+
 for (const kind of ["chrome", "firefox"] as const) {
   test(`checkClick delivers trusted input to the selected ${kind} page`, async () => {
     const transport = await createPlaywrightTransport(kind, 5000, 5000, true);
@@ -84,6 +92,7 @@ for (const kind of ["chrome", "firefox"] as const) {
         expect(await page.evaluate("document.body.dataset.trusted")).toBe("true");
         await rejectInvalidClicks(page, framework);
         await clickFirstCounter(page, framework);
+        await clickPartiallyVisibleCounter(page, framework);
       });
       await rejectBlockedClick(transport, framework, "abort");
       await rejectBlockedClick(transport, framework, "deadline");

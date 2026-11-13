@@ -10,6 +10,8 @@ actionability without sending the click. Admission is checked again before
 mouse input, so a cancelled actionability wait cannot send a late click.
 The first selector match is used consistently with the witness's
 `querySelector`, including pages that add an unrelated Dev Tools button.
+Mouse coordinates use the viewport-visible part of the target, checked by
+hit testing before input, so partly offscreen counters remain clickable.
 The selected host or preview page
 receives browser input instead of the playground's DOM `.click()` fallback.
 
