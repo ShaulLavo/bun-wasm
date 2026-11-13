@@ -94,14 +94,21 @@ memory with exactly that page maximum, so a pair linked for another stage is ref
 group's members may hold together is the guest memory maximum, `crates/bunwasm-cli/max-memory.txt`
 (1 GiB, 16384 pages): regions are not counted against it.
 
-Waffle's `memoryGroups` options are runtime-wide: every group in one `createRuntime()` uses the
-same policy. A runtime that hosts Bun groups must opt in with
-`createRuntime({ memoryGroups: { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } })`
-(`BUN_MEMORY_GROUP_POLICY`), and that also gives every other group in the same runtime a 2 GiB
-declared maximum and a 1 GiB member cap. Waffle's defaults (4 GiB, 1 MiB stacks) still apply to
-runtimes that don't set them. A Waffle runtime left at the defaults cannot admit a Bun core: the
-import check fails. There is no fallback. `memberPages` needs a Waffle release that enforces it;
-an older one would admit the core and ignore the cap.
+Waffle's `memoryGroups` options are runtime-wide. Every group in one `createRuntime()` uses the
+same policy. `BUN_MEMORY_GROUP_POLICY` currently trials a 20,480-page backing maximum, 1.25 GiB,
+with the unchanged 16,384-page member allowance and 8 MiB stacks. This is experimental pending
+a complete native workflow. It does not change either guest's 32,768-page import declaration or
+its original receipt. The backing maximum may be smaller than the imported maximum under Wasm
+import matching. Waffle's defaults, 4 GiB and 1 MiB stacks, still apply to other runtimes.
+A runtime left at those defaults cannot admit a Bun core because its supplied maximum exceeds
+the source import maximum. There is no fallback.
+
+Host staging verifies both core and side declarations against `sharedGroupMaxPages()`, including
+sharedness, a single imported `env.memory`, and the exact producer maximum. It separately checks
+that backing capacity is no larger than either source maximum and no smaller than either initial
+minimum or the member allowance. Core data, stack, side data and alignment must also fit the
+static layout and member limits. These are admission checks, not proof that all later allocations
+fit. Receipt, source, profile and core/side checks remain unchanged.
 
 On wasmtime, a Bun group is an `shm::MemoryGroup` created with
 `GroupPolicy { maximum_pages, member_pages }` at those two values; the service default (65536)

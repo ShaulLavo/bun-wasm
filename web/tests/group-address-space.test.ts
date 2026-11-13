@@ -1,4 +1,4 @@
-// The Bun group's 2 GiB address space and 1 GiB member cap on the Browser host
+// The guest's declared 2 GiB address space and 1 GiB member cap on the Browser host
 // (docs/memory-ceiling.md, stage 2), through the adapters a page uses: Waffle's group owner under
 // BUN_MEMORY_GROUP_POLICY, the real NestedHost, and Waffle's preview1 over the group memory.
 // The last valid byte is 0x7fffffff. 0x80000000 is a legal one-past-end address and nothing more.
@@ -10,6 +10,7 @@ import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { PAGE, counters, errorText, group, handle, type Member, type Owner, type ReplyOf } from "./nested-host-owner";
 
 const END = 0x8000_0000;
+const declarationPolicy = { ...BUN_MEMORY_GROUP_POLICY, maximumPages: 32768 };
 const NOMEM = -GroupErrno.NOMEM;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -47,15 +48,15 @@ function write(member: Member, wasi: Wasi, iovec: number, span: readonly [number
 }
 
 describe("the Bun group policy", () => {
-  test("declares the 2 GiB address space and the 1 GiB member cap", () => {
-    expect(BUN_MEMORY_GROUP_POLICY).toEqual({ maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 });
-    expect(BUN_MEMORY_GROUP_POLICY.maximumPages * PAGE).toBe(END);
+  test("keeps experimental backing below declarations with the 1 GiB member cap", () => {
+    expect(BUN_MEMORY_GROUP_POLICY).toEqual({ maximumPages: 20480, memberPages: 16384, stackBytes: 8 << 20 });
+    expect(declarationPolicy.maximumPages * PAGE).toBe(END);
   });
 });
 
 describe("a Bun group filled to its 2 GiB end", () => {
   test("holds stock Rolldown's memory beside its member, serves the final byte and refuses one page more", () => {
-    const { groups, join } = group(BUN_MEMORY_GROUP_POLICY);
+    const { groups, join } = group(declarationPolicy);
     const member = join();
     const output: string[] = [];
     const diagnostics: string[] = [];
@@ -78,7 +79,7 @@ describe("a Bun group filled to its 2 GiB end", () => {
       expect(Array.from(bytes(member, top - 1, 2))).toEqual([7, 0]);
 
       // The member takes every page that is left; its last chunk ends at the end of the group.
-      const rest = BUN_MEMORY_GROUP_POLICY.maximumPages - member.owner.snapshot().committedBytes / PAGE;
+      const rest = declarationPolicy.maximumPages - member.owner.snapshot().committedBytes / PAGE;
       expect(rest).toBeGreaterThan(8192);
       const heap = grow(member, rest);
       expect(heap * PAGE).toBeGreaterThan(2 ** 30);
