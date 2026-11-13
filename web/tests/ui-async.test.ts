@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { SharedFilesystem } from "waffle/browser/shared-fs";
 import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
 import { deferred, filesystem, filesystemFixture as pageFilesystem, method, models, turn } from "./ui-model-helpers";
+import { StorageRecovery } from "../../sandbox/src/workspace-policy";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -189,6 +190,73 @@ test("sandbox reports failed filesystem saves and rejects explicit flush", async
   writes[0]!.done.reject(new Error("filesystem unavailable"));
   await expect(saving).rejects.toThrow("filesystem unavailable");
   expect(editor.saveState).toEqual({ text: "not saved: Error: filesystem unavailable", kind: "error" });
+});
+
+test("sandbox flushAll retries a failed save after its debounce timer was removed", async () => {
+  const { sandboxEditor: editor, fixture } = await editorFixture("sandbox");
+  await editor.open("src/main.ts");
+  editor.setText("keep this document");
+  const saving = editor.flush("src/main.ts").catch((error: unknown) => error);
+  fixture.writes[0]!.done.reject(new Error("errno 51"));
+  expect(await saving).toBeInstanceOf(Error);
+  expect(editor.hasPending).toBe(true);
+  fixture.control.holdWrites = false;
+  await editor.flushAll();
+  expect(fixture.files.get("/home/user/app/src/main.ts")).toBe("keep this document");
+  expect(editor.hasPending).toBe(false);
+});
+
+test.each([false, true])("sandbox keeps failed-file warnings when the next saved file is edited: %s", async edited => {
+  const page = await pageFixture();
+  const sandbox = new page.Sandbox("?mode=memory");
+  sandbox.start();
+  const editor = sandbox.editor!;
+  pageCleanups.push(async () => { editor.discard(); });
+  const write = page.fixture.fs.writeFile;
+  let failA = true;
+  page.fixture.fs.writeFile = async (path, data) => {
+    if (failA && path.endsWith("/a.ts")) throw new Error("errno 51");
+    await write(path, data);
+  };
+  await editor.open("a.ts");
+  editor.setText("A is still only in this editor");
+  await expect(editor.flush("a.ts")).rejects.toThrow("errno 51");
+  await editor.open("b.ts");
+  if (edited) editor.setText("B saves successfully");
+  await editor.flush("b.ts");
+  expect(editor.hasPending).toBe(true);
+  expect(sandbox.failure).toBe("storage");
+  expect(sandbox.status.text).toContain("Keep this page open");
+  expect(editor.saveState.text).toContain("not saved");
+  await editor.open("a.ts");
+  expect(editor.view.state.doc.toString()).toBe("A is still only in this editor");
+  expect(editor.saveState.text).toContain("not saved");
+  failA = false;
+  await editor.flushAll();
+  expect(editor.hasPending).toBe(false);
+  expect(editor.saveState).toEqual({ text: "saved", kind: "ok" });
+  expect(sandbox.failure).toBeUndefined();
+  expect(sandbox.status.text).not.toContain("Keep this page open");
+  expect(page.fixture.files.get("/home/user/app/a.ts")).toBe("A is still only in this editor");
+});
+
+test("sandbox serializes saves while retaining text edited during a pending save", async () => {
+  const { sandboxEditor: editor, fixture } = await editorFixture("sandbox");
+  await editor.open("src/main.ts");
+  editor.setText("first");
+  const first = editor.flush("src/main.ts");
+  editor.setText("newer pending text");
+  const second = editor.flush("src/main.ts");
+  expect(fixture.writes).toHaveLength(1);
+  fixture.writes[0]!.done.resolve();
+  await first;
+  await turn();
+  expect(editor.hasPending).toBe(true);
+  expect(fixture.writes[1]?.text).toBe("newer pending text");
+  fixture.writes[1]!.done.resolve();
+  await second;
+  expect(fixture.files.get("/home/user/app/src/main.ts")).toBe("newer pending text");
+  expect(editor.hasPending).toBe(false);
 });
 
 test("sandbox stale durability replies do not replace the latest save status", async () => {
@@ -548,6 +616,66 @@ test("sandbox stops on a failed install and only launches dev after a successful
   page.runs[1]!.done.resolve({ code: 0 });
   await turn();
   expect(page.runs[2]!.args).toEqual(["run", "dev"]);
+});
+
+test("sandbox awaits its post-install checkpoint before starting dev", async () => {
+  const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  const checkpoint = deferred<void>();
+  page.fixture.checkpoints.push(checkpoint);
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs).toHaveLength(1);
+  expect(sandbox.serverState.state).not.toBe("up");
+  checkpoint.resolve();
+  await turn();
+  expect(page.runs[1]?.args).toEqual(["run", "dev"]);
+});
+
+test("sandbox retries an exited installer after quota output, then checkpoints the retry", async () => {
+  const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
+  const sandbox = new page.Sandbox("");
+  let reclaims = 0;
+  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; }), initialize: async (_fs: unknown, seed: () => Promise<void>) => seed(), close() {} });
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  page.runs[0]!.hooks.stderr(encoder.encode("error: ENOSPC\n"));
+  page.runs[0]!.hooks.stdout(encoder.encode("later output\n".repeat(1000)));
+  page.runs[0]!.done.resolve({ code: 1 });
+  await turn();
+  expect(reclaims).toBe(1);
+  expect(page.runs[1]?.args).toEqual(["install"]);
+  page.runs[1]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[2]?.args).toEqual(["run", "dev"]);
+  expect(page.boundary.location.reloads).toBe(0);
+});
+
+test("quota save failure retains pending text and offers Retry without reloading", async () => {
+  const { sandbox, sandboxEditor: editor, fixture, boundary, renderSandbox } = await editorFixture("sandbox");
+  fixture.control.holdWrites = false;
+  let reclaims = 0;
+  Reflect.set(sandbox, "storage", { recovery: new StorageRecovery(async () => { reclaims++; throw new Error("errno 51"); }), initialize: async (_fs: unknown, seed: () => Promise<void>) => seed(), close() {} });
+  await editor.open("src/main.ts");
+  editor.setText("pending source must stay here");
+  const checkpoint = deferred<void>();
+  fixture.checkpoints.push(checkpoint);
+  const saving = editor.flush("src/main.ts").catch((error: unknown) => error);
+  checkpoint.reject(new Error("errno 51"));
+  expect(await saving).toBeInstanceOf(Error);
+  expect(editor.hasPending).toBe(true);
+  expect(editor.view.state.doc.toString()).toBe("pending source must stay here");
+  expect(editor.saveState.kind).toBe("error");
+  expect(sandbox.status.text).toContain("Keep this page open");
+  method<(text: string, kind: "ok") => void>(sandbox, "setStatus")("stale preview ready", "ok");
+  expect(sandbox.status.kind).toBe("error");
+  expect(await renderSandbox(sandbox)).toContain(">Retry</button>");
+  expect(boundary.location.reloads).toBe(0);
+  expect(reclaims).toBe(1);
 });
 
 test("playground passes the borrowed filesystem and truthful prompt options to the public session", async () => {

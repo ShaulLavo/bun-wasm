@@ -22,8 +22,8 @@ test('profile manifests reject unknown values and unrelated owners', () => {
 });
 
 test('CLI profile selection is closed and missing group artifacts fail', () => {
-  expect(checkArguments(['native', '--profile', 'shared-group', '--list'])).toEqual({ owner: 'native', profile: 'shared-group', list: true });
-  expect(checkArguments(['native', '--list'])).toEqual({ owner: 'native', profile: 'split', list: true });
+  expect(checkArguments(['native', '--profile', 'shared-group', '--list'])).toEqual({ owner: 'native', profile: 'shared-group', list: true, batch: undefined, batches: false });
+  expect(checkArguments(['native', '--list'])).toEqual({ owner: 'native', profile: 'split', list: true, batch: undefined, batches: false });
   for (const args of [['native', '--profile'], ['native', '--profile', 'browser'], ['native', '--list', '--list'], ['web', '--profile', 'shared-group']]) {
     expect(() => checkArguments(args)).toThrow();
   }
