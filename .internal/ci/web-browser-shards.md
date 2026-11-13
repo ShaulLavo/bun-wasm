@@ -29,9 +29,9 @@ performance benchmark. Each hosted shard gets its own Ubuntu runner.
 
 | Batch | Files | Full PC command seconds | Results | CI deadline seconds |
 | --- | ---: | ---: | --- | ---: |
-| `10-interface` | 10 | 92.058 | 89 pass, 1 existing skip | 127 |
-| `20-preview` | 18 | 67.026 | 70 pass | 113 |
-| `30-lifecycle` | 5 | 78.146 | 24 pass | 114 |
+| `10-interface` | 10 | 92.058 | 89 pass, 1 existing skip | 126 |
+| `20-preview` | 18 | 67.026 | 70 pass | 104 |
+| `30-lifecycle` | 5 | 78.146 | 24 pass | 98 |
 
 All commands exited zero. Sandbox readiness completed all twelve checks. Its
 previously unprinted WebKit failures and deadlines checks took 6.08943 and
@@ -39,29 +39,30 @@ previously unprinted WebKit failures and deadlines checks took 6.08943 and
 
 ## Deadline calculation and limits
 
-PC timings alone would underbudget the slower hosted runner. Attribute the
-hosted interval from each file's group start to the next group start to that
-file's manifest batch, ending the final partial interval at the deadline log.
-This includes inter-group work that the completed-group wall totals omit.
-Those observed intervals sum to 299.969798 seconds. Add the observed 0.374-second
-step-to-first-group startup separately to each shard.
+All three shards completed successfully in [PR CI run 43468007947](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947)
+on source `9ce67b0a0bb64593f604d22fd8d879c150af79bf`. Each shard used a separate
+GitHub-hosted Ubuntu runner, Bun 1.4.4 and the existing browser setup. All 33 files
+ran once, with 183 passing tests and the same existing skip.
 
-| Batch | Hosted intervals seconds | Local completion supplement seconds | Reference seconds | Margin |
-| --- | ---: | ---: | ---: | ---: |
-| `10-interface` | 112.494944 | 0 | 112.869 | 12.52% |
-| `20-preview` | 86.723623 | 12.74824 | 99.846 | 13.17% |
-| `30-lifecycle` | 100.751231 | 0 | 101.125 | 12.73% |
+Measure each command from its workflow log's `Run bun ...run-with-timeout.mts`
+group to the next action's start. This interval includes startup, tests and
+command cleanup, with a small upper margin for the transition to the next action.
+Round that measured interval up to the next millisecond for the reference.
+The command bounds are `ceil(reference * 1.125)`; test deadlines and assertions
+remain unchanged.
 
-The preview supplement is the two previously unprinted WebKit checks plus the
-entire storage-index check. It conservatively includes the full local failures
-check even though the hosted log had already spent 3.117 seconds after its last
-printed result. The references exceed the complete local shard measurements.
-Deadlines use `ceil(reference * 1.125)` and remain below 300 seconds. The preview
-reference combines a partial hosted observation with local completions; it is
-not a measured full hosted shard. Complete hosted matrix timings remain to be
-confirmed by the PR run. If that runner's measured complete shards require
-recalibration, update this evidence and the references without changing any
-test deadline or assertion.
+| Batch | Hosted job | Log interval seconds | Reference seconds | Bound seconds | Margin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `10-interface` | [132034773867](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773867) | 111.683085 | 111.684 | 126 | 12.82% |
+| `20-preview` | [132034773910](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773910) | 92.312170 | 92.313 | 104 | 12.66% |
+| `30-lifecycle` | [132034773941](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773941) | 86.501588 | 86.502 | 98 | 13.29% |
+
+The raw hosted logs are retained as `hosted-interface.log`, `hosted-preview.log`
+and `hosted-lifecycle.log` in the report directory. These complete hosted
+measurements replace the initial references assembled from the interrupted
+batch's file intervals and local completions. They are observations from one
+normal run, not a controlled performance benchmark or a guarantee of future
+runner speed.
 
 ## Reproduction and cleanup
 

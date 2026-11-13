@@ -1,10 +1,10 @@
 import { namedCheckBatches } from "./test-checks";
 
-// Hosted baseline intervals and completed local measurements are in .internal/ci/web-browser-shards.md.
+// Complete hosted command measurements are in .internal/ci/web-browser-shards.md.
 const baselineSeconds: Readonly<Record<string, number>> = {
-  "10-interface": 112.869,
-  "20-preview": 99.846,
-  "30-lifecycle": 101.125,
+  "10-interface": 111.684,
+  "20-preview": 92.313,
+  "30-lifecycle": 86.502,
 };
 
 export function webBrowserShards(batches = namedCheckBatches("web-browser")) {
