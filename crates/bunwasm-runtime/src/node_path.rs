@@ -143,6 +143,9 @@ fn resolve_windows(a: Args<'_>) -> NativeResult {
 }
 
 fn join(a: Args<'_>, encoding: Encoding) -> NativeResult {
+    if matches!(encoding, Encoding::String) {
+        return join_string(a);
+    }
     let windows = a.bool(0);
     let paths = path_slices(a, 1, encoding)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
@@ -155,6 +158,28 @@ fn join(a: Args<'_>, encoding: Encoding) -> NativeResult {
         path::join_posix_t(&slices, &mut output, &mut scratch)
     };
     encoding.write(result)
+}
+
+fn join_string(a: Args<'_>) -> NativeResult {
+    let windows = a.bool(0);
+    let input = a
+        .array(1)
+        .ok_or_else(|| NativeError::type_error("Expected path array"))?;
+    let slices: Vec<_> = input
+        .iter()
+        .map(|value| Args(std::slice::from_ref(value)).str(0).map(str::as_bytes))
+        .collect::<Result<_, _>>()?;
+    let size = path::join_buf_len(windows, &slices);
+    let mut output = vec![0; size];
+    let mut scratch = vec![0; size];
+    let result = if windows {
+        path::join_windows_t(&slices, &mut output, &mut scratch)
+    } else {
+        path::join_posix_t(&slices, &mut output, &mut scratch)
+    };
+    std::str::from_utf8(result)
+        .map(|value| Val::Str(value.to_owned()))
+        .map_err(|_| NativeError::error("Path string result contains invalid UTF-8"))
 }
 
 fn relative(a: Args<'_>, encoding: Encoding) -> NativeResult {
