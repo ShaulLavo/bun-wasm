@@ -29,7 +29,7 @@ performance benchmark. Each hosted shard gets its own Ubuntu runner.
 
 | Batch | Files | Full PC command seconds | Results | CI deadline seconds |
 | --- | ---: | ---: | --- | ---: |
-| `10-interface` | 10 | 92.058 | 89 pass, 1 existing skip | 126 |
+| `10-interface` | 10 | 92.058 | 89 pass, 1 existing skip | 143 |
 | `20-preview` | 18 | 67.026 | 70 pass | 123 |
 | `30-lifecycle` | 5 | 78.146 | 24 pass | 98 |
 
@@ -53,7 +53,7 @@ remain unchanged.
 
 | Batch | Hosted job | Log interval seconds | Reference seconds | Bound seconds | Margin |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `10-interface` | [132034773867](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773867) | 111.683085 | 111.684 | 126 | 12.82% |
+| `10-interface` | [132034773867](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773867) | 111.683085 | See slower observation below | 143 | See below |
 | `20-preview` | [132034773910](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773910) | 92.312170 | See slower observation below | 123 | See below |
 | `30-lifecycle` | [132034773941](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947/job/132034773941) | 86.501588 | 86.502 | 98 | 13.29% |
 
@@ -75,6 +75,16 @@ observation with measured remaining work; it is not another complete shard
 measurement. Retain the failed run as evidence and confirm a complete hosted
 pass with the new bound. Its raw log is `calibrated-preview-failure.log` in the
 report directory. Other shard references remain unchanged.
+
+The later [interface job](https://github.com/ShaulLavo/bun-wasm/actions/runs/43471785469/job/132048504451)
+printed all 89 passing tests and the existing skip at 126 seconds, just as the
+command deadline fired. The job exited 124 and Web host correctly failed its
+prerequisite guard. No assertion failed. Use that slower observation rounded
+to 127 seconds to include command cleanup; the interface bound becomes
+`ceil(127 * 1.125) = 143` seconds. Its raw log is `interface-third-run.log`.
+Preview and lifecycle passed in that same run. Keep all observations and
+confirm normal completion under the final bounds without changing assertions,
+test deadlines, allocation or the aggregate guard.
 
 ## Reproduction and cleanup
 

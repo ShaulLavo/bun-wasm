@@ -2,7 +2,7 @@ import { namedCheckBatches } from "./test-checks";
 
 // Hosted command measurements and the slow preview observation are in .internal/ci/web-browser-shards.md.
 const baselineSeconds: Readonly<Record<string, number>> = {
-  "10-interface": 111.684,
+  "10-interface": 127,
   "20-preview": 109,
   "30-lifecycle": 86.502,
 };
