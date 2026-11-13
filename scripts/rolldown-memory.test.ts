@@ -11,6 +11,7 @@ const binary = join(scratch, "target/release/rolldown-memory-check");
 const output = join(scratch, "adapted.cjs");
 const measurements: unknown[] = [];
 const loaders = ["rolldown-binding.wasi.cjs", "rolldown-binding.wasi-browser.js"];
+const browserResult = process.env.BUNWASM_ROLLDOWN_BROWSER_RESULT;
 afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
   if (process.env.BUNWASM_ROLLDOWN_MEMORY_RESULT) writeFileSync(process.env.BUNWASM_ROLLDOWN_MEMORY_RESULT,
@@ -33,6 +34,8 @@ beforeAll(async () => {
   command(["cargo", "build", "--quiet", "--release", "--manifest-path", join(scratch, "Cargo.toml"), "--target-dir", join(scratch, "target")]);
   writeFileSync(join(scratch, "package.json"), JSON.stringify({ private: true, dependencies: {
     "@napi-rs/wasm-runtime": "1.2.6", "@emnapi/core": "2.0.0-beta.2", "@emnapi/runtime": "2.0.0-beta.2", "rolldown": "1.2.16",
+    "@tybys/wasm-util": "0.10.4", "@emnapi/wasi-threads": "2.2.0",
+    ...(browserResult ? { esbuild: "0.28.2", playwright: "1.64.1" } : {}),
   } }));
   command(["bun", "install", "--ignore-scripts", "--no-progress"]);
   const response = await fetch("https://registry.npmjs.org/@rolldown/binding-wasm32-wasi/-/binding-wasm32-wasi-1.2.16.tgz",
@@ -71,7 +74,7 @@ test("Rolldown rejects one page below the real binary minimum before imports run
 
 test("Rolldown real sync, async, bundling, caller errors and disposal survive the reduction", () => {
   adapt();
-  const probe = resolve(import.meta.dir, "fixtures/rolldown-memory-probe.ts");
+  const probe = new URL("./fixtures/rolldown-memory-probe.ts", import.meta.url).pathname;
   const stock = JSON.parse(command(["node", probe, scratch, "stock"]));
   const small = JSON.parse(command(["node", probe, scratch, "small", output]));
   expect(stock.loadError).toBeUndefined();
@@ -87,6 +90,12 @@ test("Rolldown real sync, async, bundling, caller errors and disposal survive th
   expect(small.grownBytes[0]).toBeLessThan(stock.grownBytes[0]);
   measurements.push({ stock, small });
 }, 90_000);
+
+test.skipIf(!browserResult)("compiled Rolldown browser output preserves real Chromium and WebKit APIs", () => {
+  if (!browserResult) throw new Error("Missing explicit browser result destination");
+  const script = new URL("./rolldown-memory-browser.ts", import.meta.url).pathname;
+  command(["bun", script, scratch, binary, browserResult]);
+}, 180_000);
 
 test.each(loaders)("%s keeps changed source, binaries, debug selection, and unrelated paths untouched", filename => {
   const loader = join(directory, filename);

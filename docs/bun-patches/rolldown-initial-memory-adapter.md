@@ -56,6 +56,10 @@ synchronous and asynchronous parsing, transformation, minification, bundling,
 caller errors, and disposal. It also checks an 8,000-statement input and the
 binary minimum.
 
+Set `BUNWASM_ROLLDOWN_BROWSER_RESULT` to an output JSON path to run the browser
+controls from the same test setup. Use the shared runner's browser class for
+that explicit run. The default runtime gate keeps these browser controls skipped.
+
 `scripts/rolldown-memory-browser.ts` takes an isolated dependency tree, the
 compiled adapter, and an output JSON path. It bundles the stock and compiled
 adapter output of the published browser loader, then exercises real APIs in
