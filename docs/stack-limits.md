@@ -303,6 +303,12 @@ activation. `Function.prototype.call` and `apply` no longer keep the unused fram
 while reentering JavaScript. Interrupt polling, native class dispatch, frame
 bookkeeping and the stack guards are unchanged.
 
+Ordinary targets of `Function.prototype.call` now stay in the interpreter loop
+through a [native builtin continuation](bun-patches/quickjs-loop-dispatch.md).
+The native logical frame and builtin identity remain visible. `apply` and other
+target classes keep their native calls. The historical measurements below
+describe the dispatcher extraction before this continuation change.
+
 At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
 55 nested calls through both methods, catches unbounded apply recursion and
 continues. The same production core with the old engine fails that fixture on
