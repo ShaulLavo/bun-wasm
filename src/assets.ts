@@ -176,6 +176,13 @@ export interface ProgramMetadata {
 const programs = new WeakMap<WebAssembly.Module, ProgramMetadata>();
 const ordinaryProgram: ProgramMetadata = Object.freeze({ linkPlan: undefined, memoryLimitBytes: null });
 
+/** Match Waffle's public format errno without eagerly loading its process service. */
+function isExecutableFormatFailure(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  try { return Object.getOwnPropertyDescriptor(error, "code")?.value === "ENOEXEC"; }
+  catch { return false; }
+}
+
 export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
   if (files.kind === "single") {
     const source = Uint8Array.from(files.core);
@@ -186,13 +193,12 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     return module;
   }
   try {
-    const source = await engineLinkPlan(files);
-    const plan = await prepareLinkPlan(source);
+    const { source, plan } = await engineLinkPlan(files, prepareLinkPlan);
     programs.set(plan.entryModule, Object.freeze({ linkPlan: plan.shared, memoryLimitBytes: memoryMaximumBytes(source.core.source) ?? null }));
     recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;
   } catch (error) {
-    if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError || isExecutableFormatFailure(error)) {
       throw new BunWasmAssetError(error.message);
     }
     throw error;

@@ -12,7 +12,7 @@ import { engineLinkPlan } from "../../src/quickjs-program.ts";
 
 const wasm = new URL("../../dist/bun.wasm", import.meta.url);
 async function memoryGrowth(fallback: boolean) {
-  const plan = await prepareLinkPlan(await engineLinkPlan({ kind: "quickjs", core: readFileSync(wasm), side: readFileSync(new URL("quickjs.wasm", wasm)) }));
+  const { plan } = await engineLinkPlan({ kind: "quickjs", core: readFileSync(wasm), side: readFileSync(new URL("quickjs.wasm", wasm)) }, prepareLinkPlan);
   const module = plan.entryModule;
   // The guest imports runtime_proc directly; this test never calls it.
   const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));

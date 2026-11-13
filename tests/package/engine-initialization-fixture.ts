@@ -1,4 +1,4 @@
-import { tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
+import { appendCustomSection, ENGINE_SECTION, tagProgramCore, type PairedEngine } from "../../src/engine-kind.ts";
 import { sharedGroupMaxPages } from "../../scripts/src/program-profile.ts";
 
 const unsigned = (value: number): number[] => {
@@ -25,7 +25,7 @@ const memory = (shared: boolean) => imported("env", "memory", [2].concat(shared 
 const table = imported("env", "__indirect_function_table", [1, 0x70, 0, 1]);
 
 /** Executable data/relocation fixture, not a qualified production guest. */
-export function initializationPair(kind: PairedEngine, shared = false) {
+export function initializationPair(kind: PairedEngine, shared = false, sideProfile: "valid" | "missing-run" | "contradictory" | "paired" = "valid") {
   const imports = [imported("runtime_proc", "signal", [0, 0]), imported("env", "trace", [0, 1])];
   const bounds = shared && kind === "spidermonkey" ? ["__stack_low", "__stack_high"] : [];
   const importInfo = vector(bounds.map(label => name("env").concat(name(label), [0x11])));
@@ -50,12 +50,15 @@ export function initializationPair(kind: PairedEngine, shared = false) {
     ])),
     section(11, vector([shared ? [1, 4, 42, 0, 0, 0] : [0, 0x41, 16, 0x0b, 4, 42, 0, 0, 0]])),
   ]));
-  const initializers = [`${kind}_initialize_memory`, `${kind}_apply_data_relocs`, `${kind}_call_ctors`, `${kind}_register`, `${kind}_run`];
+  const initializers = [`${kind}_initialize_memory`, `${kind}_apply_data_relocs`, `${kind}_call_ctors`, `${kind}_register`, `${kind}_${sideProfile === "missing-run" ? "unused" : "run"}`];
+  const sideExports = initializers.map((label, index) => exported(label, 0, index + 2));
+  if (sideProfile === "contradictory") sideExports.push(exported(kind === "jsc" ? "quickjs_run" : "jsc_run", 0, 2));
+  if (sideProfile === "paired") sideExports.push(exported("bun_core_bind_engine", 0, 2));
   const side = binary([
     dylink, section(1, [2, 0x60, 0, 0, 0x60, 1, 0x7f, 0]),
     section(2, vector([imported("env", "core_checkpoint", [0, 0]), imported("env", "trace", [0, 1]), memory(shared), table].concat(globals))),
     section(3, [5, 0, 0, 0, 0, 0]),
-    section(7, vector(initializers.map((label, index) => exported(label, 0, index + 2)))),
+    section(7, vector(sideExports)),
     section(12, [1]),
     section(10, vector([
       body(copyData.concat(trace(5))), body(requireWord(22).concat(store(23), trace(6))),
@@ -63,5 +66,5 @@ export function initializationPair(kind: PairedEngine, shared = false) {
     ])),
     section(11, vector([[1, 4, 22, 0, 0, 0]])),
   ]);
-  return { kind, core: tagProgramCore(core, kind), side, untaggedCore: core };
+  return { kind, core: tagProgramCore(core, kind), side: sideProfile === "paired" ? appendCustomSection(side, ENGINE_SECTION, new TextEncoder().encode(kind)) : side, untaggedCore: core };
 }

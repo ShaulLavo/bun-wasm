@@ -181,7 +181,7 @@ async function analysis(config: Config, window: { before: number; after: number 
 async function campaign(config: Config, signal: AbortSignal) {
   await mkdir(config.output);
   const host = object(await json(join(config.host, "lifecycle-host.json")));
-  if (host.waffle !== "0.0.127") throw new Error("Waffle 0.0.127 required");
+  if (host.waffle !== "0.0.128") throw new Error("Waffle 0.0.128 required");
   await preflight(config.host, [config.engine]);
   const hostIdentity = sha256(JSON.stringify(await assetIdentity(config.host)));
   await save(join(config.output, "sources.json"), { host, hostIdentity });

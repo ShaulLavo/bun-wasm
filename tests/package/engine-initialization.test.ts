@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
-import { instantiateLinkPlan, prepareLinkPlan, type LinkHost } from "waffle/link";
+import { adoptLinkPlan, instantiateLinkPlan, prepareLinkPlan, type LinkHost } from "waffle/link";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { initializationPair } from "./engine-initialization-fixture.ts";
@@ -26,8 +26,8 @@ function host(trace: number[], shared: boolean): LinkHost {
 for (const kind of ["quickjs", "jsc", "spidermonkey"] as const) {
   test(`${kind} split links passive side data before relocation, constructors and registration`, async () => {
     const trace: number[] = [];
-    const source = await engineLinkPlan(initializationPair(kind));
-    const group = instantiateLinkPlan(await prepareLinkPlan(source), host(trace, false));
+    const { plan } = await engineLinkPlan(initializationPair(kind), prepareLinkPlan);
+    const group = instantiateLinkPlan(plan, host(trace, false));
     try {
       expect(new DataView(group.memory.buffer).getUint32(16, true)).toBe(42);
       expect(trace).toEqual([]);
@@ -43,8 +43,8 @@ for (const kind of ["quickjs", "jsc", "spidermonkey"] as const) {
 
 for (const kind of ["quickjs", "jsc", "spidermonkey"] as const) test(`shared ${kind} core memory and relocation finish before escape, then constructors precede side linking`, async () => {
   const trace: number[] = [];
-  const source = await engineLinkPlan(initializationPair(kind, true));
-  const group = instantiateLinkPlan(await prepareLinkPlan(structuredClone(source)), host(trace, true));
+  const { plan } = await engineLinkPlan(initializationPair(kind, true), prepareLinkPlan);
+  const group = instantiateLinkPlan(adoptLinkPlan(structuredClone(plan.shared)), host(trace, true));
   try {
     expect(new DataView(group.memory.buffer).getUint32(16, true)).toBe(43);
     expect(trace).toEqual([1, 2]);
@@ -58,7 +58,7 @@ for (const kind of ["quickjs", "jsc", "spidermonkey"] as const) test(`shared ${k
 });
 
 test("passive memory cannot be skipped or scheduled after relocation", async () => {
-  const source = await engineLinkPlan(initializationPair("quickjs", true));
+  const { source } = await engineLinkPlan(initializationPair("quickjs", true), prepareLinkPlan);
   await expect(prepareLinkPlan({ ...source, core: { ...source.core, initializeMemory: [] } })).rejects.toThrow("passive data requires declared memory stages");
   await expect(prepareLinkPlan({ ...source, core: { ...source.core, initializeMemory: source.core.initializeMemory.toReversed() } })).rejects.toThrow("relocation cannot precede passive memory initialization");
   const side = source.libraries[0]!;
@@ -68,6 +68,6 @@ test("passive memory cannot be skipped or scheduled after relocation", async () 
 test("SpiderMonkey still refuses mixed split and shared-group halves", async () => {
   const split = initializationPair("spidermonkey");
   const shared = initializationPair("spidermonkey", true);
-  await expect(engineLinkPlan({ ...shared, side: split.side })).rejects.toThrow("different program profiles");
-  await expect(engineLinkPlan({ ...split, side: shared.side })).rejects.toThrow("different program profiles");
+  await expect(engineLinkPlan({ ...shared, side: split.side }, prepareLinkPlan)).rejects.toThrow("different program profiles");
+  await expect(engineLinkPlan({ ...split, side: shared.side }, prepareLinkPlan)).rejects.toThrow("different program profiles");
 });

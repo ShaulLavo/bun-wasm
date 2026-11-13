@@ -69,7 +69,7 @@ test("SpiderMonkey refuses another core, a missing side, and a mismatched side",
     rmSync(join(root, programProfile(kind).side));
     await expect(loadNodeProgram(path, kind)).rejects.toThrow("spidermonkey-engine.wasm");
     writeFileSync(join(root, programProfile(kind).side), quickjsPair("jsc").side);
-    await expect(loadNodeProgram(path, kind)).rejects.toThrow("Invalid spidermonkey companion");
+    await expect(loadNodeProgram(path, kind)).rejects.toThrow("export spidermonkey_initialize_memory");
   });
 });
 
@@ -236,7 +236,7 @@ test("SpiderMonkey declarations cannot borrow QuickJS or JSC companion profiles"
   for (const other of pairedEngines) {
     const pair = quickjsPair(other);
     await expect(prepareProgram({ kind, core: pair.core, side: sm.side })).rejects.toThrow("does not match core declaration");
-    await expect(prepareProgram({ kind, core: sm.core, side: pair.side })).rejects.toThrow("Invalid spidermonkey companion");
+    await expect(prepareProgram({ kind, core: sm.core, side: pair.side })).rejects.toThrow("export spidermonkey_initialize_memory");
     expect(() => verifyProgramSide(other, new WebAssembly.Module(sm.side))).toThrow("initializer/RUN");
   }
   expect(() => parseProgramFiles({ kind, core: sm.core }, value => value)).toThrow("companion fields");

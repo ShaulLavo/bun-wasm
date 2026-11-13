@@ -19,7 +19,7 @@ export async function loadNodeProgram(path: string, expected?: PairedEngine): Pr
   if (expected !== undefined && kind !== expected) throw new TypeError(`Selected ${expected} core declares ${kind}`);
   if (kind === "single") return { module };
   const side = readFileSync(join(dirname(path), programProfile(kind).side));
-  const plan = await prepareLinkPlan(await engineLinkPlan({ kind, core: bytes, side }));
+  const { plan } = await engineLinkPlan({ kind, core: bytes, side }, prepareLinkPlan);
   return { module: plan.entryModule, linkPlan: plan.shared };
 }
 
