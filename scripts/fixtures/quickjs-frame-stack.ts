@@ -322,6 +322,7 @@ report("call foreign intrinsic alias", () => {
 });
 
 report("reduce sparse directions and initial values", () => {
+  // oxlint-disable-next-line no-sparse-arrays -- Holes must be skipped, rather than visited as undefined.
   const values = [, 2, , 4];
   const visit = (a: string, v: number | undefined, k: number): string => `${a}/${k}:${v}`;
   return [values.reduce(visit, "start"), values.reduceRight(visit, "start"), values.reduce((a, b) => Number(a) + Number(b)), values.reduce<string | undefined>((a, b) => `${a}:${b}`, undefined)].join(" | ");
