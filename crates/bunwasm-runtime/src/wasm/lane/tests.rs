@@ -2121,68 +2121,106 @@ fn a_nonce_and_its_wake_bit_fit_one_exact_number() {
 #[test]
 fn a_sender_killed_at_any_access_of_the_commit_leaves_the_message_absent_or_whole() {
     for len in [64, 300_000] {
-        let (mut absent, mut whole_after_death) = (0, 0);
-        for stop in 0.. {
-            let relay = relay(2);
-            let (r, s, d) = (
-                relay.root.lanes(),
-                relay.sender.lanes(),
-                relay.receiver.lanes(),
-            );
-            let (carrier, carried) = (relay.carrier, &relay.carried);
-            let mut unsettled = Unsettled::default();
-            unsettled.stage(&s, carrier, 0, &frame(stop, len)).unwrap();
-            let epochs: Vec<u32> = carried
-                .iter()
-                .map(|lane| unsettled.stage_end(&s, carrier, 0, *lane, 1).unwrap())
-                .collect();
-            unsettled.commit_check(&s, carrier, 0).unwrap();
-            let killed = Killed {
-                inner: &relay.group.mem,
-                stop,
-                seen: Cell::new(0),
-            };
-            let dying = Lanes {
-                mem: &killed,
-                host: &relay.sender.guest,
-                ledger: relay.root.ledger,
-                tag: relay.sender.tag,
-            };
-            let commit = || unsettled.commit_staged(&dying, carrier, 0, 1);
-            let survived = catch_unwind(AssertUnwindSafe(commit)).is_ok();
-            relay.sender.release();
-            r.sweep(Sweep::Full);
-            let got = take(&d, carrier, 1);
-            if got.is_empty() {
-                // No frame names the ports. Whichever of them already moved wait with the
-                // frame's reader and close when it does; the others died with the sender.
-                assert!(!survived, "stop {stop}: a finished commit shows its frame");
-                absent += 1;
-                d.close_end(carrier, 1);
-                r.sweep(Sweep::Full);
-                for lane in carried {
-                    assert_eq!(r.end_state(*lane, 1).0, end::CLOSED, "stop {stop}");
-                    assert!(r.drain(*lane, 0, 8).unwrap().terminal, "stop {stop}");
-                }
-            } else {
-                // The publication store is the last one that matters: every port it names is
-                // already in the reader's custody.
-                assert_eq!(got, [frame(stop, len)], "stop {stop}");
-                whole_after_death += usize::from(!survived);
-                for (lane, epoch) in carried.iter().zip(&epochs) {
-                    assert!(d.adopt(*lane, 1, *epoch, 2), "stop {stop}");
-                    post(&d, *lane, 1, b"from the adopter");
-                    assert_eq!(take(&r, *lane, 0), [b"from the adopter".to_vec()]);
-                }
-            }
-            if survived {
-                break;
-            }
-        }
+        let outcomes = killings(len);
         assert!(
-            absent > 0,
+            outcomes.iter().any(|outcome| !outcome.whole),
             "length {len}: no stop fell before the publication store"
         );
-        assert!(whole_after_death > 0, "length {len}: no stop fell after it");
+        assert!(
+            outcomes
+                .iter()
+                .any(|outcome| outcome.whole && !outcome.survived),
+            "length {len}: no stop fell after it"
+        );
+    }
+}
+
+/// What a commit left when its sender was killed before one of its memory accesses.
+struct Killing {
+    /// The commit ran to its end: `stop` was past its last access.
+    survived: bool,
+    /// The receiver found the frame.
+    whole: bool,
+}
+
+/// Every stop from the first memory access of the commit to the first it survives.
+fn killings(len: usize) -> Vec<Killing> {
+    let mut outcomes = Vec::new();
+    for stop in 0.. {
+        let outcome = kill_commit_at(stop, len);
+        let survived = outcome.survived;
+        outcomes.push(outcome);
+        if survived {
+            break;
+        }
+    }
+    outcomes
+}
+
+/// Stages a frame of `len` bytes that carries two ports, kills the sender before the `stop`th
+/// memory access of its commit, and checks that the group has the message whole or not at all.
+fn kill_commit_at(stop: usize, len: usize) -> Killing {
+    let relay = relay(2);
+    let (r, s, d) = (
+        relay.root.lanes(),
+        relay.sender.lanes(),
+        relay.receiver.lanes(),
+    );
+    let carrier = relay.carrier;
+    let mut unsettled = Unsettled::default();
+    unsettled.stage(&s, carrier, 0, &frame(stop, len)).unwrap();
+    let epochs: Vec<u32> = relay
+        .carried
+        .iter()
+        .map(|lane| unsettled.stage_end(&s, carrier, 0, *lane, 1).unwrap())
+        .collect();
+    unsettled.commit_check(&s, carrier, 0).unwrap();
+    let killed = Killed {
+        inner: &relay.group.mem,
+        stop,
+        seen: Cell::new(0),
+    };
+    let dying = Lanes {
+        mem: &killed,
+        host: &relay.sender.guest,
+        ledger: relay.root.ledger,
+        tag: relay.sender.tag,
+    };
+    let commit = || unsettled.commit_staged(&dying, carrier, 0, 1);
+    let survived = catch_unwind(AssertUnwindSafe(commit)).is_ok();
+    relay.sender.release();
+    r.sweep(Sweep::Full);
+    let got = take(&d, carrier, 1);
+    let whole = !got.is_empty();
+    if whole {
+        assert_eq!(got, [frame(stop, len)], "stop {stop}");
+        assert_carried_ports_arrive(&relay, &epochs, stop);
+    } else {
+        assert!(!survived, "stop {stop}: a finished commit shows its frame");
+        assert_carried_ports_close(&relay, stop);
+    }
+    Killing { survived, whole }
+}
+
+/// The publication store is the last one that matters: every port the frame names is already
+/// in its reader's custody, so the reader adopts each and it works.
+fn assert_carried_ports_arrive(relay: &Relay, epochs: &[u32], stop: usize) {
+    let (r, d) = (relay.root.lanes(), relay.receiver.lanes());
+    for (lane, epoch) in relay.carried.iter().zip(epochs) {
+        assert!(d.adopt(*lane, 1, *epoch, 2), "stop {stop}");
+        post(&d, *lane, 1, b"from the adopter");
+        assert_eq!(take(&r, *lane, 0), [b"from the adopter".to_vec()]);
+    }
+}
+
+/// No frame names the ports. Whichever of them already moved wait with the frame's reader and
+/// close when it does; the others died with the sender.
+fn assert_carried_ports_close(relay: &Relay, stop: usize) {
+    let (r, d) = (relay.root.lanes(), relay.receiver.lanes());
+    d.close_end(relay.carrier, 1);
+    r.sweep(Sweep::Full);
+    for lane in &relay.carried {
+        assert_eq!(r.end_state(*lane, 1).0, end::CLOSED, "stop {stop}");
+        assert!(r.drain(*lane, 0, 8).unwrap().terminal, "stop {stop}");
     }
 }

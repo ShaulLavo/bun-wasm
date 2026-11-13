@@ -1200,6 +1200,28 @@ mod tests {
         fn calls(&self) -> Vec<WordCall> {
             self.calls.take()
         }
+
+        /// A list of a good buffer and then `last`, which no transfer may take. A plain
+        /// transfer throws its own `DataCloneError`; a lane transfer throws what the caller's
+        /// maker made. Either way the good buffer keeps its bytes and the core hears nothing,
+        /// since the predicate comes before the core's check.
+        fn assert_bad_last_buffer_is_refused(&self, name: &str, last: &str, lane: bool) {
+            let (call, expected) = if lane {
+                (
+                    "transferArrayBuffers([good, last], 3, 7, 1, 0, 9, message => ({ made: message }))",
+                    ",ArrayBuffer is not detachable,8",
+                )
+            } else {
+                ("transferArrayBuffers([good, last])", "DataCloneError,,8")
+            };
+            let outcome = self.run(&format!(
+                "const good = new ArrayBuffer(8), last = {last};
+                 try {{ {call}; return 'returned'; }}
+                 catch (error) {{ return [error.name, error.made, good.byteLength].join(); }}"
+            ));
+            assert_eq!(outcome, text(expected), "{name}, lane {lane}");
+            assert!(self.calls().is_empty(), "{name}, lane {lane}");
+        }
     }
 
     fn text(value: &str) -> Val {
@@ -1242,24 +1264,7 @@ mod tests {
         ];
         for (name, last) in bad {
             for lane in [false, true] {
-                let call = if lane {
-                    "transferArrayBuffers([good, last], 3, 7, 1, 0, 9, message => ({ made: message }))"
-                } else {
-                    "transferArrayBuffers([good, last])"
-                };
-                let outcome = transfer.run(&format!(
-                    "const good = new ArrayBuffer(8), last = {last};
-                     try {{ {call}; return 'returned'; }}
-                     catch (error) {{ return [error.name, error.made, good.byteLength].join(); }}"
-                ));
-                let expected = if lane {
-                    ",ArrayBuffer is not detachable,8"
-                } else {
-                    "DataCloneError,,8"
-                };
-                assert_eq!(outcome, text(expected), "{name}, lane {lane}");
-                // The predicate comes before the core's check, so the core never hears of it.
-                assert!(transfer.calls().is_empty(), "{name}, lane {lane}");
+                transfer.assert_bad_last_buffer_is_refused(name, last, lane);
             }
         }
         // A list whose length is not a whole number of elements is no list.

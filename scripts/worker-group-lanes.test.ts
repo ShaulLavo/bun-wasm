@@ -751,6 +751,15 @@ for (const thread of ["root", "worker"] as const) {
       await turn();
       expect(got).toEqual(["first", "second"]);
       expect(swept()).toBeGreaterThan(sweeps);
+      // And a later closure reaches the port through the same loop.
+      let closed = false;
+      listening.on("close", () => { closed = true; });
+      sender.close();
+      await turn();
+      passes();
+      await turn();
+      expect(closed).toBe(true);
+      expect(refused).toBe(0);
     } finally { Set.prototype.add = add; }
   });
 }

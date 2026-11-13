@@ -268,6 +268,10 @@ for (const { when, scope, equal, capacity } of twoChannelCases) {
 // A write's reply is lost, and then its result cannot even be asked for: the engine refuses to
 // enter that call. Nothing may be written until the result is known, on any channel, however
 // many flushes that takes, or bytes the pipe already took would be written again.
+/** A pipe's bytes as the reader takes them: one JSON frame a line. Throws on a line that is none. */
+function frames(wire: string | undefined): unknown[] {
+  return (wire ?? "").split("\n").filter(Boolean).map(line => JSON.parse(line) as unknown);
+}
 const unknownCases = (["before", "after"] as const).flatMap(when => [Infinity, 5].flatMap(capacity => [1, 4].map(lookups => ({ when, capacity, lookups }))));
 for (const { when, capacity, lookups } of unknownCases) {
   const kind = `${capacity === 5 ? "partial" : "whole"} write lost ${when} it ran, result unavailable ${lookups} time${lookups > 1 ? "s" : ""}`;
@@ -292,6 +296,8 @@ for (const { when, capacity, lookups } of unknownCases) {
     channel.send(second);
     for (let turn = 0; turn < 32 && channel.pending; turn++) channel.pump(() => {});
     expect(core.written.get(2)).toBe(JSON.stringify(first) + "\n" + JSON.stringify(second) + "\n");
+    // What the reader gets is two frames that parse, not a frame with a repeated prefix.
+    expect(frames(core.written.get(2))).toEqual([first, second]);
     expect(channel.pending).toBe(false);
     expect(new Set(core.tokens).size).toBe(core.tokens.length);
   });
@@ -317,6 +323,8 @@ for (const { when, capacity, lookups } of unknownCases) {
     for (let turn = 0; turn < 64 && (first.pending || second.pending); turn++) { second.pump(() => {}); first.pump(() => {}); }
     expect(core.written.get(2)).toBe(JSON.stringify(toFirst) + "\n");
     expect(core.written.get(4)).toBe((JSON.stringify(toSecond) + "\n").repeat(lookups));
+    expect(frames(core.written.get(2))).toEqual([toFirst]);
+    expect(frames(core.written.get(4))).toEqual(Array.from({ length: lookups }, () => toSecond));
     expect(first.pending || second.pending).toBe(false);
     expect(new Set(core.tokens).size).toBe(core.tokens.length);
   });
