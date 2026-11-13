@@ -5,36 +5,133 @@ import type { Runtime } from "waffle";
 import type { Editor } from "../src/editor";
 import type { Terminal } from "@xterm/xterm";
 import { workspaceName } from "../src/workspace-policy";
+import type { PreviewNavigation, Status } from "../src/sandbox";
+import { frameworks } from "../../scripts/goals-matrix/catalog";
 
-declare const sandbox: { fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean };
+declare const sandbox: {
+  fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
+  template: string; server: () => PreviewNavigation["server"] | null;
+  preview: () => PreviewNavigation | null; status: () => Status;
+};
+declare const storageReadiness: { candidate(selector: string): { checkpoint(): Promise<boolean> } | false };
 const APP = "/home/user/app";
 const STARTUP_MS = 180_000;
+const observedPages = new WeakSet<Page>();
+
+function installReadiness(): void {
+  if (window !== window.top) return;
+  let failure = "";
+  const observeErrors = (records: MutationRecord[] = []) => {
+    const status = document.querySelector<HTMLElement>("#status");
+    if (status?.dataset.kind === "error") failure ||= status.textContent || "startup error";
+    if (records.some(record => record.target === status && record.attributeName === "data-kind" && record.oldValue === "error")) failure ||= "startup error before status changed";
+  };
+  const observer = new MutationObserver(observeErrors);
+  observer.observe(document, { subtree: true, attributes: true, attributeFilter: ["data-kind"], attributeOldValue: true, childList: true });
+  window.addEventListener("error", event => { failure ||= event.message || "page error"; });
+  window.addEventListener("unhandledrejection", event => { failure ||= String(event.reason); });
+  const checkErrors = () => {
+    observeErrors(observer.takeRecords());
+    if (failure) throw new Error(failure);
+    if (typeof sandbox === "undefined") return;
+    if (sandbox.status().kind === "error") throw new Error(sandbox.status().text);
+    if (sandbox.fs.state.status === "failed") throw sandbox.fs.state.error;
+  };
+  const candidate = (selector: string) => {
+    checkErrors();
+    if (typeof sandbox === "undefined") return false;
+    const api = sandbox;
+    const parent = document;
+    const navigation = api.preview();
+    const server = api.server();
+    const preview = navigation?.document;
+    if (!navigation || !preview || !server) return false;
+    const current = () => {
+      checkErrors();
+      const status = document.querySelector<HTMLElement>("#status");
+      return document === parent && sandbox === api && api.server() === server && api.preview() === navigation && navigation.server === server
+        && document.querySelector("#preview") === navigation.frame && navigation.frame.contentDocument === preview
+        && navigation.frame.src === navigation.url && preview.URL === navigation.url && preview.readyState === "complete"
+        && api.started?.() === true && api.fs.state.status === "ready" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up"
+        && api.status().kind === "ok" && status?.dataset.kind === "ok" && /dev server ready/.test(status.textContent ?? "")
+        && preview.querySelector(selector) !== null;
+    };
+    if (!current()) return false;
+    return { checkpoint: async () => {
+      if (!current()) return false;
+      await api.fs.flush();
+      return current();
+    } };
+  };
+  Object.assign(globalThis, { storageReadiness: { candidate } });
+}
+
+async function observeReadiness(page: Page): Promise<void> {
+  if (observedPages.has(page)) return;
+  await page.addInitScript(installReadiness);
+  observedPages.add(page);
+}
+
+function previewSelector(template: string): string {
+  if (template === "vanilla") return "button.counter:not([disabled])";
+  const framework = frameworks.find(item => item.template === (template === "next-app" ? "next" : template));
+  if (!framework) throw new Error(`Missing preview readiness selector for ${template}`);
+  return `${framework.button}:not([disabled])`;
+}
 
 export function storageReportPath(env = process.env): string | undefined {
   const directory = env.BUN_WASM_BROWSER_REPORT_DIR;
   return env.BUN_WASM_STORAGE_REPORT ?? (directory ? join(directory, "sandbox-storage.json") : undefined);
 }
 
-async function openTemplate(page: Page, base: string, template: string): Promise<void> {
+export async function openTemplate(page: Page, base: string, template: string): Promise<void> {
+  const deadline = Date.now() + STARTUP_MS;
+  await observeReadiness(page);
   const url = new URL(base);
   url.searchParams.set("template", template);
   url.searchParams.set("engine", "browser");
   await page.bringToFront();
-  await page.goto(url.href);
-  await ready(page, template);
+  await page.goto(url.href, { timeout: remaining(deadline) });
+  await ready(page, template, deadline);
 }
 
-async function ready(page: Page, template: string): Promise<void> {
-  await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error" || /dev server ready/.test(document.querySelector("#status")?.textContent ?? ""), undefined, { timeout: STARTUP_MS });
-  const status = await page.locator("#status").textContent();
-  assert.equal(await page.locator("#status").getAttribute("data-kind"), "ok", `startup failed ${template}: ${status}`);
-  await page.evaluate(() => sandbox.fs.flush());
+function remaining(deadline: number): number {
+  const ms = deadline - Date.now();
+  if (ms <= 0) throw new Error("Storage readiness exceeded its startup deadline");
+  return ms;
 }
 
-async function restart(page: Page): Promise<void> {
-  await page.locator("#restart").click();
-  await page.waitForFunction(() => document.querySelector("#server-dot")?.getAttribute("data-state") === "starting");
-  await ready(page, "restarted workspace");
+async function checkpoint(page: Page, selector: string, deadline: number): Promise<boolean> {
+  const candidate = await page.waitForFunction(selector => storageReadiness.candidate(selector), selector, { timeout: remaining(deadline) });
+  try { return await candidate.evaluate(candidate => candidate ? candidate.checkpoint() : false); }
+  finally { await candidate.dispose(); }
+}
+
+export async function ready(page: Page, template: string, deadline = Date.now() + STARTUP_MS): Promise<void> {
+  const selector = previewSelector(template);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Storage readiness deadline: ${template}`)), remaining(deadline)); });
+  try { await Promise.race([waitUntilReady(page, selector, deadline), expired]); }
+  finally { clearTimeout(timer); }
+}
+
+async function waitUntilReady(page: Page, selector: string, deadline: number): Promise<void> {
+  while (remaining(deadline)) {
+    try { if (await checkpoint(page, selector, deadline)) return; }
+    catch (error) {
+      if (!(error instanceof Error) || !/Execution context was destroyed|Cannot find context with specified id/.test(error.message)) throw error;
+    }
+  }
+}
+
+export async function restart(page: Page): Promise<void> {
+  const deadline = Date.now() + STARTUP_MS;
+  const previous = await page.evaluateHandle(() => sandbox.server());
+  try {
+    await page.locator("#restart").click({ timeout: remaining(deadline) });
+    await page.waitForFunction(previous => sandbox.server() !== previous, previous, { timeout: remaining(deadline) });
+    await ready(page, await page.evaluate(() => sandbox.template), deadline);
+  } finally { await previous.dispose(); }
 }
 
 async function edit(page: Page, path: string, text: string): Promise<void> {

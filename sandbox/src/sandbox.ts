@@ -52,6 +52,13 @@ interface Server {
   helper: RuntimeNetworkHelper;
 }
 
+export interface PreviewNavigation {
+  server: Server;
+  frame: HTMLIFrameElement;
+  url: string;
+  document: Document | null;
+}
+
 /** One Waffle runtime installs the selected project and runs its dev script. */
 export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** Each template has its own persistent workspace, shared across engine switches. */
@@ -85,6 +92,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private firstStart = true;
   private run: Run | null = null;
   private server: Server | null = null;
+  private preview: PreviewNavigation | null = null;
   private serverRevision = 0;
   private serverTiming = { started: 0, visibleStart: 0 };
   private readonly network: BunNetworkOptions = {
@@ -323,7 +331,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       changed: () => this.changed(),
     });
     Object.assign(globalThis, {
-      sandbox: { runtime, sharedObjects, fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, started: () => this.started, engine: this.engine, profile: this.profile, template: this.template },
+      sandbox: { runtime, sharedObjects, fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, preview: () => this.preview, status: () => this.status, started: () => this.started, engine: this.engine, profile: this.profile, template: this.template },
     });
     return { runtime, fs, browserPrograms, editor, term, moduleScope };
   }
@@ -468,11 +476,21 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const previewStarted = performance.now();
     const { frame } = this;
     if (!frame) return;
-    frame.addEventListener("load", () => {
-      if (this.server !== target) return;
+    const previous = frame.contentDocument;
+    const navigation: PreviewNavigation = this.preview = { server: target, frame, url, document: null };
+    const loaded = (event: Event) => {
+      if (this.preview !== navigation || this.server !== target || this.frame !== frame) {
+        frame.removeEventListener("load", loaded);
+        return;
+      }
+      const document = frame.contentDocument;
+      if (!event.isTrusted || !document || document === previous || document.URL !== url || document.readyState !== "complete") return;
+      frame.removeEventListener("load", loaded);
+      navigation.document = document;
       measureStartup("preview", previewStarted);
       this.setStatus(`dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[this.engine].name} · ${mb(this.wasm?.size ?? 0)}`, "ok");
-    }, { once: true });
+    };
+    frame.addEventListener("load", loaded);
     frame.src = url;
   }
 
