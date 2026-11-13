@@ -1,6 +1,8 @@
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 
 const callbackDepth = 16;
+const assignmentCount = 100;
+const assignmentWrapperDepth = 5;
 
 function callbackSource(): string {
   return "return " + "foo(() => { return ".repeat(callbackDepth) + "42;" + " });".repeat(callbackDepth);
@@ -11,13 +13,24 @@ function loadCallbacks(): void {
   if (value !== 42) throw new Error(`nested callbacks returned ${value}`);
 }
 
+function loadAssignmentChain(): void {
+  const chain = Array.from({ length: assignmentCount }, (_, index) => `exports.Name${index}`).join(" = ") + " = void 0;";
+  const source = "(function(){\n".repeat(assignmentWrapperDepth) + chain + "})();".repeat(assignmentWrapperDepth);
+  new Function("exports", source)({});
+}
+
+function loadParserInputs(): void {
+  loadCallbacks();
+  loadAssignmentChain();
+}
+
 function recover(): void {
   if ((0, eval)("21 * 2") !== 42) throw new Error("parser did not recover");
 }
 
 function run(): void {
-  loadCallbacks();
-  console.log("nested callbacks loaded");
+  loadParserInputs();
+  console.log("nested callbacks and assignments loaded");
 
   const deep = "(() => ".repeat(200000) + "0" + ")".repeat(200000);
   try {
@@ -28,8 +41,8 @@ function run(): void {
     console.log("deep parser overflow caught");
   }
   recover();
-  loadCallbacks();
-  console.log("nested callbacks reloaded");
+  loadParserInputs();
+  console.log("nested callbacks and assignments reloaded");
   console.log("continued");
 }
 
