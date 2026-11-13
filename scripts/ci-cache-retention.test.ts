@@ -26,7 +26,7 @@ const caches = groups.flatMap(group => group.steps.filter(step => /^actions\/cac
 const writers = caches.filter(({ step }) => step.uses !== "actions/cache/restore@v4");
 
 function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true"): boolean {
-  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
+  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
   const expression = String(step.if ?? "true").replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replace(/success\(\)/g, "true").replace(/cancelled\(\)/g, "false")
     .replace(/(?:github|steps|needs|inputs)\.[\w.-]+/g, name => {

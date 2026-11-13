@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { buildToolPins, installBuildTools, verifyBuildToolArchive } from "./ci-b
 
 const repo = join(import.meta.dir, "..");
 type Step = Record<string, unknown>;
-const workflow = Bun.YAML.parse(readFileSync(join(repo, ".github/workflows/ci.yml"), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
+const workflow = Bun.YAML.parse(expandedCiWorkflow()) as { jobs: Record<string, { steps: Step[] }> };
 const installName = "Install pinned CMake and Ninja";
 
 function withRoot(body: (root: string) => void | Promise<void>) {
