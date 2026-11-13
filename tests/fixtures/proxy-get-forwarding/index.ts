@@ -66,8 +66,7 @@ const aroundRevoked = chain(revoked.proxy, 50);
 revoked.revoke();
 check("revoked middle Proxy", isRevokedTypeError(thrown(() => aroundRevoked.value)), true);
 
-let deeper = Proxy.revocable({ value: 2 }, {});
-const revokesDeeper = new Proxy(deeper.proxy, {
+const deeper = Proxy.revocable({ value: 2 }, {});const revokesDeeper = new Proxy(deeper.proxy, {
   get get() { deeper.revoke(); Bun.gc(true); return undefined; },
 });
 check("handler lookup revokes a deeper Proxy", isRevokedTypeError(thrown(() => revokesDeeper.value)), true);
@@ -81,9 +80,10 @@ check("revoking an already visited outer Proxy has no effect", outer.proxy.value
 let fresh = Proxy.revocable({ value: 4 }, {});
 fresh = Proxy.revocable(fresh.proxy, {
   get get() {
+    const trap = () => "fresh trap";
     fresh.revoke();
     Bun.gc(true);
-    return () => "fresh trap";
+    return trap;
   },
 });
 check("a fresh trap survives revocation and collection", fresh.proxy.value, "fresh trap");
