@@ -1,3 +1,5 @@
 16 nested requires loaded
 overflow in a nested module caught, cache clean
+24 nested requires with a module hook loaded
+module hook overflow caught, cache clean, hooked chain reloaded
 continued

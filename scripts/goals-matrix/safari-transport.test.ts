@@ -5,7 +5,7 @@ import { createContext, runInContext, type Context } from "node:vm";
 import { createSafariTransport, type SafariTransport, type SafariTransportOptions } from "./safari-transport";
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
 import { Scope } from "./scope";
-import { armSafariClick, observeSafariClick } from "./safari-click";
+import { armNativeClick, observeNativeClick } from "./native-click";
 
 type Call = { method: string; path: string; body: Record<string, unknown> };
 type FixtureOptions = {
@@ -801,8 +801,8 @@ test("click observation rejects replacement targets and document identity change
   try {
     install();
     const input = { button: "button", clicked: "output", token: "fixture" };
-    const arm = `(${armSafariClick.toString()})(${JSON.stringify(input)})`;
-    const observe = `(${observeSafariClick.toString()})(${JSON.stringify(input)})`;
+    const arm = `(${armNativeClick.toString()})(${JSON.stringify(input)})`;
+    const observe = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
     await withScoped(transport, page => page.evaluate(arm));
     await withScoped(transport, page => page.evaluate("target = { ...target }"));
     await expect(withScoped(transport, page => page.evaluate(observe))).rejects.toThrow("target changed");

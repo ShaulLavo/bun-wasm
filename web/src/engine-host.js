@@ -666,7 +666,7 @@ class EngineHost {
       initMeta: (key, meta) => host.internal.initImportMeta(meta, key, key === host.internal.mainPath),
       resolve: (specifier, referrer) => host.native.resolveImport(specifier, referrer, "inferred"),
       active: () => !host.exited,
-      track: operation => host.track(operation, then),
+      track: operation => then(host.track(operation, then), value => value),
     }, this.evalPolyfill("esm_loader"), then);
   }
 
@@ -786,10 +786,10 @@ class EngineHost {
     });
     hidden("__bunwasm_dynamicImport", (from) => (spec, options) => host.records
       ? host.records.importFrom(spec, from, options)
-      : host.track(host.internal.importRequests.request(spec, options, (text, mode, resolve, reject) => {
+      : nativePromiseThen(host.track(host.internal.importRequests.request(spec, options, (text, mode, resolve, reject) => {
         const key = host.native.resolveImport(text, from, mode);
         host.importReady(key).then(resolve, reject);
-      })),
+      })), value => value),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
     this.installContextHooks(hidden);

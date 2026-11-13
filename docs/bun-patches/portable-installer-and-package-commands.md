@@ -25,6 +25,12 @@ the current lookup instead of retaining every parsed document. After platform
 selection, it releases the cached responses before archive installation.
 Selected and skipped packages keep their own metadata for lockfile writing and
 downloads. Registry cache validation still runs before parsing and resolution.
+Archive extraction remembers up to 1,024 successfully prepared parent directories
+per package. The installer owns its staging tree, and tarball links remain
+unsupported, so another entry cannot replace a remembered parent. Repeated files
+skip the same recursive directory check. Entries still decompress in order, use
+the same file writes and flushes, and retain the existing path and size checks.
+This is an original adapter change.
 Foreign lockfile migration is kept in a separate follow-up PR using this
 workspace graph.
 
