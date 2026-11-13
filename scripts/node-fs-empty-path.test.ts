@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 test("filesystem paths preserve empty input at the native boundary", () => {
-  const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-fs-empty-"));
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-fs-empty-"));
   try {
     const options = readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8");
     const generated = join(scratch, "fs-options.js");
