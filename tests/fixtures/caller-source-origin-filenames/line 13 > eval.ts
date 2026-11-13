@@ -1,3 +1,3 @@
 import { callerSourceOrigin } from "bun:jsc";
 
-export function origin() { return callerSourceOrigin(); }
+export function origin() { return { origin: callerSourceOrigin() }; }

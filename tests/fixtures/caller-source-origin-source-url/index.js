@@ -20,7 +20,8 @@ const cases = [
 let failed = false;
 for (const [name, directives, expected] of cases) {
   const { origin } = makeEval(directives)();
-  const ok = origin === expected || origin === null;
+  const opaqueAllowed = expected === helper || !process.env.BUN_WASM_SPIDERMONKEY_TIER;
+  const ok = origin === expected || (origin === null && opaqueAllowed);
   console.log(name, ok);
   if (!ok) { console.error(name, "wrong origin", origin); failed = true; }
 }
