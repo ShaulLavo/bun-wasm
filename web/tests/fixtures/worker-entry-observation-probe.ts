@@ -7,7 +7,6 @@ import { captureNativeReturn, captureProcessObserver } from "waffle/proc/observa
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { browserBuildConfig } from "../../../scripts/browser-build.ts";
 import type { RunRequest } from "../../src/bun-executor.ts";
-import { prepareLinkPlan } from "waffle/link";
 import { engineLinkPlan } from "../../../src/quickjs-program.ts";
 import { initializationPair } from "../../../tests/package/engine-initialization-fixture.ts";
 
@@ -27,7 +26,7 @@ try {
   assert.equal(build.success, true, String(build.logs));
   const service = await runtime.processes();
   const plan = mode?.startsWith("nested")
-    ? await prepareLinkPlan(await engineLinkPlan(initializationPair("quickjs", true)))
+    ? (await engineLinkPlan(initializationPair("quickjs", true))).plan
     : undefined;
   const module = plan?.entryModule ?? new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]));
   const metadata = { linkPlan: plan?.shared };

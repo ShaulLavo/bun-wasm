@@ -3,7 +3,6 @@ import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core";
 import { createFilesystemConnection, FilesystemClient } from "waffle/fs";
 import { MemFS } from "waffle/fs/memory";
-import { prepareLinkPlan } from "waffle/link";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 import { initializationPair } from "../../tests/package/engine-initialization-fixture.ts";
@@ -22,7 +21,7 @@ test("Browser SpiderMonkey member stack size matches the side's bound derivation
 });
 
 async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: number; low?: number; high?: number; pointer?: number; missing?: string; unbalance?: 1 | 8; pages?: number } = {}) {
-  const plan = await prepareLinkPlan(await engineLinkPlan(initializationPair("spidermonkey", true)));
+  const { plan } = await engineLinkPlan(initializationPair("spidermonkey", true));
   const module = plan.entryModule;
   const low = options.low ?? 65536;
   const high = options.high ?? low + STACK;

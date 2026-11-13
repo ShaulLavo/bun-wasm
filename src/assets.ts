@@ -1,5 +1,6 @@
 import { recordProgramMemory } from "./program-memory.ts";
-import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";
+import type { SharedLinkPlan } from "waffle/link";
+import { ExecutableFormatError } from "waffle/proc";
 import { engineLinkPlan } from "./quickjs-program.ts";
 import { memoryMaximumBytes, parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
 import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
@@ -186,13 +187,12 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     return module;
   }
   try {
-    const source = await engineLinkPlan(files);
-    const plan = await prepareLinkPlan(source);
+    const { source, plan } = await engineLinkPlan(files);
     programs.set(plan.entryModule, Object.freeze({ linkPlan: plan.shared, memoryLimitBytes: memoryMaximumBytes(source.core.source) ?? null }));
     recordProgramMemory(plan.entryModule, source.core.source);
     return plan.entryModule;
   } catch (error) {
-    if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError || error instanceof ExecutableFormatError) {
       throw new BunWasmAssetError(error.message);
     }
     throw error;

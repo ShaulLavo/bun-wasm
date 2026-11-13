@@ -49,6 +49,11 @@ workspace `Cargo.lock` conservatively; it does not narrow the lock graph.
 JSC's pair is `bun-jsc.wasm` plus `jsc-engine.wasm`; the existing prebuild shell
 is a different artifact. The async `engineLinkPlan` accepts paired files only,
 snapshots the bytes, and uses the selected fixed initializer profile.
+It prepares the Waffle plan once, then checks the exact compiled companion
+through the public `PreparedLinkPlan.memberModule` accessor before returning
+the plan or publishing program metadata. The side is not separately compiled
+for validation. The initial core inspection, shared/split agreement, pair
+digests and custom section, and ordered memory/constructor stages are unchanged.
 Receipts bind core and side byte identities to engine origin and compatible
 current inputs. One common core is compiled and optimized before decoration
 in the source recipe. Captured-command controls do not prove that production
