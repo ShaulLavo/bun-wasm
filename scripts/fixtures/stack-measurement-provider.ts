@@ -18,6 +18,7 @@ function resource(kind: string) {
   return async () => {
     rmSync(path, { recursive: true, force: true });
     appendFileSync(join(root, "cleanup.log"), `${kind}\n`);
+    if (scenario === `${kind}-close`) throw new Error(`fake ${kind} cleanup failure`);
   };
 }
 
@@ -64,6 +65,7 @@ export async function run(_page: unknown, command: string) {
   }
   const fixture = /bun run (stack-overflow(?:-console)?)\.js$/.exec(command);
   if (!fixture) throw new Error(`Unexpected command ${command}`);
+  if (process.env.STACK_TEST_FIXTURE_FAILURE === fixture[1]) return { code: 1, output: "fixture failed" };
   return { code: 0, output: readFileSync(new URL(`../../tests/fixtures/${fixture[1]}/expected.txt`, import.meta.url), "utf8") };
 }
 

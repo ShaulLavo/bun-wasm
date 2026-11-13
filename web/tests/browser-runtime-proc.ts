@@ -7,19 +7,22 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { processBundle } from "../scripts/ci-process-bundles";
-import { runtimeProcChecks, runtimeProcJobWaitChecks } from "./runtime-proc-fixtures";
+import { checkRuntimeProcResult, type RuntimeProcResult } from "./runtime-proc-result";
 import { runtimeProcFailure } from "./runtime-proc-browser-diagnostics";
 
-type RuntimeProcResult = Record<string, unknown> & {
-  ok: boolean;
-  checks: string[];
-  stopCodes: number[];
-  admissionReports: number;
-  cleanup: { activeWorkers: number };
-  teardown: { forcedWorkers: number; activeWorkers: number };
-};
+if (process.argv[2] === "ios-safari") {
+  const startedAt = performance.now();
+  for (const key of ["RUNTIME_PROC_ITERATIONS", "RUNTIME_PROC_MODE", "RUNTIME_PROC_SCENARIO"]) {
+    if (process.env[key] !== undefined) throw new Error(`ios-safari requires the complete default command; unset ${key}`);
+  }
+  const { nativeMain } = await import("waffle/testing/page-runner");
+  const { runtimeProcAdapter } = await import("./runtime-proc-ios-adapter");
+  process.exit(await nativeMain(runtimeProcAdapter, process.argv.slice(3), { startedAt, port: 4187 }));
+}
+
+const { chromium, firefox, webkit } = await import("playwright");
 
 const iterations = Number(process.env.RUNTIME_PROC_ITERATIONS ?? "1");
 assert.ok(Number.isSafeInteger(iterations) && iterations > 0 && iterations <= 1000, "bounded positive repeat count required");
@@ -96,13 +99,7 @@ try {
         await page.waitForFunction(() => (globalThis as any).runtimeProcResult, undefined, { timeout: 40_000 });
         const completed: RuntimeProcResult = await page.evaluate(() => (globalThis as any).runtimeProcResult);
         result = completed;
-        assert.equal(completed.ok, true, JSON.stringify(completed));
-        assert.deepEqual(completed.checks, Array.from<string>(scenario === "job-wait" ? runtimeProcJobWaitChecks : runtimeProcChecks));
-        assert.deepEqual(completed.stopCodes, scenario === "pipes" ? [130, 137] : []);
-        assert.equal(completed.cleanup.activeWorkers, 0);
-        assert.equal(completed.teardown.forcedWorkers, 0);
-        assert.equal(completed.teardown.activeWorkers, 0);
-        assert.deepEqual(errors, []);
+        checkRuntimeProcResult(completed, scenario, errors);
         console.log(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ok: true,
           checks: completed.checks, stopCodes: completed.stopCodes, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
       } catch (error) {
