@@ -1856,6 +1856,26 @@ fn relay(ports: usize) -> Relay {
     }
 }
 
+/// Stages a message that carries two ports, hands its commit to `measured`, then checks that
+/// the commit happened. `wasm/lane_allocation_tests.rs` counts allocations around it: this
+/// file also builds on its own, where the crate's counting allocator does not exist.
+pub(crate) fn staged_commit_under(measured: impl FnOnce(&mut dyn FnMut())) {
+    let relay = relay(2);
+    let (s, d) = (relay.sender.lanes(), relay.receiver.lanes());
+    let carrier = relay.carrier;
+    let mut unsettled = Unsettled::default();
+    unsettled.stage(&s, carrier, 0, b"two ports").unwrap();
+    for lane in &relay.carried {
+        unsettled.stage_end(&s, carrier, 0, *lane, 1).unwrap();
+    }
+    assert_eq!(unsettled.commit_check(&s, carrier, 0), Ok(()));
+    measured(&mut || {
+        unsettled.commit_staged(&s, carrier, 0, 7);
+    });
+    assert_eq!(unsettled.committed() >> 1, 7);
+    assert_eq!(take(&d, carrier, 1), [b"two ports".to_vec()]);
+}
+
 #[test]
 fn a_staged_message_moves_its_ports_and_publishes_in_one_commit() {
     let relay = relay(2);

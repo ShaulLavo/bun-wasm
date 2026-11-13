@@ -12,6 +12,9 @@ mod group;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/lane.rs"]
 mod lane;
+#[cfg(test)]
+#[path = "wasm/lane_allocation_tests.rs"]
+mod lane_allocation_tests;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/nested_description.rs"]
 mod nested_description;

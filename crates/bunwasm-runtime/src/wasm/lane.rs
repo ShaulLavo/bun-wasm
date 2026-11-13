@@ -2608,4 +2608,4 @@ pub(crate) mod guest {
 
 #[cfg(test)]
 #[path = "lane/tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -228,9 +228,32 @@ Measured so far, on QuickJS only:
   the wrapper's release of its arguments and the JavaScript function's return, to the
   caller's next statement, the C allocator is asked for nothing. The test's counter sees the
   engine's own allocations, and an object made in the native's tail fails it.
+- An allocation count on the host build of the core's commit
+  (`wasm/lane_allocation_tests.rs`): `laneCommitStaged` for a message that carries two ports
+  asks the Rust allocator for nothing.
+- A heap sweep on a shared-group guest on the native launcher. A worker fills its heap to the
+  member limit and keeps it full, leaves one free run that grows by 16 or 24 bytes per level,
+  and posts a transferred buffer, with and without a carried port, at each level until every
+  post has succeeded for 128 levels. In 9,198 attempts each threw with nothing moved or
+  returned with the whole message received. A control that throws after a post returned is
+  reported every time.
+- A validation side (`QUICKJS_TRANSFER_FAULT=1` in `scripts/build-engine-quickjs.sh`,
+  `src/transfer_fault.rs`) on the same guest. From a transfer's first detach until the
+  program's next statement it refuses every allocation the side asks for: the C allocator
+  calls of QuickJS and of the side's Rust code, routed with the linker's `--wrap`, and the
+  buffers the side asks the core for. In 12,000 posts, half from the first guest and half
+  from a worker, the stretch asked for nothing and every message arrived whole. A control
+  that allocates a buffer inside the stretch is refused every time, and its message still
+  arrives whole. The side has no receipt, so it cannot be staged as a program, and the
+  module is compiled only for that producer option. It does not intercept the core's own
+  allocator.
 
-Neither has been run on JSC or SpiderMonkey, and the guest has not been run under Waffle. A
-heap-exhaustion probe on a real guest has not been written.
+The heap sweep also showed what the sentence does not cover. A failed allocation in the
+core's Rust code, such as the staging map's node in `laneReserve`, ends the guest instead
+of throwing. The receiver then has nothing of that message, as for any sender that dies.
+
+None of these has been run on JSC or SpiderMonkey, and the guest has not been run under
+Waffle. The heap sweep's sender is a worker: a first guest that ends takes the group with it.
 
 Ending a guest is not catchable and follows the death rules.
 
