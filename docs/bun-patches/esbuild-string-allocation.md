@@ -21,15 +21,15 @@ unchanged. The published tarball's SHA-256 is
 
 Only path and source content affect qualification. No package manifest, binary,
 or other filesystem input is read. The existing source-content cache dependency
-is sufficient. This private module has no production caller in this change.
-The coordinator owns integration at the existing pre-transpilation source
-boundary in `modules.rs`.
+is sufficient. The private module runs immediately after Oxc adaptation at the
+existing pre-transpilation source boundary in `modules.rs`.
 
 ## Borrowed strings and owned bytes
 
 The two string consumers, including object keys, call `read(false)`.
 For a nonnegative in-bounds span in an ordinary Uint8Array backed by an
-ArrayBuffer, this returns a temporary subarray for synchronous UTF-8 decoding.
+ArrayBuffer with its default constructor and species, this returns a temporary
+subarray for synchronous UTF-8 decoding.
 The real channel owns its stdout accumulator and reuses it only after packet
 decoding returns. No borrowed byte value escapes in the decoded result.
 
@@ -53,6 +53,14 @@ engine-specific behavior, or dependency override.
 tarball, compiles the actual private Rust adapter, and executes both complete
 module variants. It exercises their real encoder, decoder, and stdout channel
 without launching an esbuild subprocess or compiling a guest.
+
+The compressed fixture `scripts/fixtures/esbuild-packet/main.js.gz` preserves
+the complete unchanged published module for the runtime unit test. It is
+generated data with the upstream MIT license preserved beside it. Its decoded
+bytes must equal the freshly downloaded module. The fixture is included only
+under `cfg(test)`. The unit control calls the real `State::prepare_javascript`
+path with the existing passthrough transpiler and requires the qualified file
+to change while an unrelated path keeps the original source.
 
 The checks cover allocation and copied-byte counts, Unicode and malformed
 UTF-8, empty fields, packet headers, every truncated packet prefix, partial

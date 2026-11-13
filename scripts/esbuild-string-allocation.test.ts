@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { gunzipSync } from "node:zlib";
 
 type Packet = { id: number; isRequest: boolean; value: unknown };
 type Counts = { allocations: number[]; copiedBytes: number; views: number };
@@ -47,6 +48,7 @@ beforeAll(async () => {
   command(["tar", "-xzf", archive, "-C", scratch, "package/lib/main.js", "package/package.json"]);
   expect(JSON.parse(readFileSync(join(scratch, "package/package.json"), "utf8"))).toMatchObject({ name: "esbuild-wasm", version: "0.25.12" });
   original = readFileSync(join(scratch, "package/lib/main.js"), "utf8");
+  expect(gunzipSync(readFileSync(new URL("./fixtures/esbuild-packet/main.js.gz", import.meta.url))).toString()).toBe(original);
   adapted = adapt(join(scratch, "node_modules/esbuild/lib/main.js"));
 }, 120_000);
 
@@ -261,6 +263,18 @@ test("Buffer, shared buffers and typed-array subclasses preserve original copy s
   const input = new PacketBytes(packet);
   expect(String(failure(() => small.decode(input)))).toBe(String(failure(() => stock.decode(input))));
   expect(small.counts).toEqual(stock.counts);
+});
+
+test("a plain byte array with a custom constructor retains species coercion", () => {
+  const stock = codec(original), small = codec(adapted);
+  const packet = stock.encode({ id: 1, isRequest: true, value: "abcdef" });
+  const input = new Uint8Array(new ArrayBuffer(40), 1, packet.length);
+  input.set(packet);
+  Object.defineProperty(input, "constructor", { value: Uint16Array });
+  stock.reset();
+  expect(small.decode(input)).toEqual(stock.decode(input));
+  expect(small.counts).toEqual(stock.counts);
+  expect(small.counts.allocations).toEqual([6]);
 });
 
 test("the Buffer UTF-8 fallback and malformed UTF-8 preserve decoded text", () => {

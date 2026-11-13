@@ -7,6 +7,8 @@
 //! importers through a tiny generated wrapper module that re-exports the keys
 //! of an object handed over through the wrapper's `import.meta.m`.
 
+#[path = "esbuild_packet.rs"]
+mod esbuild_packet;
 #[path = "next_swc.rs"]
 mod next_swc;
 #[path = "oxc_memory.rs"]
@@ -496,6 +498,7 @@ impl State {
     ) -> Result<crate::Transpiled, NativeError> {
         let adapted = next_swc::adapt(raw, path);
         let adapted = oxc_memory::adapt(&adapted, path);
+        let adapted = esbuild_packet::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
