@@ -4,6 +4,132 @@ import { browserTrapSource } from "../../scripts/fixtures/browser-call-trap.ts";
 import { copyLaunchFailure, errorFact, launchFailureFact, maxLaunchFailureBytes } from "../src/launch-failure.ts";
 import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots, retainedMemoryProcesses, type FrozenAllocatorFailure } from "../src/memory-telemetry.ts";
 import { createMemoryPublisher } from "../src/memory-channel.ts";
+import { bytes, pages, type SharedMemorySnapshot } from "waffle";
+
+type Holder = SharedMemorySnapshot["holders"][number];
+
+function captureHolders(holders: readonly Holder[]) {
+  const fixture = launchFailureFixture();
+  fixture.runtime.sharedMemory.snapshot = () => ({ ...fixture.ledger, holders });
+  return fixture.capture();
+}
+
+function holder(shape: Holder["shape"], label: Holder["label"], state: Holder["state"] = "live"): Holder {
+  return { label, shape, state, scope: "runtime", declaredBytes: 16, grownBytes: 16 };
+}
+
+test("all ledger holders contribute before detail rows are truncated", () => {
+  const arenas = Array.from({ length: 60 }, () => holder({ kind: "growable-buffer", initial: 0, maximum: bytes(134316032) }, "request-arena"));
+  const holders = arenas.concat([
+    holder({ kind: "growable", maximumPages: pages(32768) }, "memory-group"),
+    holder({ kind: "growable", maximumPages: pages(32768) }, "memory-group", "awaiting-collection"),
+    holder({ kind: "fixed", pages: pages(2) }, "memory-group", "idle"),
+    holder({ kind: "growable-buffer", initial: 16, maximum: bytes(256) }, "pipe-registry"),
+    holder({ kind: "fixed-buffer", length: bytes(16) }, "filesystem-root"),
+    holder({ kind: "capacity-promise", bytes: bytes(1593835520) }, "filesystem-segment"),
+    holder({ kind: "growable", maximumPages: pages(32768) }, "headroom"),
+  ]);
+  const fact = captureHolders(holders);
+  expect(fact.ledger.holders).toMatchObject({ rowCount: 67, rowsTruncated: true });
+  expect(fact.ledger.holderSummary).toMatchObject({ availability: "observed", rowCount: 67,
+    unknownShapeCount: 0, unknownStateCount: 0, requestArenaActivity: "unavailable" });
+  const summary = fact.ledger.holderSummary;
+  if (summary.availability !== "observed") throw Error("Missing aggregate");
+  expect(summary.kinds.find(row => row.kind === "request-arena")).toMatchObject({ count: 60, maximumBytes: 8058961920, knownCurrentBytes: 960, states: { live: 60, idle: 0 } });
+  expect(summary.kinds.find(row => row.kind === "group-growable")).toMatchObject({ count: 2, maximumBytes: 4294967296, states: { live: 1, "awaiting-collection": 1 } });
+  expect(summary.kinds.find(row => row.kind === "group-fixed")).toMatchObject({ count: 1, maximumBytes: 131072, states: { idle: 1 } });
+  expect(summary.kinds.find(row => row.kind === "growable-buffer")).toMatchObject({ count: 1, maximumBytes: 256 });
+  expect(summary.kinds.find(row => row.kind === "fixed-buffer")).toMatchObject({ count: 1, maximumBytes: 16 });
+  expect(summary.kinds.find(row => row.kind === "capacity-promise")).toMatchObject({ count: 1, maximumBytes: null, knownCurrentBytes: null });
+  expect(summary.kinds.find(row => row.kind === "headroom")).toMatchObject({ count: 1, maximumBytes: null, knownCurrentBytes: null });
+  const copy = copyLaunchFailure(fact);
+  expect(copy).toEqual(fact);
+  summary.kinds[0]!.count = 0;
+  summary.kinds[0]!.states.live = 0;
+  const retained = copy?.ledger.holderSummary;
+  if (retained?.availability !== "observed") throw Error("Missing copied aggregate");
+  expect(retained.kinds.find(row => row.kind === "request-arena")).toMatchObject({ count: 60, states: { live: 60 } });
+});
+
+test("shared alias metadata and guest declarations do not multiply backing counts", () => {
+  const shared = holder({ kind: "shared-guest", initialPages: pages(1), actualMaximumPages: pages(8), sourceMaximumPages: pages(8) }, "guest-memory");
+  const declaration = holder({ kind: "guest", memories: [{ kind: "shared", origin: "imported", initialPages: pages(1), maximumPages: pages(8) }] }, "guest-memory");
+  const fixture = launchFailureFixture();
+  fixture.runtime.sharedMemory.snapshot = () => ({ ...fixture.ledger, holders: [shared, declaration], sharedGuests: [{
+    id: Symbol("backing"), owner: { directory: "control", pid: 1 }, phase: "live", aliases: { reserved: 0, transferred: 4, retained: 0 },
+    continuations: { active: 0, retained: 0 }, fence: "pending", chargedBytes: 524288,
+    initialPages: pages(1), actualMaximumPages: pages(8), sourceMaximumPages: pages(8),
+  }] });
+  const summary = fixture.capture().ledger.holderSummary;
+  if (summary.availability !== "observed") throw Error("Missing aggregate");
+  expect(summary.kinds.find(row => row.kind === "shared-guest")).toMatchObject({ count: 1, maximumBytes: 524288 });
+  expect(summary.kinds.find(row => row.kind === "guest-declaration")).toMatchObject({ count: 1, maximumBytes: null, knownCurrentBytes: null });
+  const independent = captureHolders([shared, shared]).ledger.holderSummary;
+  expect(independent).toMatchObject({ kinds: [{ kind: "shared-guest", count: 2, maximumBytes: 1048576 }] });
+});
+
+test("unknown and malformed aggregate facts stay explicit without invoking accessors", () => {
+  let reads = 0;
+  const shape = { kind: "fixed-buffer", length: bytes(16) } as const;
+  Object.defineProperty(shape, "length", { get() { reads++; throw Error("size getter"); } });
+  const unknown = holder(shape, "control");
+  Object.defineProperty(unknown, "state", { get() { reads++; throw Error("state getter"); } });
+  Object.defineProperty(unknown, "grownBytes", { value: -1 });
+  const invalidShape = holder({ kind: "fixed-buffer", length: bytes(16) }, "control");
+  Object.defineProperty(invalidShape, "shape", { get() { reads++; throw Error("shape getter"); } });
+  const invalidSize = holder({ kind: "fixed-buffer", length: bytes(16) }, "control");
+  Object.defineProperty(invalidSize, "declaredBytes", { value: Infinity });
+  const summary = captureHolders([unknown, invalidShape, invalidSize]).ledger.holderSummary;
+  expect(reads).toBe(0);
+  expect(summary).toMatchObject({ availability: "observed", rowCount: 3, unknownShapeCount: 1, unknownStateCount: 1 });
+  if (summary.availability !== "observed") throw Error("Missing aggregate");
+  expect(summary.kinds.find(row => row.kind === "fixed-buffer")).toMatchObject({ count: 2, maximumBytes: null, declaredBytes: null,
+    knownCurrentBytes: 16, unknownCurrentCount: 1, states: { unknown: 1 } });
+  expect(summary.kinds.find(row => row.kind === "unknown")).toMatchObject({ count: 1, maximumBytes: null, knownCurrentBytes: null });
+});
+
+test("empty, unavailable and overflowed ledger aggregates remain distinct", () => {
+  expect(captureHolders([]).ledger.holderSummary).toMatchObject({ availability: "observed", rowCount: 0, kinds: [] });
+  const fixture = launchFailureFixture();
+  fixture.runtime.sharedMemory.snapshot = () => { throw Error("unavailable"); };
+  expect(fixture.capture().ledger.holderSummary).toEqual({ availability: "unavailable" });
+  const large = holder({ kind: "fixed-buffer", length: bytes(Number.MAX_SAFE_INTEGER) }, "control");
+  Object.defineProperty(large, "declaredBytes", { value: Number.MAX_SAFE_INTEGER });
+  Object.defineProperty(large, "grownBytes", { value: Number.MAX_SAFE_INTEGER });
+  expect(captureHolders([large, large]).ledger.holderSummary).toMatchObject({ kinds: [{ count: 2,
+    declaredBytes: null, maximumBytes: null, knownCurrentBytes: null }] });
+});
+
+test("maximum diagnostic text and every aggregate category fit the unchanged serialized bound", () => {
+  const fixture = launchFailureFixture(100);
+  const shapes = [holder({ kind: "fixed-buffer", length: bytes(16) }, "control"),
+    holder({ kind: "growable-buffer", initial: 0, maximum: bytes(16) }, "request-arena"),
+    holder({ kind: "growable-buffer", initial: 0, maximum: bytes(16) }, "pipe-registry"),
+    holder({ kind: "fixed", pages: pages(1) }, "memory-group"),
+    holder({ kind: "growable", maximumPages: pages(8) }, "memory-group"),
+    holder({ kind: "capacity-promise", bytes: bytes(16) }, "filesystem-segment"),
+    holder({ kind: "growable", maximumPages: pages(8) }, "headroom"),
+    holder({ kind: "guest", memories: [] }, "guest-memory"),
+    holder({ kind: "shared-guest", initialPages: pages(1), actualMaximumPages: pages(8), sourceMaximumPages: pages(8) }, "guest-memory")];
+  const unknown = holder({ kind: "fixed-buffer", length: bytes(16) }, "control");
+  Object.defineProperty(unknown, "shape", { value: null });
+  shapes.push(unknown);
+  const states = ["live", "draining", "idle", "awaiting-collection", "debt"] as const;
+  fixture.runtime.sharedMemory.snapshot = () => ({ ...fixture.ledger, holders: shapes.flatMap(shape => states.map(state => ({ ...shape, state }))) });
+  const text = "ࠀ".repeat(10000);
+  fixture.error.message = text;
+  fixture.error.name = text;
+  fixture.error.stack = text;
+  fixture.cause.message = text;
+  fixture.cause.name = text;
+  fixture.cause.stack = text;
+  const fact = fixture.capture();
+  fact.cleanupError = errorFact({ name: text, message: text, stack: text });
+  const copy = copyLaunchFailure(fact);
+  expect(copy).not.toBeNull();
+  expect(new TextEncoder().encode(JSON.stringify(copy)).byteLength).toBeLessThanOrEqual(maxLaunchFailureBytes);
+  scalarTree(copy);
+});
 
 test("bounded scalar copies include admitted identity outside the truncated worker table", () => {
   const fixture = launchFailureFixture(100);
