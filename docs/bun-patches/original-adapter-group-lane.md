@@ -105,8 +105,14 @@ buffers detach, so that write follows the same rule (`worker_channel.ts`, `nativ
 - The core keeps one last attempt for the whole guest, so a token names one attempt of the
   guest, not of a channel. The channel module counts them across every channel it opens and
   never reuses one (53 bits, passed to the word native as two words).
-- A flush never throws for a call the bridge could not carry. The frame stays queued and the
-  pipe's writable subscription brings the next attempt.
+- An attempt is named in the channel module before its write is made and stays there until
+  its result has been counted, across flushes. If the write's reply is lost and the result
+  cannot be asked for either (the engine may refuse to enter that call), the attempt stays
+  unsettled, and no channel of the guest writes again until a later flush has learned what
+  it came to. Counting a result sets the frame's offset instead of adding to it, so
+  counting it twice changes nothing.
+- A flush never throws. The frame stays queued and the pipe's writable subscription brings
+  the next flush.
 
 The host engine (`engine_host.rs`) has one bridge, so it registers word natives as ordinary
 natives. The runtime JavaScript calls them the same way on every engine.
@@ -230,8 +236,9 @@ Ending a guest is not catchable and follows the death rules.
 - A failed drain in an event-loop step does not stop the step or the loop. The other ports,
   the mailbox, the control channels and the housekeeping are still served, then the first
   failure is thrown as the thread's uncaught error. The loop drops a waiter whose step threw,
-  so the worker waiter puts itself back: it is the only thing that pumps the thread's lanes
-  and channels.
+  except one marked `permanent`, which the worker waiter is: it is the only thing that pumps
+  the thread's lanes and channels, and staying registered needs no new set entry after the
+  failure, where putting itself back would.
 - A port or broadcast channel keeps the loop alive by being a member of one set
   (`internal.messagePortRefs`), not by a flag beside a counter. Taking and dropping the hold
   are each one set operation that does nothing when repeated, so cleanup that is interrupted

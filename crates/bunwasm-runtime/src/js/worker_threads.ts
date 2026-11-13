@@ -1433,13 +1433,15 @@
       for (const child of children.values()) list.push(child.watch());
       return internal.concatBytes(list);
     },
+    // This waiter is the only thing that pumps this thread's control channels, lanes and lane
+    // housekeeping, so the loop never takes it out: a thread that handles a failed step keeps
+    // all of them, and the next step takes up what the failed one left, such as a lane batch
+    // the core kept or a frame still queued. Staying registered costs nothing after the
+    // failure. Being put back would need a new set entry, which can fail in turn.
+    permanent: true,
     // A failed step is this thread's uncaught error, and it is thrown on as one: the loop then
     // runs `uncaughtException` handlers, or reports it (a worker to its parent) and exits 1.
-    // The loop has already dropped this waiter, and it must not stay dropped. It is the only
-    // thing that pumps this thread's control channels, lanes and lane housekeeping, so a thread
-    // that handles the error keeps all of them, and the next step takes up what the failed one
-    // left: a lane batch the core kept, a frame still queued.
-    fail(error) { internal.addIoWaiter(waiter); throw error; },
+    fail(error) { throw error; },
   };
   internal.addIoWaiter(waiter);
   return exports;

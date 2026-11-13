@@ -713,6 +713,48 @@ for (const { thread, when } of loopCases) {
   });
 }
 
+for (const thread of ["root", "worker"] as const) {
+  test(`the ${thread}'s waiter survives a failed step when no new set entry can be made for it`, async () => {
+    const { model, root, spawn } = group({ realLoop: true });
+    const { child, port, pid } = spawn();
+    const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
+    const got: unknown[] = [];
+    listening.on("message", value => got.push(value));
+    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
+    const pending = Reflect.get(receiver.internal, "ioPending") as () => number;
+    const before = pending();
+    // From here on, registering a waiter fails: the engine has no memory for one more entry.
+    const add = Set.prototype.add as (this: Set<unknown>, value: unknown) => Set<unknown>;
+    let refused = 0;
+    Set.prototype.add = function (this: Set<unknown>, value: unknown) {
+      const waiter = typeof value === "object" && value !== null && "step" in value && "fail" in value;
+      if (!waiter) return add.call(this, value);
+      refused++;
+      throw new RangeError("out of memory");
+    } as typeof Set.prototype.add;
+    try {
+      sender.postMessage("first");
+      model.control.fault = { native: "laneDrain", when: "after" };
+      let caught: unknown;
+      try { receiver.pumpIo(); } catch (error) { caught = error; }
+      // The step's own error leaves the loop, not one from putting the waiter back: it never left.
+      expect(caught).toBe(model.control.thrown[0]);
+      expect(refused).toBe(0);
+      expect(pending()).toBe(before);
+      // Later loop passes alone deliver what the failed step left and what came after, and
+      // the housekeeping goes on. Nothing here is a synchronous receive or a port call.
+      const swept = () => model.control.sweeps.filter(item => item.tag === tag).length;
+      const sweeps = swept();
+      sender.postMessage("second");
+      passes();
+      await turn();
+      expect(got).toEqual(["first", "second"]);
+      expect(swept()).toBeGreaterThan(sweeps);
+    } finally { Set.prototype.add = add; }
+  });
+}
+
 test("one lane that fails to drain does not hold back the thread's other lanes and channels", async () => {
   const { model, root, spawn } = group({ realLoop: true });
   const first = spawn();

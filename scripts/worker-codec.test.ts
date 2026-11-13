@@ -174,7 +174,8 @@ function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "
   const written = new Map<number, string>();
   const tokens: number[] = [];
   let last = { fd: 0, token: 0, result: 0 };
-  const control = { fault };
+  /** `lookups`: how many times asking for a write's result fails before the core is entered. */
+  const control = { fault, lookups: 0 };
   const native = {
     procWriteOnce(fd: number, bytes: Uint8Array, token: number) {
       const failing = control.fault;
@@ -188,6 +189,7 @@ function guestCore(fault: "before" | "after" | null = null, scope: "attempt" | "
       return taken;
     },
     procWriteResult(fd: number, high: number, low: number) {
+      if (control.lookups > 0) { control.lookups--; throw new RangeError("Maximum call stack size exceeded"); }
       const same = last.token === high * 2 ** 32 + low && (scope === "token" || last.fd === fd);
       return same ? last.result : -(2 ** 63);
     },
@@ -262,6 +264,76 @@ for (const { when, scope, equal, capacity } of twoChannelCases) {
     expect(new Set(core.tokens).size).toBe(core.tokens.length);
   });
 }
+
+// A write's reply is lost, and then its result cannot even be asked for: the engine refuses to
+// enter that call. Nothing may be written until the result is known, on any channel, however
+// many flushes that takes, or bytes the pipe already took would be written again.
+const unknownCases = (["before", "after"] as const).flatMap(when => [Infinity, 5].flatMap(capacity => [1, 4].map(lookups => ({ when, capacity, lookups }))));
+for (const { when, capacity, lookups } of unknownCases) {
+  const kind = `${capacity === 5 ? "partial" : "whole"} write lost ${when} it ran, result unavailable ${lookups} time${lookups > 1 ? "s" : ""}`;
+  test(`a frame is written once and in order across flushes (${kind})`, () => {
+    const core = guestCore(when, "attempt", capacity);
+    const channel = channelFactory()({ native: core.native }).open(1, 2);
+    const first = { kind: "moving", id: 1 }, second = { kind: "port-wake" };
+    core.control.lookups = lookups;
+    expect(() => channel.send(first)).not.toThrow();
+    // The outcome is unknown: the frame stays queued and nothing more was attempted.
+    expect(channel.pending).toBe(true);
+    expect(core.tokens).toHaveLength(1);
+    const taken = core.written.get(2) ?? "";
+    // A pump flushes twice, so it asks at most twice. While the core still cannot be asked
+    // after it, the outcome is still unknown: not one more byte and not one more attempt.
+    while (core.control.lookups >= 2) {
+      expect(() => channel.pump(() => {})).not.toThrow();
+      expect(core.written.get(2) ?? "").toBe(taken);
+      expect(core.tokens).toHaveLength(1);
+    }
+    for (let turn = 0; turn < 32 && channel.pending; turn++) channel.pump(() => {});
+    channel.send(second);
+    for (let turn = 0; turn < 32 && channel.pending; turn++) channel.pump(() => {});
+    expect(core.written.get(2)).toBe(JSON.stringify(first) + "\n" + JSON.stringify(second) + "\n");
+    expect(channel.pending).toBe(false);
+    expect(new Set(core.tokens).size).toBe(core.tokens.length);
+  });
+
+  test(`another channel of the guest does not write over an unknown result (${kind})`, () => {
+    const core = guestCore(null, "attempt", capacity);
+    const guest = channelFactory()({ native: core.native });
+    const first = guest.open(1, 2), second = guest.open(3, 4);
+    const toFirst = { kind: "to-a", text: "a".repeat(11) }, toSecond = { kind: "to-b" };
+    core.control.fault = when;
+    core.control.lookups = lookups;
+    first.send(toFirst);
+    expect(core.tokens).toHaveLength(1);
+    // The core keeps one result, the last attempt's. A write by the second channel now would
+    // replace it and the first channel could never learn what its own write came to.
+    for (let flush = 1; flush < lookups; flush++) {
+      second.send(toSecond);
+      expect(core.tokens).toHaveLength(1);
+      expect(core.written.get(4)).toBeUndefined();
+    }
+    for (let turn = 0; turn < 64 && (first.pending || second.pending); turn++) { second.pump(() => {}); first.pump(() => {}); }
+    second.send(toSecond);
+    for (let turn = 0; turn < 64 && (first.pending || second.pending); turn++) { second.pump(() => {}); first.pump(() => {}); }
+    expect(core.written.get(2)).toBe(JSON.stringify(toFirst) + "\n");
+    expect(core.written.get(4)).toBe((JSON.stringify(toSecond) + "\n").repeat(lookups));
+    expect(first.pending || second.pending).toBe(false);
+    expect(new Set(core.tokens).size).toBe(core.tokens.length);
+  });
+}
+
+test("closing a channel gives up its unknown write, and the guest's other channels write again", () => {
+  const core = guestCore("after", "attempt", 5);
+  const guest = channelFactory()({ native: core.native });
+  const first = guest.open(1, 2), second = guest.open(3, 4);
+  core.control.lookups = 1000;
+  first.send({ kind: "to-a" });
+  second.send({ kind: "to-b" });
+  expect(core.written.get(4)).toBeUndefined();
+  first.close();
+  for (let turn = 0; turn < 32 && second.pending; turn++) second.pump(() => {});
+  expect(core.written.get(4)).toBe('{"kind":"to-b"}\n');
+});
 
 test("a control frame that could not be encoded stays queued in order", () => {
   let failing = true;

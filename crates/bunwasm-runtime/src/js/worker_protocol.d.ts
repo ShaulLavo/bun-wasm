@@ -250,6 +250,8 @@ declare namespace BunWasm {
     subscriptions?(): Uint8Array;
     /** A filesystem watch, stepped before the other waiters in each pump (see net.js pumpIo). */
     watch?: boolean;
+    /** The loop keeps this waiter registered when its step throws; `fail` still gets the error. */
+    permanent?: boolean;
   }
   /** The frame a resource's own callbacks run in, captured when it starts (resource_frame.ts). */
   interface ResourceFrame {
