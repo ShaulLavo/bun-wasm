@@ -653,17 +653,13 @@
     return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  // The whole require path lives in this one function, and the module body runs straight from
-  // it. Every JavaScript frame between a require call and the next module body costs each
-  // nested level about 320 bytes of QuickJS stack (docs/stack-limits.md), so the steps that
-  // finish before the body runs are calls, and the body's own call is not. Without an owner
-  // this is Module.prototype.require. A module's own require passes its module and still
-  // honors a replaced require method.
+  // Method dispatch preserves hook receivers without a native Reflect.apply reentry on
+  // QuickJS. The loader runs the module body directly; preparatory calls return before it.
+  // See docs/stack-limits.md for the separate native and ordinary bytecode frame budgets.
   function requireFunction(owner) {
     return function require(spec) {
-      const method = owner && owner.require;
-      if (owner && method !== moduleRequire) return apply(method, owner, [spec]);
-      const parent = owner || this;
+      if (owner) return owner.require(spec);
+      const parent = this;
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
         if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];

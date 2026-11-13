@@ -4,6 +4,7 @@
 const { spawnSync }: typeof import("node:child_process") = require("node:child_process");
 const fs: typeof import("node:fs") = require("node:fs");
 const path: typeof import("node:path") = require("node:path");
+const Module: typeof import("node:module") = require("node:module");
 
 const levels = 16;
 
@@ -33,7 +34,34 @@ function loadChains(): void {
   console.log("overflow in a nested module caught, cache clean");
 
   if (require(writeChain("again", levels, "module.exports = 1;")) !== levels) throw new Error("second chain result changed");
+  hookedChains();
   console.log("continued");
+}
+
+function hookedChains(): void {
+  const originalRequire = Module.prototype.require;
+  Module.prototype.require = function (specifier: string) {
+    return originalRequire.call(this, specifier);
+  };
+  try {
+    const hookedLevels = 24;
+    if (require(writeChain("hooked", hookedLevels, "module.exports = 1;")) !== hookedLevels) throw new Error("hooked chain result changed");
+    console.log(hookedLevels, "nested requires with a module hook loaded");
+    expectHookOverflow(writeChain("hook-overflow", 256, "function recurse() { return 1 + recurse(); }\nmodule.exports = recurse();"));
+    if (Object.keys(require.cache).some(file => file.includes("/hook-overflow/"))) throw new Error("failed hooked modules stayed cached");
+    if (require(writeChain("hook-again", hookedLevels, "module.exports = 1;")) !== hookedLevels) throw new Error("hooked recovery result changed");
+    console.log("module hook overflow caught, cache clean, hooked chain reloaded");
+  } finally {
+    Module.prototype.require = originalRequire;
+  }
+}
+
+function expectHookOverflow(filename: string): void {
+  try { require(filename); } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return;
+  }
+  throw new Error("unbounded module hooks did not throw");
 }
 
 if (process.argv[2] === "load") {

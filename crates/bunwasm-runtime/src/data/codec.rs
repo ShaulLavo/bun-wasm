@@ -110,7 +110,7 @@ pub(crate) fn encode(value: &Val) -> Result<Vec<u8>> {
 
 fn walk(value: &Val, out: &mut impl Sink) -> Result<()> {
     let mut pending = Vec::new();
-    push(&mut pending, Part::Value(value))?;
+    encode_part(Part::Value(value), &mut pending, out)?;
     while let Some(part) = pending.pop() {
         encode_part(part, &mut pending, out)?;
     }
@@ -155,11 +155,18 @@ fn tag(value: &Val) -> u8 {
 }
 
 fn encode_array<'a>(
-    items: &'a [Val],
+    mut items: &'a [Val],
     pending: &mut Vec<Part<'a>>,
     out: &mut impl Sink,
 ) -> Result<()> {
     length(out, items.len())?;
+    while let Some((item, rest)) = items.split_first() {
+        if matches!(item, Val::Array(_) | Val::Object(_)) {
+            break;
+        }
+        encode_part(Part::Value(item), pending, out)?;
+        items = rest;
+    }
     for item in items.iter().rev() {
         push(pending, Part::Value(item))?;
     }
@@ -167,11 +174,19 @@ fn encode_array<'a>(
 }
 
 fn encode_object<'a>(
-    fields: &'a [(String, Val)],
+    mut fields: &'a [(String, Val)],
     pending: &mut Vec<Part<'a>>,
     out: &mut impl Sink,
 ) -> Result<()> {
     length(out, fields.len())?;
+    while let Some(((key, value), rest)) = fields.split_first() {
+        if matches!(value, Val::Array(_) | Val::Object(_)) {
+            break;
+        }
+        string(out, key)?;
+        encode_part(Part::Value(value), pending, out)?;
+        fields = rest;
+    }
     for (key, value) in fields.iter().rev() {
         push(pending, Part::Value(value))?;
         push(pending, Part::Key(key))?;
@@ -362,6 +377,37 @@ fn read_container(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_prefixes_keep_nested_values_and_later_siblings_in_order() {
+        let value = Val::Array(vec![
+            Val::Bool(true),
+            Val::Object(vec![
+                ("a".into(), Val::Null),
+                ("b".into(), Val::Array(vec![Val::Bool(false)])),
+                ("c".into(), Val::Undefined),
+            ]),
+            Val::Str("z".into()),
+        ]);
+        let expected = [
+            7, 3, 0, 0, 0, 3, 8, 3, 0, 0, 0, 1, 0, 0, 0, b'a', 1, 1, 0, 0, 0, b'b', 7, 1, 0, 0, 0,
+            2, 1, 0, 0, 0, b'c', 0, 5, 1, 0, 0, 0, b'z',
+        ];
+        assert_eq!(encode(&value).unwrap(), expected);
+        assert_eq!(decode(&expected).unwrap(), value);
+    }
+
+    #[test]
+    fn scalar_prefixes_do_not_recurse_through_deep_containers() {
+        let mut expected = Vec::new();
+        for _ in 0..10_000 {
+            expected.extend_from_slice(&[7, 2, 0, 0, 0, 3]);
+        }
+        expected.push(0);
+        let value = decode(&expected).unwrap();
+        assert_eq!(encode(&value).unwrap(), expected);
+        drop_tree(value);
+    }
 
     #[test]
     fn measured_total_fails_like_an_unallocatable_vec() {
