@@ -263,4 +263,6 @@ and its encoding the same way.
 
 `tests/fixtures/shared-wasm-memory/group-lane.ts` and `group-lane-lifetime.ts` run on a real
 shared-group guest. The lifetime fixture starts 200 workers in turn, which takes about 100
-seconds on the native launcher at roughly half a second per worker start.
+seconds on the native launcher at roughly half a second per worker start. It is the
+fixture's second command (`cmd.lifetime`, `docs/check-discovery.md`), followed there by a
+fresh guest, so that it has the command time bound to itself.

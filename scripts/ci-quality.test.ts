@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { discoverChecks, automaticChecks, checkCommand, nativeGroups, selectChecks } from "./test-checks";
+import { discoverChecks, automaticChecks, checkCommand, checkId, nativeGroups, selectChecks } from "./test-checks";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { rustTestPackages } from "./rust-test-packages";
@@ -158,7 +158,8 @@ test("CMake owner migration accepts new features and rejects missing original ow
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
   expectOriginalCmakeOwners(selectChecks("cmake"));
-  const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  // By check id: two commands of one shared-group fixture share a path and are two executions.
+  const checks = discoverChecks().map(checkId).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
   expect(selectChecks("web")).toContain("scripts/runtime-sqlite.test.ts");

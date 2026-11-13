@@ -518,7 +518,7 @@ test("a port at the last sequence a number holds exactly refuses to post, and on
     const extra = new made.root.MessageChannel();
     port.postMessage({ port: extra.port2 }, [extra.port2]);
     rewriteCarriedPort(made, carried => { carried.sent = sent; });
-    const moved = (child.receiveMessageOnPort(child.parentPort)?.message as { port: SourcePort }).port;
+    const moved = carried(child.receiveMessageOnPort(child.parentPort)?.message);
     const buffer = new ArrayBuffer(32);
     const reserved = made.model.control.reserved;
     if (!refused) { moved.postMessage({ buffer }, [buffer]); expect(buffer.byteLength).toBe(0); continue; }
@@ -536,11 +536,11 @@ test("a port at the last version the lane can record refuses to move, and one be
     const extra = new made.root.MessageChannel();
     port.postMessage({ port: extra.port2 }, [extra.port2]);
     rewriteCarriedPort(made, carried => { carried.version = version; });
-    const moved = (child.receiveMessageOnPort(child.parentPort)?.message as { port: SourcePort }).port;
+    const moved = carried(child.receiveMessageOnPort(child.parentPort)?.message);
     const back = () => child.parentPort.postMessage({ port: moved }, [moved]);
     if (!refused) {
       back();
-      const returned = (made.root.receiveMessageOnPort(port)?.message as { port: SourcePort }).port;
+      const returned = carried(made.root.receiveMessageOnPort(port)?.message);
       returned.postMessage("after the last move");
       expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("after the last move");
       continue;

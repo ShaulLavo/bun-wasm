@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildNativeProfile, nativeProfileEngine, spiderMonkeyNativeInputs } from './build-native-profile.ts';
@@ -8,7 +8,7 @@ import { hash } from './guest-source-manifest.ts';
 import { groupFlags } from '../spidermonkey/shared-group.ts';
 import { pin } from '../spidermonkey/native-profile.ts';
 import { verifySharedSysroot } from './src/program-profile.ts';
-import { profileArtifacts, runProfileFixtures } from './native-profile-fixtures.ts';
+import { profileArtifacts, runDeclaredFixtures, runProfileFixtures } from './native-profile-fixtures.ts';
 import { appendCustomSection, tagProgramCore } from '../src/engine-kind.ts';
 
 const text = (value: string) => [value.length].concat(Array.from(value, character => character.charCodeAt(0)));
@@ -154,6 +154,64 @@ test('the real native fixture runner invokes the original command and rejects wr
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+
+/** A launcher that records its arguments and tier, and prints what the selected command is expected to print. */
+const recordingLauncher = [
+  '#!/bin/sh',
+  'printf "%s\\n" "${BUN_WASM_SPIDERMONKEY_TIER:-none} $*" >> "$RECORDER_ARGS"',
+  'case "$*" in *lifetime.ts) name=lifetime; printf "%s" "$RECORDER_LIFETIME";; *) name=default; printf "%s" "$RECORDER_DEFAULT";; esac',
+  'entries=0; if [ "$BUN_WASM_SPIDERMONKEY_TIER" = pbl ]; then entries=9; fi',
+  'printf "bun-wasm spidermonkey: stack_low=0x7a0000 stack_high=0xfa0000 stack_bytes=8388608 register_depth=16 entry_depth=1392 interrupt_polls=123 portable_baseline_entries=%s\\n" "$entries" >&2',
+  'printf "%s\\n" "bun-wasm nested resources: {}" "bun-wasm group before physical stop: GroupSnapshot {}" >&2',
+  'printf "%s\\n" "bun-wasm group after physical stop: GroupSnapshot { members: 0, reserved: 0, retained: 0, regions: 0, pins: 0, holds: 0, watches: 0, waiters: 0, committed_bytes: 166002688, free_bytes: 165937152, bypassed: false, published: 0 }" >&2',
+  'if [ "$RECORDER_FAIL" = "$name" ]; then exit 3; fi',
+].join('\n') + '\n';
+
+test('each command of a fixture runs once per tier with its own files, and either one failing fails the run', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-native-entry-'));
+  try {
+    const path = 'tests/fixtures/pair';
+    const fixture = join(root, path);
+    mkdirSync(fixture, { recursive: true });
+    const files = { cmd: 'run\n/default.ts\n', 'expected.txt': 'default\n', 'cmd.lifetime': 'run\n/lifetime.ts\n', 'expected.lifetime.txt': 'lifetime\n' };
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(fixture, name), text);
+    const launcher = join(root, 'launcher');
+    const record = join(root, 'record');
+    writeFileSync(launcher, recordingLauncher, { mode: 0o755 });
+    const ids = [path, `${path}#lifetime`];
+    const env: NodeJS.ProcessEnv = { ...process.env, RECORDER_ARGS: record, RECORDER_DEFAULT: 'default\n', RECORDER_LIFETIME: 'lifetime\n', RECORDER_FAIL: '' };
+    const calls = () => { const lines = readFileSync(record, 'utf8').trim().split('\n'); rmSync(record); return lines; };
+    const quickjs = { program: join(root, 'bun.wasm'), launcher, engine: 'quickjs' as const };
+    const results = runDeclaredFixtures(ids, ids, root, quickjs, env);
+    expect(results.map(result => [result.id, result.path, result.entry, result.tier])).toEqual([[path, path, null, null], [`${path}#lifetime`, path, 'lifetime', null]]);
+    expect(results.every(result => result.wallMs >= 0)).toBe(true);
+    // One launch each, an argument vector ending in that command's own lines.
+    expect(calls().map(line => line.split(' -- ')[1])).toEqual(['run /default.ts', 'run /lifetime.ts']);
+    // SpiderMonkey runs each command in each tier, and neither twice within one.
+    const spidermonkey = { ...quickjs, engine: 'spidermonkey' as const };
+    const tiered = runDeclaredFixtures(ids, ids, root, spidermonkey, env);
+    expect(tiered.map(result => `${result.id} ${result.tier}`)).toEqual([`${path} interp`, `${path} pbl`, `${path}#lifetime interp`, `${path}#lifetime pbl`]);
+    expect(calls().map(line => `${line.split(' ')[0]} ${line.split(' -- ')[1]}`)).toEqual(['interp run /default.ts', 'pbl run /default.ts', 'interp run /lifetime.ts', 'pbl run /lifetime.ts']);
+    // Each command is held to its own expected output and its own exit status.
+    env.RECORDER_LIFETIME = 'default\n';
+    expect(() => runDeclaredFixtures(ids, ids, root, quickjs, env)).toThrow(`${path}#lifetime: shared native output differs from expected.lifetime.txt`);
+    env.RECORDER_LIFETIME = 'lifetime\n'; env.RECORDER_DEFAULT = 'lifetime\n';
+    expect(() => runDeclaredFixtures(ids, ids, root, quickjs, env)).toThrow(`${path}: shared native output differs from expected.txt`);
+    env.RECORDER_DEFAULT = 'default\n'; env.RECORDER_FAIL = 'lifetime';
+    expect(() => runDeclaredFixtures(ids, ids, root, quickjs, env)).toThrow(`${path}#lifetime: guest failed with 3`);
+    env.RECORDER_FAIL = '';
+    rmSync(record, { force: true });
+    // Nothing undeclared, repeated or empty is launched.
+    for (const selection of [[`${path}#other`], [path, path], [], [`${path}#lifetime`, `${path}#../x`]]) {
+      expect(() => runDeclaredFixtures(selection, ids, root, quickjs, env)).toThrow('empty, repeated or undeclared');
+    }
+    // An entry file that is not a regular file of the fixture is refused before any launch.
+    rmSync(join(fixture, 'cmd.lifetime'));
+    symlinkSync(join(fixture, 'cmd'), join(fixture, 'cmd.lifetime'));
+    expect(() => runDeclaredFixtures([`${path}#lifetime`], ids, root, quickjs, env)).toThrow('needs cmd.lifetime');
+    expect(() => readFileSync(record)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('the native CLI runs one SM pair on both actual tiers and preserves all stderr', () => {
   const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-tier-cli-'));

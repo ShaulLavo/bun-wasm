@@ -124,6 +124,30 @@ for (const event of ["pull_request", "push"]) {
     expect(selected.inputs).toContain(input);
   });
 
+  test(`${event} reads a fixture's second command from the snapshot that declares it, added or deleted`, () => {
+    const repo = repository();
+    const path = "tests/fixtures/shared-pair";
+    const manifest = "checks/native-shared-pair-lifetime.json";
+    repo.write("checks/native-shared-pair.json", JSON.stringify({ owner: "native", path, profile: "shared-group" }));
+    for (const name of ["cmd", "expected.txt", "cmd.lifetime", "expected.lifetime.txt", "lifetime.ts"]) repo.write(`${path}/${name}`, "before\n");
+    const base = repo.commit();
+    // Added: the head snapshot declares the entry, and the same schema reads it.
+    repo.write(manifest, JSON.stringify({ owner: "native", path, profile: "shared-group", entry: "lifetime" }));
+    const added = repo.commit();
+    const addition = repo.select(base, added, event);
+    expect(addition.profile).toBe("shared_native=true");
+    expect(addition.inputs).toContain(manifest);
+    // An edit to a file only the second command runs selects the shared producer.
+    repo.write(`${path}/lifetime.ts`, "changed\n");
+    const edited = repo.commit();
+    expect(repo.select(added, edited, event).profile).toBe("shared_native=true");
+    // Deleted: the base snapshot still declares it.
+    rmSync(join(repo.directory, manifest));
+    const removal = repo.select(edited, repo.commit(), event);
+    expect(removal.profile).toBe("shared_native=true");
+    expect(removal.inputs).toContain(manifest);
+  });
+
   test(`${event} keeps unrelated Web source and docs outside the Browser guest producer`, () => {
     const repo = repository();
     repo.write(largeMessageManifest, readFileSync(join(import.meta.dir, "..", largeMessageManifest), "utf8"));

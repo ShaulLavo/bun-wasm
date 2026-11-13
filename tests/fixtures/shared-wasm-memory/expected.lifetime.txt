@@ -1,0 +1,2 @@
+shared-wasm-memory group lane lifetime: pass
+plain-sab: pass

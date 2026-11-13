@@ -1,12 +1,12 @@
 import { strict as assert } from 'node:assert';
 
-// Each runs in its own guest process: a new group, region table and Store budget.
+// Each runs in its own guest process: a new group, region table and Store budget. `plain-sab`
+// runs in the lifetime command, as the fresh group after the worker churn.
 for (const name of [
   'shared-buffer-slice',
   'shared-buffer-alias',
   'shared-buffer-growable',
   'shared-buffer-churn',
-  'plain-sab',
   'plain-sab-guest',
   'table-global',
   'table-global-guest',
