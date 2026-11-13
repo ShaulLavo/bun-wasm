@@ -140,9 +140,10 @@ test('real workflow steps wire the library, existing core, side and discovered c
 test('the discovered native consumer qualifies both SM tiers without a second producer or a changed clock', () => {
   const driver = readFileSync(new URL('./native-profile-fixtures.ts', import.meta.url), 'utf8');
   expect(driver).toContain("artifacts.engine === 'spidermonkey'");
-  expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(path, artifacts, env, tier))');
+  expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(id, directory, artifacts, env, tier))');
   expect(driver).toContain('verifySpiderMonkeyQualification(result.stderr, tier)');
-  expect(driver).toContain('timeout: 120_000');
+  expect(driver).toContain('const COMMAND_TIMEOUT_MS = 120_000');
+  expect(driver).toContain('timeout: COMMAND_TIMEOUT_MS');
   expect(driver).toContain('result.stdout !== expected');
   expect(driver).toContain("process.stderr.write(result.stderr ?? '')");
   expect(driver).not.toMatch(/build-native|build-bun|build-engine|\.replace\(|\.filter\(/);
