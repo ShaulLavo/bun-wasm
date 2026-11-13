@@ -101,7 +101,7 @@ test("parallel browser shards discover every owned check exactly once and requir
   const discovery = steps(object(jobs.quality)).find(step => step.id === "web-browser-shards");
   assert(discovery && typeof discovery.run === "string");
   expect(discovery.run).toContain("bun scripts/ci-web-browser-shards.ts");
-  const execution = spawnSync("bun", ["scripts/ci-web-browser-shards.ts"], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+  const execution = spawnSync("bun", [new URL("./ci-web-browser-shards.ts", import.meta.url).pathname], { encoding: "utf8" });
   expect(execution.status, execution.stderr).toBe(0);
   expect(JSON.parse(execution.stdout)).toEqual({ include: matrix });
   const command = steps(shards).find(step => step.name === "Run the discovered Web browser shard");

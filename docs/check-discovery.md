@@ -37,6 +37,14 @@ existing required Processes gates wait for every batch and reject failures,
 cancellations and unexpected skips. A producer-disabled run skips the guest jobs.
 All jobs keep their existing ten-minute budget, and the site is still built once.
 
+`web-browser` manifests select one of three measured `batch` labels. CI uses
+`scripts/ci-web-browser-shards.ts` to discover the matrix and command deadlines.
+Adding an unmeasured batch fails discovery. Every shard runs in parallel with
+`fail-fast: false`, so one failure does not cancel the others. The required
+Web host gate rejects any failed, cancelled or skipped shard and unit job before
+running its existing smoke checks once. Local `test-web-host.sh --browser` still
+runs both the discovered checks and smoke checks; CI uses `--smoke` after shards.
+
 `localRuntime` retains the former local `check-runtime.sh` selection. It does not
 add a second CI owner. The `runtime` owner runs in the compiled native fixture
 job. Use `web` with `localRuntime: true` for source-only Node or Bun checks that

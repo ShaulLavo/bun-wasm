@@ -2264,47 +2264,6 @@ jobs:
           export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
 
-  web-browser:
-    needs: quality
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web browser (${{ matrix.batch }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.quality.outputs.web-browser-shards) }}
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/release-downloads
-        with:
-          scope: web
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install Web host browser test dependencies
-        run: bash ../scripts/test-web-host.sh --setup
-      - uses: ./.github/actions/browser-deps
-        with:
-          browsers: chromium firefox webkit
-      - name: Install Chromium, Firefox and WebKit
-        run: bunx playwright install chromium firefox webkit
-      - name: Run the discovered Web browser shard
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-          WEB_BROWSER_BATCH: ${{ matrix.batch }}
-          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
-        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
-      - uses: ./.github/actions/save-release-downloads
-
   web:
     needs: [quality, web-unit, web-browser]
     if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -2403,6 +2362,47 @@ jobs:
           path: ${{ runner.temp }}/c1-webkit-failures
           if-no-files-found: ignore
           retention-days: 7
+      - uses: ./.github/actions/save-release-downloads
+
+  web-browser:
+    needs: quality
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web browser (${{ matrix.batch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.quality.outputs.web-browser-shards) }}
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install Web host browser test dependencies
+        run: bash ../scripts/test-web-host.sh --setup
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
+      - name: Run the discovered Web browser shard
+        env:
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+          WEB_BROWSER_BATCH: ${{ matrix.batch }}
+          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
+        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
       - uses: ./.github/actions/save-release-downloads
 
   process-bundles:
