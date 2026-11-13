@@ -10,7 +10,7 @@ export async function checkStatMissing(api: typeof fs): Promise<void> {
   api.writeFileSync(file, "test");
   api.symlinkSync("absent", dangling);
   const errors = new Set<Error>();
-  function check(error: unknown, code: string, path: string, syscall: string): void {
+  function check(error: unknown, code: string, path: string, syscall: string): Error {
     assert(error instanceof Error);
     assert.equal(Object.getPrototypeOf(error), Error.prototype);
     assert.equal("code" in error && error.code, code);
@@ -20,12 +20,16 @@ export async function checkStatMissing(api: typeof fs): Promise<void> {
     assert(error.message.includes(`${syscall} '${path}'`));
     assert(!errors.has(error));
     errors.add(error);
-    assert(String(error.stack).includes("fs-stat-missing"), "stack retains the caller");
     assert(!Object.keys(error).includes("message"));
+    return error;
   }
   function missing(operation: () => unknown, code: string, path: string, syscall: string): void {
     try { operation(); }
-    catch (error) { check(error, code, path, syscall); return; }
+    catch (error) {
+      const checked = check(error, code, path, syscall);
+      assert(String(checked.stack).includes("checkSync"), "stack retains the synchronous caller");
+      return;
+    }
     assert.fail("missing path succeeded");
   }
   async function checkAsync(link: boolean): Promise<void> {
@@ -46,22 +50,22 @@ export async function checkStatMissing(api: typeof fs): Promise<void> {
     await assert.rejects(promise(absent, options), error => error === identity);
   }
   function checkSync(link: boolean): void {
-      const sync = link ? api.lstatSync : api.statSync;
-      const syscall = link ? "lstat" : "stat";
-      for (const path of [absent, Buffer.from(absent), ""]) {
-        assert.equal(sync(path, { throwIfNoEntry: false }), undefined);
-        assert.equal(sync(path, { bigint: true, throwIfNoEntry: false }), undefined);
-      }
-      missing(() => sync(absent), "ENOENT", absent, syscall);
-      missing(() => sync(absent, { throwIfNoEntry: true }), "ENOENT", absent, syscall);
-      missing(() => sync(`${file}/child`, { throwIfNoEntry: false }), "ENOTDIR", `${file}/child`, syscall);
-      const normal = sync(file, { throwIfNoEntry: false });
-      assert(normal instanceof api.Stats && normal.isFile());
-      const big = sync(file, { bigint: true, throwIfNoEntry: false });
-      assert.equal(big?.size, 4n);
-      const identity = new Error("getter identity");
-      const options = { get bigint(): false { throw identity; } };
-      assert.throws(() => sync(absent, options), error => error === identity);
+    const sync = link ? api.lstatSync : api.statSync;
+    const syscall = link ? "lstat" : "stat";
+    for (const path of [absent, Buffer.from(absent), ""]) {
+      assert.equal(sync(path, { throwIfNoEntry: false }), undefined);
+      assert.equal(sync(path, { bigint: true, throwIfNoEntry: false }), undefined);
+    }
+    missing(() => sync(absent), "ENOENT", absent, syscall);
+    missing(() => sync(absent, { throwIfNoEntry: true }), "ENOENT", absent, syscall);
+    missing(() => sync(`${file}/child`, { throwIfNoEntry: false }), "ENOTDIR", `${file}/child`, syscall);
+    const normal = sync(file, { throwIfNoEntry: false });
+    assert(normal instanceof api.Stats && normal.isFile());
+    const big = sync(file, { bigint: true, throwIfNoEntry: false });
+    assert.equal(big?.size, 4n);
+    const identity = new Error("getter identity");
+    const options = { get bigint(): false { throw identity; } };
+    assert.throws(() => sync(absent, options), error => error === identity);
   }
   try {
     for (const link of [false, true]) {

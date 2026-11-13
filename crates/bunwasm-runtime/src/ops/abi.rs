@@ -152,35 +152,32 @@ impl Transport {
     /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
     /// encoded bytes. Returns the allocation's pointer and length.
     pub fn encode(&self, value: &Val) -> Result<(u32, u32), CodecError> {
-        let len = codec::encoded_len(value)?;
-        let len = u32::try_from(len).map_err(|_| CodecError::Allocation)?;
-        let pointer = self.alloc(len, Frame::ALIGN);
-        if pointer == 0 {
-            return Err(CodecError::Allocation);
-        }
-        let encoded = self
-            .allocation(pointer, len)
-            .expect("fresh transport allocation")
-            .encode(value);
-        if let Err(error) = encoded {
-            self.free(pointer, len, Frame::ALIGN)
-                .expect("fresh transport allocation");
-            return Err(error);
-        }
-        Ok((pointer, len))
+        self.encode_payload(codec::encoded_len(value)?, |allocation| {
+            allocation.encode(value)
+        })
     }
 
     fn encode_error(&self, error: &NativeError) -> Result<(u32, u32), CodecError> {
-        let len = codec::encoded_error_len(error)?;
+        self.encode_payload(codec::encoded_error_len(error)?, |allocation| {
+            allocation.encode_error(error)
+        })
+    }
+
+    fn encode_payload(
+        &self,
+        len: usize,
+        fill: impl FnOnce(&Allocation) -> Result<(), CodecError>,
+    ) -> Result<(u32, u32), CodecError> {
         let len = u32::try_from(len).map_err(|_| CodecError::Allocation)?;
         let pointer = self.alloc(len, Frame::ALIGN);
         if pointer == 0 {
             return Err(CodecError::Allocation);
         }
-        let encoded = self
-            .allocation(pointer, len)
-            .expect("fresh transport allocation")
-            .encode_error(error);
+        let encoded = fill(
+            &self
+                .allocation(pointer, len)
+                .expect("fresh transport allocation"),
+        );
         if let Err(error) = encoded {
             self.free(pointer, len, Frame::ALIGN)
                 .expect("fresh transport allocation");
@@ -339,6 +336,16 @@ fn call_error(status: Status) -> crate::data::NativeError {
 #[cfg(test)]
 mod nested_frame_controls {
     use super::*;
+
+    #[test]
+    fn failed_fill_releases_the_fresh_payload() {
+        let transport = Transport::default();
+        assert_eq!(
+            transport.encode_payload(8, |_| Err(CodecError::Allocation)),
+            Err(CodecError::Allocation)
+        );
+        assert_eq!(transport.live_allocations(), 0);
+    }
 
     #[test]
     fn validation_requires_an_exact_live_owned_frame_without_retaining_it() {
