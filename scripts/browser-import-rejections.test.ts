@@ -7,9 +7,7 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dir, "..");
 const wasm = process.env.BUN_WASM_TEST_BROWSER_WASM ?? join(root, "dist/bun-browser.wasm");
 
-for (const modules of ["records", "store"]) {
-  for (const extension of ["mjs", "cjs"]) {
-    test(`${modules} ${extension} dynamic imports preserve unhandled and caught rejections`, () => {
+function checkRejections(modules: string, extension: string): void {
       const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-import-rejection-"));
       try {
         writeFileSync(join(scratch, "failure.mjs"), 'throw new Error("dynamic-import-startup-marker");\n');
@@ -29,6 +27,10 @@ for (const modules of ["records", "store"]) {
         expect(caught.stdout).toBe("caught dynamic-import-startup-marker\n");
         expect(caught.stderr).toBe("");
       } finally { rmSync(scratch, { recursive: true, force: true }); }
-    }, 90000);
+}
+
+for (const modules of ["records", "store"]) {
+  for (const extension of ["mjs", "cjs"]) {
+    test(`${modules} ${extension} dynamic imports preserve unhandled and caught rejections`, () => checkRejections(modules, extension), 90000);
   }
 }
