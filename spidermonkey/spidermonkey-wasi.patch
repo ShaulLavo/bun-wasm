@@ -1,3 +1,26 @@
+diff --git i/js/src/jsapi.cpp w/js/src/jsapi.cpp
+--- i/js/src/jsapi.cpp
++++ w/js/src/jsapi.cpp
+@@ -1555,8 +1555,8 @@ JS_GetExternalStringCallbacks(JSString* str) {
+ static void SetNativeStackSize(JSContext* cx, JS::StackKind kind,
+                                JS::NativeStackSize stackSize) {
+-#ifdef __wasi__
++#if defined(__wasi__) && !defined(BUNWASM_EMBED)
+   cx->nativeStackLimit[kind] = JS::WASINativeStackLimit;
+-#else   // __wasi__
++#else   // __wasi__ && !BUNWASM_EMBED
+   if (stackSize == 0) {
+     cx->nativeStackLimit[kind] = JS::NativeStackLimitMax;
+   } else {
+@@ -1564,7 +1564,7 @@ static void SetNativeStackSize(JSContext* cx, JS::StackKind kind,
+     cx->nativeStackLimit[kind] =
+         JS::GetNativeStackLimit(cx->nativeStackBase(), stackSize - 1);
+   }
+-#endif  // !__wasi__
++#endif  // !__wasi__ || BUNWASM_EMBED
+ }
+
+ JS_PUBLIC_API void JS_SetNativeStackQuota(
 diff --git i/js/src/vm/ErrorMessages.cpp w/js/src/vm/ErrorMessages.cpp
 --- i/js/src/vm/ErrorMessages.cpp
 +++ w/js/src/vm/ErrorMessages.cpp

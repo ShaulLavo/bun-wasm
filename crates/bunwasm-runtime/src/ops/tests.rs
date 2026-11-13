@@ -8,10 +8,22 @@ fn request(values: Vec<Val>) -> Vec<u8> {
 }
 
 fn reply_result(reply: Reply) -> NativeResult {
-    let bytes = reply
-        .value
-        .map_or_else(Vec::new, |value| codec::encode(&value).unwrap());
-    Reply::decode(reply.status, &bytes)
+    let status = reply.status();
+    let bytes = match reply {
+        Reply::Value(value) => {
+            let bytes = codec::encode(&value).unwrap();
+            drop_tree(value);
+            bytes
+        }
+        Reply::NativeError(error) => {
+            let mut bytes = vec![0; codec::encoded_error_len(&error).unwrap()];
+            codec::encode_error_into(&error, &mut bytes).unwrap();
+            drop_tree(Val::Object(error.props));
+            bytes
+        }
+        Reply::Failed(_) => Vec::new(),
+    };
+    Reply::decode(status, &bytes)
 }
 
 pub(super) fn dispatcher(function: impl Fn(Args<'_>) -> NativeResult + 'static) -> Dispatcher {
@@ -214,11 +226,11 @@ fn dispatch_deep_request() {
         Ok(Val::Undefined)
     });
     let reply = dispatch.dispatch(dispatch.op(), 1, &encoded);
-    assert_eq!(reply.status, Status::Ok);
+    assert_eq!(reply.status(), Status::Ok);
     assert_eq!(calls.get(), 1);
 
     let rejected = dispatch.dispatch(dispatch.op(), 1, &deep_object());
-    assert_eq!(rejected.status, Status::BadCall);
+    assert_eq!(rejected.status(), Status::BadCall);
     assert_eq!(calls.get(), 1);
 
     let mut trailing = deep_value();
@@ -252,23 +264,29 @@ fn invalid_calls_cannot_invoke_the_native() {
         Ok(Val::Undefined)
     });
     assert_eq!(
-        dispatch.dispatch(0, 1, &request(vec![])).status,
+        dispatch.dispatch(0, 1, &request(vec![])).status(),
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 0, &request(vec![])).status,
+        dispatch
+            .dispatch(dispatch.op(), 0, &request(vec![]))
+            .status(),
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 2, &request(vec![])).status,
+        dispatch
+            .dispatch(dispatch.op(), 2, &request(vec![]))
+            .status(),
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 1, &[0]).status,
+        dispatch.dispatch(dispatch.op(), 1, &[0]).status(),
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 1, &[7, 1, 0, 0, 0]).status,
+        dispatch
+            .dispatch(dispatch.op(), 1, &[7, 1, 0, 0, 0])
+            .status(),
         Status::BadCall
     );
     assert_eq!(calls.get(), 0);
@@ -281,8 +299,8 @@ fn replies_keep_independent_owned_values_across_later_calls() {
     let dispatch = dispatcher(|args| Ok(args.get(0).clone()));
     let first = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Bytes(vec![3; 4096])]));
     let second = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Str("second".into())]));
-    assert_eq!(first.status, Status::Ok);
-    assert_eq!(first.value, Some(Val::Bytes(vec![3; 4096])));
+    assert_eq!(first.status(), Status::Ok);
+    assert_eq!(reply_result(first).unwrap(), Val::Bytes(vec![3; 4096]));
     assert_eq!(reply_result(second).unwrap(), Val::Str("second".into()));
 }
 
@@ -296,7 +314,7 @@ fn native_errors_remain_data_with_ordered_duplicate_properties() {
             .prop("code", "again"))
     });
     let reply = dispatch.dispatch(dispatch.op(), 1, &request(vec![]));
-    assert_eq!(reply.status, Status::NativeError);
+    assert_eq!(reply.status(), Status::NativeError);
     let error = reply_result(reply).unwrap_err();
     assert_eq!(error.kind, ErrorKind::TypeError);
     assert_eq!(error.name.as_deref(), Some("CustomError"));
@@ -543,6 +561,49 @@ fn physical_native_error_and_wrong_free_sizes_release_every_allocation() {
         transport.free(frame.1, frame.2, Frame::ALIGN),
         Err(Status::BadCall)
     );
+}
+
+#[test]
+fn deep_error_properties_are_drained_after_physical_encoding_and_allocation_failure() {
+    for exhausted in [false, true] {
+        physical_deep_error(exhausted);
+    }
+}
+
+fn physical_deep_error(exhausted: bool) {
+    let transport = abi::Transport::default();
+    let dispatch = dispatcher(|_| {
+        let deep = codec::decode(&deep_value()).unwrap();
+        Err(NativeError::error("deep failure")
+            .prop("deep", deep)
+            .prop("after", true))
+    });
+    let frame = allocated_frame(&transport, dispatch.op(), vec![]);
+    if exhausted {
+        transport.exhaust();
+    }
+    let status = transport.dispatch(&dispatch, frame.0);
+    if !exhausted {
+        assert_eq!(status, Status::NativeError);
+        let bytes = release_frame(&transport, frame.0, frame.1, frame.2);
+        let error = decode_error(&bytes).unwrap();
+        assert_eq!(error.message, "deep failure");
+        let mut reencoded = vec![0; codec::encoded_error_len(&error).unwrap()];
+        codec::encode_error_into(&error, &mut reencoded).unwrap();
+        assert_eq!(bytes, reencoded);
+        drop_tree(Val::Object(error.props));
+        assert_eq!(transport.live_allocations(), 0);
+        return;
+    }
+    assert_eq!(status, Status::ResourceLimit);
+    let words = Frame::decode(&transport.read(frame.0, Frame::SIZE as u32).unwrap()).unwrap();
+    assert_eq!((words.reply_ptr, words.reply_len), (0, 0));
+    assert_eq!(transport.live_allocations(), 2);
+    transport.free(frame.1, frame.2, Frame::ALIGN).unwrap();
+    transport
+        .free(frame.0, Frame::SIZE as u32, Frame::ALIGN)
+        .unwrap();
+    assert_eq!(transport.live_allocations(), 0);
 }
 
 #[test]

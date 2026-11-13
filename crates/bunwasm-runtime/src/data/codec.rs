@@ -2,7 +2,7 @@
 
 #![cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 
-use super::{Val, drop_tree};
+use super::{ErrorKind, NativeError, Val, drop_tree};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CodecError {
@@ -77,6 +77,80 @@ fn string(out: &mut impl Sink, text: &str) -> Result<()> {
 enum Part<'a> {
     Value(&'a Val),
     Key(&'a str),
+    Property(&'a (String, Val)),
+}
+
+/// The split error record, measured without constructing a temporary value tree.
+pub(crate) fn encoded_error_len(error: &NativeError) -> Result<usize> {
+    let mut measure = Measure(0);
+    walk_error(error, &mut measure)?;
+    Ok(measure.0)
+}
+
+pub(crate) fn encode_error_into(error: &NativeError, out: &mut [u8]) -> Result<()> {
+    let mut fill = Fill { out, pos: 0 };
+    walk_error(error, &mut fill)?;
+    if fill.pos != fill.out.len() {
+        return Err(CodecError::Invalid("encoding shorter than destination"));
+    }
+    Ok(())
+}
+
+fn tagged_string(out: &mut impl Sink, text: &str) -> Result<()> {
+    out.put(&[5])?;
+    string(out, text)
+}
+
+fn error_header(error: &NativeError, out: &mut impl Sink) -> Result<()> {
+    let kind = match error.kind {
+        ErrorKind::Error => "Error",
+        ErrorKind::TypeError => "TypeError",
+        ErrorKind::RangeError => "RangeError",
+        ErrorKind::SyntaxError => "SyntaxError",
+    };
+    out.put(&[8, 4, 0, 0, 0])?;
+    string(out, "kind")?;
+    tagged_string(out, kind)?;
+    string(out, "message")?;
+    tagged_string(out, &error.message)?;
+    string(out, "name")?;
+    match &error.name {
+        Some(name) => tagged_string(out, name)?,
+        None => out.put(&[1])?,
+    }
+    string(out, "props")?;
+    out.put(&[7])?;
+    length(out, error.props.len())
+}
+
+fn walk_error(error: &NativeError, out: &mut impl Sink) -> Result<()> {
+    error_header(error, out)?;
+    let mut pending = Vec::new();
+    let mut props = error.props.as_slice();
+    while let Some((property, rest)) = props.split_first() {
+        if matches!(property.1, Val::Array(_) | Val::Object(_)) {
+            break;
+        }
+        encode_property(property, &mut pending, out)?;
+        props = rest;
+    }
+    for property in props.iter().rev() {
+        push(&mut pending, Part::Property(property))?;
+    }
+    while let Some(part) = pending.pop() {
+        encode_part(part, &mut pending, out)?;
+    }
+    Ok(())
+}
+
+fn encode_property<'a>(
+    (key, value): &'a (String, Val),
+    pending: &mut Vec<Part<'a>>,
+    out: &mut impl Sink,
+) -> Result<()> {
+    out.put(&[7, 2, 0, 0, 0])?;
+    tagged_string(out, key)?;
+    encode_part(Part::Value(value), pending, out)
 }
 
 /// The exact number of bytes `encode_into` writes for `value`.
@@ -120,6 +194,7 @@ fn walk(value: &Val, out: &mut impl Sink) -> Result<()> {
 fn encode_part<'a>(part: Part<'a>, pending: &mut Vec<Part<'a>>, out: &mut impl Sink) -> Result<()> {
     let value = match part {
         Part::Key(key) => return string(out, key),
+        Part::Property(property) => return encode_property(property, pending, out),
         Part::Value(value) => value,
     };
     out.put(&[tag(value)])?;
@@ -377,6 +452,103 @@ fn read_container(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The former production error_value adapter is an independent byte oracle.
+    fn error_value(error: NativeError) -> Val {
+        let kind = match error.kind {
+            ErrorKind::Error => "Error",
+            ErrorKind::TypeError => "TypeError",
+            ErrorKind::RangeError => "RangeError",
+            ErrorKind::SyntaxError => "SyntaxError",
+        };
+        let props = error
+            .props
+            .into_iter()
+            .map(|(key, value)| Val::Array(vec![Val::Str(key), value]))
+            .collect();
+        super::super::Record::new()
+            .set("kind", kind)
+            .set("message", error.message)
+            .set("name", error.name.map_or(Val::Null, Val::Str))
+            .set("props", Val::Array(props))
+            .into()
+    }
+
+    fn error_tags() -> Val {
+        Val::Array(vec![
+            Val::Undefined,
+            Val::Null,
+            Val::Bool(false),
+            Val::Bool(true),
+            Val::Num(-0.0),
+            Val::Num(f64::INFINITY),
+            Val::Num(f64::NEG_INFINITY),
+            Val::Num(f64::from_bits(0x7ff8_0000_0000_0042)),
+            Val::BigInt(i64::MIN),
+            Val::BigUint(u64::MAX),
+            Val::Str("héllo\0世界".into()),
+            Val::Bytes(vec![0, 255]),
+            Val::Array(vec![]),
+            Val::Object(vec![("z".into(), Val::Null)]),
+        ])
+    }
+
+    fn assert_error_bytes(error: NativeError) {
+        let oracle = error_value(error.clone());
+        let expected = encode(&oracle).unwrap();
+        let len = encoded_error_len(&error).unwrap();
+        assert_eq!(len, expected.len());
+        let mut bytes = vec![0; len];
+        encode_error_into(&error, &mut bytes).unwrap();
+        assert_eq!(bytes, expected);
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(encode(&decoded).unwrap(), bytes);
+        let mut short = vec![0; len - 1];
+        assert_eq!(
+            encode_error_into(&error, &mut short),
+            Err(CodecError::Invalid("encoding exceeds destination"))
+        );
+        bytes.push(0);
+        assert_eq!(
+            encode_error_into(&error, &mut bytes),
+            Err(CodecError::Invalid("encoding shorter than destination"))
+        );
+        drop_tree(oracle);
+        drop_tree(decoded);
+        drop_tree(Val::Object(error.props));
+    }
+
+    #[test]
+    fn borrowed_errors_equal_the_old_ordered_record_for_every_kind_and_value_tag() {
+        let cases = [
+            NativeError::error(""),
+            NativeError::error("héllo\0世界").named(""),
+            NativeError::error("missing")
+                .named("Custom\0Error")
+                .prop("path", "/missing")
+                .prop("syscall", "stat")
+                .prop("errno", -2)
+                .prop("code", "ENOENT")
+                .prop("code", "again"),
+            NativeError::error("nested")
+                .prop("name", "property name")
+                .prop("tags", error_tags())
+                .prop("after", true)
+                .prop("tags", Val::Object(vec![("nested".into(), error_tags())])),
+        ];
+        for kind in [
+            ErrorKind::Error,
+            ErrorKind::TypeError,
+            ErrorKind::RangeError,
+            ErrorKind::SyntaxError,
+        ] {
+            for case in &cases {
+                let mut error = case.clone();
+                error.kind = kind;
+                assert_error_bytes(error);
+            }
+        }
+    }
 
     #[test]
     fn scalar_prefixes_keep_nested_values_and_later_siblings_in_order() {

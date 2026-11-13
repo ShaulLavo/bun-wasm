@@ -3,10 +3,10 @@
 use std::num::NonZeroU32;
 use std::ops::Range;
 
+#[cfg(any(test, not(feature = "engine-split")))]
+use crate::data::ErrorKind;
 use crate::data::codec::{self, CodecError};
-use crate::data::{
-    Args, DataFn, ErrorKind, NativeError, Record, Val, WORD_ARGS, WordFn, drop_tree,
-};
+use crate::data::{Args, DataFn, NativeError, Val, WORD_ARGS, WordFn, drop_tree};
 
 pub(crate) const DATA_NATIVE: u32 = 65_536;
 
@@ -118,18 +118,19 @@ fn span(ptr: u32, len: u32, memory_len: usize) -> Result<Range<usize>, Status> {
     Ok(ptr as usize..end as usize)
 }
 
-/// A dispatched call's status and reply value. The transport encodes the value straight into
-/// memory it owns; a call that failed before producing a value carries none.
-pub(crate) struct Reply {
-    pub status: Status,
-    pub value: Option<Val>,
+/// Owned native output, or a transport failure without a payload.
+pub(crate) enum Reply {
+    Value(Val),
+    NativeError(NativeError),
+    Failed(Status),
 }
 
 impl Reply {
-    fn failed(status: Status) -> Self {
-        Self {
-            status,
-            value: None,
+    pub fn status(&self) -> Status {
+        match self {
+            Self::Value(_) => Status::Ok,
+            Self::NativeError(_) => Status::NativeError,
+            Self::Failed(status) => *status,
         }
     }
 }
@@ -180,28 +181,24 @@ impl Dispatcher {
 
     pub fn dispatch(&self, op: u32, session: u32, request: &[u8]) -> Reply {
         if session != self.session.get() {
-            return Reply::failed(Status::BadCall);
+            return Reply::Failed(Status::BadCall);
         }
         let Some(function) = self.functions.get(&op).cloned() else {
-            return Reply::failed(Status::BadCall);
+            return Reply::Failed(Status::BadCall);
         };
         let args = match codec::decode(request) {
             Ok(Val::Array(args)) => args,
             Ok(value) => {
                 drop_tree(value);
-                return Reply::failed(Status::BadCall);
+                return Reply::Failed(Status::BadCall);
             }
-            Err(error) => return Reply::failed(error_status(error)),
+            Err(error) => return Reply::Failed(error_status(error)),
         };
         let result = function(Args(&args));
         drop_tree(Val::Array(args));
-        let (status, value) = match result {
-            Ok(value) => (Status::Ok, value),
-            Err(error) => (Status::NativeError, error_value(error)),
-        };
-        Reply {
-            status,
-            value: Some(value),
+        match result {
+            Ok(value) => Reply::Value(value),
+            Err(error) => Reply::NativeError(error),
         }
     }
 }
@@ -211,26 +208,6 @@ fn error_status(error: CodecError) -> Status {
         CodecError::Invalid(_) => Status::BadCall,
         CodecError::Allocation => Status::ResourceLimit,
     }
-}
-
-fn error_value(error: NativeError) -> Val {
-    let kind = match error.kind {
-        ErrorKind::Error => "Error",
-        ErrorKind::TypeError => "TypeError",
-        ErrorKind::RangeError => "RangeError",
-        ErrorKind::SyntaxError => "SyntaxError",
-    };
-    let props = error
-        .props
-        .into_iter()
-        .map(|(key, value)| Val::Array(vec![Val::Str(key), value]))
-        .collect();
-    Record::new()
-        .set("kind", kind)
-        .set("message", error.message)
-        .set("name", error.name.map_or(Val::Null, Val::Str))
-        .set("props", Val::Array(props))
-        .into()
 }
 
 #[cfg(test)]
