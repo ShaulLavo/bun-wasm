@@ -25,6 +25,8 @@ interface PortsRuntime {
   __fixtureChild(channel: Channel, graph: Graph, id?: number): void;
   /** Port ids the root's broker still has a record for. */
   __fixtureOwners(): string[];
+  /** Sets the last commit nonce this thread took, to reach the end of the range. */
+  __fixtureNonces(value: number): void;
   __fixturePacket(port: SourcePort, sequence: number, graph: Graph): void;
 }
 const native = {
@@ -79,6 +81,7 @@ function childOverlay(source: string) {
       claimTransferred(graph, [id]);
     },
     __fixtureOwners() { return Array.from(owners.keys()); },
+    __fixtureNonces(value) { nonces = value; },
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }

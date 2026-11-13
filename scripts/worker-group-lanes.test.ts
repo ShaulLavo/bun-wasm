@@ -483,6 +483,77 @@ test("a worker that exits after a refused post reports only the messages it sent
   expect(made.root.receiveMessageOnPort(port)).toBeUndefined();
 });
 
+const tooMany = expect.objectContaining({ name: "DataCloneError", message: "MessagePort has sent too many messages" });
+
+test("the last commit nonce is used, and the post after it is refused before anything is staged", () => {
+  const made = group();
+  const { child, port } = made.spawn();
+  const buffer = new ArrayBuffer(32);
+  made.root.__fixtureNonces(2 ** 52 - 2);
+  port.postMessage("the last nonce");
+  expect(child.receiveMessageOnPort(child.parentPort)?.message).toBe("the last nonce");
+  const reserved = made.model.control.reserved;
+  expect(() => port.postMessage({ buffer }, [buffer])).toThrow(tooMany);
+  expect(() => port.postMessage({ buffer }, [buffer])).toThrow(tooMany);
+  expect(buffer.byteLength).toBe(32);
+  expect(made.model.control.reserved).toBe(reserved);
+  expect(made.model.control.staged).toBe(0);
+  expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+});
+
+/** Rewrites the one port a frame still in a lane carries, as if its earlier owner had left it so. */
+function rewriteCarriedPort(made: ReturnType<typeof group>, change: (port: { version: number; sent: number }) => void) {
+  const directions = made.model.lanes.flatMap(lane => lane.directions).filter(direction => direction.frames.some(text => text.includes('"port"')));
+  expect(directions).toHaveLength(1);
+  const frames = directions[0]!.frames;
+  const frame = JSON.parse(frames[0]!) as { graph: { nodes: [string, { version: number; sent: number }][] } };
+  change(frame.graph.nodes.find(node => node[0] === "port")![1]);
+  frames[0] = JSON.stringify(frame);
+}
+
+test("a port at the last sequence a number holds exactly refuses to post, and one below it posts", () => {
+  for (const [sent, refused] of [[Number.MAX_SAFE_INTEGER - 1, false], [Number.MAX_SAFE_INTEGER, true]] as const) {
+    const made = group();
+    const { child, port } = made.spawn();
+    const extra = new made.root.MessageChannel();
+    port.postMessage({ port: extra.port2 }, [extra.port2]);
+    rewriteCarriedPort(made, carried => { carried.sent = sent; });
+    const moved = (child.receiveMessageOnPort(child.parentPort)?.message as { port: SourcePort }).port;
+    const buffer = new ArrayBuffer(32);
+    const reserved = made.model.control.reserved;
+    if (!refused) { moved.postMessage({ buffer }, [buffer]); expect(buffer.byteLength).toBe(0); continue; }
+    expect(() => moved.postMessage({ buffer }, [buffer])).toThrow(tooMany);
+    expect(buffer.byteLength).toBe(32);
+    expect(made.model.control.reserved).toBe(reserved);
+    expect(made.model.control.staged).toBe(0);
+  }
+});
+
+test("a port at the last version the lane can record refuses to move, and one below it moves", () => {
+  for (const [version, refused] of [[2 ** 32 - 3, false], [2 ** 32 - 2, true]] as const) {
+    const made = group();
+    const { child, port } = made.spawn();
+    const extra = new made.root.MessageChannel();
+    port.postMessage({ port: extra.port2 }, [extra.port2]);
+    rewriteCarriedPort(made, carried => { carried.version = version; });
+    const moved = (child.receiveMessageOnPort(child.parentPort)?.message as { port: SourcePort }).port;
+    const back = () => child.parentPort.postMessage({ port: moved }, [moved]);
+    if (!refused) {
+      back();
+      const returned = (made.root.receiveMessageOnPort(port)?.message as { port: SourcePort }).port;
+      returned.postMessage("after the last move");
+      expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("after the last move");
+      continue;
+    }
+    expect(back).toThrow(expect.objectContaining({ name: "DataCloneError", message: "MessagePort has moved too many times" }));
+    // Refused while preparing: the port is still the child's and still works.
+    expect(made.model.control.staged).toBe(0);
+    moved.postMessage("still here");
+    expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("still here");
+    expect(made.root.receiveMessageOnPort(port)).toBeUndefined();
+  }
+});
+
 test("a commit the core refuses throws DataCloneError with everything put back before the throw", () => {
   let stale = true;
   const made = group({ beforeTransfer: () => {
