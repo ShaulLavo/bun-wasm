@@ -1,0 +1,16 @@
+{
+  "owner": "native-probe",
+  "path": "scripts/tick-dispatch.test.ts",
+  "inputs": [
+    "tests/controls/tick-dispatch.rs",
+    "crates/bunwasm-engine-quickjs/src/client.rs",
+    "crates/bunwasm-engine-quickjs/src/client/tick.rs",
+    "crates/bunwasm-engine-quickjs/src/transport.rs",
+    "crates/bunwasm-runtime/src/data.rs",
+    "crates/bunwasm-runtime/src/data/codec.rs",
+    "crates/bunwasm-runtime/src/ops.rs",
+    "crates/bunwasm-runtime/src/ops/abi.rs",
+    "crates/bunwasm-runtime/src/ops/client.rs",
+    "crates/bunwasm-runtime/src/split_api.rs"
+  ]
+}
