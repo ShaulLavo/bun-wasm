@@ -49,6 +49,7 @@ const NativeTextEncoder = globalThis.TextEncoder;
 const NativeTextDecoder = globalThis.TextDecoder;
 const NativeBlob = globalThis.Blob;
 const nativeCreateObjectURL = globalThis.URL && globalThis.URL.createObjectURL ? globalThis.URL.createObjectURL.bind(globalThis.URL) : null;
+const nativeRevokeObjectURL = globalThis.URL && globalThis.URL.revokeObjectURL ? globalThis.URL.revokeObjectURL.bind(globalThis.URL) : null;
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
@@ -60,6 +61,8 @@ const nativeEval = globalThis.eval;
 const nativeEncodeURIComponent = globalThis.encodeURIComponent;
 const uncurryThis = Function.prototype.bind.bind(Function.prototype.call);
 const nativeMapSet = uncurryThis(Map.prototype.set);
+const nativeStringSlice = uncurryThis(String.prototype.slice);
+const nativeStringIndexOf = uncurryThis(String.prototype.indexOf);
 
 // A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
 // reads and calls of GetIterator(iterable, async) and given to the loop in
@@ -651,7 +654,12 @@ class EngineHost {
       record: key => host.native.hostModuleRecord(key),
       // A module URL the URL -> path table maps back to the file in stack traces.
       evaluate: (code, key, done, fail) => {
-        then(import(host.url(code, key)), namespace => { done(namespace.default); }, fail);
+        const url = host.url(code, key);
+        const revoke = host.o.moduleUrls === "blob" ? nativeRevokeObjectURL : null;
+        const sourceURL = revoke ? nativeStringSlice(url, 0, nativeStringIndexOf(url, "#")) : "";
+        // Compiled record functions keep their code and stack names without the source Blob.
+        then(import(url), namespace => { revoke?.(sourceURL); done(namespace.default); },
+          error => { revoke?.(sourceURL); fail(error); });
       },
       handoff: (key, format) => host.handoff(key, format),
       keys: wrapperKeys,
