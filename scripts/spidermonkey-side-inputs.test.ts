@@ -29,7 +29,6 @@ const inputs = [
   "scripts/build-engine-spidermonkey.sh", "scripts/build-bun-spidermonkey.sh", "scripts/src/engine-init.c",
   "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts",
   "crates/bunwasm-engine-quickjs/build/transfer_fault.rs",
-  "scripts/guest-core-receipt.ts",
   "spidermonkey/build.sh", "spidermonkey/spidermonkey-wasi.patch", "spidermonkey/mozconfig.in",
   "spidermonkey/irregexp-icu/generated/special-case.cc",
 ];

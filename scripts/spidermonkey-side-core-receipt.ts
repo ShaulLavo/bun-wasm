@@ -12,7 +12,6 @@ import { resolve } from "node:path";
 import { importedMemory, tagProgramCore } from "../src/engine-kind.ts";
 import { verifyEngineInputs } from "../spidermonkey/prepare-engine-inputs.ts";
 import { sideSourceSha256 } from "./spidermonkey-side-inputs.ts";
-import { assertQualifiedEnvironment } from "./guest-core-receipt.ts";
 import { assertSideMemory } from "./src/engine-explicit-init.ts";
 
 const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
@@ -69,7 +68,9 @@ export function parseInputs(value: unknown): SideCoreInputs {
 }
 
 export function captureInputs(repository: string, nativeDirectory: string): SideCoreInputs {
-  assertQualifiedEnvironment("spidermonkey", process.env);
+  if ((process.env.SPIDERMONKEY_TRANSFER_FAULT ?? "0") !== "0" || process.env.BUN_WASM_TRANSFER_FAULT !== undefined) {
+    throw new Error("Qualified SpiderMonkey program receipts require SPIDERMONKEY_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+  }
   verifyEngineInputs(nativeDirectory);
   const receipt = readFileSync(resolve(nativeDirectory, "native-inputs.json"));
   const native: Record<string, unknown> = JSON.parse(receipt.toString("utf8"));
