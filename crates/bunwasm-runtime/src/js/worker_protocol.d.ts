@@ -124,6 +124,8 @@ declare namespace BunWasm {
       credit(): void;
     };
     begin(): SharedPublication;
+    /** Shared-group engines: finishes publication settlements an interruption left unfinished. */
+    settle?(): void;
     read(reference: SharedReference): SharedArrayBuffer;
     readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;

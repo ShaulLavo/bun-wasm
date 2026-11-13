@@ -258,6 +258,15 @@
     if (state === LANE_OPEN && version <= endpoint.version) groupLanes.sever(ref, endpoint.lane[2]);
   }
   /**
+   * Work a finished send still owes, such as the withdrawal of a publication it never committed,
+   * tried again on every step until it is done. A failure here is not this thread's error: what
+   * is owed stays listed and the next step asks again.
+   */
+  function settleOwed() {
+    try { internal.sharedObjects?.settle?.(); }
+    catch { /* still owed */ }
+  }
+  /**
    * Group lane housekeeping, on ordinary event-loop steps only: a sweep may call the group owner,
    * which on the Browser host is the page, so it never runs inside `receiveMessageOnPort`.
    */
@@ -1247,7 +1256,7 @@
       // The housekeeping is owed whatever the pump met: a failed drain must not hold back the
       // sweep or the retirement of closed lanes.
       try { return pump() ? "progress" : false; }
-      finally { laneHousekeeping(); }
+      finally { settleOwed(); laneHousekeeping(); }
     },
     // Every open control channel: the idle loop wakes for a frame from any of them.
     subscriptions() {

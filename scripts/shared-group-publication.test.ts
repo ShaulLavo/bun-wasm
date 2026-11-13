@@ -62,6 +62,138 @@ test("group publication does not revoke a message already delivered before trans
   expect(codec.decode(plan.graph)).toEqual({ memory });
 });
 
+const WITHDRAWN = 0, WITHDRAW_ABSENT = 1;
+
+/** Collects the warnings `action` emits. */
+function warnings(action: () => void): string[] {
+  const seen: string[] = [], emit = process.emitWarning;
+  process.emitWarning = ((warning: string | Error) => { seen.push(String(warning)); }) as typeof process.emitWarning;
+  try { action(); }
+  finally { process.emitWarning = emit; }
+  return seen;
+}
+
+test("a withdrawal whose reply was lost is asked again and answered absent", () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.faults.push("lost-after");
+  expect(warnings(() => codec.prepare({ memory }).abort())).toEqual([]);
+  expect(directory.size).toBe(0);
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
+  settle();
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN], [1, WITHDRAW_ABSENT]]);
+  settle();
+  expect(control.withdrawals.length).toBe(2);
+  // The memory is published again under a new token, and the stale request cannot reach it.
+  const later = codec.prepare({ memory });
+  later.commit();
+  expect(Array.from(directory.keys())).toEqual([2]);
+  expect(codec.decode(later.graph)).toEqual({ memory });
+});
+
+test("a withdrawal lost before the directory acted stays owed until it is answered", () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.faults.push("lost-before", "lost-before");
+  codec.prepare({ memory }).abort();
+  expect(directory.size).toBe(1);
+  settle();
+  expect(directory.size).toBe(1);
+  // A send prepared while the first token is still owed gets its own publication.
+  const later = codec.prepare({ memory });
+  expect(Array.from(directory.keys())).toEqual([1, 2]);
+  settle();
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
+  later.commit();
+  settle();
+  expect(Array.from(directory.keys())).toEqual([2]);
+  expect(control.withdrawals).toEqual([[1, WITHDRAWN]]);
+  // Withdrawing the first token left the second one in place for the next send.
+  codec.prepare({ memory }).commit();
+  expect(Array.from(directory.keys())).toEqual([2]);
+});
+
+for (const fault of ["refused", "broken"] as const) test(`a ${fault} withdrawal is given up once, with a warning, and never asked again`, () => {
+  const { codec, control, directory, memory, settle } = fixture();
+  control.faults.push(fault);
+  const plan = codec.prepare({ memory });
+  const said = warnings(() => plan.abort());
+  expect(said).toHaveLength(1);
+  expect(said[0]).toContain("Shared publication 1 could not be withdrawn");
+  expect(warnings(() => { settle(); settle(); })).toEqual([]);
+  expect(control.withdrawals).toEqual([]);
+  expect(directory.size).toBe(1);
+  // The memory is not stuck: it is published again under a new token.
+  const later = codec.prepare({ memory });
+  later.commit();
+  expect(Array.from(directory.keys())).toEqual([1, 2]);
+});
+
+type Scenario = { name: string; published: number; run(runtime: ReturnType<typeof fixture>): () => void };
+const scenarios: Scenario[] = [
+  { name: "one aborted send", published: 0, run: ({ codec, memory }) => { const plan = codec.prepare({ memory }); return () => plan.abort(); } },
+  { name: "an aborted send overlapping a committed one", published: 1, run: ({ codec, memory }) => {
+    const first = codec.prepare({ memory }), second = codec.prepare({ memory });
+    return () => { first.abort(); second.commit(); };
+  } },
+  { name: "a committed send overlapping an aborted one", published: 1, run: ({ codec, memory }) => {
+    const first = codec.prepare({ memory }), second = codec.prepare({ memory });
+    return () => { first.commit(); second.abort(); };
+  } },
+  { name: "two overlapping aborted sends", published: 0, run: ({ codec, memory }) => {
+    const first = codec.prepare({ memory }), second = codec.prepare({ memory });
+    return () => { first.abort(); second.abort(); };
+  } },
+  { name: "a send whose preparation is interrupted", published: 0, run: ({ codec, memory }) => () => { codec.prepare({ memory }).abort(); } },
+  { name: "a send whose preparation is interrupted and whose withdrawal is lost once", published: 0, run: ({ codec, control, memory }) => {
+    control.faults.push("lost-before");
+    return () => { codec.prepare({ memory }).abort(); };
+  } },
+];
+const collections: [object, string][] = [[Set.prototype, "add"], [Set.prototype, "delete"], [Map.prototype, "set"], [Map.prototype, "delete"]];
+
+/** Runs `action` with the `stop`th collection call throwing, before or after it took effect, as
+ * an engine may at any call. False when `action` made fewer calls than that. */
+function interrupted(stop: number, after: boolean, action: () => void): boolean {
+  let seen = 0, hit = false;
+  const originals = collections.map(([target, name]) => Reflect.get(target, name) as (...args: unknown[]) => unknown);
+  collections.forEach(([target, name], index) => Reflect.set(target, name, function (this: unknown, ...args: unknown[]) {
+    if (seen++ !== stop) return Reflect.apply(originals[index]!, this, args);
+    hit = true;
+    if (after) Reflect.apply(originals[index]!, this, args);
+    throw new RangeError("Maximum call stack size exceeded");
+  }));
+  try { action(); }
+  catch (error) { if (!hit) throw error; }
+  finally { collections.forEach(([target, name], index) => Reflect.set(target, name, originals[index])); }
+  return hit;
+}
+
+for (const scenario of scenarios) for (const after of [false, true]) {
+  test(`${scenario.name}, interrupted ${after ? "after" : "before"} each collection call, settles exactly`, () => {
+    let stops = 0;
+    for (let stop = 0; ; stop++) {
+      const runtime = fixture();
+      const action = scenario.run(runtime);
+      const reached = interrupted(stop, after, action);
+      runtime.settle();
+      const effective = runtime.control.withdrawals.filter(([, answer]) => answer === WITHDRAWN);
+      expect(runtime.directory.size, `stop ${stop}`).toBe(scenario.published);
+      // Every token that was published and is not kept was withdrawn, each once.
+      expect(effective.length, `stop ${stop}`).toBe(runtime.control.published - scenario.published);
+      // Nothing is left owed: a later settle asks the directory nothing.
+      const asked = runtime.control.withdrawals.length;
+      runtime.settle();
+      expect(runtime.control.withdrawals.length, `stop ${stop}`).toBe(asked);
+      // And the memory still travels.
+      const later = runtime.codec.prepare({ memory: runtime.memory });
+      later.commit();
+      expect(runtime.codec.decode(later.graph)).toEqual({ memory: runtime.memory });
+      if (!reached) break;
+      stops++;
+    }
+    expect(stops).toBeGreaterThan(3);
+  });
+}
+
 test("failed group deliveries do not exhaust the publication limit", () => {
   const { codec, directory, memory } = fixture();
   const failure = new Error("delivery failed");

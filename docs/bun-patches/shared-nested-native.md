@@ -174,6 +174,28 @@ again. That is safe because a token is issued once (`Directory::insert`): the se
 request is answered 1 and touches no other publication. The constants are in
 `nested_wire.rs`, and the browser host answers the same way.
 
+`webassembly.ts` settles a prepared send so that an interruption anywhere leaves work it
+can finish later, not a wrong count:
+
+- A pending record lists the plans that refer to it, and a plan lists its records. Releasing
+  a reference marks the record committed first if the plan committed, removes the plan from
+  the record, finishes the record, and only then removes the record from the plan. Each of
+  those does nothing when repeated.
+- A record with no plans left is dropped if it is committed. Otherwise it is withdrawn, and
+  it stays listed until the host has answered. An answer of 0 or 1 settles it. An answer of
+  2, or a failure the host reports (the native marks it with the code
+  `ERR_BUNWASM_WITHDRAW_FAILED`), gives the publication up with a process warning, since it
+  then stays in the directory until the group ends. Any other exception on the call is no
+  answer: the record stays owed and is asked again.
+- A plan lists the record for a publication before the native makes it, so its abort finds
+  the token even when the bookkeeping after the native is interrupted.
+- The service's `settle()` finishes whatever is still listed. The worker loop's step calls
+  it, so a withdrawal that got no answer is asked again on a later step.
+
+One case is not covered: a `publishSharedMemory` or `publishSharedModule` whose reply is
+lost has published under a token the guest never learned, and that entry stays until the
+group ends.
+
 The core checks serialized request size against the same 1 MiB limit as the native
 host before crossing the import boundary, including checked conversion to its
 32-bit wire length. A valid module with an oversized publication description is

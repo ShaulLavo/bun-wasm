@@ -193,17 +193,21 @@ pub(super) fn attach_module(token: u32) -> NativeResult {
     MODULES.with(|modules| modules.borrow_mut().insert(id, description));
     Ok(record)
 }
-/// The host's answer, one of the three `wire` counts. Anything thrown here means no answer
-/// arrived, and the caller asks again.
+/// The host's answer, one of the three `wire` counts. A failure the host or this exchange
+/// reports is final and carries `WITHDRAW_FAILED`, so the caller gives the publication up
+/// instead of asking forever. Any other exception on this call's way to or from JavaScript
+/// means no answer arrived, and the caller asks again.
 pub(super) fn withdraw(token: u32) -> NativeResult {
-    let answer = request(Request::Withdraw { token })?;
+    let failed = |error: NativeError| error.prop("code", WITHDRAW_FAILED);
+    let answer = request(Request::Withdraw { token }).map_err(failed)?;
     let Reply::Count(answer @ (wire::WITHDRAWN | wire::WITHDRAW_ABSENT | wire::WITHDRAW_REFUSED)) =
         answer
     else {
-        return Err(error("invalid nested withdrawal reply"));
+        return Err(failed(error("invalid nested withdrawal reply")));
     };
     Ok(Val::Num(f64::from(answer)))
 }
+const WITHDRAW_FAILED: &str = "ERR_BUNWASM_WITHDRAW_FAILED";
 pub(super) fn create_memory(initial: u32, maximum: u32) -> NativeResult {
     Ok(Val::Num(f64::from(handle(Request::Reserve {
         initial,

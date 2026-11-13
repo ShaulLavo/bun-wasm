@@ -977,6 +977,8 @@
     const group = () => { internal.require("webassembly"); return internal.groupSharedObjects; };
     internal.sharedObjects = {
       begin: () => group().begin(),
+      // Nothing is owed before the polyfill has loaded, so this does not load it.
+      settle: () => { internal.groupSharedObjects?.settle(); },
       read: reference => group().read(reference),
       readWasm: reference => group().readWasm(reference),
       wait: () => null,
