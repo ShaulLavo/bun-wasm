@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { resolve, join } from "node:path";
-import { preservationScenario, accumulation, quotaRefusalScenario, storageReportPath } from "../sandbox/tests/storage-browser";
+import { preservationScenario, quotaRefusalScenario } from "../sandbox/tests/storage-browser";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 
@@ -45,24 +45,3 @@ test("chromium: full-origin preservation failure keeps idle source and pending e
   if (!requested.includes("chromium")) return;
   await siteCheck("chromium", quotaRefusalScenario);
 }, 240_000);
-
-test("chromium: a recorded single-install quota admits repeated framework switching", async () => {
-  if (!requested.includes("chromium")) return;
-  const quotaSize = Number(process.env.BUN_WASM_STORAGE_QUOTA ?? 240 * 1024 * 1024);
-  if (!Number.isSafeInteger(quotaSize) || quotaSize <= 0) throw new Error("Invalid storage quota cap");
-  await siteCheck("chromium", async (browser, base) => {
-    const context = await browser.newContext();
-    try {
-      const page = await context.newPage();
-      await page.goto(new URL("engine-builds.json", base).href);
-      const cdp = await context.newCDPSession(page);
-      await cdp.send("Storage.overrideQuotaForOrigin", { origin: new URL(base).origin, quotaSize });
-      const rows = await accumulation(context, base, ["vanilla", "vite-react", "vite-vue", "vite-svelte"]);
-      const evidence = JSON.stringify({ quotaSize, browser: browser.version(), rows }, null, 2);
-      const report = storageReportPath();
-      if (report) await Bun.write(report, evidence);
-      expect(rows, evidence).toHaveLength(4);
-      expect(rows.filter(row => row.error), evidence).toEqual([]);
-    } finally { await context.close(); }
-  });
-}, 420_000);

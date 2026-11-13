@@ -22,7 +22,7 @@ trap 'rm -f -- "$guest_inputs"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 bun "$root/scripts/guest-build-receipt.ts" inputs browser > "$guest_inputs"
-"$GUEST_CARGO" build -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli \
+"$GUEST_CARGO" build --locked -j "${JOBS:-12}" --release --target wasm32-wasip1 -p bunwasm-cli \
   --no-default-features --features engine-host,bun-transpiler,bun-build
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"

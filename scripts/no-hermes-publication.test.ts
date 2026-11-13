@@ -54,7 +54,7 @@ test("normal CI retires Hermes work instead of recording it as passed", () => {
   const workflow = read(".github/workflows/ci.yml");
   expect(workflow).not.toMatch(/hermes/i);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
-  expect(workflow).toContain("source-cache-browser-guest");
+  expect(workflow).toContain("name: browser-program");
   expect(discoverChecks().filter(check => /^scripts\/hermes-/.test(check.path))).toEqual([]);
   expect(discoverChecks().filter(check => check.path === "scripts/no-hermes-publication.test.ts").map(check => check.owner)).toEqual(["quality"]);
 });

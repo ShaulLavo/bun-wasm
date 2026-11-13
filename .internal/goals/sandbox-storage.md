@@ -76,3 +76,25 @@ owning-runtime identity. Raw reproductions are retained in the storage report's
 preview ownership, including HTTP and socket routing, with two distinct apps on
 the same port and foreground/background permutations. This branch does not edit
 the preview protocol or claim to fix that routing bug.
+
+
+## Re-land the repeated-framework quota control
+
+Status: Approved, deferred until the temporary CI rollback is merged.
+
+Managing directed immediate removal of the new 240 MiB repeated-framework
+control because it blocks main and unrelated PRs before the first Vanilla
+dev server starts. Main `1b98b7c4`, PR 687 and PR 684 all report errno 51 at
+the post-install checkpoint after 20 packages, with about 230 to 233 MB already
+charged to IndexedDB. This does not yet establish the minimum complete-install
+footprint or a runtime defect. Do not merely increase the cap or deadline.
+
+Resume bounded source diagnosis after main is unblocked. Measure live logical
+files, retained generations and atomic commit headroom for the actual CI guest
+and browser, then restore the unchanged four-framework acceptance only with a
+supported admission/capacity contract and regression proof. Original source and
+control are retained in commit `1b98b7c4`; protocols are in the sandbox-fixes main
+regression report and the desktop Safari/SpiderMonkey CI artifacts. No further
+product CI retry was requested. The separate 512 MiB refusal-setup readiness
+transition must remain distinct from the full-origin refusal after its 1 KiB
+injection. Preservation and full-origin refusal controls remain blocking.
