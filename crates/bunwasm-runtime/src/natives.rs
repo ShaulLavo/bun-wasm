@@ -26,6 +26,12 @@ use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::modules;
 use crate::resolve::{self, Kind, Resolved};
 
+mod fs_path;
+
+fn required_path<'a>(path: &'a str, syscall: &str) -> Result<&'a str, NativeError> {
+    fs_path::required(path).map_err(|error| io_error(error, syscall, Some(path)))
+}
+
 /// Natives by name, plus constant properties of the `native` object.
 #[derive(Default)]
 pub struct Table {
@@ -392,6 +398,7 @@ fn open_file(path: &str, flags: i32, mode: u32) -> io::Result<File> {
         host_flags &= !(libc::O_SYNC | libc::O_DSYNC);
     }
     host_flags |= libc::O_CLOEXEC;
+    let path = fs_path::required(path)?;
     let path = std::ffi::CString::new(path).map_err(|_| io::ErrorKind::InvalidInput)?;
     let fd = unsafe { libc::open(path.as_ptr(), host_flags, mode as libc::mode_t) };
     if fd < 0 {
@@ -634,13 +641,13 @@ fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
 
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "open")?;
         Ok(Val::Bytes(
             fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
         ))
     });
     t.add("readFileUtf8", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "open")?;
         let bytes = fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?;
         Ok(String::from_utf8(bytes)
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
@@ -663,17 +670,18 @@ fn install_fs(t: &mut Table) {
         )
     });
     t.add("exists", |a| {
-        Ok(fs::symlink_metadata(a.str(0)?).is_ok().into())
+        let path = a.str(0)?;
+        Ok((!path.is_empty() && fs::symlink_metadata(path).is_ok()).into())
     });
     t.add("stat", |a| {
-        let path = a.str(0)?;
         let lstat = a.bool(1);
+        let path = required_path(a.str(0)?, if lstat { "lstat" } else { "stat" })?;
         let stat = path_metadata(path, lstat)
             .map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
         Ok(stat_record(&stat, a.bool(2)))
     });
     t.add("mkdir", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "mkdir")?;
         if !a.bool(1) {
             fs::create_dir(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
             return Ok(Val::Null);
@@ -682,7 +690,7 @@ fn install_fs(t: &mut Table) {
         Ok(first.map_or(Val::Null, Val::Str))
     });
     t.add("readdir", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "scandir")?;
         let entries = fs::read_dir(path).map_err(|e| io_error(e, "scandir", Some(path)))?;
         let mut list = Vec::new();
         for entry in entries {
@@ -701,6 +709,10 @@ fn install_fs(t: &mut Table) {
     });
     t.add("rm", |a| {
         let path = a.str(0)?;
+        if path.is_empty() && a.bool(2) {
+            return ok();
+        }
+        let path = required_path(path, "rm")?;
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
@@ -715,7 +727,7 @@ fn install_fs(t: &mut Table) {
         ok()
     });
     t.add("rmdir", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "rmdir")?;
         let result = if a.bool(1) {
             fs::remove_dir_all(path)
         } else {
@@ -725,23 +737,27 @@ fn install_fs(t: &mut Table) {
         ok()
     });
     t.add("unlink", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "unlink")?;
         fs::remove_file(path).map_err(|e| io_error(e, "unlink", Some(path)))?;
         ok()
     });
     t.add("rename", |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
+        required_path(from, "rename")?;
+        required_path(to, "rename")?;
         fs::rename(from, to).map_err(|e| io_error(e, "rename", Some(from)))?;
         ok()
     });
     t.add("copyFile", |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
+        required_path(from, "copyfile")?;
+        required_path(to, "copyfile")?;
         copy_file(from, to, a.opt_num(2).unwrap_or(0.0) as i32)
             .map_err(|e| io_error(e, "copyfile", Some(from)))?;
         ok()
     });
     t.add("realpath", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "realpath")?;
         let real = fs::canonicalize(path)
             .map(|p| p.to_string_lossy().into_owned())
             .or_else(|e| match fs::metadata(path) {
@@ -753,22 +769,24 @@ fn install_fs(t: &mut Table) {
         Ok(real.into())
     });
     t.add("readlink", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "readlink")?;
         let target = fs::read_link(path).map_err(|e| io_error(e, "readlink", Some(path)))?;
         Ok(target.to_string_lossy().into_owned().into())
     });
     t.add("symlink", |a| {
-        let (target, path) = (a.str(0)?, a.str(1)?);
+        let (target, path) = (a.str(0)?, required_path(a.str(1)?, "symlink")?);
         symlink(target, path).map_err(|e| io_error(e, "symlink", Some(path)))?;
         ok()
     });
     t.add("link", |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
+        required_path(from, "link")?;
+        required_path(to, "link")?;
         fs::hard_link(from, to).map_err(|e| io_error(e, "link", Some(from)))?;
         ok()
     });
     t.add("truncate", |a| {
-        let path = a.str(0)?;
+        let path = required_path(a.str(0)?, "open")?;
         let file = OpenOptions::new()
             .write(true)
             .open(path)
@@ -1688,6 +1706,53 @@ fn platform_info() -> Val {
 #[cfg(test)]
 mod builtin_tests {
     use super::*;
+
+    #[test]
+    fn filesystem_empty_paths_retain_operation_errors() {
+        let mut natives = Table::default();
+        install_fs(&mut natives);
+        for (name, syscall, args) in [
+            ("readFile", "open", vec!["".into()]),
+            ("readFileUtf8", "open", vec!["".into()]),
+            ("stat", "stat", vec!["".into(), false.into()]),
+            ("stat", "lstat", vec!["".into(), true.into()]),
+            ("mkdir", "mkdir", vec!["".into(), false.into()]),
+            ("mkdir", "mkdir", vec!["".into(), true.into()]),
+            ("readdir", "scandir", vec!["".into()]),
+            ("rm", "rm", vec!["".into()]),
+            ("rmdir", "rmdir", vec!["".into()]),
+            ("unlink", "unlink", vec!["".into()]),
+            ("rename", "rename", vec!["".into(), ".".into()]),
+            ("rename", "rename", vec![".".into(), "".into()]),
+            ("copyFile", "copyfile", vec!["".into(), ".".into()]),
+            ("copyFile", "copyfile", vec![".".into(), "".into()]),
+            ("realpath", "realpath", vec!["".into()]),
+            ("readlink", "readlink", vec!["".into()]),
+            ("symlink", "symlink", vec!["target".into(), "".into()]),
+            ("link", "link", vec!["".into(), ".".into()]),
+            ("link", "link", vec![".".into(), "".into()]),
+            ("truncate", "open", vec!["".into()]),
+            ("writeFile", "open", vec!["".into(), "x".into()]),
+        ] {
+            let error = call(&natives, name, &args).unwrap_err();
+            assert!(error.props.contains(&("code".into(), "ENOENT".into())));
+            assert!(error.props.contains(&("errno".into(), (-2).into())));
+            assert!(error.props.contains(&("syscall".into(), syscall.into())));
+            assert!(error.props.contains(&("path".into(), "".into())));
+        }
+        assert_eq!(
+            call(&natives, "exists", &["".into()]).unwrap(),
+            false.into()
+        );
+        assert_eq!(
+            call(&natives, "rm", &["".into(), true.into(), true.into()]).unwrap(),
+            Val::Undefined
+        );
+        assert_eq!(
+            open_file("", 0, 0).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
     use crate::transpiler::PassthroughTranspiler;
 
     fn call(table: &Table, name: &str, args: &[Val]) -> NativeResult {
