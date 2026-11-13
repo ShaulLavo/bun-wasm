@@ -7,7 +7,7 @@ the existing `rust` job. They do not depend on optional files appearing in CI.
 | Group | Cases | Required fixtures | Producer |
 | --- | --- | --- | --- |
 | QuickJS | memory growth with both buffer modes, slot table, Node compose | `dist/bun.wasm`, `dist/bun-tools.wasm` and both build receipts | Existing QuickJS build plus one tools build |
-| Host engine | nine subprocess checks, Node compose | `dist/bun-browser.wasm`, `dist/bun-tools.wasm` and both build receipts | Existing source-cache browser guest, linked into `dist/`, plus the same tools build |
+| Host engine | nine subprocess checks, Node compose | `dist/bun-browser.wasm`, `dist/bun-tools.wasm` and both build receipts | One standard Browser recipe plus the same tools build |
 | JSC | Node compose | `dist/bun-jsc.wasm`, `dist/bun-tools.wasm` and both build receipts | Existing conditional JSC embedding producer plus the same tools build |
 
 Run selected groups with `source env.sh` followed by
@@ -20,8 +20,19 @@ installation. No tools stand-in, skip or retry is used.
 
 The tools build uses the native job's existing Cargo target. Binaryen is installed
 before it, and cache saves remain after all producers and consumers. The four
-shared process-browser bundles and source-cache artifact consumer stay unchanged.
+shared process-browser bundles retain their existing owners. Source-cache and
+Wasm-transfer consumers download the same standard guest from `browser-program`.
 The fixture receipts and execution logs are uploaded for review.
+
+The normal Rust job runs `scripts/build-bun-browser.sh` once, with its existing
+native target and two Cargo jobs. It includes the transpiler and optimizer and
+keeps the original `browser` receipt. Native fixtures, Web guest cases and the
+closed playground site all reuse this guest. After the Web guest gates, the
+`browser-program` artifact retains the raw Browser and tools guests, their
+original receipts, file identities and composing source. The source-cache
+browser regression verifies this delivery before running its existing scenario;
+the transfer regression consumes the same guest. No CI caller keeps the former
+source-cache-only artifact name or recipe.
 
 `ci-changes.ts` selects the native owner for its existing native inputs and the
 shared Node-host/test contracts. Shared runtime, tool, host and fixture changes
@@ -29,7 +40,7 @@ also select JSC. Engine-specific Rust and test files keep their own checks. Page
 sandbox UI and documentation changes do not build engines. New shared host
 imports need a matching selection rule and regression check.
 
-The native v2 and v4 restore/save primary keys include the tools builder and
+The native v2 and v4 restore/save primary keys include the tools and standard Browser builders and
 workflow. A builder-only edit changes both exact keys while retaining both
 compatibility prefixes. A workflow edit changes the v2 compatibility fingerprint,
 so it cannot reuse the old v2 target. The v4 compatibility prefix stays unchanged,
