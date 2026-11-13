@@ -5,7 +5,7 @@
 // reaches the woken receiver's synchronous receive without any broker hop. Decoding it still needs
 // every shared backing it names: one the destination doesn't hold yet attaches through its event loop.
 import { createNativeSharedBuffer } from "./native.ts";
-import { overflowLimit, assertPoolActive, closeOverflow, copyOverflow, creditOverflow, laneError, reserveOverflow } from "./lane-overflow.ts";
+import { overflowLimit, assertPoolActive, closeOverflow, copyOverflow, creditOverflow, laneError, reserveOverflow, poolSlotWords, slotWord } from "./lane-overflow.ts";
 import type { LaneOverflow } from "./lane-overflow.ts";
 export { overflowLimit, overflowBudget, poolChargedWord, poolDisposedWord, poolControlWords } from "./lane-overflow.ts";
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add, atomicNotify = Atomics.notify, atomicWaitAsync = Atomics.waitAsync;
@@ -20,6 +20,7 @@ const frameHeaderBytes = 4;
 const overflowTag = 0xffffffff, descriptorBytes = 12;
 export const inlineLaneLimit = ringBytes - frameHeaderBytes;
 export const sharedLaneBytes = headerBytes + 2 * ringBytes;
+const dynamicLaneBytes = sharedLaneBytes + 2 * poolSlotWords * Int32Array.BYTES_PER_ELEMENT;
 
 export interface SharedLane {
   readonly buffer: SharedArrayBuffer;
@@ -42,10 +43,16 @@ export function createSharedLaneBuffer(): SharedArrayBuffer {
   return createNativeSharedBuffer(sharedLaneBytes);
 }
 
+/** Fresh endpoints keep their slot identity in the backing that is already published with them. */
+export function createDynamicSharedLaneBuffer(): SharedArrayBuffer {
+  return createNativeSharedBuffer(dynamicLaneBytes);
+}
+
 function align(bytes: number) { return (bytes + 3) & ~3; }
 
-export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?: LaneOverflow): SharedLane {
-  if (buffer.byteLength !== sharedLaneBytes) throw new DOMException("Invalid shared lane size", "DataCloneError");
+export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, grant?: Omit<LaneOverflow, "slots"> & { readonly index?: number }): SharedLane {
+  if (buffer.byteLength !== sharedLaneBytes && buffer.byteLength !== dynamicLaneBytes) throw new DOMException("Invalid shared lane size", "DataCloneError");
+  const overflow = grant ? laneOverflow(buffer, grant) : undefined;
   const inbound = ring(buffer, side), outbound = ring(buffer, side === 0 ? 1 : 0);
   const destination = side === 0 ? 1 : 0;
   let reserved = false;
@@ -96,7 +103,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
   function poison(error: unknown): never {
     terminal = error ?? laneError("Shared lane consumption failed");
     atomicStore(inbound.header, closedIndex, 2);
-    if (overflow) closeOverflow(overflow.control, overflow.index, side);
+    if (overflow) closeOverflow(overflow.slots, side);
     throw terminal;
   }
   function frame(read: number, available: number) {
@@ -154,10 +161,17 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, overflow?
   }
   function close() {
     Atomics.compareExchange(inbound.header, closedIndex, 0, 1);
-    if (overflow) closeOverflow(overflow.control, overflow.index, side);
+    if (overflow) closeOverflow(overflow.slots, side);
     atomicAdd(inbound.header, signalIndex, 1); atomicNotify(inbound.header, signalIndex);
   }
   return { buffer, reserve, drain, watch, close, peerClosed: () => atomicLoad(outbound.header, closedIndex) !== 0 };
+}
+
+function laneOverflow(buffer: SharedArrayBuffer, grant: Omit<LaneOverflow, "slots"> & { readonly index?: number }): LaneOverflow {
+  const { control, arena, index } = grant;
+  if (index !== undefined) return { control, arena, slots: control.subarray(slotWord(index, 0), slotWord(index, 0) + 2 * poolSlotWords) };
+  if (buffer.byteLength !== dynamicLaneBytes) throw laneError("Invalid dynamic shared lane size");
+  return { control, arena, slots: new Int32Array(buffer, sharedLaneBytes, 2 * poolSlotWords) };
 }
 
 function ring(buffer: SharedArrayBuffer, side: 0 | 1) {

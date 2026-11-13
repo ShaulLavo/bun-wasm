@@ -76,6 +76,15 @@ old range stays charged and unused. Ranges also stay charged after copy, abort,
 close and sender exit. An interrupted producer can strand conservative budget
 until runtime disposal.
 
+After the 32 pre-attached lanes have been claimed, each fresh lane adds two private
+five-word slot records to its own shared backing. Publishing that backing also
+attaches the slot records; endpoint moves need no extra attachment or route command.
+The slots use the same private arena, global charge and disposal barrier as pooled
+lanes. Closed lane identities are never reused, and their arena extents stay charged.
+This repairs large-message delivery after pool exhaustion without changing the
+worker codec, the encoded cap or the runtime budget. These remain original host
+adapters; no upstream source or comparison revision changed.
+
 Directions grow the one backing concurrently. A grow call that fails while the
 backing is already long enough is treated as a lost race to a longer growth, not
 as an error. A failed growth returns its charge only for bytes that were never
