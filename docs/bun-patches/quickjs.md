@@ -10,6 +10,7 @@
 | `quickjs/quickjs.c`, async context | Store and trace a context value, capture it in promise reactions, restore it for jobs, and expose get/set functions. | QuickJS `AsyncLocalStorage` loses its store across promise and await boundaries. The original engine has no obligation to implement Node's API. |
 | `quickjs/quickjs.c`, WebAssembly.Memory buffers | Add a `wasm_memory` ArrayBuffer flag, `JS_bunwasm_NewWasmMemoryBuffer` over bytes QuickJS never frees, and `JS_bunwasm_DetachWasmMemoryBuffer`. Flagged buffers refuse `transfer()` and report themselves non-detachable. | The WebAssembly polyfill must copy the whole guest memory across every call and import callback, which exhausts the 512 MiB guest memory for esbuild-wasm. Without the flag, user code could transfer the buffer away from the memory that owns its bytes. |
 | `build.rs` | Add rerun tracking for `quickjs` and `quickjs.bind.h`. | Local C changes can leave Cargo using a stale engine until another input invalidates it. This hook supports our fork. |
+| `build.rs`, WASI C optimization | Set `cc::Build::opt_level(2)` for WASI. | Cargo's size-oriented Rust release profile otherwise compiles `libregexp.c`, `libunicode.c`, `quickjs.c` and `dtoa.c` with `-Os`. The override selects `-O2` for these four C files while preserving the Rust profile, dispatch defines and stack guards. |
 
 The memory readout extends the C header and generated bindings as recorded in [QuickJS memory telemetry](quickjs-memory-telemetry.md). Automatic threshold-GC state is recorded as [QuickJS automatic-GC telemetry](quickjs-automatic-gc-telemetry.md). The allocator header change is recorded in [QuickJS memory accounting on WASI](quickjs-wasi-gc-accounting.md). Sharing function source text per parse is recorded in [QuickJS function source shared per parse](quickjs-shared-function-source.md). The WeakMap collection fix is recorded in [QuickJS WeakMap entries as ephemerons](quickjs-weakmap-ephemerons.md). Our Rust engine declares the added functions. The vendored tree keeps Linux x86_64 and wasm32-wasip1 bindings and the C files needed by the library, dropping other targets, shell programs, tests, build tooling, and package metadata. It adds the license copy. These packaging choices do not change retained upstream implementations. Every other retained source file matches the published crate.
 
@@ -22,7 +23,7 @@ The memory readout extends the C header and generated bindings as recorded in [Q
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, inspection helpers](#quickjs) | Host feature | Inspect keys and iterator entries without consuming them. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, async context](#quickjs) | Host feature | Capture and restore async context in promise reactions. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, WebAssembly.Memory buffers](#quickjs) | Host feature | View wasm memory in place; only the polyfill can detach it. |
-| [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
+| [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change; compile the four WASI C files at `-O2`. |
 
 [Parent context](bun-patch-series.md).
 

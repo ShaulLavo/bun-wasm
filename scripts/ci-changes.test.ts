@@ -330,6 +330,10 @@ for (const [path, fixture] of [
   ["tests/fixtures/parser-literal-overflow/index.ts", ""],
   ["checks/native-assignment-chain-depth.json", "tests/fixtures/assignment-chain-depth"],
   ["tests/fixtures/assignment-chain-depth/index.ts", ""],
+  ["checks/native-statement-record-cap.json", "tests/fixtures/statement-record-cap"],
+  ["tests/fixtures/statement-record-cap/index.ts", ""],
+  ["checks/native-statement-records-async-using.json", "tests/fixtures/statement-records-async-using"],
+  ["tests/fixtures/statement-records-async-using/index.ts", ""],
 ] as const) {
   test.each(["pull_request", "push"])(`${path} retains the strict JSC stack embedding gate for %s`, event => {
     const content = fixture ? JSON.stringify({ owner: "native", path: fixture }) : "changed stack fixture input\n";

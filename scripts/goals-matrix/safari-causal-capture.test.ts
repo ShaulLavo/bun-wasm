@@ -123,7 +123,7 @@ function fakeNative(control: Partial<ControlReceipt>, query: () => Promise<Nativ
   const cpu = new Map([[101, 0], [202, 0]]);
   const reads: number[] = [];
   return { births, cpu, reads,
-    read(pid): ProcessClock | null { reads.push(pid); const birth = births.get(pid); return birth ? { cpuMs: cpu.get(pid) ?? 0, birth } : null; },
+    read(pid): ProcessClock | null { reads.push(pid); const birth = births.get(pid); return birth ? { cpuMs: cpu.get(pid) ?? 0, birth, footprintBytes: 4096 } : null; },
     async candidates() { return [101, 202]; },
     async control() { return { passed: true, failure: null, label: "control", pid: 5, readErrno: null, cpuRatio: 1, birthStable: true, exitObserved: true, killerPid: 6, event: null,
       classes: ["signal-service"], jobRemoved: true, fileRemoved: true, startedAt: "", finishedAt: "", ...control }; },
@@ -241,7 +241,12 @@ test("an armed capture whose native query fails leaves the ordinary outcome unch
   expect(receipt).toMatchObject({ state: "settled", arm: { kind: "armed", target: { pid: 101, birth: "7" } }, native: { query: "failed", initiating: "unknown" } });
   const names = await readdir(directory);
   expect(names.filter(name => name.endsWith(".native.jsonl"))).toHaveLength(1);
-  expect(await readFile(join(directory, names.find(name => name.endsWith(".native.jsonl"))!), "utf8")).not.toContain("\"202\"");
+  const text = await readFile(join(directory, names.find(name => name.endsWith(".native.jsonl"))!), "utf8");
+  expect(text).not.toContain("\"202\"");
+  const facts: unknown[] = text.trim().split("\n").map(line => JSON.parse(line));
+  const identities = facts.filter(fact => fact && typeof fact === "object" && "kind" in fact && fact.kind === "identity");
+  expect(identities.length).toBeGreaterThan(0);
+  for (const fact of identities) expect(fact).toMatchObject({ target: { pid: 101, birth: "7" }, reading: { cpuMs: expect.any(Number), birth: "7", footprintBytes: 4096 } });
 });
 
 test("a start-time change at a challenge boundary rejects association, and a change after arming ends attribution", async () => {
@@ -263,11 +268,31 @@ test("a start-time change at a challenge boundary rejects association, and a cha
   expect(result.status).toBe("pass");
   const receipt = await settlement(directory);
   expect(receipt).toMatchObject({ identityLost: { reason: "birth-changed" }, arm: { target: { birth: "7" } } });
+  const names = await readdir(directory);
+  const text = await readFile(join(directory, names.find(name => name.endsWith(".native.jsonl"))!), "utf8");
+  expect(text).not.toContain('"kind":"identity"');
   const after = native.reads.slice(native.reads.lastIndexOf(202) + 1);
   expect(after.every(pid => pid === 101)).toBe(true);
 });
 
 const launchd = (subsystem: string, eventMessage: string, processID = 1) => ({ timestamp: "2026-11-12 17:34:11.745123-0800", processID, processImagePath: processID === 1 ? "/sbin/launchd" : "/usr/libexec/other", subsystem, eventMessage });
+test("launchd caller ancestry preserves the immediate caller and rejects malformed chains", () => {
+  const job = "gui/501/dev.bun-wasm.causal-control.native";
+  const result = normalizeLaunchdLog(JSON.stringify([
+    launchd(`${job} [93976]`, "signal service: caller = launchctl[93982]<-bun[93974]<-bash[93969]<-bun[93967]<-bun[93921]<-mesh[77235], value = 0x9"),
+    launchd(`${job} [93976]`, "signal service: caller = bun[93974]<-launchctl[93982], value = 0x9"),
+    launchd(`${job} [93976]`, "signal service: caller = launchctl[93982]<-bun[invalid], value = 0x9"),
+    launchd(`${job} [93976]`, "signal service: caller = launchctl[93982]<-, value = 0x9"),
+    launchd(`${job} [939760]`, "signal service: caller = launchctl[93982]<-bun[93974], value = 0x9"),
+  ]), 93976, service => service === job ? "control" : undefined);
+  expect(result.ignored).toBe(3);
+  expect(result.events.map(event => [event.target, event.signal, event.caller])).toEqual([
+    [93976, 9, { name: "launchctl", pid: 93982 }],
+    [93976, 9, { name: "bun", pid: 93974 }],
+  ]);
+  expect(JSON.stringify(result)).not.toContain("mesh");
+});
+
 test("the launchd parser keeps only exact target tokens and normalized fields", () => {
   const service = "pid/13792/com.apple.WebKit.WebContent.9E124E17-28EA-452A-B77F-98EBD4296BD5";
   const text = JSON.stringify([

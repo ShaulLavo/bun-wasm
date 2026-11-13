@@ -174,6 +174,6 @@ without an assignment equal the old ones at 192, 208 and 800 KiB and are at most
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, assignment chains](#jsc-assignment-chains-without-parser-recursion) | Port | Parse a chain of assignment targets in one parser activation, and reserve generator stack in the nine assignment emitters. |
-| `tests/fixtures/assignment-chain-semantics`, `tests/fixtures/assignment-chain-depth` | Original adapter | Assignment chain semantics and the nine-form depth controls through the guest entry point. |
+| `tests/fixtures/assignment-chain-semantics`, `tests/fixtures/assignment-chain-depth` | Original adapter | Assignment chain semantics and the nine-form depth controls through the guest entry point. The semantics fixture recognizes SpiderMonkey's invalid lexical declaration message when selecting JSC-only position checks. |
 
 [Ledger scope and pinned revisions](scope.md).

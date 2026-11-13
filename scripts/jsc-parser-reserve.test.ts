@@ -17,15 +17,17 @@ const guardBoundary: Boundary = (_name, capacity) => ({ refusal: capacity === ch
 
 /**
  * A guest whose parser stops when budget plus 64 KiB is spent, at `reserve(value)` plus a real frame
- * per level. Assignment chains parse without recursion: the syntax-check pass loads the deepest chain
- * tried, and the full parse stops at `assignment(reserve)` plus a frame per level.
+ * per level. Assignment chains and block nests parse without recursion: the syntax-check pass of an
+ * assignment chain and both passes of a block nest load the deepest chain tried, and an assignment
+ * chain's full parse stops at `assignment(reserve)` plus a frame per level.
  */
-function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object, assignment = generatorCost, iterative = true, boundary: Boundary = guardBoundary): ProbeHost {
+function modelHost(reserve: ReserveRule = effectiveParserReserve, reported?: (settings: StackSettings) => object, assignment = generatorCost, iterative = true, boundary: Boundary = guardBoundary, blocks = true): ProbeHost {
   return (settings, mode, depth) => {
     const room = settings.budgetKib * 1024 + 65536 - 22000;
     const bytes = reserve(settings.parserReserve);
     const capacity = (name: string, index: number) => {
       if (iterative && name.startsWith("chainAssignCompile")) return chainMaximum;
+      if (blocks && name.startsWith("chainBlock")) return chainMaximum;
       const level = name.startsWith("chainAssign") ? assignment(bytes) : bytes;
       return Math.floor(room / (level + 380 + index));
     };
@@ -62,8 +64,10 @@ for (const { fault, reserve, message } of brokenGuests) {
 }
 
 test("a capacity counts only when the guard refused with RangeError and the parser recovered", () => {
-  const syntax: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainBlockCall8" ? "SyntaxError" : guardBoundary(name, capacity).refusal });
-  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, syntax))).toThrow("chainBlockCall8 at 192 KiB, reserve unset: refused with SyntaxError");
+  const syntax: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainWhileCall8" ? "SyntaxError" : guardBoundary(name, capacity).refusal });
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, syntax))).toThrow("chainWhileCall8 at 192 KiB, reserve unset: refused with SyntaxError");
+  const blockRefused: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainBlockCall16" ? "RangeError" : guardBoundary(name, capacity).refusal });
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, blockRefused))).toThrow("chainBlockCall16");
   const stuck: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), recovered: name !== "chainAssignCall16" });
   expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, stuck))).toThrow("chainAssignCall16 at 192 KiB, reserve unset: a shallow chain failed");
   const saturated: Boundary = (name, capacity) => ({ ...guardBoundary(name, capacity), refusal: name === "chainAssignCompile8" ? "RangeError" : guardBoundary(name, capacity).refusal });
@@ -73,6 +77,10 @@ test("a capacity counts only when the guard refused with RangeError and the pars
 test("the tuples reject a guest whose assignment chains still recurse in the parser", () => {
   expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, false))).toThrow("does not reach 4096");
   expect(() => parserReserveControls(modelHost(undefined, undefined, bytes => bytes))).toThrow("chainAssignCall8");
+});
+
+test("the tuples reject a guest whose block nests still recurse in the parser", () => {
+  expect(() => parserReserveControls(modelHost(undefined, undefined, generatorCost, true, guardBoundary, false))).toThrow("chainBlockCompile8: ");
 });
 
 test("a capacity counts only from a guest that reports the requested settings and continues", () => {
@@ -94,7 +102,7 @@ test("the probe's settings and capacities lines are read strictly", () => {
   expect(() => guestStackSettings("settings {\"budget\":192,\"parserReserve\":null}\n")).toThrow("Malformed");
   const capacities = Object.fromEntries(chainModes.map(mode => [mode, 7]));
   expect(chainCapacities(`capacities ${JSON.stringify(capacities)}\n`)).toEqual(capacities);
-  expect(chainModes).toHaveLength(20);
+  expect(chainModes).toHaveLength(24);
   expect(chainMaximum).toBe(4096);
   expect(() => chainCapacities("completed chainCapacity 4096\n")).toThrow("Expected one capacities line");
   expect(() => chainCapacities(`capacities ${JSON.stringify({ ...capacities, chainAssignCall8: -1 })}\n`)).toThrow("Malformed");
@@ -215,9 +223,9 @@ for (const mode of ["chainCapacity", "chainWorker"]) {
     expect(output).toContain(`completed ${mode} 1`);
     // chainCapacity: a warm-up and a measured pass, then one recovery parse per chain (each saturates at 1).
     // chainWorker: a warm-up and the parent's two measured passes.
-    expect(phases).toHaveLength(60);
+    expect(phases).toHaveLength(3 * chainModes.length);
     expect(phases).toEqual(phases.map(() => false));
     expect(compilations[0]).toBe("var o = {};\n0;");
-    expect(compilations[20]).toBe("var o = {};\no.a = 0;");
+    expect(compilations[chainModes.length]).toBe("var o = {};\no.a = 0;");
   });
 }

@@ -1,0 +1,77 @@
+direct eval, value at the bottom: 1
+indirect eval, value at the bottom: 1
+direct eval, empty innermost block: 2
+indirect eval, empty innermost block: 2
+direct eval, declaration-only block: 3
+indirect eval, declaration-only block: 3
+direct eval, break at the bottom: 4
+indirect eval, break at the bottom: 4
+direct eval, continue at the bottom: 6
+indirect eval, continue at the bottom: 6
+direct eval, labelled break out of a nest: 6
+indirect eval, labelled break out of a nest: 6
+direct eval, mixed block, label and if nest: 8
+indirect eval, mixed block, label and if nest: 8
+direct eval, mixed nest with break at the bottom: undefined
+indirect eval, mixed nest with break at the bottom: undefined
+direct eval, if without else after a value: undefined
+indirect eval, if without else after a value: undefined
+direct eval, empty then branch: undefined
+indirect eval, empty then branch: undefined
+direct eval, value in an else branch: 15
+indirect eval, value in an else branch: 15
+direct eval, folded break: undefined
+indirect eval, folded break: undefined
+direct eval, folded break with else: undefined
+indirect eval, folded break with else: undefined
+direct eval, folded continue then a deep else: 21
+indirect eval, folded continue then a deep else: 21
+direct eval, else-if chain: 5
+indirect eval, else-if chain: 5
+function code, value at the bottom: 21
+folded break: 3
+folded break in a block: 3
+folded break with else: 3
+folded continue: 20
+folded continue with else: 20
+folded continue under outer records: 9
+folded then before a deep else: 5
+labelled continue across blocks: 4
+return through two finally blocks: ["r",["inner","outer"]]
+throw through finally: ["f","x"]
+tail position return under a spine: "done"
+using, three nested blocks: "ok" | acquire a, acquire b, acquire c, acquire d, body, dispose d, dispose c, dispose b, dispose a
+using, throw from the innermost: undefined | acquire r0, acquire r1, acquire r2, acquire r3, dispose r3, dispose r2, dispose r1, dispose r0, caught x
+using, return computed before disposal: "v" | acquire r0, acquire r1, acquire r2, acquire r3, ret, dispose r3, dispose r2, dispose r1, dispose r0
+using, break and continue: undefined | acquire a0, acquire b0, dispose b0, dispose a0, acquire a1, acquire b1, brk, dispose b1, dispose a1
+using, labelled break across levels: undefined | acquire a, acquire b, acquire c, dispose c, dispose b, dispose a, acquire a, acquire b, acquire c, dispose c, dispose b, dispose a
+using, return from try-finally inside using: "t" | acquire r0, acquire r1, acquire r2, finally, dispose r2, dispose r1, dispose r0
+using, generator ended early: {"value":9,"done":true} | acquire a, acquire b, dispose b, dispose a
+using, disposer throws after a normal body: "Error: dispose b failed" | acquire a, acquire b, body, dispose b, dispose a
+using, disposer throws after a throwing body: "suppressed(Error: dispose b failed) <- Error: body" | acquire a, acquire b, dispose b, dispose a
+using, every level throws: "suppressed(Error: dispose r0 failed) <- suppressed(Error: dispose r1 failed) <- suppressed(Error: dispose r2 failed) <- suppressed(Error: dispose r3 failed) <- suppressed(Error: dispose r4 failed) <- Error: body" | acquire r0, acquire r1, acquire r2, acquire r3, acquire r4, dispose r4, dispose r3, dispose r2, dispose r1, dispose r0
+using, null resource: undefined | acquire c, body, dispose c
+using, folded break in a using block: undefined | acquire a0, dispose a0, acquire a1, dispose a1
+using, folded continue in a plain block: undefined | acquire a0, e0, dispose a0, acquire a1, dispose a1, acquire a2, e2, dispose a2
+using, alternating if and using block: undefined | acquire r1, acquire r3, acquire r5, body, dispose r5, dispose r3, dispose r1
+using, using in then and else: undefined | acquire then, dispose then, acquire else, dispose else
+using, else-if chain of using blocks: undefined | acquire k0, dispose k0, acquire k1, dispose k1, acquire k2, dispose k2
+using, using in try, catch and finally: undefined | acquire try, dispose try, acquire catch, dispose catch, acquire finally, dispose finally
+using, for-of and for with using: undefined | acquire x0, acquire x1, acquire y, dispose y, dispose x0, acquire y, dispose y, dispose x1, acquire z, acquire w, dispose w, dispose z
+using, deep spine: undefined | acquire r0, acquire r1, acquire r2, acquire r3, acquire r4, acquire r5, acquire r6, acquire r7, acquire r8, acquire r9, acquire r10, acquire r11, acquire r12, acquire r13, acquire r14, acquire r15, acquire r16, acquire r17, acquire r18, acquire r19, acquire r20, acquire r21, acquire r22, acquire r23, acquire r24, acquire r25, acquire r26, acquire r27, acquire r28, acquire r29, body, dispose r29, dispose r28, dispose r27, dispose r26, dispose r25, dispose r24, dispose r23, dispose r22, dispose r21, dispose r20, dispose r19, dispose r18, dispose r17, dispose r16, dispose r15, dispose r14, dispose r13, dispose r12, dispose r11, dispose r10, dispose r9, dispose r8, dispose r7, dispose r6, dispose r5, dispose r4, dispose r3, dispose r2, dispose r1, dispose r0
+using in a block through direct eval: [5,["acquire a","dispose a"]]
+using at the top level of eval: SyntaxError
+using in a top-level block of eval: 6
+using directly in a switch case: SyntaxError
+using in a block in a switch case: 7
+using in a switch case under blocks: SyntaxError
+using in a block in a case under blocks: 8
+long labels, called: 9
+long labels, later syntax error: SyntaxError
+long labels in eval: 10
+async using, await using order: undefined | acquire a, acquire b, acquire c, body, dispose c, dispose b, dispose a
+async using, await using null and sync after async: undefined | acquire b, acquire c, body, dispose c, dispose b
+async using, async disposer rejects: "Error: dispose b failed" | acquire a, acquire b, body, dispose b, dispose a
+async using, async throw through every level: "suppressed(Error: dispose r0 failed) <- suppressed(Error: dispose r1 failed) <- suppressed(Error: dispose r2 failed) <- suppressed(Error: dispose r3 failed) <- Error: body" | acquire r0, acquire r1, acquire r2, acquire r3, dispose r3, dispose r2, dispose r1, dispose r0
+async using, async deep spine: undefined | acquire r0, acquire r1, acquire r2, acquire r3, acquire r4, acquire r5, acquire r6, acquire r7, acquire r8, acquire r9, acquire r10, acquire r11, acquire r12, acquire r13, acquire r14, acquire r15, acquire r16, acquire r17, acquire r18, acquire r19, body, dispose r19, dispose r18, dispose r17, dispose r16, dispose r15, dispose r14, dispose r13, dispose r12, dispose r11, dispose r10, dispose r9, dispose r8, dispose r7, dispose r6, dispose r5, dispose r4, dispose r3, dispose r2, dispose r1, dispose r0
+async using, async disposal ticks: undefined | acquire a, acquire b, dispose b, tick 1, dispose a, tick 2, after

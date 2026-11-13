@@ -13,6 +13,7 @@ afterAll(() => { for (const directory of owned) rmSync(directory, { recursive: t
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stack-parts-"));
 owned.push(scratch);
 const host = "chromium/jsc";
+const modeCount = stackModeSlice(0, 1).length;
 const provider = new URL("./fixtures/stack-measurement-provider.ts", import.meta.url).pathname;
 
 function harness(slice: string | undefined, scenario = "safe", cold = true, overrides: Record<string, string> = {}, measure = true) {
@@ -46,7 +47,7 @@ test("every legal partition is nonempty, ordered, disjoint and covers the origin
   expect(stackSelection("1-2/4", true).fixtures).toEqual(["stack-overflow", "stack-overflow-console"]);
 });
 
-for (const slice of ["", "0/4", "1/0", "5/4", "3-2/4", "1/49", "1/1.5", "1/NaN", "01/4", " 1/4", "1/4\n", "1-9/4", "1/9007199254740992", "1-9007199254740992/4", "9007199254740993/4", "1/4/2"]) {
+for (const slice of ["", "0/4", "1/0", "5/4", "3-2/4", `1/${modeCount + 1}`, "1/1.5", "1/NaN", "01/4", " 1/4", "1/4\n", "1-9/4", "1/9007199254740992", "1-9007199254740992/4", "9007199254740993/4", "1/4/2"]) {
   test(`rejects unsafe or malformed selection ${JSON.stringify(slice)} before acquiring resources`, () => {
     expect(() => stackSelection(slice, true)).toThrow();
     const run = harness(slice);
@@ -143,7 +144,7 @@ test("completion requires every part, every mode and both successful fixtures", 
   const runs = Array.from({ length: 4 }, (_, index) => harness(`${index + 1}/4`));
   for (const run of runs) expect(run.result.exitCode).toBe(0);
   const transcripts = runs.map(run => run.stdout);
-  expect(completeStackParts(transcripts.toReversed(), host)).toMatchObject({ complete: true, modes: 48, parts: 4 });
+  expect(completeStackParts(transcripts.toReversed(), host)).toMatchObject({ complete: true, modes: modeCount, parts: 4 });
   expect(() => completeStackParts(transcripts.slice(1), host)).toThrow("Missing stack parts");
   expect(() => completeStackParts(transcripts.concat([transcripts[0]!]), host)).toThrow("Duplicate stack part");
   expect(() => completeStackParts([], host)).toThrow();
@@ -193,7 +194,7 @@ test("the rerunnable completion command accepts a full explicit part and rejects
   writeFileSync(file, harness("1/1").stdout);
   const full = Bun.spawnSync(command, { cwd: resolve(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
   expect(full.exitCode).toBe(0);
-  expect(JSON.parse(full.stdout.toString())).toMatchObject({ host, modes: 48, parts: 1, complete: true });
+  expect(JSON.parse(full.stdout.toString())).toMatchObject({ host, modes: modeCount, parts: 1, complete: true });
   writeFileSync(file, harness("1/4").stdout);
   const partial = Bun.spawnSync(command, { cwd: resolve(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
   expect(partial.exitCode).not.toBe(0);
