@@ -11,12 +11,13 @@ the 1 GiB guest maximum. Split programs did not change.
 
 Safari allocates requested WebAssembly memory ahead of time, while Chrome and Firefox allocate lazily, so size memory for Safari.
 
-## Two quantities, each with one authority
+## Guest declarations and supplied backing
 
 | Quantity | Authority | Value | What derives from it |
 | --- | --- | --- | --- |
 | Guest memory maximum | `crates/bunwasm-cli/max-memory.txt` | 1 GiB | Split links, engine heap sizing, the single-memory Store limit, and the pages a group's members may hold together |
-| Group address space | `crates/bunwasm-cli/group-address-space.txt` | 2 GiB | The maximum every shared-group core and side declares, and both hosts' group policy |
+| Group address space | `crates/bunwasm-cli/group-address-space.txt` | 2 GiB | The maximum every shared-group core and side declares, and the native host's group policy |
+| Browser backing capacity | `BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts` | 2 GiB default | The supplied Waffle shared-group backing maximum, checked separately against both source imports and static layout. Smaller policies require separate qualification. |
 
 Each file holds one line of decimal bytes and is the only copy of its number.
 
@@ -47,8 +48,9 @@ Each file holds one line of decimal bytes and is the only copy of its number.
   import when each is converted (`scripts/src/engine-explicit-init.ts`,
   `scripts/spidermonkey-side-core-receipt.ts`) and when the native host admits them
   (`crates/bunwasm-host/src/linked_group.rs`);
-- the Bun group policy: `bun_policy()` on the native host and
-  `BUN_MEMORY_GROUP_POLICY` (`src/engine-kind.ts`) for Waffle.
+- the Bun group policy `bun_policy()` on the native host, and the exact source declaration
+  check in the browser host's staging validator. Browser backing capacity is a separate host
+  policy and may be smaller. It preserves the guest member allowance and stack limits.
 
 Rust reads the files in `crates/bunwasm-cli/max_memory.rs` and
 `crates/bunwasm-cli/group_address_space.rs`, TypeScript in
