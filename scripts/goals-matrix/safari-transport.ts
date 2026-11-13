@@ -1,7 +1,7 @@
 import type { Transport } from "./transport";
 import { admit, awaitWithin, type Admission } from "./scope";
 import { until } from "./playground";
-import { armSafariClick, observeSafariClick } from "./safari-click";
+import { armNativeClick, observeNativeClick } from "./native-click";
 import { presentIphonePreview } from "./iphone-browser";
 import { SafariOwnershipWitness, ownershipRequest, type SafariOwnershipSink, type SafariOwnershipOperation } from "./safari-ownership";
 import { jsonKind, mediaKind, networkKind, newTrace, openFact, webDriverError, type ProtocolLane, type ProtocolObserver, type ProtocolTrace, type SafariProtocolSink } from "./safari-protocol";
@@ -268,15 +268,15 @@ function transport(request: Request, sessionPath: string, host: string, capabili
 
   async function nativeClick(button: string, clicked: string, admission: Admission): Promise<unknown> {
     const input = { button, clicked, token: crypto.randomUUID() };
-    const arm = `(${armSafariClick.toString()})(${JSON.stringify(input)})`;
-    const before = await until(() => evaluate<ReturnType<typeof armSafariClick>>(arm, admission), value => value.ready, admit(admission));
+    const arm = `(${armNativeClick.toString()})(${JSON.stringify(input)})`;
+    const before = await until(() => evaluate<ReturnType<typeof armNativeClick>>(arm, admission), value => value.ready, admit(admission));
     if (!before.ready) throw new Error("Safari counter is not ready");
     const element = await decodedCommand(admission, "/element", { using: "css selector", value: button }, undefined, elementReply);
     const id = handle(element["element-6066-11e4-a52e-4f735466cecf"]);
     await command(admission, `/element/${encodeURIComponent(id)}/click`, {});
-    const observation = `(${observeSafariClick.toString()})(${JSON.stringify(input)})`;
+    const observation = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
     const expected = before.before.replace(/\b0\b/, "1");
-    const after = await until(() => evaluate<ReturnType<typeof observeSafariClick>>(observation, admission), value => value.trusted && value.after === expected, admit(admission));
+    const after = await until(() => evaluate<ReturnType<typeof observeNativeClick>>(observation, admission), value => value.trusted && value.after === expected, admit(admission));
     return { before: before.before, after: after.after, trusted: true, inputMethod: "Safari WebDriver element click" };
   }
 

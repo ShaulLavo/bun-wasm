@@ -2,6 +2,8 @@ import { chromium, firefox, type Page, type BrowserContext } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
 import { admit, awaitWithin, type Admission } from "./scope";
 import type { EvaluationOptions, Transport } from "./scoped-transport";
+import { armNativeClick, observeNativeClick } from "./native-click";
+import { until } from "./playground";
 export type { Transport, ScopedTransport } from "./scoped-transport";
 export { scoped } from "./scoped-transport";
 export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, admission: Admission, options?: EvaluationOptions): Promise<T> {
@@ -15,6 +17,17 @@ export async function evaluatePage<T>(page: Page, expression: string, timeoutMs:
     return JSON.parse(serialized).value;
   }
   finally { await handle.dispose(); }
+}
+async function clickPage(page: Page, button: string, clicked: string, admission: Admission): Promise<unknown> {
+  const input = { button, clicked, token: crypto.randomUUID() };
+  const arm = `(${armNativeClick.toString()})(${JSON.stringify(input)})`;
+  const before = await until(() => evaluatePage<ReturnType<typeof armNativeClick>>(page, arm, admit(admission), admission), value => value.ready, admit(admission));
+  if (!before.ready) throw new Error("Counter is not ready");
+  await page.locator(button).click({ timeout: admit(admission) });
+  const observation = `(${observeNativeClick.toString()})(${JSON.stringify(input)})`;
+  const expected = before.before.replace(/\b0\b/, "1");
+  const after = await until(() => evaluatePage<ReturnType<typeof observeNativeClick>>(page, observation, admit(admission), admission), value => value.trusted && value.after === expected, admit(admission));
+  return { before: before.before, after: after.after, trusted: true, inputMethod: "Playwright locator click" };
 }
 export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false): Promise<Transport> {
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
@@ -45,6 +58,10 @@ export function createPageTransport(context: Pick<BrowserContext, "newPage">, ho
   page.setDefaultTimeout(timeoutMs);
   return {
     capabilities,
+    async nativeClick(button, clicked, admission) {
+      admit(admission);
+      return awaitWithin(clickPage(page, button, clicked, admission), admission);
+    },
     beginCleanup(admission) { admit(admission); evaluationTimeoutMs = cleanupTimeoutMs; },
     async navigate(url, admission) {
       admit(admission);
