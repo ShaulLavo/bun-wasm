@@ -67,6 +67,13 @@ test("pending native followed by several docs replacements retains every owed fa
   expect(result).toMatchObject({ kind: "verified", base, head, run: 1, edges: 4, selection: all });
 }));
 
+test.each([".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"])("JSC coordination change %s selects PR validation and survives pending main replacement", path => fixture(async base => {
+  const action = change(path, "changed JSC action");
+  expect(selectChanges(base, action, true)).toEqual({ ...none, rust: true, jsc: true });
+  const head = change("docs/after-action.md", "docs");
+  expect(await mainCoverage(api(head, [run(base)], [quality(base)]))).toMatchObject({ kind: "verified", selection: { ...none, rust: true, jsc: true } });
+}));
+
 test("reverted native paths, package inputs and manifests retain historical families", () => fixture(async base => {
   change("jsc/changed.c", "native");
   rmSync("jsc/changed.c");
@@ -271,7 +278,8 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
   }));
   expect(graph).toEqual({
     quality: { needs: [], minutes: 10 },
-    "jsc-prebuild": { needs: "quality", minutes: 45 },
+    "jsc-identity": { needs: "quality", minutes: 15 },
+    "jsc-prebuild": { needs: ["quality", "jsc-identity"], minutes: 45 },
     "native-quality": { needs: ["quality", "jsc-prebuild"], minutes: 45 },
     rust: { needs: ["quality", "jsc-prebuild", "native-quality"], minutes: 60 },
     package: { needs: "quality", minutes: 10 },
@@ -283,8 +291,8 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "process-bundles": { needs: "quality", minutes: 10 },
     "browser-guest": { needs: ["quality", "rust"], minutes: 10 },
     "browser-process": { needs: ["quality", "rust", "process-bundles", "browser-guest"], minutes: 10 },
-    "ci-result": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
-    "update-status": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
+    "ci-result": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });

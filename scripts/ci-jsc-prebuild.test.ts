@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
@@ -17,7 +18,7 @@ function record(value: unknown): Job {
   return Object.fromEntries(Object.entries(value));
 }
 
-const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const source = expandedCiWorkflow();
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
 const producer = record(jobs["jsc-prebuild"]);
 const native = record(jobs.rust);
@@ -69,7 +70,7 @@ function guard(result: string): number | null {
 }
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
-  expect(producer.needs).toBe("quality");
+  expect(producer.needs).toEqual(["quality", "jsc-identity"]);
   expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
   expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
   expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
@@ -88,7 +89,7 @@ const graphCases: GraphCase[] = ["success", "failure"].flatMap(quality => ["true
 
 function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
   const qualityNeed = { result: quality, outputs: { rust, jsc, shared: "false" } };
-  const prebuildRuns = jobRuns(producer, { quality: qualityNeed }, cancelled);
+  const prebuildRuns = jobRuns(producer, { quality: qualityNeed, "jsc-identity": { result: quality === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
   const prebuild = { result: prebuildRuns ? outcome : "skipped" };
   const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
   const selected = quality === "success" && rust === "true" && !cancelled;
@@ -119,7 +120,7 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
       || item.run === 'bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts'
       || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
   });
-  const bunSetup = (items: Job[]) => items.map(item => item.uses === "./.github/actions/setup-tools"
+  const bunSetup = (items: Job[]) => items.map(item => Object.fromEntries(Object.entries(item).filter(([key]) => key !== "shell"))).map(item => item.uses === "./.github/actions/setup-tools"
     ? { ...item, with: { "bun-version": record(item.with)["bun-version"] } } : item);
   const producerShared = bunSetup(shared(producer));
   expect(producerShared).toHaveLength(14);

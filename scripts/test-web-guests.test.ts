@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { fixtureReceipt, wasm } from "../tests/package/guest-receipt-fixture";
 import { expect, test } from "bun:test";
@@ -7,7 +8,7 @@ import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
 import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./test-web-guests";
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  native-quality:\n")[0]!;
 const sharedPrebuild = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;

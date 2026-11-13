@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -16,13 +17,13 @@ function string(value: unknown): string {
   return value;
 }
 
-const workflow: unknown = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+const workflow: unknown = Bun.YAML.parse(expandedCiWorkflow());
 function jobSteps(job: string): unknown[] {
   const steps: unknown = field(field(field(workflow, "jobs"), job), "steps");
   if (!Array.isArray(steps)) throw new Error("Expected workflow steps");
   return steps;
 }
-const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).ordered}`);
+const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(expandedCiWorkflow()).ordered}`);
 const orderedSteps = field(field(field(pipeline, "jobs"), "rust"), "steps");
 if (!Array.isArray(orderedSteps)) throw new Error("Expected ordered native steps");
 const stepList = orderedSteps;
@@ -54,9 +55,10 @@ test("native-only selections provision the tools JSC prerequisite without enabli
   }
   expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
   expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}");
-  for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps), byId("jsc-artifact", producerSteps)]) {
+  for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
+  expect(field(byId("jsc-artifact", producerSteps), "if")).toBe("inputs.transfer == 'true'");
   for (const prerequisite of [named("Require the JSC prebuild job's output"), named("Configure private JSC build paths"), named("Import the verified JSC prebuild and sysroot"), byId("jsc-inputs")]) {
     expect(prerequisite).not.toHaveProperty("if");
   }

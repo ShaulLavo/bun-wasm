@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -106,7 +107,7 @@ test("Node bootstrap preserves major and exact version selectors", () => {
 });
 
 test("CI bootstraps tools, ICU and every install through the authenticated adapters", async () => {
-  const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  const workflow = expandedCiWorkflow();
   expect(workflow.includes("oven-sh/setup-bun@")).toBe(false);
   expect(workflow.includes("actions/setup-node@")).toBe(false);
   expect(workflow.includes("bun install ")).toBe(false);
@@ -182,7 +183,7 @@ test("release caches can grow after partial restore without saving duplicate war
     expect(await run(grown.split("\n")[0]!.split("=")[1]!)).not.toContain("changed=true");
     expect(save).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.inventory.outputs.changed == 'true'");
     expect(save).not.toContain("github.run_id");
-    const workflow = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+    const workflow = expandedCiWorkflow();
     expect(workflow.match(/uses: \.\/\.github\/actions\/save-release-downloads/g)?.length).toBe(workflow.match(/uses: \.\/\.github\/actions\/release-downloads/g)?.length);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });

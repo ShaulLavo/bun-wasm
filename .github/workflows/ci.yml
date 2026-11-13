@@ -128,235 +128,67 @@ jobs:
   # because the tools fixture links JSC even when the JSC engine gates are off. It owns
   # the run's one sysroot and one prebuild (built, or restored and verified), their
   # caches and the hand-off artifact.
-  # Boat's public-repository allowlist cannot admit the built-in GitHub Actions bot.
 
-  jsc-prebuild:
-    name: JSC C/C++ prebuild
+  jsc-identity:
+    name: Resolve effective JSC inputs
     needs: quality
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    # A cold prebuild took up to 1739s on the slower runner class; setup, the sysroot
-    # and the hand-off add a few minutes.
-    timeout-minutes: 45
+    timeout-minutes: 15
     outputs:
-      manifest-sha256: ${{ steps.jsc-artifact.outputs.manifest-sha256 }}
+      key: ${{ steps.setup.outputs.key }}
+      sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
-      - name: Configure portable quality toolchain homes
-        run: |
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-      - name: Install native build tools
-        run: |
-          if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
-             command -v ruby && command -v gperf && command -v bison &&
-             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
-      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
-      # land on different runner images. Every producer and consumer uses the same pinned bytes.
-      - uses: actions/cache/restore@v4
-        id: build-tools-cache
-        with:
-          path: |
-            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
-            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
-          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
-      - name: Install pinned CMake and Ninja
-        run: bun scripts/ci-build-tools.ts
-      - name: Save completed build-tools-cache setup
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
-            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
-          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
-      # Image updates change many unrelated packages. Build caches follow the host
-      # tools these builds run; each layer's own input hash covers its toolchain.
-      - name: Identify host build tools
-        id: host-tools
-        run: |
-          report="$RUNNER_TEMP/host-tools.txt"
-          {
-            for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
-              command -v "$tool"
-              "$tool" --version | sed -n '1,2p'
-            done
-            ldd --version | sed -n '1p'
-            ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
-          } > "$report"
-          cat "$report"
-          echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: sdk
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
-      - name: Install pinned WASI SDK
-        if: steps.sdk.outputs.cache-hit != 'true'
-        run: |
-          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
-          trap 'rm -f "$archive"' EXIT
-          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
-          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
-          mkdir -p "$WASM_TOOLS/wasi-sdk"
-          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - name: Save completed sdk setup
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: ${{ steps.sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
-        id: binaryen-cache
-        with:
-          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
-          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
-      - name: Install pinned Binaryen
-        run: bun scripts/ci-binaryen.ts
-      - name: Save completed binaryen-cache setup
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
-          key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
-      - name: Identify sysroot build inputs
-        id: sysroot-inputs
+      - uses: ./.github/actions/jsc-setup
+        id: setup
+      - name: Package this run's prepared sysroot
+        id: sysroot
+        shell: bash
         run: |
           source env.sh
-          inputs=$(bun scripts/build-wasi-sysroot.ts --inputs)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: sysroot-cache
+          transfer="$RUNNER_TEMP/jsc-identity-sysroot.tar.zst"
+          tar --posix -C "$WASM_TOOLS" -cf - bun-wasm-sysroot-patched | zstd -T0 -q -o "$transfer"
+          echo "sha256=$(sha256sum "$transfer" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
         with:
-          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
-          key: wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
-          restore-keys: |
-            wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-
-      - name: Build patched WASI sysroot
-        run: |
-          source env.sh
-          time bun scripts/build-wasi-sysroot.ts
-      - name: Save the verified sysroot cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+          path: ${{ runner.temp }}/jsc-identity-sysroot.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          archive: false
+      - uses: ./.github/actions/save-release-downloads
+
+  jsc-prebuild:
+    name: JSC C/C++ prebuild
+    needs: [quality, jsc-identity]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ needs.jsc-identity.outputs.key }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 45
+    outputs:
+      manifest-sha256: ${{ steps.prebuild.outputs.manifest-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 5
         with:
-          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
-          key: ${{ steps.sysroot-cache.outputs.cache-primary-key }}
-      - name: Configure private JSC build paths
-        run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
-      - name: Identify JSC prebuild inputs
-        id: jsc-inputs
-        env:
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          source jsc/common.sh
-          copy_jsc_config_inputs
-          inputs=$(jsc_inputs_hash)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: jsc-prebuild-cache
+          name: jsc-identity-sysroot.tar.zst
+          path: ${{ runner.temp }}
+      - uses: ./.github/actions/jsc-setup
+        id: setup
         with:
-          path: ${{ runner.temp }}/jsc/prebuild
-          key: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
-          restore-keys: |
-            jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-
-      - name: Build or verify the JSC prebuild
-        id: jsc-producer
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        env:
-          CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
-        run: |
-          run_jsc_prebuild() {
-            source env.sh
-            export JOBS=2 CAGE=
-            if [[ "$CI_JSC_PREBUILD_HIT" != 'true' ]]; then
-              bash scripts/build-jsc.sh
-            fi
-            source jsc/common.sh
-            check_jsc_inputs_stamp
-          }
-          jsc_pid=
-          jsc_completion=
-          jsc_log="$RUNNER_TEMP/jsc-prebuild.log"
-          cleanup() {
-            status=$?
-            trap - EXIT INT TERM
-            # $! also covers a signal between the fork and PID assignment.
-            jsc_pid=${jsc_pid:-${!:-}}
-            if [[ -n "$jsc_pid" ]]; then
-              kill -TERM -- "-$jsc_pid" 2>/dev/null || true
-              kill -KILL -- "-$jsc_pid" 2>/dev/null || true
-              wait "$jsc_pid" 2>/dev/null || true
-            fi
-            if [[ -n "$jsc_completion" ]]; then rm -f -- "$jsc_completion" || true; fi
-            if [[ -f "$jsc_log" ]]; then cat "$jsc_log" || true; fi
-            exit "$status"
-          }
-          trap cleanup EXIT
-          trap 'exit 130' INT
-          trap 'exit 143' TERM
-          jsc_completion=$(mktemp "$RUNNER_TEMP/jsc-completion-XXXXXX")
-          # Only this child owns a process group; its descendants inherit it.
-          set -m
-          (
-            set +m
-            trap - EXIT INT TERM
-            run_jsc_prebuild
-            printf 'verified\n' > "$jsc_completion"
-          ) > "$jsc_log" 2>&1 &
-          jsc_pid=$!
-          set +m
-          wait "$jsc_pid"
-          [[ "$(cat "$jsc_completion")" == verified ]]
-          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
-      - name: Save the JSC prebuild cache once per input revision
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+          sysroot: ${{ needs.jsc-identity.outputs.sysroot-sha256 }}
+      - uses: ./.github/actions/jsc-prebuild
+        id: prebuild
         with:
-          path: ${{ runner.temp }}/jsc/prebuild
-          key: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
-      # One archive for the prebuild and the sysroot it was built against, bound to
-      # this run and commit. The native job checks this manifest digest, extracts at
-      # the same absolute paths and re-verifies both in its own environment.
-      - name: Package the verified prebuild and sysroot
-        id: jsc-artifact
-        run: |
-          set -euo pipefail
-          source env.sh
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
-          mkdir "$bundle"
-          bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" split "$bundle/prebuild.tar.zst"
-          tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
-          cp "$RUNNER_TEMP/jsc-prebuild.log" "$bundle/jsc-prebuild.log"
-          {
-            printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
-            (cd "$bundle" && sha256sum prebuild.tar.zst sysroot.tar.zst)
-          } > "$bundle/manifest"
-          transfer="$RUNNER_TEMP/jsc-prebuild.tar"
-          tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
-          ls -l "$bundle" "$transfer"
-          echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          key: ${{ steps.setup.outputs.key }}
+          prefix: ${{ steps.setup.outputs.prefix }}
+          expected-key: ${{ needs.jsc-identity.outputs.key }}
+          transfer: 'true'
       - uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
@@ -2539,7 +2371,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process]
+    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2556,7 +2388,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [quality, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

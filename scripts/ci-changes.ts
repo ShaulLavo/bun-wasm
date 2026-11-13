@@ -95,6 +95,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml",
   "scripts/ci-program-delivery.ts",
   "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-jsc-artifact.ts",
