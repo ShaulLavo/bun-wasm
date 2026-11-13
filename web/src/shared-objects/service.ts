@@ -1,4 +1,4 @@
-import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
+import { createDynamicSharedLaneBuffer, openSharedLane } from "./lane.ts";
 import { assertPoolActive } from "./lane-overflow.ts";
 import type { LaneBacking } from "./protocol.ts";
 import { createSharedMailbox } from "./mailbox.ts";
@@ -166,7 +166,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   function createLane(): LaneBacking {
     active();
     const buffer = pool && claimSlot(sharedPoolLaneCursor, pool.lanes);
-    return buffer ? { buffer, poolIndex: pool!.lanes.indexOf(buffer) } : { buffer: createSharedLaneBuffer(), poolIndex: null };
+    return buffer ? { buffer, poolIndex: pool!.lanes.indexOf(buffer) } : { buffer: createDynamicSharedLaneBuffer(), poolIndex: null };
   }
   function read(reference: SharedReference) {
     const attachment = present(reference);
@@ -349,7 +349,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   const lanes = { create: createLane, open(backing: LaneBacking, side: 0 | 1) {
     active();
     const { buffer, poolIndex } = backing;
-    if (poolIndex === null) return guardedLane(openSharedLane(buffer, side));
+    if (poolIndex === null) return guardedLane(openSharedLane(buffer, side, poolCursors ? { control: poolCursors, arena: pool?.overflow?.arena ?? null } : undefined));
     if (!Number.isInteger(poolIndex) || poolIndex < 0 || !pool || pool.lanes[poolIndex] !== buffer || !poolCursors) throw sharedError("Invalid shared lane pool index");
     return guardedLane(openSharedLane(buffer, side, { control: poolCursors, index: poolIndex, arena: pool.overflow?.arena ?? null }));
   } };
