@@ -473,11 +473,16 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
     return { ms: performance.now() - start, bytes, files: paths.length, bad, fullByteValidation: true, ...counters(), resources: backend!.resources() };
   },
 };
-self.onmessage = async ({ data }) => {
-  if (data?.kind === "idle-quota-result") return;
+async function persistenceMessage({ data }: MessageEvent<unknown>): Promise<void> {
+  if (!data || typeof data !== "object") return;
+  if ("kind" in data && data.kind === "idle-quota-result") return;
+  if (!("command" in data) || typeof data.command !== "string" || !("id" in data)) return;
+  const { id, command } = data;
+  const args = "args" in data ? data.args : undefined;
   try {
-    const operation = commands[data.command];
-    if (!operation) throw new Error(`Unknown persistence test command ${data.command}`);
-    self.postMessage({ id: data.id, value: await operation(data.args) });
-  } catch (error) { self.postMessage({ id: data.id, error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) }); }
-};
+    const operation = commands[command];
+    if (!operation) throw new Error(`Unknown persistence test command ${command}`);
+    self.postMessage({ id, value: await operation(args) });
+  } catch (error) { self.postMessage({ id, error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) }); }
+}
+self.addEventListener("message", persistenceMessage);

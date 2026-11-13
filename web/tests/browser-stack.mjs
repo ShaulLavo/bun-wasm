@@ -8,19 +8,21 @@
 import { readFileSync } from 'node:fs';
 import { firstVisit } from './first-visit.mjs';
 import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix } from '../../scripts/stack-measurement.ts';
+import { stackSelection, reportStackSelection, reportStackCompletion } from '../../scripts/stack-parts.ts';
 import { effectiveParserReserve } from '../src/engine-stack-budget.ts';
 import { playwright, ready, run, session, writeFile } from './playground.mjs';
 
-const s = session('bun-wasm-web-stack-');
 const engines = (process.env.ENGINES ?? 'quickjs,jsc,browser').split(',');
 const args = process.argv.slice(2);
 const measure = args.includes('--measure');
 const cold = args.includes('--cold');
+const selection = stackSelection(process.env.STACK_SLICE, measure, cold);
+const s = session('bun-wasm-web-stack-');
 const browsers = args.filter((name) => !name.startsWith('--'));
 if (!browsers.length) browsers.push('chromium', 'webkit');
 const probe = readFileSync(new URL('../../tests/stack-depth.js', import.meta.url), 'utf8');
 
-const fixtureNames = ['stack-overflow', 'stack-overflow-console'];
+const fixtureNames = selection.fixtures;
 async function fixtures(page, label, names = fixtureNames) {
   for (const name of names) {
     const base = new URL(`../../tests/fixtures/${name}/`, import.meta.url);
@@ -81,13 +83,14 @@ async function coldFixtures(browser, name, url, engine, label) {
 
 async function checkEngine(browser, name, url, engine) {
   const label = `${name}/${engine}`;
+  reportStackSelection(label, selection, cold, requested);
   const opened = await openPage(browser, name, url, engine);
   try {
     if (measure) {
       const nativeFirefox = engine === 'browser' && name === 'firefox';
       const failed = await measureStackPaths(
         cold ? coldAttempt(browser, name, url, engine, nativeFirefox) : (mode, n) => outcome(opened.page, mode, n, nativeFirefox),
-        label, row => console.log(JSON.stringify(row)),
+        label, row => console.log(JSON.stringify(row)), selection.modes,
       );
       reportSettings(label, engine);
       if (failed) throw new Error(`failed stack measurement ${label} (see rows above)`);
@@ -107,3 +110,4 @@ try {
   const url = await s.serve();
   for (const name of browsers) await checkBrowser(name, url);
 } finally { await s.cleanup(); }
+reportStackCompletion(browsers, engines, selection);

@@ -24,9 +24,9 @@ export async function joinProcessBundleProducer(producer: BundleProducer, signal
   }
 }
 
-export async function prepareProcessBundle(out: string, signal: AbortSignal): Promise<void> {
+export async function prepareProcessBundle(out: string, signal: AbortSignal, fixture: "supervisor" | "runtime-proc" = "supervisor"): Promise<void> {
   signal.throwIfAborted();
-  const producer = Bun.spawn([process.execPath, import.meta.path, out], {
+  const producer = Bun.spawn([process.execPath, import.meta.path, out, fixture], {
     stdin: "ignore", stdout: "ignore", stderr: "inherit", env: { ...process.env },
   });
   await joinProcessBundleProducer(producer, signal);
@@ -74,8 +74,8 @@ export async function prepareProcessAssets(context: PreparationContext): Promise
 }
 
 if (import.meta.main) {
-  const [out, ...extra] = process.argv.slice(2);
-  if (!out || extra.length) throw new Error("Usage: process-page-assets.ts <owned-output-directory>");
+  const [out, fixture = "supervisor", ...extra] = process.argv.slice(2);
+  if (!out || extra.length || (fixture !== "supervisor" && fixture !== "runtime-proc")) throw new Error("Usage: process-page-assets.ts <owned-output-directory> [supervisor|runtime-proc]");
   const { processBundle } = await import("../scripts/ci-process-bundles.ts");
-  await processBundle("supervisor", out);
+  await processBundle(fixture, out);
 }

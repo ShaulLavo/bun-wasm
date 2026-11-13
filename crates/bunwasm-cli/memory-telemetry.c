@@ -21,9 +21,15 @@ static struct MemoryTelemetry counters = { 1, 80, 0, 0, UNKNOWN, NONE, 0, 0, 0, 
 struct MemoryFailureTelemetry {
     uint64_t version, byte_length, failed_size, failed_category, previous_usable;
     uint64_t live, peak, capacity_before, capacity_after;
+    uint64_t growth_successes, growth_failures, growth_last_increment, growth_first_failed_increment;
 };
-_Static_assert(sizeof(struct MemoryFailureTelemetry) == 72, "memory failure telemetry ABI");
-static struct MemoryFailureTelemetry failure = { 1, 72, UNKNOWN, NONE, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN };
+_Static_assert(sizeof(struct MemoryFailureTelemetry) == 104, "memory failure telemetry ABI");
+static struct MemoryFailureTelemetry failure = {
+    2, 104, UNKNOWN, NONE, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN
+};
+static struct GrowthTelemetry {
+    uint64_t successes, failures, last_increment, first_failed_increment;
+} growth;
 static unsigned depth;
 
 void *__real_malloc(size_t);
@@ -32,6 +38,24 @@ void *__real_realloc(void *, size_t);
 void __real_free(void *);
 void *__real_aligned_alloc(size_t, size_t);
 int __real_posix_memalign(void **, size_t, size_t);
+void *__real_sbrk(intptr_t);
+
+static void enter(void) {
+    if (depth++ != 0) return;
+    growth = (struct GrowthTelemetry) { 0, 0, UNKNOWN, UNKNOWN };
+}
+
+void *__wrap_sbrk(intptr_t increment) {
+    void *result = __real_sbrk(increment);
+    if (!depth || increment <= 0) return result;
+    growth.last_increment = (uint64_t) increment;
+    if (result != (void *) -1) {
+        growth.successes++;
+        return result;
+    }
+    if (!growth.failures++) growth.first_failed_increment = (uint64_t) increment;
+    return result;
+}
 
 static uint64_t usable(void *pointer) {
     return pointer ? malloc_usable_size(pointer) : 0;
@@ -54,7 +78,8 @@ static void allocated(void *pointer, uint64_t previous, uint64_t requested, enum
         counters.failed_size = requested;
         counters.failed_category = category;
         failure = (struct MemoryFailureTelemetry) {
-            1, 72, requested, category, previous, counters.live, counters.peak, capacity_before, capacity()
+            2, 104, requested, category, previous, counters.live, counters.peak, capacity_before, capacity(),
+            growth.successes, growth.failures, growth.last_increment, growth.first_failed_increment
         };
         return;
     }
@@ -64,7 +89,7 @@ static void allocated(void *pointer, uint64_t previous, uint64_t requested, enum
 }
 
 EXPORT("malloc") void *__wrap_malloc(size_t size) {
-    depth++;
+    enter();
     void *pointer = __real_malloc(size);
     if (--depth == 0) allocated(pointer, 0, size, MALLOC, UNKNOWN);
     return pointer;
@@ -72,7 +97,7 @@ EXPORT("malloc") void *__wrap_malloc(size_t size) {
 
 EXPORT("calloc") void *__wrap_calloc(size_t count, size_t size) {
     uint64_t requested = size && count > SIZE_MAX / size ? UNKNOWN : (uint64_t) count * size;
-    depth++;
+    enter();
     void *pointer = __real_calloc(count, size);
     if (--depth == 0) allocated(pointer, 0, requested, CALLOC, UNKNOWN);
     return pointer;
@@ -81,7 +106,7 @@ EXPORT("calloc") void *__wrap_calloc(size_t count, size_t size) {
 EXPORT("realloc") void *__wrap_realloc(void *previous, size_t size) {
     uint64_t before = depth == 0 ? usable(previous) : 0;
     uint64_t capacity_before = depth == 0 ? capacity() : UNKNOWN;
-    depth++;
+    enter();
     void *pointer = __real_realloc(previous, size);
     if (--depth != 0) return pointer;
     if (!pointer && !size && previous) {
@@ -95,7 +120,7 @@ EXPORT("realloc") void *__wrap_realloc(void *previous, size_t size) {
 
 EXPORT("free") void __wrap_free(void *pointer) {
     uint64_t before = depth == 0 ? usable(pointer) : 0;
-    depth++;
+    enter();
     __real_free(pointer);
     if (--depth != 0 || !pointer) return;
     counters.live -= before;
@@ -103,14 +128,14 @@ EXPORT("free") void __wrap_free(void *pointer) {
 }
 
 EXPORT("aligned_alloc") void *__wrap_aligned_alloc(size_t align, size_t size) {
-    depth++;
+    enter();
     void *pointer = __real_aligned_alloc(align, size);
     if (--depth == 0) allocated(pointer, 0, size, ALIGNED_ALLOC, UNKNOWN);
     return pointer;
 }
 
 EXPORT("posix_memalign") int __wrap_posix_memalign(void **out, size_t align, size_t size) {
-    depth++;
+    enter();
     int result = __real_posix_memalign(out, align, size);
     if (--depth == 0 && result == 0) allocated(*out, 0, size, POSIX_MEMALIGN, UNKNOWN);
     if (depth == 0 && result == ENOMEM) allocated(NULL, 0, size, POSIX_MEMALIGN, UNKNOWN);

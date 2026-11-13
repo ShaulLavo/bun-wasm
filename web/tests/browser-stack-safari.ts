@@ -15,7 +15,8 @@ import { gunzipSync } from "node:zlib";
 import { withNativeDriver } from "../../scripts/goals-matrix/native.ts";
 import { foreground, ObservationTimeout, ready, stopServer, terminal } from "../../scripts/goals-matrix/playground.ts";
 import { createSafariTransport, type SafariTransport } from "../../scripts/goals-matrix/safari-transport.ts";
-import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix, stackModeSlice, type GuestStackSettings } from "../../scripts/stack-measurement.ts";
+import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix, type GuestStackSettings } from "../../scripts/stack-measurement.ts";
+import { stackSelection, reportStackSelection, reportStackCompletion } from "../../scripts/stack-parts.ts";
 import { Scope } from "../../scripts/goals-matrix/scope.ts";
 import { scoped, type ScopedTransport } from "../../scripts/goals-matrix/scoped-transport.ts";
 import { effectiveParserReserve } from "../src/engine-stack-budget.ts";
@@ -30,23 +31,14 @@ const cold = args.includes("--cold");
 const engines = (process.env.ENGINES ?? "quickjs,jsc,browser").split(",");
 const site = resolve(process.env.ROOT ?? "web/dist");
 let probe: string | undefined;
-const fixtureNames = ["stack-overflow", "stack-overflow-console"];
+const selection = stackSelection(process.env.STACK_SLICE, measure, cold);
+const fixtureNames = selection.fixtures;
 // As in browser-stack.mjs: unset keys leave the executor's host policy in charge, as for a user.
 const requested: GuestStackSettings = { budget: process.env.STACK_KIB ?? null, parserReserve: process.env.JSC_PARSER_RESERVE ?? null };
 const settingsPrefix = stackEnvironmentPrefix(requested);
 const observed = new Set<string>();
-const modes = sliceModes(process.env.STACK_SLICE);
+const modes = selection.slice === null ? undefined : selection.modes;
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-
-/** STACK_SLICE=2/4 or 2-3/4 measures those of four parts, so a long sweep can hold the Mac in short turns. */
-function sliceModes(slice: string | undefined): string[] | undefined {
-  if (slice === undefined) return undefined;
-  const parts = /^([1-9][0-9]*)(?:-([1-9][0-9]*))?\/([1-9][0-9]*)$/.exec(slice);
-  if (!parts) throw new Error(`STACK_SLICE must be PART/COUNT or FIRST-LAST/COUNT, got ${slice}`);
-  const first = Number(parts[1]), last = Number(parts[2] ?? parts[1]), count = Number(parts[3]);
-  if (last < first) throw new Error(`STACK_SLICE parts run backwards: ${slice}`);
-  return Array.from({ length: last - first + 1 }, (_, offset) => stackModeSlice(first - 1 + offset, count)).flat();
-}
 
 /** Each operation gets a finite scope; a warm sweep deliberately has no shared attempt deadline. */
 export async function observe<T>(page: MeasurementPage, timeoutMs: number, operation: (transport: ScopedTransport) => Promise<T>): Promise<T> {
@@ -169,8 +161,9 @@ async function checkCold(host: Host, engine: string, label: string): Promise<voi
 
 async function checkEngine(host: Host, engine: string): Promise<void> {
   const label = `safari/${engine}`;
-  if (cold) return checkCold(host, engine, label);
-  await withPage(host, engine, async (page) => {
+  reportStackSelection(label, selection, cold, requested);
+  if (cold) await checkCold(host, engine, label);
+  else await withPage(host, engine, async (page) => {
     await identify(page, engine, label);
     if (measure) await measureEngine(engine, label, (mode, depth) => outcome(page, mode, depth));
     await fixtures(page, label, fixtureNames);
@@ -189,6 +182,9 @@ async function served<T>(use: (url: string) => Promise<T>): Promise<T> {
   } finally { server.kill("SIGTERM"); await server.exited; }
 }
 
-if (import.meta.main) await served(url => withNativeDriver(async (endpoint, signal) => {
-  for (const engine of engines) await checkEngine({ endpoint, url, signal }, engine);
-}, { desktopSafari: true, cleanupFile: process.env.SAFARI_CLEANUP_FILE }));
+if (import.meta.main) {
+  await served(url => withNativeDriver(async (endpoint, signal) => {
+    for (const engine of engines) await checkEngine({ endpoint, url, signal }, engine);
+  }, { desktopSafari: true, cleanupFile: process.env.SAFARI_CLEANUP_FILE }));
+  reportStackCompletion(["safari"], engines, selection);
+}
