@@ -4,6 +4,8 @@ use std::{env, path::PathBuf};
 mod max_memory;
 #[path = "../bunwasm-runtime/build/program_profile.rs"]
 mod program_profile;
+#[path = "../bunwasm-engine-quickjs/build/transfer_fault.rs"]
+mod transfer_fault;
 
 fn main() {
     program_profile::configure();
@@ -55,6 +57,11 @@ fn main() {
     let mut shim = cc::Build::new();
     if shared_group {
         shim.define("BUN_WASM_SHARED_GROUP", "1");
+    }
+    // A validation side, never a release: its two natives are a file of their own.
+    println!("cargo:rerun-if-changed=cpp/transfer_fault.cpp");
+    if transfer_fault::configure() {
+        shim.file("cpp/transfer_fault.cpp");
     }
     shim.cpp(true)
         .file(if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {

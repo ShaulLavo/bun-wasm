@@ -1,9 +1,10 @@
-//! Whether this compilation is a validation side (`src/transfer_fault.rs`). The build script
-//! decides with this function, and the crate's tests run it too.
+//! Whether this compilation is a validation side (`src/transfer_fault.rs`). The build scripts of
+//! the three engine crates and of the SpiderMonkey adapter decide with this file, and the
+//! QuickJS engine crate's tests run its decision too.
 
-/// `value` is `BUN_WASM_TRANSFER_FAULT` as the compiler's environment has it. Only
-/// `scripts/build-engine-quickjs.sh` sets it, and only to `1`, when it is asked for a
-/// validation side and so writes no receipt. Any other value is refused: nothing but that
+/// `value` is `BUN_WASM_TRANSFER_FAULT` as the compiler's environment has it. Only a side's
+/// producer sets it (`scripts/src/transfer-fault.sh`), and only to `1`, when it is asked for a
+/// validation side and so writes no receipt. Any other value is refused: nothing but the
 /// producer may choose, and a value that merely looks like "off" must not pass for a choice.
 pub fn selected(value: Option<&str>) -> Result<bool, String> {
     match value {
@@ -11,8 +12,28 @@ pub fn selected(value: Option<&str>) -> Result<bool, String> {
         Some("1") => Ok(true),
         Some(other) => Err(format!(
             "BUN_WASM_TRANSFER_FAULT={other:?} is not accepted: unset it. \
-             scripts/build-engine-quickjs.sh sets it for QUICKJS_TRANSFER_FAULT=1"
+             A side's producer sets it for its own transfer-fault option"
         )),
+    }
+}
+
+/// For a build script: reads the variable, tells cargo about it and about the cfg, sets the cfg
+/// for a validation side, and fails the build on a value [`selected`] refuses.
+#[allow(dead_code)]
+pub fn configure() -> bool {
+    println!("cargo:rustc-check-cfg=cfg(bun_wasm_transfer_fault)");
+    println!("cargo:rerun-if-env-changed=BUN_WASM_TRANSFER_FAULT");
+    let ambient = std::env::var_os("BUN_WASM_TRANSFER_FAULT");
+    let value = ambient
+        .as_ref()
+        .map(|value| value.to_str().unwrap_or("not UTF-8"));
+    match selected(value) {
+        Ok(true) => {
+            println!("cargo:rustc-cfg=bun_wasm_transfer_fault");
+            true
+        }
+        Ok(false) => false,
+        Err(refusal) => panic!("{refusal}"),
     }
 }
 

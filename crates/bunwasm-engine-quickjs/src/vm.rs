@@ -279,6 +279,22 @@ fn stack_budget() -> usize {
     kib.filter(|&kib| kib > 0).unwrap_or(152).min(MAX_KIB) * 1024
 }
 
+/// `__transferFault()` and `__transferFaultWatch()` of a validation side
+/// (`transfer_fault.rs`). Neither takes arguments, so the wrapper allocates nothing on entry.
+#[cfg(bun_wasm_transfer_fault)]
+fn install_transfer_fault(ctx: &Ctx<'_>) {
+    use crate::transfer_fault::{bunwasm_transfer_fault_leave, bunwasm_transfer_fault_watch};
+    let report = Function::new(ctx.clone(), || bunwasm_transfer_fault_leave());
+    let watch = Function::new(ctx.clone(), || bunwasm_transfer_fault_watch());
+    let globals = ctx.globals();
+    globals
+        .set("__transferFault", report.expect("transfer fault report"))
+        .expect("transfer fault report global");
+    globals
+        .set("__transferFaultWatch", watch.expect("transfer fault watch"))
+        .expect("transfer fault watch global");
+}
+
 impl Engine for QuickJs {
     type Value = V;
 
@@ -297,7 +313,7 @@ impl Engine for QuickJs {
         };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
         #[cfg(bun_wasm_transfer_fault)]
-        crate::transfer_fault::install(&ctx);
+        install_transfer_fault(&ctx);
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),

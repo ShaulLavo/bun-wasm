@@ -439,7 +439,8 @@ for (const path of [
 
 
 test("shared engine bridge and errno adapter inputs retain their JSC and shared gates", () => {
-  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c"]) {
+  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
+    "scripts/src/transfer-fault.sh", "crates/bunwasm-engine-quickjs/src/transfer_fault.rs", "crates/bunwasm-engine-quickjs/build/transfer_fault.rs"]) {
     expect(needsJsc([path])).toBe(true);
     expect(needsRust([path])).toBe(true);
     expect(needsSharedNative([path])).toBe(true);

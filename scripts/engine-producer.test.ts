@@ -74,7 +74,7 @@ function fixture(run: (root: string, shell: (script: string, env?: Record<string
 function prepare(root: string): void {
   for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib", "crates/bunwasm-cli"]) mkdirSync(join(root, directory), { recursive: true });
   for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh",
-    "crates/bunwasm-cli/max-memory.txt", "scripts/src/program-profile.ts"]) {
+    "crates/bunwasm-cli/max-memory.txt", "scripts/src/program-profile.ts", "scripts/src/transfer-fault.sh"]) {
     copyFileSync(join(repository, file), join(root, file));
   }
   for (const tool of ["bun", "selected-cargo", "selected-rustc", "cargo", "rustc", "clang", "clang++", "wasm-ld", "wasm-opt", "wasm-tools", "node", "git", "cmake"]) {
@@ -177,7 +177,7 @@ test("QuickJS smoke mode retains its alternate exports without writing a product
 // The validation side (crates/bunwasm-engine-quickjs/src/transfer_fault.rs) is chosen by the
 // producer's option alone. What the compiler is told, the allocation wraps and the absence of a
 // receipt go together, and the compiler's own variable is never taken from outside.
-const FAULT_WRAPS = ["malloc", "calloc", "realloc", "posix_memalign", "bun_core_alloc", "bun_shared_buffer_alloc"];
+const FAULT_WRAPS = ["malloc", "calloc", "realloc", "posix_memalign", "aligned_alloc", "mmap", "bun_core_alloc", "bun_shared_buffer_alloc"];
 
 test("QuickJS validation mode tells the compiler, wraps the allocators and writes no receipt", () => {
   fixture((root, shell, log) => {
@@ -243,6 +243,57 @@ for (const option of ["", "2", "true", "yes", "on", " 1"]) {
     });
   });
 }
+
+// The JSC producer takes the same option through the same file (scripts/src/transfer-fault.sh).
+test("JSC validation mode tells the compiler, wraps the allocators and writes no receipt", () => {
+  fixture((root, shell, log) => {
+    success(shell("scripts/build-engine-jsc.sh", { JSC_TRANSFER_FAULT: "1" }));
+    expect(log()).toContain("transfer-fault|1\n");
+    for (const name of FAULT_WRAPS) expect(log()).toContain(`--wrap=${name} `);
+    expect(log()).toContain("--export=jsc_register --export=jsc_run");
+    expect(log()).not.toContain("guest-engine-receipt.ts inputs");
+    expect(log()).not.toContain("guest-engine-receipt.ts write");
+    expect(readdirSync(join(root, "side"))).not.toContain("engine.wasm.engine.json");
+  });
+});
+
+test("a release JSC side compiles without the validation flag or wraps, and its directory is not reused for a validation side", () => {
+  fixture((root, shell, log) => {
+    success(shell("scripts/build-engine-jsc.sh"));
+    expect(log()).toContain("transfer-fault|unset\n");
+    expect(log()).not.toContain("--wrap=malloc");
+    expect(readFileSync(join(root, "side/engine.wasm.engine.json"), "utf8")).toBe("fixture\n");
+    const result = shell("scripts/build-engine-jsc.sh", { JSC_TRANSFER_FAULT: "1" });
+    expect(result.exitCode).toBe(1);
+    expect(String(result.stderr)).toContain("use a separate JSC_ENGINE_BUILD_DIR for a transfer-fault side");
+    expect(log().match(/^selected-cargo\|build /gm)?.length).toBe(1);
+    expect(log()).not.toContain("transfer-fault|1");
+  });
+});
+
+const jscRefusals = ["0", "1", ""].map(ambient => ({ env: { BUN_WASM_TRANSFER_FAULT: ambient } as Record<string, string>, says: "unset BUN_WASM_TRANSFER_FAULT" }))
+  .concat(["", "2", "true"].map(option => ({ env: { JSC_TRANSFER_FAULT: option }, says: "JSC_TRANSFER_FAULT must be 0, 1 or unset" })));
+for (const { env, says } of jscRefusals) {
+  test(`the JSC producer refuses ${JSON.stringify(env)}`, () => {
+    fixture((root, shell, log) => {
+      const result = shell("scripts/build-engine-jsc.sh", env);
+      expect(result.exitCode).toBe(2);
+      expect(String(result.stderr)).toContain(says);
+      expect(log()).not.toMatch(/selected-cargo\|build |wasm-ld|guest-engine-receipt\.ts (inputs|write)/);
+      expect(readdirSync(join(root, "side"))).toEqual([]);
+    });
+  });
+}
+
+test("a JSC receipt's inputs are not captured in an environment that selects or could select a validation side", () => {
+  const refused = (env: Record<string, string>) => expect(() => assertQualifiedEnvironment("jsc", env)).toThrow("JSC_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+  expect(() => assertQualifiedEnvironment("jsc", {})).not.toThrow();
+  expect(() => assertQualifiedEnvironment("jsc", { JSC_TRANSFER_FAULT: "0" })).not.toThrow();
+  // Another engine's option and QuickJS's smoke exports say nothing about a JSC side.
+  expect(() => assertQualifiedEnvironment("jsc", { QUICKJS_TRANSFER_FAULT: "1", QUICKJS_SMOKE_EXPORTS: "1" })).not.toThrow();
+  for (const option of ["1", "", "true"]) refused({ JSC_TRANSFER_FAULT: option });
+  for (const ambient of ["0", "1", ""]) refused({ BUN_WASM_TRANSFER_FAULT: ambient });
+});
 
 test("the producer and the receipt capture accept the same values of the validation option for a release", () => {
   for (const option of [undefined, "0"]) expect(() => assertQualifiedEnvironment("quickjs", option === undefined ? {} : { QUICKJS_TRANSFER_FAULT: option })).not.toThrow();

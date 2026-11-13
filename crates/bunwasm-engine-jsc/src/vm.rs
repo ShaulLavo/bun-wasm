@@ -390,6 +390,54 @@ unsafe extern "C" fn dispatch(
     }
 }
 
+/// `__transferFault()` of a validation side (`transfer_fault.rs`). A callback of its own, not
+/// `dispatch`: it looks nothing up and wraps no argument, so entering it asks for no memory.
+#[cfg(bun_wasm_transfer_fault)]
+unsafe extern "C" fn transfer_fault_report(
+    ctx: JSContextRef,
+    _function: JSObjectRef,
+    _this: JSObjectRef,
+    _argc: usize,
+    _argv: *const JSValueRef,
+    _exception: *mut JSValueRef,
+) -> JSValueRef {
+    let requests = crate::transfer_fault::bunwasm_transfer_fault_leave();
+    // SAFETY: a number is an immediate value; nothing is allocated for it.
+    unsafe { JSValueMakeNumber(ctx, f64::from(requests)) }
+}
+
+/// `__transferFaultWatch()`: see [`transfer_fault_report`].
+#[cfg(bun_wasm_transfer_fault)]
+unsafe extern "C" fn transfer_fault_watch(
+    ctx: JSContextRef,
+    _function: JSObjectRef,
+    _this: JSObjectRef,
+    _argc: usize,
+    _argv: *const JSValueRef,
+    _exception: *mut JSValueRef,
+) -> JSValueRef {
+    crate::transfer_fault::bunwasm_transfer_fault_watch();
+    // SAFETY: `undefined` is an immediate value.
+    unsafe { JSValueMakeUndefined(ctx) }
+}
+
+#[cfg(bun_wasm_transfer_fault)]
+fn install_transfer_fault() {
+    let natives: [(&str, JSObjectCallAsFunctionCallback); 2] = [
+        ("__transferFault", transfer_fault_report),
+        ("__transferFaultWatch", transfer_fault_watch),
+    ];
+    for (name, callback) in natives {
+        let name = JsString::new(name);
+        // SAFETY: the context is live, and each callback has the C API callback signature.
+        unsafe {
+            let function = JSObjectMakeFunctionWithCallback(ctx(), name.raw(), callback);
+            let global = JSContextGetGlobalObject(ctx());
+            JSObjectSetProperty(ctx(), global, name.raw(), function, 0, ptr::null_mut());
+        }
+    }
+}
+
 fn with_host<R>(f: impl FnOnce(&Rc<dyn ModuleHost<Jsc>>) -> R) -> R {
     let host = HOST
         .with(|h| h.borrow().clone())
@@ -516,6 +564,8 @@ impl Engine for Jsc {
             unsafe { bunjsc_set_interrupt_handler(c, true) };
         }
         qualify_allocation_boundary(c);
+        #[cfg(bun_wasm_transfer_fault)]
+        install_transfer_fault();
         #[cfg(test)]
         install_regression_natives(&Jsc);
         Jsc
@@ -742,6 +792,9 @@ impl Engine for Jsc {
     }
 
     fn detach_buffer(&self, v: &JsVal) {
+        // A validation side refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { bunjsc_detach_buffer(ctx(), v.raw()) }
     }

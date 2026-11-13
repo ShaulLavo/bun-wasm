@@ -966,3 +966,6 @@ extern "C" void bsm_heap_info(double* used, double* total, double* external) {
   *total = JS_GetGCParameter(context, JSGC_TOTAL_CHUNKS) * static_cast<double>(js::gc::ChunkSize);
   *external = std::nan("");
 }
+// For glue compiled beside this file and not into it (cpp/transfer_fault.cpp).
+extern "C" JSContext* bsm_context() { return context; }
+extern "C" JSObject* bsm_global_object() { return global->get(); }
