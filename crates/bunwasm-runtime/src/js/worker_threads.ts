@@ -713,6 +713,11 @@
       if (groupLane && state.version + 1 >= MAX_VERSION) throw cloneError("MessagePort has moved too many times");
       const snapshot = value.#snapshot(state.version + 1, groupLane);
       const lane = value.#laneRecord();
+      /** Tells the broker the port is on its way. Sent again, it changes nothing. */
+      const moved = () => {
+        const { queue: _queue, lane: _lane, groupLane: _groupLane, ...metadata } = snapshot;
+        root({ kind: "moving", snapshot: metadata, origin: route, lane });
+      };
       return {
         snapshot,
         validate() {
@@ -733,8 +738,7 @@
           state.group?.io.transfer(custody);
           value.#closeLane(false); deleteLocalPort(state.id); value.#state = null;
           if (internal.sharedObjects?.routes?.enabled) return;
-          const { queue: _queue, lane: _lane, groupLane: _groupLane, ...metadata } = snapshot;
-          root({ kind: "moving", snapshot: metadata, origin: route, lane });
+          moved();
         },
         // For a post that commits in one native call: the same local steps as `commit`, taken
         // before that call and undone by `restore` when it refuses. The ledger is not touched
@@ -751,10 +755,7 @@
               if (referenced) internal.messagePortRefs.add(state);
               value.#schedule();
             },
-            moved() {
-              const { queue: _queue, lane: _lane, groupLane: _groupLane, ...metadata } = snapshot;
-              root({ kind: "moving", snapshot: metadata, origin: route, lane });
-            },
+            moved,
           };
         },
       };

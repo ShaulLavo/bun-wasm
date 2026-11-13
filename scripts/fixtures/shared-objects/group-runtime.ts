@@ -15,7 +15,7 @@ function factory(name: string, api: typeof WebAssembly) {
 
 /** What the next withdrawal does instead of answering: lose the call before or after the
  * directory acted, refuse for good, or fail in a way that is no lost call. */
-export type WithdrawalFault = "lost-before" | "lost-after" | "refused" | "broken";
+type WithdrawalFault = "lost-before" | "lost-after" | "refused" | "broken";
 /** The answers of `nested_wire.rs`. */
 const WITHDRAWN = 0, WITHDRAW_ABSENT = 1, WITHDRAW_REFUSED = 2;
 // The model's own bookkeeping, taken before any test replaces these methods to interrupt the
