@@ -2107,6 +2107,439 @@ index 7187af71..f78f579a 100644
  
  .osrReturnPoint:
      getterSetterOSRExitReturnPoint(op_get_by_id, size)
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.cpp
+@@ -382,6 +382,9 @@ ParserError BytecodeGenerator::generate(unsigned& size)
+     if (size > static_cast<unsigned>(INT32_MAX))
+         return ParserError(ParserError::OutOfMemory);
+ 
++    // Every statement spine record and using scope was closed, refused children included.
++    ASSERT(m_statementSpine.isEmpty());
++    ASSERT(m_usingScopeStack.isEmpty());
+     if (m_expressionTooDeep)
+         return ParserError(ParserError::OutOfMemory);
+     return ParserError(ParserError::ErrorNone);
+@@ -4882,6 +4885,16 @@ void BytecodeGenerator::emitPrepareDisposable(RegisterID* value, const JSTextPos
+ }
+ 
+ void BytecodeGenerator::emitUsingBodyScope(unsigned usingCount, bool hasAwaitUsing, NOESCAPE const ScopedLambda<void(BytecodeGenerator&)>& emitBody)
++{
++    beginUsingBodyScope(usingCount, hasAwaitUsing);
++    emitBody(*this);
++    endUsingBodyScope();
++}
++
++// The two halves of a using scope. Everything the second half reads lives in the scope's stack
++// entry, so a block emitted by emitStatementSpine opens the scope in one step and closes it in a
++// later one, with every emit in the order of the single function they were cut from.
++NEVER_INLINE void BytecodeGenerator::beginUsingBodyScope(unsigned usingCount, bool hasAwaitUsing)
+ {
+     ASSERT(!hasAwaitUsing || isAsyncFunctionParseMode(parseMode()) || isModuleParseMode(parseMode()));
+ 
+@@ -4904,16 +4917,26 @@ void BytecodeGenerator::emitUsingBodyScope(unsigned usingCount, bool hasAwaitUsi
+         usingScope.slots.append({ valueCopy, method, reached, false });
+     }
+ 
+-    RefPtr<RegisterID> thrownValue = newTemporary();
+-    emitLoad(thrownValue.get(), jsUndefined());
++    usingScope.thrownValue = newTemporary();
++    emitLoad(usingScope.thrownValue.get(), jsUndefined());
+ 
+-    Ref<Label> finallyLabel = newLabel();
+-    FinallyContext finallyContext(*this, finallyLabel.get());
+-    pushFinallyControlFlowScope(finallyContext);
++    usingScope.finallyLabel = newLabel();
++    usingScope.finallyContext.emplace(*this, *usingScope.finallyLabel);
++    pushFinallyControlFlowScope(*usingScope.finallyContext);
+ 
+     Ref<Label> tryStartLabel = newEmittedLabel();
+-    TryData* tryData = pushTry(tryStartLabel.get(), *finallyContext.finallyLabel(), HandlerType::SynthesizedFinally);
+-    emitBody(*this);
++    usingScope.tryData = pushTry(tryStartLabel.get(), *usingScope.finallyContext->finallyLabel(), HandlerType::SynthesizedFinally);
++}
++
++NEVER_INLINE void BytecodeGenerator::endUsingBodyScope()
++{
++    auto& usingScope = currentUsingScope();
++    bool hasAwaitUsing = usingScope.hasAwaitUsing;
++    RefPtr<RegisterID>& thrownValue = usingScope.thrownValue;
++    FinallyContext& finallyContext = *usingScope.finallyContext;
++    TryData* tryData = usingScope.tryData;
++    ASSERT(m_currentFinallyContext == &finallyContext);
++
+     Ref<Label> tryEndLabel = newEmittedLabel();
+     popTry(tryData, tryEndLabel.get());
+ 
+diff --git a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+--- a/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
++++ b/Source/JavaScriptCore/bytecompiler/BytecodeGenerator.h
+@@ -342,6 +342,26 @@ namespace JSC {
+         Vector<UsingSlot> slots;
+         unsigned nextSlot { 0 };
+         bool hasAwaitUsing { false };
++        // What the disposal half reads after the body. The entry never moves (SegmentedVector), so
++        // the context's address stays valid while break, continue and return emitters point at it.
++        RefPtr<RegisterID> thrownValue;
++        RefPtr<Label> finallyLabel;
++        std::optional<FinallyContext> finallyContext;
++        TryData* tryData { nullptr };
++    };
++
++    // One open block or `if` of a nest that emitStatementSpine emits in one loop.
++    struct StatementSpineRecord {
++        enum class Kind : uint8_t { Block, IfThen, IfElse };
++        Kind kind;
++        bool hasUsingScope; // Block: the block's using scope is open.
++        bool didFoldIfBlock; // If: the then branch became the condition's jump target.
++        StatementNode* node;
++        RegisterID* dst; // The destination the node was entered with; owned by its caller.
++        StatementNode* next; // Block: the next statement. If: the branch still to emit.
++        StatementNode* lastWithCompletionValue; // Block.
++        RefPtr<Label> beforeElse; // If.
++        RefPtr<Label> afterElse; // If.
+     };
+ 
+     struct JSGeneratorTraits {
+@@ -887,8 +907,13 @@ namespace JSC {
+         UsingScope& currentUsingScope() { ASSERT(!m_usingScopeStack.isEmpty()); return m_usingScopeStack.last(); }
+         void emitPrepareDisposable(RegisterID* value, const JSTextPosition& divot, bool isAsync = false);
+         void emitUsingBodyScope(unsigned usingCount, bool hasAwaitUsing, NOESCAPE const ScopedLambda<void(BytecodeGenerator&)>& emitBody);
++        void beginUsingBodyScope(unsigned usingCount, bool hasAwaitUsing);
++        void endUsingBodyScope();
+         void emitBodyWithUsingIfNeeded(unsigned usingCount, bool hasAwaitUsing, NOESCAPE const ScopedLambda<void(BytecodeGenerator&)>& emitBody);
+ 
++        // Emits a nest of blocks and `if` statements without one native call per level.
++        void emitStatementSpine(RegisterID* dst, StatementNode* root);
++
+         void emitEnumeration(ThrowableExpressionData* enumerationNode, ExpressionNode* subjectNode, NOESCAPE const ScopedLambda<void(BytecodeGenerator&, RegisterID*)>& callBack, ForOfNode* = nullptr, RegisterID* forLoopSymbolTable = nullptr);
+ 
+         RegisterID* emitGetTemplateObject(RegisterID* dst, TaggedTemplateNode*);
+@@ -1404,6 +1429,14 @@ namespace JSC {
+         Vector<Ref<ForInContext>> m_forInContextStack;
+         Vector<TryContext> m_tryContextStack;
+         SegmentedVector<UsingScope, 8> m_usingScopeStack;
++        Vector<StatementSpineRecord> m_statementSpine;
++        bool reserveStatementSpineRecord();
++        void enterStatementSpineNode(RegisterID* dst, StatementNode*);
++        void openStatementSpineBlock(RegisterID* dst, BlockNode*);
++        void openStatementSpineIf(RegisterID* dst, IfElseNode*);
++        void emitStatementSpineChild(RegisterID* dst, StatementNode*);
++        void emitStatementSpineCompletionLoad(RegisterID* dst);
++        void finishStatementSpineStep();
+         unsigned m_yieldPoints { 0 };
+         bool m_needsGeneratorification { false };
+ 
+diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+--- a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
++++ b/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp
+@@ -4359,17 +4359,7 @@ inline void SourceElements::emitBytecode(BytecodeGenerator& generator, RegisterI
+ 
+ void BlockNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
+-    if (!m_statements)
+-        return;
+-    generator.pushLexicalScope(this, BytecodeGenerator::ScopeType::LetConstScope, BytecodeGenerator::TDZCheckOptimization::Optimize, BytecodeGenerator::NestedScopeType::IsNested);
+-
+-    generator.emitBodyWithUsingIfNeeded(usingDeclarationCount(), hasAwaitUsingDeclaration(),
+-        [&](BytecodeGenerator& generator) {
+-            m_statements->emitBytecode(generator, dst);
+-        }
+-    );
+-
+-    generator.popLexicalScope(this);
++    generator.emitStatementSpine(dst, this);
+ }
+ 
+ // ------------------------------ EmptyStatementNode ---------------------------
+@@ -4485,40 +4475,174 @@ bool IfElseNode::tryFoldBreakAndContinue(BytecodeGenerator& generator, Statement
+ 
+ void IfElseNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
+ {
+-    if (generator.shouldBeConcernedWithCompletionValue()) {
+-        if (m_ifBlock->hasEarlyBreakOrContinue() || (m_elseBlock && m_elseBlock->hasEarlyBreakOrContinue()))
+-            generator.emitLoad(dst, jsUndefined());
++    generator.emitStatementSpine(dst, this);
++}
++
++// ------------------------------ Statement spine ------------------------------
++//
++// Blocks and `if` statements nested in each other are emitted by one loop over generator-owned
++// records instead of one native call per level, so their depth costs no host stack here
++// (docs/bun-patches/jsc-statement-spine.md in bun-wasm). Every emit call happens in the order the
++// recursive BlockNode and IfElseNode emitters made it. Any other child is emitted natively through
++// emitNodeInTailPosition and may start a fresh activation above this one's base. No reference to a
++// record is held across a push or a native emit: records are read through last() each time.
++
++ALWAYS_INLINE bool BytecodeGenerator::reserveStatementSpineRecord()
++{
++    size_t size = m_statementSpine.size();
++    if (size < m_statementSpine.capacity())
++        return true;
++    return m_statementSpine.tryReserveCapacity(std::max<size_t>(16, size * 2));
++}
++
++// Opening a block or an `if` is everything its recursive emitter did before its first child. The
++// record is secured before any scope, register, label or jump exists, so a refusal leaves nothing
++// half open, as when emitNodeInTailPosition refuses a child. Both openers are out of line: they
++// return before any child is emitted, so their locals never stay under a native child.
++ALWAYS_INLINE void BytecodeGenerator::enterStatementSpineNode(RegisterID* dst, StatementNode* node)
++{
++    if (node->isBlock()) {
++        openStatementSpineBlock(dst, static_cast<BlockNode*>(node));
++        return;
++    }
++    ASSERT(node->isIfElseNode());
++    openStatementSpineIf(dst, static_cast<IfElseNode*>(node));
++}
++
++NEVER_INLINE void BytecodeGenerator::openStatementSpineBlock(RegisterID* dst, BlockNode* block)
++{
++    if (!block->m_statements)
++        return;
++    if (!reserveStatementSpineRecord()) [[unlikely]] {
++        emitThrowExpressionTooDeepException();
++        return;
++    }
++    // The stored answers are the list's own (one level: children answer from their bits).
++    ASSERT(block->m_hasCompletionValue == block->m_statements->hasCompletionValue());
++    ASSERT(block->m_hasEarlyBreakOrContinue == block->m_statements->hasEarlyBreakOrContinue());
++    pushLexicalScope(block, ScopeType::LetConstScope, TDZCheckOptimization::Optimize, NestedScopeType::IsNested);
++    unsigned usingCount = block->usingDeclarationCount();
++    if (usingCount)
++        beginUsingBodyScope(usingCount, block->hasAwaitUsingDeclaration());
++    StatementNode* head = block->m_statements->firstStatement();
++    StatementNode* lastWithCompletionValue = nullptr;
++    for (StatementNode* statement = shouldBeConcernedWithCompletionValue() ? head : nullptr;
++         statement; statement = statement->next()) {
++        if (statement->hasCompletionValue())
++            lastWithCompletionValue = statement;
++    }
++
++    m_statementSpine.append(StatementSpineRecord { StatementSpineRecord::Kind::Block, !!usingCount, false, block, dst, head, lastWithCompletionValue, nullptr, nullptr });
++}
++
++NEVER_INLINE void BytecodeGenerator::openStatementSpineIf(RegisterID* dst, IfElseNode* ifNode)
++{
++    if (!reserveStatementSpineRecord()) [[unlikely]] {
++        emitThrowExpressionTooDeepException();
++        return;
++    }
++    if (shouldBeConcernedWithCompletionValue()) {
++        if (ifNode->m_ifBlock->hasEarlyBreakOrContinue() || (ifNode->m_elseBlock && ifNode->m_elseBlock->hasEarlyBreakOrContinue()))
++            emitLoad(dst, jsUndefined());
+     }
+ 
+-    Ref<Label> beforeThen = generator.newLabel();
+-    Ref<Label> beforeElse = generator.newLabel();
+-    Ref<Label> afterElse = generator.newLabel();
++    Ref<Label> beforeThen = newLabel();
++    Ref<Label> beforeElse = newLabel();
++    Ref<Label> afterElse = newLabel();
+ 
+     Label* trueTarget = beforeThen.ptr();
+     Label& falseTarget = beforeElse.get();
+     FallThroughMode fallThroughMode = FallThroughMeansTrue;
+-    bool didFoldIfBlock = tryFoldBreakAndContinue(generator, m_ifBlock, trueTarget, fallThroughMode);
++    bool didFoldIfBlock = ifNode->tryFoldBreakAndContinue(*this, ifNode->m_ifBlock, trueTarget, fallThroughMode);
+ 
+-    generator.emitNodeInConditionContext(m_condition, *trueTarget, falseTarget, fallThroughMode);
+-    generator.emitLabel(beforeThen.get());
+-    generator.emitProfileControlFlow(m_ifBlock->startOffset());
++    emitNodeInConditionContext(ifNode->m_condition, *trueTarget, falseTarget, fallThroughMode);
++    emitLabel(beforeThen.get());
++    emitProfileControlFlow(ifNode->m_ifBlock->startOffset());
+ 
+-    if (!didFoldIfBlock) {
+-        generator.emitNodeInTailPosition(dst, m_ifBlock);
+-        if (m_elseBlock)
+-            generator.emitJump(afterElse.get());
++    // Every entered `if` owns one record, folded or not; beforeThen is bound and needs no owner.
++    StatementNode* pendingBranch = didFoldIfBlock ? nullptr : ifNode->m_ifBlock;
++    m_statementSpine.append(StatementSpineRecord { StatementSpineRecord::Kind::IfThen, false, didFoldIfBlock, ifNode, dst, pendingBranch, nullptr, WTF::move(beforeElse), WTF::move(afterElse) });
++}
++
++// What emitNodeInTailPosition does for a child, with blocks and `if`s entered in the loop.
++ALWAYS_INLINE void BytecodeGenerator::emitStatementSpineChild(RegisterID* dst, StatementNode* child)
++{
++    if (!child->isBlock() && !child->isIfElseNode()) {
++        emitNodeInTailPosition(dst, child);
++        return;
++    }
++    // Node::emitCode assumes that dst, if provided, is either a local or a referenced temporary.
++    ASSERT(!dst || dst == ignoredResult() || !dst->isTemporary() || dst->refCount());
++    if (child->needsDebugHook()) [[unlikely]]
++        emitDebugHook(child);
++    enterStatementSpineNode(dst, child);
++}
++
++NEVER_INLINE void BytecodeGenerator::emitStatementSpineCompletionLoad(RegisterID* dst)
++{
++    emitLoad(dst, jsUndefined());
++}
++
++// A record with no child left: a block closes (the end of BlockNode::emitBytecode), and an `if`
++// takes its step after a branch (IfElseNode::emitBytecode after each emitNodeInTailPosition).
++// Out of line, like the openers: this step emits no node, and the loop's frame, which stays under
++// every native child, keeps none of its locals.
++NEVER_INLINE void BytecodeGenerator::finishStatementSpineStep()
++{
++    StatementSpineRecord& record = m_statementSpine.last();
++    if (record.kind == StatementSpineRecord::Kind::Block) {
++        BlockNode* block = static_cast<BlockNode*>(record.node);
++        if (record.hasUsingScope)
++            endUsingBodyScope();
++        popLexicalScope(block);
++        m_statementSpine.removeLast();
++        return;
+     }
+ 
+-    generator.emitLabel(beforeElse.get());
+-
+-    if (m_elseBlock) {
+-        generator.emitProfileControlFlow(m_ifBlock->endOffset() + (m_ifBlock->isBlock() ? 1 : 0));
+-        generator.emitNodeInTailPosition(dst, m_elseBlock);
++    IfElseNode* ifNode = static_cast<IfElseNode*>(record.node);
++    if (record.kind == StatementSpineRecord::Kind::IfThen) {
++        if (!record.didFoldIfBlock && ifNode->m_elseBlock)
++            emitJump(*m_statementSpine.last().afterElse);
++        emitLabel(*m_statementSpine.last().beforeElse);
++        if (ifNode->m_elseBlock) {
++            emitProfileControlFlow(ifNode->m_ifBlock->endOffset() + (ifNode->m_ifBlock->isBlock() ? 1 : 0));
++            StatementSpineRecord& elseRecord = m_statementSpine.last();
++            elseRecord.kind = StatementSpineRecord::Kind::IfElse;
++            elseRecord.next = ifNode->m_elseBlock;
++            return;
++        }
+     }
+ 
+-    generator.emitLabel(afterElse.get());
+-    StatementNode* endingBlock = m_elseBlock ? m_elseBlock : m_ifBlock;
+-    generator.emitProfileControlFlow(endingBlock->endOffset() + (endingBlock->isBlock() ? 1 : 0));
++    emitLabel(*m_statementSpine.last().afterElse);
++    StatementNode* endingBlock = ifNode->m_elseBlock ? ifNode->m_elseBlock : ifNode->m_ifBlock;
++    emitProfileControlFlow(endingBlock->endOffset() + (endingBlock->isBlock() ? 1 : 0));
++    m_statementSpine.removeLast();
++}
++
++void BytecodeGenerator::emitStatementSpine(RegisterID* dst, StatementNode* root)
++{
++    size_t base = m_statementSpine.size();
++    enterStatementSpineNode(dst, root);
++    while (m_statementSpine.size() > base) {
++        StatementSpineRecord& record = m_statementSpine.last();
++        StatementNode* child = record.next;
++        if (!child) {
++            finishStatementSpineStep();
++            continue;
++        }
++        RegisterID* childDst = record.dst;
++        if (record.kind != StatementSpineRecord::Kind::Block)
++            record.next = nullptr; // An `if` branch is emitted once.
++        else {
++            // SourceElements::emitBytecode, one statement per turn.
++            record.next = child->next();
++            if (!shouldBeConcernedWithCompletionValue())
++                childDst = ignoredResult();
++            else if (child == record.lastWithCompletionValue)
++                emitStatementSpineCompletionLoad(childDst);
++        }
++        emitStatementSpineChild(childDst, child);
++    }
+ }
+ 
+ // ------------------------------ DoWhileNode ----------------------------------
+diff --git a/Source/JavaScriptCore/parser/NodeConstructors.h b/Source/JavaScriptCore/parser/NodeConstructors.h
+--- a/Source/JavaScriptCore/parser/NodeConstructors.h
++++ b/Source/JavaScriptCore/parser/NodeConstructors.h
+@@ -1141,6 +1141,8 @@ namespace JSC {
+         : StatementNode(location)
+         , VariableEnvironmentNode(WTF::move(lexicalVariables), WTF::move(functionStack))
+         , m_statements(statements)
++        , m_hasCompletionValue(statements && statements->hasCompletionValue())
++        , m_hasEarlyBreakOrContinue(statements && statements->hasEarlyBreakOrContinue())
+     {
+     }
+ 
+diff --git a/Source/JavaScriptCore/parser/Nodes.cpp b/Source/JavaScriptCore/parser/Nodes.cpp
+--- a/Source/JavaScriptCore/parser/Nodes.cpp
++++ b/Source/JavaScriptCore/parser/Nodes.cpp
+@@ -105,12 +105,12 @@ StatementNode* BlockNode::singleStatement() const
+ 
+ bool BlockNode::hasCompletionValue() const
+ {
+-    return m_statements && m_statements->hasCompletionValue();
++    return m_hasCompletionValue;
+ }
+ 
+ bool BlockNode::hasEarlyBreakOrContinue() const
+ {
+-    return m_statements && m_statements->hasEarlyBreakOrContinue();
++    return m_hasEarlyBreakOrContinue;
+ }
+ 
+ // ------------------------------ ScopeNode -----------------------------
+diff --git a/Source/JavaScriptCore/parser/Nodes.h b/Source/JavaScriptCore/parser/Nodes.h
+--- a/Source/JavaScriptCore/parser/Nodes.h
++++ b/Source/JavaScriptCore/parser/Nodes.h
+@@ -264,6 +264,7 @@ namespace JSC {
+         virtual bool isContinue() const { return false; }
+         virtual bool isLabel() const { return false; }
+         virtual bool isBlock() const { return false; }
++        virtual bool isIfElseNode() const { return false; }
+         virtual bool isFuncDeclNode() const { return false; }
+         virtual bool isModuleDeclarationNode() const { return false; }
+         virtual bool isForOfNode() const { return false; }
+@@ -1659,6 +1660,8 @@ namespace JSC {
+         StatementNode* lastStatement() const;
+ 
+     private:
++        friend class BytecodeGenerator;
++
+         void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
+ 
+         bool hasCompletionValue() const final;
+@@ -1667,6 +1670,9 @@ namespace JSC {
+         bool isBlock() const final { return true; }
+ 
+         SourceElements* m_statements;
++        // Both answers are fixed once the block is built: its list is finished and never changes.
++        bool m_hasCompletionValue : 1;
++        bool m_hasEarlyBreakOrContinue : 1;
+     };
+ 
+     class EmptyStatementNode final : public StatementNode {
+@@ -1741,6 +1747,9 @@ namespace JSC {
+         IfElseNode(const JSTokenLocation&, ExpressionNode* condition, StatementNode* ifBlock, StatementNode* elseBlock);
+ 
+     private:
++        friend class BytecodeGenerator;
++
++        bool isIfElseNode() const final { return true; }
+         void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
+         bool tryFoldBreakAndContinue(BytecodeGenerator&, StatementNode* ifBlock,
+             Label*& trueTarget, FallThroughMode&);
+@@ -1890,8 +1899,18 @@ namespace JSC {
+         bool isLabel() const final { return true; }
+ 
+     private:
+-        bool hasCompletionValue() const final { return m_statement->hasCompletionValue(); }
+-        bool hasEarlyBreakOrContinue() const final { return m_statement->hasEarlyBreakOrContinue(); }
++        // A run of labels is built in a loop, so it is answered in one too: the queries go to the
++        // first statement that is not a label, without recursion. That statement answers in
++        // constant time (a block from its stored bits).
++        bool hasCompletionValue() const final { return unlabelledStatement()->hasCompletionValue(); }
++        bool hasEarlyBreakOrContinue() const final { return unlabelledStatement()->hasEarlyBreakOrContinue(); }
++        StatementNode* unlabelledStatement() const
++        {
++            StatementNode* statement = m_statement;
++            while (statement->isLabel())
++                statement = static_cast<const LabelNode*>(statement)->m_statement;
++            return statement;
++        }
+         void emitBytecode(BytecodeGenerator&, RegisterID* = nullptr) final;
+ 
+         const Identifier& m_name;
 diff --git a/Source/JavaScriptCore/bytecode/BytecodeList.rb b/Source/JavaScriptCore/bytecode/BytecodeList.rb
 index fab0e74..79215b0 100644
 --- a/Source/JavaScriptCore/bytecode/BytecodeList.rb
