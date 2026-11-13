@@ -113,9 +113,8 @@ natives. The runtime JavaScript calls them the same way on every engine.
 
 ### Staged commit
 
-The core and the engine side can publish a message, its ports and its detached buffers in
-one native call. The runtime JavaScript does not use this yet: `postMessage` still runs the
-sequence under "Rules" below, and moves to this call in the change that follows.
+A post over a group lane publishes its message, its ports and its detached buffers in one
+native call, and that call is the last statement of `postMessage`.
 
 - `laneStageEnd(sender end, carried end)` adds a port end to the frame staged under the
   sender end and returns the epoch it will have in flight. Nothing moves and nothing in group
@@ -144,25 +143,54 @@ sequence under "Rules" below, and moves to this call in the change that follows.
 access of the commit. The engine crate's tests run the native on QuickJS with a recording
 stand-in for the core.
 
-### Engine exceptions between detachment and return
+How `postMessage` uses it (`worker_threads.ts`, `GroupPost`):
 
-Word natives remove the native bridge's own failures. The JavaScript around them can still be
-interrupted by an exception the engine raises itself. Two kinds are catchable:
+- Everything fallible comes first. The codec walks the message, which is the only step that
+  runs user code. Then the frame is staged, each carried port's end is named under it, and
+  each carried port's local state is taken off its object. The sender's sequence is advanced.
+- The transfer native is then called as an expression statement, outside any `try`, with
+  nothing after it. `scripts/worker-post-shape.test.ts` checks that shape in the JavaScript
+  the build emits, and in each wrapper that forwards to a port's `postMessage`.
+- A refusal from the native (a buffer its predicate rejects, or the core's commit check) calls
+  back into JavaScript before anything detaches. That callback rolls the post back (the
+  staged frame, the ports' local state, the sequence) and makes the `DataCloneError`.
+- A post is listed in a registry from the start of its gather. If an exception keeps the
+  rollback from running or finishing, the post is still listed, and the next entry into the
+  module or the next loop step finishes it: the core says whether the post's nonce was
+  committed. Every port method settles earlier posts first.
+- What a committed post owes others is sent at that same next entry or step: the broker's
+  record that a port is moving, the publication's commit, the wake hint. None of it is needed
+  for the message to be whole. The receiver adopts a carried end from the ledger and binds
+  it at its next version, and its own idle loop reads its lanes without the hint.
+- A post made from a getter of another post commits and is finished before the outer one
+  stages anything, because the core remembers one commit, the last.
 
-- Stack exhaustion. Measured on a shared-group QuickJS guest on the native launcher: a
-  `postMessage` that transfers an ArrayBuffer, with and without a carried port, called from
-  every stack depth around the limit, with the sender on the group's first guest and in a
-  worker, at 4096 KiB and 36 KiB budgets. In 59,520 attempts every call either threw with the
-  buffer attached, the port still local and nothing received, or returned with the whole
-  message received. The reason is the order of work: the deepest point of the call is reached
-  while the message is prepared and staged, before anything detaches, and what follows
-  detachment is a loop over the carried ports, not a recursion. A control that overflows on
-  purpose after a finished post is reported by the same probe. This has not been measured on
-  JSC or SpiderMonkey guests.
-- Heap exhaustion that QuickJS reports as a catchable error. After detachment the runtime still
-  creates a few small objects and one control frame. An allocation failure exactly there, after
-  the larger allocations of preparing and staging succeeded and were freed, has not been
-  produced or ruled out.
+### Between the first detach and the return
+
+No runtime JavaScript runs there, so no exception the engine raises in JavaScript can
+separate a detached buffer from its message. What runs is the engine's detach primitive, the
+core's commit, the native wrapper's return and the interpreter's return from `postMessage`.
+
+- The native makes its result and takes one more reference to every argument and buffer
+  before the first detach. Making `undefined` allocates on JSC for wasm32 (a wrapper cell)
+  and on SpiderMonkey (a handle slot), and JSC's release of a last protected reference can
+  shrink its protect table, which allocates. With the extra references every release on the
+  way out only lowers a count.
+- The detach predicates cover every rejection of the detach primitives: QuickJS and JSC have
+  none, and SpiderMonkey's four are an unwrappable object, a detach key, an immutable buffer
+  and a pinned length. SpiderMonkey's predicate (`bsm_is_detachable_buffer`) does not check
+  the immutable flag yet, so an immutable buffer there still reaches the primitive, whose
+  refusal the adapter treats as a broken invariant.
+- The return paths were read in the engine sources at their pins: the call's continuation
+  and the function return raise nothing a program can catch on QuickJS, on JSC's C-loop with
+  every JIT tier off, or on either SpiderMonkey tier. A build still has to show it on each
+  engine and host with the stack and heap probes, and for JSC with a read of the generated
+  interpreter and of the bytecode emitted for `postMessage` from the matching build.
+
+Measured so far: the stack probe on a shared-group QuickJS guest on the native launcher, at
+an earlier head of this change that still ran JavaScript after the detach (59,520 attempts,
+no violation). It has to be run again on this path, and has not been run on JSC or
+SpiderMonkey guests or under Waffle.
 
 Ending a guest is not catchable and follows the death rules.
 
@@ -170,9 +198,11 @@ Ending a guest is not catchable and follows the death rules.
 
 - Staging may allocate and call the host, and refuses with `DataCloneError` before detachment.
   Commit is stores only, with no allocation, and one publication point: the ring cursor, a
-  segment's committed or next word, or the ring cursor after sealing. Between detachment and
-  the return of `postMessage` the only native calls are word natives: the transfer of each
-  carried end, then the frame's commit.
+  segment's committed or next word, or the ring cursor after sealing. A post's ports move and
+  its frame commits inside the transfer native, after its buffers detach ("Staged commit").
+  The other senders of carried ports (a worker's `workerData`, a delivery within one thread,
+  `structuredClone`) still move each end with the `laneTransfer` word after detaching, and
+  make no claim about an exception between the two.
 - A terminal end (Closed, or ClosedDead after an exit report) is reader-closed by its end word.
   A close, cascade, death declaration or release therefore writes nothing after its terminal
   swap except generation-checked swaps, and nothing counts dead ends but their end words. A

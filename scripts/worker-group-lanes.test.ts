@@ -6,7 +6,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { PipeController, type PipeEndpoint } from "../node_modules/waffle/proc/pipes.ts";
 import { createGroupLaneModel, groupSharedObjects } from "./fixtures/shared-objects/group-lanes";
-import { sourceChannels, sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { sourceChannels, sourcePorts, type SourcePort, type TransferHooks } from "./fixtures/shared-objects/source-runtime";
 
 const AGAIN = -6;
 const cleanup = new Set<() => void>();
@@ -81,11 +81,11 @@ function spawnPipes(pid: number, trace: Trace, direct: boolean, parentOpen: Retu
 
 type Runtime = ReturnType<typeof sourcePorts>;
 /** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
-function group(options: { beforeDetach?: () => void; realLoop?: boolean } = {}) {
+function group(options: { realLoop?: boolean } & TransferHooks = {}) {
   const model = createGroupLaneModel();
   const trace: Trace = [];
   const rootLanes = model.member(1);
-  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), beforeDetach: options.beforeDetach, realLoop: options.realLoop });
+  const root = sourcePorts({ sharedObjects: groupSharedObjects(rootLanes), core: rootLanes.natives, beforeTransfer: options.beforeTransfer, beforeDetach: options.beforeDetach, settled: options.settled, realLoop: options.realLoop });
   cleanup.add(() => root.__fixtureShutdown());
   const rootOpen = guestPipes(trace);
   let next = 2;
@@ -100,7 +100,7 @@ function group(options: { beforeDetach?: () => void; realLoop?: boolean } = {}) 
     const plan = root.codec.prepare([data, [], port2], transfer.concat([port2]), [], { kind: "cell", cell });
     plan.commit();
     root.__fixtureChild(pipes.parent, plan.graph, id);
-    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell }, realLoop: options.realLoop });
+    const child: Runtime = sourcePorts({ sharedObjects: groupSharedObjects(lanes), core: lanes.natives, channel: pipes.child, graph: plan.graph, route: [id], lanes: { ledger: 4096, cell }, realLoop: options.realLoop });
     cleanup.add(() => child.__fixtureShutdown());
     child.initialize();
     return { child, port: port1, pipes, cell, pid };
@@ -257,43 +257,193 @@ test("a port holding frames it read and never took cannot move until it takes th
   expect(root.receiveMessageOnPort(moved.port)?.message).toBe("after the move");
 });
 
-test("between detachment and its return, postMessage calls only natives that cannot fail", () => {
-  let detached = -1;
-  const made = group({ beforeDetach: () => { detached = made.model.control.calls.length; } });
+test("a post commits in the transfer native, and nothing runs between its detach and its return", () => {
+  let detached = -1, settled = 0;
+  const made = group({ beforeDetach: () => { detached = made.model.control.calls.length; }, settled: () => { settled++; } });
   const { child, port } = made.spawn();
   const extra = new made.root.MessageChannel();
   const buffer = new ArrayBuffer(32);
+  const calls = made.model.control.calls;
   port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]);
-  const after = made.model.control.calls.slice(detached);
-  // The carried end goes in flight and the frame is published: two word natives. A reserve,
-  // a drain or a refusal lookup here would be a call that can throw after detachment.
+  // The last native before the detach is the commit check, the last call that can refuse. After
+  // it only the native's own commit runs: the runtime calls nothing until it is entered again.
   expect(detached).toBeGreaterThan(0);
-  expect(after).toEqual(["laneTransfer", "laneCommit"]);
-  expect(child.receiveMessageOnPort(child.parentPort)?.message).toMatchObject({ buffer: new ArrayBuffer(32) });
+  expect(calls[detached - 1]).toBe("laneCommitCheck");
+  expect(calls.slice(detached)).toEqual(["laneCommitStaged"]);
+  expect(settled).toBe(0);
+  expect(buffer.byteLength).toBe(0);
+  // The receiver needs nothing more from the sender: the message is whole and its port works.
+  const message = child.receiveMessageOnPort(child.parentPort)?.message as { buffer: ArrayBuffer; port: SourcePort };
+  expect(message.buffer).toEqual(new ArrayBuffer(32));
+  message.port.postMessage("carried");
+  expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("carried");
+  // The sender's next entry finishes what the post owed and releases what the native held.
+  expect(settled).toBe(1);
+  expect(made.model.control.staged).toBe(0);
 });
 
 for (const when of ["before", "after"] as const) {
-  test(`a worker's post is whole and returns when its control pipe write fails ${when} it ran`, () => {
+  test(`a worker's post writes nothing to its pipe, and the record it owes goes out once when that write fails ${when} it ran`, () => {
     const { root, trace, spawn } = group();
     const { child, port, pid } = spawn();
     const extra = new child.MessageChannel();
     const buffer = new ArrayBuffer(32);
-    // The first write after detachment carries the broker's record that the port is moving.
+    const records = () => trace.filter(item => item.from === `child ${pid}`).reduce((sum, item) => sum + item.text.split('"moving"').length - 1, 0);
     pipeFault.next = when;
     expect(() => child.parentPort.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).not.toThrow();
-    expect(pipeFault.next).toBeNull();
+    // The post ended with the call that committed it: the record that the port is moving is owed.
+    expect(pipeFault.next).toBe(when);
+    expect(records()).toBe(0);
     expect(buffer.byteLength).toBe(0);
     const message = root.receiveMessageOnPort(port)?.message as { buffer: ArrayBuffer; port: SourcePort };
     expect(message.buffer).toEqual(new ArrayBuffer(32));
-    // The record goes out once: with the post, or at the child's next step if that write never ran.
+    // The child's next steps send it, once, whichever way its first write failed.
     child.step();
-    const records = trace.filter(item => item.from === `child ${pid}`).map(item => item.text.split('"moving"').length - 1);
-    expect(records.reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(pipeFault.next).toBeNull();
+    child.step();
+    expect(records()).toBe(1);
     root.step();
     message.port.postMessage("to the worker");
     expect(child.receiveMessageOnPort(extra.port1)?.message).toBe("to the worker");
   });
 }
+
+/** What a failed post must leave: the buffers attached, the carried port usable here, nothing staged, no sequence taken. */
+function expectNothingMoved(made: ReturnType<typeof group>, spawned: ReturnType<ReturnType<typeof group>["spawn"]>, extra: { port1: SourcePort; port2: SourcePort }, buffer: ArrayBuffer) {
+  expect(buffer.byteLength).toBe(32);
+  extra.port2.postMessage("still here");
+  expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("still here");
+  expect(made.model.control.staged).toBe(0);
+  expect(spawned.child.receiveMessageOnPort(spawned.child.parentPort)).toBeUndefined();
+  // The next post takes the sequence the failed one would have had, so the receiver sees no gap.
+  spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]);
+  expect(buffer.byteLength).toBe(0);
+  const message = spawned.child.receiveMessageOnPort(spawned.child.parentPort)?.message as { buffer: ArrayBuffer; port: SourcePort };
+  expect(message.buffer).toEqual(new ArrayBuffer(32));
+  message.port.postMessage("carried");
+  expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("carried");
+}
+
+test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
+  const failure = new RangeError("Maximum call stack size exceeded");
+  let fail = true;
+  const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
+  const spawned = made.spawn();
+  const extra = new made.root.MessageChannel();
+  const buffer = new ArrayBuffer(32);
+  extra.port2.ref();
+  expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(failure);
+  // The call never ran, so nothing could undo the local steps taken before it. The next entry
+  // into the runtime does, before it does anything else.
+  expect(extra.port2.hasRef()).toBe(true);
+  expectNothingMoved(made, spawned, extra, buffer);
+});
+
+test("a commit the core refuses throws DataCloneError with everything put back before the throw", () => {
+  let stale = true;
+  const made = group({ beforeTransfer: () => {
+    if (!stale) return;
+    stale = false;
+    // The carried end changed after it was staged: its epoch is no longer the one that was named.
+    for (const lane of made.model.lanes.slice(1)) lane.ends[0].epoch += 2;
+  } });
+  const spawned = made.spawn();
+  const extra = new made.root.MessageChannel();
+  const buffer = new ArrayBuffer(32);
+  const calls = made.model.control.calls;
+  expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(expect.objectContaining({ name: "DataCloneError", message: "MessagePort changed during transfer" }));
+  // The refusal rolled the post back itself: the staged frame is gone with no later entry.
+  expect(calls.at(-1)).not.toBe("laneCommitStaged");
+  expect(made.model.control.staged).toBe(0);
+  for (const lane of made.model.lanes.slice(1)) lane.ends[0].epoch -= 2;
+  expectNothingMoved(made, spawned, extra, buffer);
+});
+
+test("a buffer the native finds detached is refused with every other buffer attached", () => {
+  let detach: ArrayBuffer | null = null;
+  const made = group({ beforeTransfer: () => { if (detach) structuredClone(detach, { transfer: [detach] }); detach = null; } });
+  const spawned = made.spawn();
+  const extra = new made.root.MessageChannel();
+  const buffer = new ArrayBuffer(32), gone = new ArrayBuffer(8);
+  detach = gone;
+  expect(() => spawned.port.postMessage({ buffer, gone, port: extra.port2 }, [buffer, gone, extra.port2])).toThrow(expect.objectContaining({ name: "DataCloneError", message: "ArrayBuffer is not detachable" }));
+  expect(made.model.control.calls.includes("laneCommitStaged")).toBe(false);
+  expectNothingMoved(made, spawned, extra, buffer);
+});
+
+test("a post made from a getter of another post is whole first, and both keep their order", () => {
+  const { root, spawn } = group();
+  const { child, port } = spawn();
+  const extra = new root.MessageChannel();
+  const buffer = new ArrayBuffer(32);
+  const outer = { buffer, get nested() { port.postMessage({ inner: true, port: extra.port2 }, [extra.port2]); return "ran"; } };
+  port.postMessage(outer, [buffer]);
+  const first = child.receiveMessageOnPort(child.parentPort)?.message as { inner: boolean; port: SourcePort };
+  expect(first.inner).toBe(true);
+  expect(child.receiveMessageOnPort(child.parentPort)?.message).toEqual({ buffer: new ArrayBuffer(32), nested: "ran" });
+  expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+  first.port.postMessage("carried by the inner post");
+  expect(root.receiveMessageOnPort(extra.port1)?.message).toBe("carried by the inner post");
+});
+
+test("a post whose getter runs a loop step is given up clean, and the next one goes through", () => {
+  const { model, root, spawn } = group();
+  const { child, port } = spawn();
+  const buffer = new ArrayBuffer(32);
+  let step = true;
+  const message = { buffer, get stepped() { if (step) root.step(); return 1; } };
+  // The step runs inside no post, so it took this one for abandoned and rolled it back.
+  expect(() => port.postMessage(message, [buffer])).toThrow(expect.objectContaining({ name: "DataCloneError" }));
+  expect(buffer.byteLength).toBe(32);
+  expect(model.control.staged).toBe(0);
+  expect(child.receiveMessageOnPort(child.parentPort)).toBeUndefined();
+  step = false;
+  port.postMessage(message, [buffer]);
+  expect(child.receiveMessageOnPort(child.parentPort)?.message).toEqual({ buffer: new ArrayBuffer(32), stepped: 1 });
+});
+
+test("what a post owes is retried when settling it fails, and the failure is not the post's", () => {
+  const failure = new RangeError("Maximum call stack size exceeded");
+  let fail = 0, settled = 0;
+  const made = group({ settled: () => { if (fail-- > 0) throw failure; settled++; } });
+  const { child, port } = made.spawn();
+  const extra = new made.root.MessageChannel();
+  port.postMessage({ port: extra.port2 }, [extra.port2]);
+  fail = 2;
+  // The next call into the runtime finds the debt first and fails before doing its own work.
+  expect(() => port.postMessage("second")).toThrow(failure);
+  // A loop step meets the same failure, keeps it to itself and leaves the debt for the next.
+  expect(() => made.root.step()).not.toThrow();
+  expect(settled).toBe(0);
+  made.root.step();
+  expect(settled).toBe(1);
+  port.postMessage("third");
+  const got: unknown[] = [];
+  for (let item = child.receiveMessageOnPort(child.parentPort); item; item = child.receiveMessageOnPort(child.parentPort)) got.push(item.message);
+  // The first message was whole all along, and the refused second took no sequence.
+  expect(got).toHaveLength(2);
+  expect(got[1]).toBe("third");
+  (got[0] as { port: SourcePort }).port.postMessage("carried");
+  expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("carried");
+});
+
+test("a carried port is restored and sent on before its first sender ever settles", () => {
+  const { root, trace, spawn } = group();
+  const first = spawn(), second = spawn();
+  const extra = new first.child.MessageChannel();
+  // The first worker posts a port to the root and never runs again.
+  first.child.parentPort.postMessage({ port: extra.port2 }, [extra.port2]);
+  const arrived = root.receiveMessageOnPort(first.port)?.message as { port: SourcePort };
+  second.port.postMessage({ port: arrived.port }, [arrived.port]);
+  const moved = second.child.receiveMessageOnPort(second.child.parentPort)?.message as { port: SourcePort };
+  moved.port.postMessage("to the first worker");
+  expect(first.child.receiveMessageOnPort(extra.port1)?.message).toBe("to the first worker");
+  // Its record that the port was moving arrives late, at an older version, and changes nothing.
+  first.child.step(); first.child.step(); root.step();
+  expect(trace.some(item => item.from === `child ${first.pid}` && item.text.includes('"moving"'))).toBe(true);
+  extra.port1.postMessage("to the second worker");
+  expect(second.child.receiveMessageOnPort(moved.port)?.message).toBe("to the second worker");
+});
 
 /**
  * The runtime's real loop (net.js `pumpIo`) drops a waiter whose step throws and hands the error

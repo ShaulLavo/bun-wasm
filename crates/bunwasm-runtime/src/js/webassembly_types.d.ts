@@ -42,6 +42,13 @@ declare namespace BunWasm {
     laneAdopt(slot: number, generation: number, side: number, epoch: number, version: number): number;
     laneCommit(slot: number, generation: number, side: number): number;
     laneAbort(slot: number, generation: number, side: number): number;
+    /** Names a carried end under the frame staged for the sender end; the epoch it will travel at, or -1. */
+    laneStageEnd(slot: number, generation: number, side: number, carriedSlot: number, carriedGeneration: number, carriedSide: number): number;
+    /** Called by the engine's transfer native, never from JavaScript: the last check, then the commit. */
+    laneCommitCheck(slot: number, generation: number, side: number, nonceHigh: number, nonceLow: number): number;
+    laneCommitStaged(slot: number, generation: number, side: number, nonceHigh: number, nonceLow: number): number;
+    /** The last staged commit's nonce doubled, plus one when its reader was due a wake; 0 before any. */
+    laneCommitted(): number;
     laneDrained(slot: number, generation: number, side: number): number;
     laneCloseRead(slot: number, generation: number, side: number): number;
     laneCloseEnd(slot: number, generation: number, side: number): number;

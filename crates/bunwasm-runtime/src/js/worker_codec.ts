@@ -217,7 +217,25 @@
         try { internal.native.transferArrayBuffers(buffers); }
         catch { throw cloneError("ArrayBuffer is not detachable"); }
       }
-      return { graph, commit, abort };
+      // A group-lane post commits in the engine's transfer native, which detaches the buffers,
+      // moves the ports and publishes the frame in one call. So `stage` makes every check
+      // `commit` makes and moves nothing, and `settle` records what that call came to.
+      function stage(): BunWasm.StagedSend {
+        if (phase !== "prepared") throw cloneError("Worker transfer is no longer prepared");
+        try {
+          validateTransfers();
+          const plans = Array.from(ports.values());
+          for (const plan of plans) plan.beforeCommit?.();
+          validateTransfers();
+          return { buffers, ports: plans };
+        } catch (error) { abort(); throw error; }
+      }
+      function settle(committed: boolean) {
+        if (!committed) { abort(); return; }
+        if (phase === "aborted") return;
+        publication?.commit(); phase = "committed";
+      }
+      return { graph, commit, abort, stage, settle };
     }
 
     function decode(value: unknown) {

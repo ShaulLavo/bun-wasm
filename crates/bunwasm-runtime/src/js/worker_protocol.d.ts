@@ -48,6 +48,12 @@ declare namespace BunWasm {
     peerClosed(): boolean;
     transferEpoch(): number;
     transfer(custody: LaneCustody): void;
+    /** Stages a frame under this end for the engine's transfer native to commit. Throws DataCloneError when it cannot be stored whole. */
+    stage(text: string): void;
+    /** Names an end the staged frame carries; the epoch it will travel at. Throws DataCloneError when it cannot move. */
+    stageEnd(carried: GroupPortLane | (GroupLaneRef & { side: 0 | 1 })): number;
+    /** Drops the staged frame and the ends it named. Nothing had moved. */
+    abort(): void;
   }
   interface GroupLanes {
     ledger(): number;
@@ -66,6 +72,8 @@ declare namespace BunWasm {
     epochs(): number;
     /** Ledger counts for tests (`internal/bunwasm/group-lanes`); null before this member has a ledger. */
     census(): GroupLaneCensus | null;
+    /** This thread's last staged commit: its nonce (0 before any) and whether its reader was due a wake. */
+    committed(): [nonce: number, wake: boolean];
   }
   interface GroupLaneCensus {
     liveLanes: number; openEnds: number; inFlight: number; deadEnds: number; linkedSegments: number;
@@ -90,7 +98,17 @@ declare namespace BunWasm {
     publish?(toward?: string): void;
     beforeCommit?(): void;
     commit(custody: LaneCustody): void;
+    /**
+     * A post that commits in the engine's transfer native. `detach` takes the port's local state
+     * off its object before that call, `restore` puts it back when the call refuses, and `moved`
+     * tells the broker once the call has returned. `restore` and `moved` do nothing harmful when
+     * repeated, and `restore` is safe after a `detach` that did not finish or never ran.
+     */
+    stage?(): StagedPort;
   }
+  interface StagedPort { detach(): void; restore(): void; moved(): void; }
+  /** What a caller that commits a prepared send itself needs: the buffers to detach and the ports it carries. */
+  interface StagedSend { buffers: ArrayBuffer[]; ports: PortTransfer[]; }
   interface WorkerCodecHooks {
     sharedObjects?: SharedObjects;
     groupLanes?: GroupLanes;
@@ -130,10 +148,19 @@ declare namespace BunWasm {
     readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
   }
+  interface PreparedSend {
+    graph: WorkerGraph;
+    commit(deliver?: () => void, toward?: string, reserved?: boolean): void;
+    abort(): void;
+    /** Every check `commit` makes, with nothing moved, for a caller that commits the send itself. */
+    stage(): StagedSend;
+    /** After `stage`: the caller's commit happened, or did not. Safe to repeat. */
+    settle(committed: boolean): void;
+  }
   interface WorkerCodec {
     /** `custody`: where transferred ports wait while the message travels. `reserved`: `deliver` only
      * stages a frame that is published after the commit, so publications stay revocable until then. */
-    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[], custody?: LaneCustody): { graph: WorkerGraph; commit(deliver?: () => void, toward?: string, reserved?: boolean): void; abort(): void };
+    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[], custody?: LaneCustody): PreparedSend;
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
     wait(value: unknown, ready: () => void): (() => void) | null;
@@ -202,7 +229,14 @@ declare namespace BunWasm {
     utf8Decode(bytes: Uint8Array): string;
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array<ArrayBuffer>;
-    transferArrayBuffers(buffers: ArrayBuffer[]): void;
+    /**
+     * Detaches `buffers`. With a sender end and a nonce it also commits the message staged
+     * under that end, in the same call: it throws with nothing moved or returns with the whole
+     * message published. `refuse` makes the error a refusal throws.
+     */
+    transferArrayBuffers(buffers: ArrayBuffer[], slot?: number, generation?: number, side?: number, nonceHigh?: number, nonceLow?: number, refuse?: (message: string) => unknown): void;
+    /** Releases what the last `transferArrayBuffers` kept referenced across its return. */
+    transferSettled?(): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;

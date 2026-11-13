@@ -95,8 +95,37 @@ function sourceLoop(internal: { native: object; require(name: string): unknown; 
   if (!pumpIo) throw new Error("net.js installed no pumpIo");
   return { pumpIo };
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; beforeDetach?: () => void; active?: () => boolean; realLoop?: boolean } = {}) {
-  const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
+/** The core natives the engine's transfer native calls itself. */
+type CommitNatives = Pick<BunWasm.WasmNative, "laneCommitCheck" | "laneCommitStaged">;
+/**
+ * `beforeTransfer` runs on entry to a lane post's transfer call and may throw, as an engine may
+ * on entering any call. `beforeDetach` runs at the point after which the real native runs no
+ * JavaScript. `settled` counts `transferSettled` calls.
+ */
+export interface TransferHooks { beforeTransfer?: () => void; beforeDetach?: () => void; settled?: () => void; }
+/**
+ * A stand-in for the engine's transfer native (crates/bunwasm-engine-quickjs/src/transfer.rs),
+ * in its order: the detach predicate on every buffer, the core's commit check, then the
+ * detaches and the commit with nothing between them. A refusal throws what `refuse` makes.
+ */
+function transferNative(hooks: TransferHooks, core?: CommitNatives) {
+  return function transferArrayBuffers(buffers: ArrayBuffer[], slot?: number, generation?: number, side?: number, high?: number, low?: number, refuse?: (message: string) => unknown) {
+    if (slot === undefined || generation === undefined || side === undefined || high === undefined || low === undefined) {
+      hooks.beforeDetach?.(); native.transferArrayBuffers(buffers);
+      return;
+    }
+    hooks.beforeTransfer?.();
+    if (!core) throw new TypeError("MessagePort lanes are not available");
+    const refused = (message: string) => refuse ? refuse(message) : new DOMException(message, "DataCloneError");
+    if (buffers.some(buffer => !(buffer instanceof ArrayBuffer) || buffer.detached)) throw refused("ArrayBuffer is not detachable");
+    if (core.laneCommitCheck(slot, generation, side, high, low) < 0) throw refused("MessagePort changed during transfer");
+    hooks.beforeDetach?.();
+    native.transferArrayBuffers(buffers);
+    core.laneCommitStaged(slot, generation, side, high, low);
+  };
+}
+export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; active?: () => boolean; realLoop?: boolean; core?: CommitNatives } & TransferHooks = {}) {
+  const runtimeNative = { ...native, transferArrayBuffers: transferNative(options, options.core), transferSettled() { options.settled?.(); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
   // The runtime's own event-loop waiter, so a test can run real steps.

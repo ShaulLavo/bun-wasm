@@ -263,7 +263,7 @@
    * is owed stays listed and the next step asks again.
    */
   function settleOwed() {
-    try { internal.sharedObjects?.settle?.(); }
+    try { settlePosts(true); internal.sharedObjects?.settle?.(); }
     catch { /* still owed */ }
   }
   /**
@@ -385,6 +385,128 @@
     phase: "open" | "closing" | "closed";
     batch: DeliveryBatch | null;
     started: boolean; scheduled: boolean;
+  }
+  /**
+   * A post over a group lane. It commits in one native call, the last thing `postMessage` does:
+   * `transferArrayBuffers` checks everything once more, then detaches the buffers, moves the
+   * carried ports and publishes the frame, and returns. A caller that catches an exception has
+   * moved nothing, and one that sees the call return has published the whole message.
+   *
+   * So nothing can run after that call. Whatever must be true locally when it returns is done
+   * before it and undone if it refuses (`rollBack`). What the post owes others afterward (broker
+   * records, the publication's commit, the wake hint) is not needed for the message to be whole
+   * and is finished at the next entry into this module or the next loop step (`finish`).
+   *
+   * - `gathering`: the codec is walking the message. The only phase that runs user code.
+   * - `staged`: the frame and its ports are being staged. No user code from here on.
+   * - `committing`: the next thing is the native call, or it has been made.
+   * - `abandoned`: given up; an interrupted `rollBack` is finished later.
+   */
+  type GroupPost = {
+    phase: "gathering" | "staged" | "committing" | "abandoned";
+    readonly state: PortState; readonly io: BunWasm.GroupSharedLane; readonly peer: string;
+    /** The sequence this post took, once it advanced `state.sent`; -1 before. */
+    sequence: number;
+    /** Names this post's commit in the core. Never reused; 0 before one is taken. */
+    nonce: number;
+    plan: BunWasm.PreparedSend | null;
+    ports: BunWasm.StagedPort[];
+  };
+  /** Every post from the start of its gather until it is finished or rolled back. */
+  const posts = new Set<GroupPost>();
+  /** The last nonce taken. A nonce and a wake bit fit one exact number up to this many (lane.rs). */
+  let nonces = 0;
+  const MAX_NONCE = 2 ** 52 - 1;
+  const WORD = 2 ** 32;
+  const MAX_VERSION = WORD - 1;
+  /** The arguments of the call that commits a post. */
+  type CommitCall = [buffers: ArrayBuffer[], slot: number, generation: number, side: number, nonceHigh: number, nonceLow: number, refuse: (message: string) => unknown];
+  // `rollBack` and `finish` can be interrupted anywhere and are then run again. Each step is an
+  // assignment, a set or map operation or a word native that does nothing the second time, and
+  // the post leaves the registry last.
+  /** Undoes a post that did not commit: nothing of it had moved. */
+  function rollBack(post: GroupPost) {
+    post.phase = "abandoned";
+    post.io.abort();
+    for (const port of post.ports) port.restore();
+    if (post.sequence >= 0) post.state.sent = post.sequence;
+    post.plan?.settle(false);
+    internal.native.transferSettled?.();
+    posts.delete(post);
+  }
+  /** What a committed post still owes others. A record or hint sent twice changes nothing. */
+  function finish(post: GroupPost, wake: boolean) {
+    internal.native.transferSettled?.();
+    for (const port of post.ports) port.moved();
+    post.plan?.settle(true);
+    // The peer slept on an empty lane: the hint only wakes its loop sooner.
+    if (wake) root({ kind: "port-wake", id: post.peer });
+    posts.delete(post);
+  }
+  function settlePost(post: GroupPost, loop: boolean, nonce: number, wake: boolean) {
+    // A post still gathering may be an outer `postMessage` whose getter is running this call.
+    if (post.phase === "gathering" && !loop) return;
+    // The core says whether the commit happened. A post whose call threw has a nonce the core
+    // never recorded, whatever its own cleanup managed to do.
+    if (post.phase === "committing" && post.nonce === nonce) finish(post, wake);
+    else rollBack(post);
+  }
+  /**
+   * Finishes earlier posts, before anything here reads the state they left. `loop` is the worker
+   * loop's step, which runs inside no post: there a post still gathering was interrupted beyond
+   * its own cleanup and is rolled back.
+   */
+  function settlePosts(loop = false) {
+    if (!posts.size || !groupLanes) return;
+    const [nonce, wake] = groupLanes.committed();
+    for (const post of posts) settlePost(post, loop, nonce, wake);
+  }
+  /** Names a carried port's lane end under the staged frame. A port with no lane left carries none. */
+  function stageEnd(io: BunWasm.GroupSharedLane, port: BunWasm.PortTransfer) {
+    const lane = port.snapshot.groupLane;
+    if (lane && io.stageEnd(lane) !== lane.epoch) throw cloneError("MessagePort changed during transfer");
+  }
+  /**
+   * Stages a post: every fallible step, with nothing moved. Returns the arguments of the call
+   * that commits it. Only `codec.prepare` runs user code, and a post made from inside it settles
+   * before this one stages anything.
+   */
+  function stagePost(post: GroupPost, packet: unknown, list: unknown[]): CommitCall {
+    const { state, io } = post;
+    // Ports this message carries wait in the custody of the lane end that will read it.
+    const custody: BunWasm.LaneCustody = { kind: "lane", lane: io.ref, side: io.side === 0 ? 1 : 0 };
+    const plan = post.plan = codec.prepare(packet, list, [state.id, post.peer], custody);
+    // A post made from inside the gather has committed and must be finished before this one
+    // commits: the core remembers one commit, the last, and that is how a post is recognized.
+    settlePosts();
+    // A loop step that ran inside the gather gave this post up, and its publications with it.
+    if (post.phase !== "gathering") throw cloneError("MessagePort changed during transfer");
+    post.phase = "staged";
+    const send = plan.stage();
+    if (nonces >= MAX_NONCE || !Number.isSafeInteger(state.sent + 1)) throw cloneError("MessagePort has sent too many messages");
+    io.stage(JSON.stringify({ kind: "port-data", sequence: state.sent, graph: plan.graph }));
+    for (const port of send.ports) stageEnd(io, port);
+    for (const port of send.ports) {
+      // Listed before it detaches, so a rollback restores a port whose detach was interrupted.
+      const staged = port.stage!();
+      post.ports.push(staged); staged.detach();
+    }
+    post.nonce = ++nonces;
+    post.sequence = state.sent; state.sent = post.sequence + 1;
+    post.phase = "committing";
+    const refuse = (message: string) => { rollBack(post); return cloneError(message); };
+    return [send.buffers, io.ref.slot, io.ref.generation, io.side, Math.floor(post.nonce / WORD), post.nonce % WORD, refuse];
+  }
+  /** Registers a post and stages it. A post that cannot be staged is rolled back and throws. */
+  function beginPost(state: PortState, io: BunWasm.GroupSharedLane, peer: string, packet: unknown, list: unknown[]): CommitCall {
+    const post: GroupPost = { phase: "gathering", state, io, peer, sequence: -1, nonce: 0, plan: null, ports: [] };
+    posts.add(post);
+    try { return stagePost(post, packet, list); }
+    catch (error) {
+      // What an interrupted rollback leaves is still registered, and the next settle finishes it.
+      try { rollBack(post); } catch { /* still registered */ }
+      throw error;
+    }
   }
   class MessagePort extends EventTarget {
     #state: PortState | null;
@@ -538,18 +660,10 @@
       if (frame.commit() && this.#value().peer) root({ kind: "port-wake", id: this.#value().peer });
     }
     /**
-     * Reserves a frame on this end's group lane. Its commit is the native publication alone and
-     * reports whether the peer was idle; `postMessage` sends the wake hint after it has counted
-     * the message. The transfer of each carried end and the frame's commit or abort are word
-     * natives, so the native bridge cannot fail a call between detachment and the count.
-     */
-    #groupFrame(io: BunWasm.GroupSharedLane, packet: Record<string, unknown>): BunWasm.GroupLaneFrame {
-      return io.reserve(JSON.stringify(packet));
-    }
-    /**
      * Stages a message inside the codec transaction. A lane frame must be reserved here, before
      * transfers detach: a full lane rejects the message rather than accept it where the peer's
-     * owner cannot see the complete frame at once.
+     * owner cannot see the complete frame at once. A group lane's post never comes here: it is
+     * staged by `stagePost` and committed by the transfer native.
      */
     #stagePacket(graph: Graph, sequence: number, other: MessagePort | undefined) {
       const state = this.#value();
@@ -557,7 +671,6 @@
         if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(graph);
         return null;
       }
-      if (state.group) return this.#groupFrame(state.group.io, { kind: "port-data", sequence, graph });
       // A shared-group engine never carries port data on the pipe.
       if (groupLanes) throw cloneError("MessagePort has no lane to its peer");
       if (!state.lane) { root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph }); return null; }
@@ -588,6 +701,7 @@
     static #activate(value: unknown) { if (!(value instanceof MessagePort)) throw invalidPort(); value.#bind(); value.#accept(); }
     static #prepare(value: unknown): BunWasm.PortTransfer {
       if (!(value instanceof MessagePort)) throw invalidPort();
+      settlePosts();
       const state = value.#value();
       if (state.phase !== "open") throw cloneError("Cannot transfer a closed MessagePort");
       // Packets still on this side's lane wait there for the new owner.
@@ -595,6 +709,8 @@
       // The epoch this end will have in flight; refused here, before anything moves, if it would wrap.
       const group = state.group?.io;
       const groupLane = group ? { ...group.ref, side: group.side, epoch: group.transferEpoch() } : null;
+      // The lane's version word is 32 bits and its top value means "none".
+      if (groupLane && state.version + 1 >= MAX_VERSION) throw cloneError("MessagePort has moved too many times");
       const snapshot = value.#snapshot(state.version + 1, groupLane);
       const lane = value.#laneRecord();
       return {
@@ -619,6 +735,27 @@
           if (internal.sharedObjects?.routes?.enabled) return;
           const { queue: _queue, lane: _lane, groupLane: _groupLane, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route, lane });
+        },
+        // For a post that commits in one native call: the same local steps as `commit`, taken
+        // before that call and undone by `restore` when it refuses. The ledger is not touched
+        // here; the native moves the end.
+        stage() {
+          const held = state.group, referenced = internal.messagePortRefs.has(state);
+          return {
+            detach() {
+              internal.messagePortRefs.delete(state);
+              value.#closeLane(false); deleteLocalPort(state.id); value.#state = null;
+            },
+            restore() {
+              value.#state = state; state.group = held; localPorts.set(state.id, value);
+              if (referenced) internal.messagePortRefs.add(state);
+              value.#schedule();
+            },
+            moved() {
+              const { queue: _queue, lane: _lane, groupLane: _groupLane, ...metadata } = snapshot;
+              root({ kind: "moving", snapshot: metadata, origin: route, lane });
+            },
+          };
         },
       };
     }
@@ -710,6 +847,7 @@
     #hasMessageListeners() { return this.#onmessage !== null || this.#webListeners.size > 0 || this.listenerCount("message") > 0; }
     postMessage(value: unknown, transfer?: unknown) {
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
+      settlePosts();
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.peer) return;
       const other = localPorts.get(state.peer);
@@ -722,19 +860,22 @@
       if (groupLanes && !other && !group) return;
       const list = transfers(transfer);
       const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
-      // Ports this message carries wait in the custody of the lane end that will read it.
-      const custody: BunWasm.LaneCustody | undefined = group ? { kind: "lane", lane: group.io.ref, side: group.io.side === 0 ? 1 : 0 } : undefined;
-      const plan = codec.prepare(packet, list, [state.id, state.peer], custody);
+      if (!group) { this.#postDirect(state, other, packet, list); return; }
+      const call = beginPost(state, group.io, state.peer, packet, list);
+      // The post commits here or not at all (see GroupPost). This call is the last statement,
+      // outside any `try`, and nothing may be added after it: `scripts/worker-post-shape.test.ts`.
+      internal.native.transferArrayBuffers(call[0], call[1], call[2], call[3], call[4], call[5], call[6]);
+    }
+    /** A post to a peer in this thread, or over the broker or its lane: every case but a group lane. */
+    #postDirect(state: PortState, other: MessagePort | undefined, packet: unknown, list: unknown[]) {
+      const plan = codec.prepare(packet, list, [state.id, state.peer!]);
       const sequence = state.sent;
-      // The lane frame becomes visible only after transfers and detachment commit. Ports it
-      // carries stay in the custody of the lane's destination port until restored.
+      // The lane frame becomes visible only after transfers and detachment commit.
       const staged: { frame: { commit(): boolean | void; abort(): void } | null } = { frame: null };
-      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined, group !== null); }
+      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, !other && state.lane ? state.peer! : undefined); }
       catch (error) { staged.frame?.abort(); throw error; }
-      const wake = staged.frame?.commit();
+      staged.frame?.commit();
       state.sent++;
-      // A group lane's peer slept on an empty lane: the hint only wakes its loop sooner.
-      if (wake === true) root({ kind: "port-wake", id: state.peer });
       if (!other) return;
       restoringLocally = Boolean(internal.sharedObjects?.routes?.enabled);
       try { portOps.receivePacket(other, "port-data", sequence, plan.graph); }
@@ -772,12 +913,15 @@
       state.scheduled = true;
       queueMicrotask(() => this.#deliverBatch(state, batch));
     }
-    start() { if (this.#state) { this.#state.started = true; this.#schedule(); } }
+    // Each of these first settles earlier posts: a post that was refused beyond its own cleanup
+    // has left this port detached or counted, and is rolled back before the port is used.
+    start() { settlePosts(); if (this.#state) { this.#state.started = true; this.#schedule(); } }
     // A port's state is in the keepalive set exactly while the port is referenced.
-    ref() { if (this.#state?.phase === "open") internal.messagePortRefs.add(this.#state); }
-    unref() { if (this.#state) internal.messagePortRefs.delete(this.#state); }
-    hasRef() { return this.#state ? internal.messagePortRefs.has(this.#state) : false; }
+    ref() { settlePosts(); if (this.#state?.phase === "open") internal.messagePortRefs.add(this.#state); }
+    unref() { settlePosts(); if (this.#state) internal.messagePortRefs.delete(this.#state); }
+    hasRef() { settlePosts(); return this.#state ? internal.messagePortRefs.has(this.#state) : false; }
     close(callback?: () => void) {
+      settlePosts();
       if (typeof callback === "function") this.once("close", callback);
       this.#beginClose();
     }
@@ -1133,6 +1277,7 @@
   }
   const SHARE_ENV = Symbol.for("nodejs.worker_threads.SHARE_ENV");
   function receiveMessageOnPort(port: unknown) {
+    settlePosts();
     pump();
     if (port instanceof MessagePort) return portOps.receive(port);
     if (port instanceof BroadcastChannel) return undefined;
@@ -1252,12 +1397,15 @@
   internal.workerPump = pump;
   internal.workerEnvChange = (key, value) => { if (!applyingEnv) root({ kind: "env", source: route, group: envGroup, key, value }); };
   const waiter: BunWasm.IoWaiter = {
-    get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
+    // A post that still owes its records keeps the loop turning until a step has sent them.
+    get ref() { return Boolean(posts.size || parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() {
+      const owed = posts.size;
+      settleOwed();
       // The housekeeping is owed whatever the pump met: a failed drain must not hold back the
       // sweep or the retirement of closed lanes.
-      try { return pump() ? "progress" : false; }
-      finally { settleOwed(); laneHousekeeping(); }
+      try { return pump() || posts.size !== owed ? "progress" : false; }
+      finally { laneHousekeeping(); }
     },
     // Every open control channel: the idle loop wakes for a frame from any of them.
     subscriptions() {

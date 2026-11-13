@@ -272,13 +272,16 @@ the format (`crates/bunwasm-runtime/src/wasm/lane.rs`); `worker_lane.ts` wraps i
   ledger. A worker reported exited has its ends closed at once; its storage is reclaimed
   only after the host has released that worker.
 - Waking: an idle receiver's event loop is woken by a small `port-wake` hint through the
-  existing broker. The hint only affects how soon a `message` listener runs.
+  existing broker. The hint only affects how soon a `message` listener runs, and the sender
+  sends it when it next enters the runtime or takes a loop step, not inside `postMessage`. A
+  receiver's own idle loop looks at its lanes at least every 25 ms it asks to wait.
   `Atomics.wait` and the wait provider are unchanged.
 - Failure: a `postMessage` that throws has moved nothing, and one that returns has published
-  the whole message. Once buffers detach, the calls that move carried ports and publish the
-  frame cross the native bridge with no checked allocation and no error status. A receive that
-  fails while returning frames gets the same frames at the next receive, and the event loop
-  reports that failure as the thread's uncaught error and keeps pumping.
+  the whole message. The last thing `postMessage` does is one native call that checks
+  everything once more, then detaches the buffers, moves the carried ports and publishes the
+  frame, and nothing runs between its first detach and its return. A receive that fails while
+  returning frames gets the same frames at the next receive, and the event loop reports that
+  failure as the thread's uncaught error and keeps pumping.
   [The lane's record](bun-patches/original-adapter-group-lane.md) describes that path.
 
 Observable changes on these engines:

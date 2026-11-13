@@ -84,7 +84,25 @@
         const [kind, first, second, third] = custodyArguments(custody);
         native.laneTransfer(slot, generation, side, kind, first, second, third);
       },
+      // A staged post: the frame and the ends it carries stay under this end until the engine's
+      // transfer native commits them, or `abort` drops them. Nothing moves before that commit.
+      stage(text) {
+        try { native.laneReserve(slot, generation, side, text); }
+        catch (error) {
+          native.laneAbort(slot, generation, side);
+          throw cloneError(error);
+        }
+      },
+      stageEnd(carried) { return accepted(native.laneStageEnd(slot, generation, side, carried.slot, carried.generation, carried.side)); },
+      abort() { native.laneAbort(slot, generation, side); },
     };
+  }
+  /** The last staged commit of this thread: its nonce, and whether its reader was due a wake. */
+  function committed(): [nonce: number, wake: boolean] {
+    if (!ledger) return [0, false];
+    const word = native.laneCommitted();
+    const wake = word % 2;
+    return [(word - wake) / 2, wake === 1];
   }
   function adopt(lane: BunWasm.GroupPortLane, version: number) {
     if (!ledger) return null;
@@ -126,5 +144,6 @@
     sever(ref, side) { if (ledger) native.laneSever(ref.slot, ref.generation, side); },
     census() { return native.laneCensus(); },
     epochs() { return ledger ? native.laneEpochs() : 0; },
+    committed,
   };
 })

@@ -18,6 +18,7 @@ type LaneNatives = Pick<BunWasm.WasmNative, Extract<keyof BunWasm.WasmNative, `l
 const STATES = { open: 1, "in-flight": 2, closed: 3 } as const;
 const PAIR = 2 ** 28;
 const UNDELIVERED = "MessagePort lane holds received messages this thread has not taken";
+const STALE = "MessagePort changed during transfer";
 
 export function createGroupLaneModel() {
   const lanes: Lane[] = [];
@@ -112,6 +113,10 @@ export function createGroupLaneModel() {
           Object.assign(end, { state: "in-flight", owner: 0, epoch: end.epoch + 1, custody });
           if (custodyClosed(custody)) cascade();
         },
+        // The staged-post natives act on the member's staged map, which `natives` keeps.
+        stage() { throw new Error("The model stages through its natives"); },
+        stageEnd() { throw new Error("The model stages through its natives"); },
+        abort() {},
       };
     }
     function adopt(port: BunWasm.GroupPortLane, version: number) {
@@ -181,9 +186,29 @@ export function createGroupLaneModel() {
       try { return operation(); }
       catch (error) { refusal = error instanceof Error ? error.message : String(error); return -1; }
     }
+    /** The ends each staged frame names, by sender end, with the epoch each was open at. */
+    const planned = new Map<string, [slot: number, generation: number, side: number, epoch: number][]>();
+    /** The last staged commit: its nonce doubled, plus one when a wake was due. */
+    let outcome = 0;
     function abort(slot: number, generation: number, side: number) {
       const name = key(slot, generation, side);
-      staged.get(name)?.abort(); staged.delete(name);
+      staged.get(name)?.abort(); staged.delete(name); planned.delete(name);
+    }
+    function nonce(high: number, low: number) {
+      const value = high * 2 ** 32 + low;
+      if (value < 1 || value > 2 ** 52 - 1) throw new Error("MessagePort lane commit is out of range");
+      return value;
+    }
+    /** What `laneCommitStaged` relies on, as lane.rs checks it: refused while it still can be. */
+    function commitCheck(slot: number, generation: number, side: number) {
+      const name = key(slot, generation, side);
+      end(slot, generation, side).transferEpoch();
+      if (!staged.has(name)) throw new Error(STALE);
+      for (const [carriedSlot, carriedGeneration, carriedSide, epoch] of planned.get(name) ?? []) {
+        if (received.has(key(carriedSlot, carriedGeneration, carriedSide))) throw new Error(UNDELIVERED);
+        if (end(carriedSlot, carriedGeneration, carriedSide).transferEpoch() - 1 !== epoch) throw new Error(STALE);
+      }
+      return 0;
     }
     function custody(kind: number, first: number, second: number, third: number): BunWasm.LaneCustody {
       if (kind === 0) return { kind: "lane", lane: { slot: first, generation: second }, side: third === 1 ? 1 : 0 };
@@ -215,11 +240,41 @@ export function createGroupLaneModel() {
       laneDrained(slot, generation, side) { received.delete(key(slot, generation, side)); return 0; },
       laneCommit(slot, generation, side) {
         const name = key(slot, generation, side);
+        // A frame that names ends is committed only with them.
+        if (planned.get(name)?.length) { abort(slot, generation, side); return 0; }
         const frame = staged.get(name);
-        staged.delete(name);
+        staged.delete(name); planned.delete(name);
         return frame?.commit() ? 1 : 0;
       },
       laneAbort(slot, generation, side) { abort(slot, generation, side); return 0; },
+      laneStageEnd: (slot, generation, side, carriedSlot, carriedGeneration, carriedSide) => refusable(() => {
+        const name = key(slot, generation, side);
+        if (carriedSlot === slot && carriedGeneration === generation) throw new Error(STALE);
+        if (received.has(key(carriedSlot, carriedGeneration, carriedSide))) throw new Error(UNDELIVERED);
+        const epoch = end(carriedSlot, carriedGeneration, carriedSide).transferEpoch();
+        abort(carriedSlot, carriedGeneration, carriedSide);
+        if (!staged.has(name)) throw new Error(STALE);
+        const ends = planned.get(name) ?? [];
+        if (ends.some(item => item[0] === carriedSlot && item[1] === carriedGeneration && item[2] === carriedSide)) throw new Error(STALE);
+        ends.push([carriedSlot, carriedGeneration, carriedSide, epoch - 1]);
+        planned.set(name, ends);
+        return epoch;
+      }),
+      laneCommitCheck: (slot, generation, side, high, low) => refusable(() => { nonce(high, low); return commitCheck(slot, generation, side); }),
+      laneCommitStaged(slot, generation, side, high, low) {
+        const name = key(slot, generation, side);
+        const frame = staged.get(name);
+        if (!frame) return 0;
+        const custody: BunWasm.LaneCustody = { kind: "lane", lane: { slot, generation }, side: side === 0 ? 1 : 0 };
+        for (const [carriedSlot, carriedGeneration, carriedSide] of planned.get(name) ?? []) {
+          abort(carriedSlot, carriedGeneration, carriedSide);
+          end(carriedSlot, carriedGeneration, carriedSide).transfer(custody);
+        }
+        staged.delete(name); planned.delete(name);
+        outcome = nonce(high, low) * 2 + Number(frame.commit());
+        return 0;
+      },
+      laneCommitted: () => outcome,
       laneCreate: () => refusable(() => { const ref = member.create(); return ref.slot * PAIR + ref.generation; }),
       laneCell: () => refusable(() => { const [index, generation] = member.cell(); return index * PAIR + generation; }),
       laneTransferEpoch: (slot, generation, side) => refusable(() => {
@@ -255,9 +310,14 @@ export function createGroupLaneModel() {
       },
     });
   }
-  /** One member's lanes as its runtime sees them: the real `worker_lane.ts` over the model's natives. */
+  /**
+   * One member's lanes as its runtime sees them: the real `worker_lane.ts` over the model's
+   * natives. `natives` are the same natives for the stand-in of the engine's transfer native,
+   * which calls the core's commit check and commit itself.
+   */
   function member(tag: number) {
-    return sourceLanes(natives(tag));
+    const table = natives(tag);
+    return Object.assign(sourceLanes(table), { natives: table });
   }
   return { member, control, lanes };
 }
