@@ -3643,7 +3643,13 @@ typedef struct JSExecFrame {
 } JSExecFrame;
 
 enum { JS_RECORD_ORDINARY, JS_RECORD_CONTINUATION };
-typedef enum { JS_CONT_NONE, JS_CONT_CALL } JSContKind;
+typedef enum { JS_CONT_NONE, JS_CONT_CALL, JS_CONT_REDUCE, JS_CONT_REDUCE_RIGHT } JSContKind;
+
+typedef struct JSReduceState {
+    JSValue obj, acc;
+    int64_t len, k;
+    JSValue args[4];
+} JSReduceState;
 
 typedef struct JSContFrame {
     JSExecFrame base;
@@ -3652,6 +3658,7 @@ typedef struct JSContFrame {
     JSValueConst *next_argv;
     int next_argc;
     JSValue result;
+    JSReduceState reduce;
 } JSContFrame;
 
 /* True for a callee the dispatch loop may enter without a C call: an
@@ -3688,6 +3695,8 @@ _Static_assert(_Alignof(JSContFrame) <= JS_FRAME_ALIGN,
                "continuation alignment must fit frame storage");
 _Static_assert(JS_FRAME_HEADER_SIZE + JS_CONT_VALUE_SLOTS * sizeof(JSValue) >= sizeof(JSContFrame),
                "rounded continuation allocation must contain every field");
+_Static_assert(sizeof(JSContFrame) == (sizeof(void *) == 4 ? 208 : 352),
+               "reduce continuation layout must match its checked allocation");
 
 /* Gives a chunk back to the allocator. Its charge ends only once the
    allocator has the block again. */
@@ -19004,19 +19013,52 @@ static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
 
 static JSValue js_function_call(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv);
+static JSValue js_array_reduce(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv, int special);
+static no_inline int js_cont_reduce_step(JSContFrame *c, JSValue in);
 
-static inline JSContKind js_cont_kind(JSValueConst builtin, JSValueConst this_obj)
+#define special_reduce       0
+#define special_reduceRight  1
+
+static inline JSContKind js_cont_kind(JSValueConst builtin, JSValueConst this_obj,
+                                     int argc, JSValueConst *argv)
 {
     JSObject *p;
 
-    if (JS_VALUE_GET_TAG(builtin) != JS_TAG_OBJECT || !js_frame_inline_callee(this_obj))
+    if (JS_VALUE_GET_TAG(builtin) != JS_TAG_OBJECT)
         return JS_CONT_NONE;
     p = JS_VALUE_GET_OBJ(builtin);
-    if (p->class_id == JS_CLASS_C_FUNCTION &&
-        p->u.cfunc.cproto == JS_CFUNC_generic &&
-        p->u.cfunc.c_function.generic == js_function_call)
+    if (p->class_id != JS_CLASS_C_FUNCTION)
+        return JS_CONT_NONE;
+    if (p->u.cfunc.cproto == JS_CFUNC_generic &&
+        p->u.cfunc.c_function.generic == js_function_call &&
+        js_frame_inline_callee(this_obj))
         return JS_CONT_CALL;
+    if (p->u.cfunc.cproto != JS_CFUNC_generic_magic ||
+        p->u.cfunc.c_function.generic_magic != js_array_reduce ||
+        argc < 1 || !js_frame_inline_callee(argv[0]))
+        return JS_CONT_NONE;
+    if (p->u.cfunc.magic == special_reduce)
+        return JS_CONT_REDUCE;
+    if (p->u.cfunc.magic == special_reduceRight)
+        return JS_CONT_REDUCE_RIGHT;
     return JS_CONT_NONE;
+}
+
+static void js_cont_clear_value(JSRuntime *rt, JSValue *value)
+{
+    JSValue old = *value;
+
+    *value = JS_UNDEFINED;
+    JS_FreeValueRT(rt, old);
+}
+
+static void js_cont_reduce_clear_args(JSRuntime *rt, JSReduceState *r)
+{
+    int i;
+
+    for (i = 0; i < 4; i++)
+        js_cont_clear_value(rt, &r->args[i]);
 }
 
 /* Native argument readers do not index native arg_buf: this is the actual,
@@ -19028,6 +19070,7 @@ static no_inline JSContFrame *js_cont_push(JSContext *ctx, JSExecFrame *resume_r
 {
     JSContFrame *c = (JSContFrame *)js_frame_push(ctx, JS_CONT_VALUE_SLOTS, 0);
     JSStackFrame *sf;
+    int i;
 
     if (!c)
         return NULL;
@@ -19047,6 +19090,10 @@ static no_inline JSContFrame *js_cont_push(JSContext *ctx, JSExecFrame *resume_r
     c->next_argv = NULL;
     c->next_argc = 0;
     c->result = JS_UNDEFINED;
+    c->reduce.obj = c->reduce.acc = JS_UNDEFINED;
+    c->reduce.len = c->reduce.k = 0;
+    for (i = 0; i < 4; i++)
+        c->reduce.args[i] = JS_UNDEFINED;
     sf = &c->base.frame;
     sf->cur_func = unsafe_unconst(builtin);
     sf->arg_buf = (JSValue *)argv;
@@ -19067,7 +19114,8 @@ static no_inline JSContFrame *js_cont_push(JSContext *ctx, JSExecFrame *resume_r
 /* The input is owned. Only the first step receives JS_UNINITIALIZED. */
 static no_inline int js_cont_step(JSContFrame *c, JSValue in)
 {
-    assert(c->kind == JS_CONT_CALL);
+    if (c->kind != JS_CONT_CALL)
+        return js_cont_reduce_step(c, in);
     if (!JS_IsUninitialized(in)) {
         c->result = in;
         return 0;
@@ -19089,6 +19137,9 @@ static no_inline JSValue js_cont_finish(JSRuntime *rt, JSContFrame *c)
     JSValue result = c->result;
 
     c->result = JS_UNDEFINED;
+    js_cont_reduce_clear_args(rt, &c->reduce);
+    js_cont_clear_value(rt, &c->reduce.acc);
+    js_cont_clear_value(rt, &c->reduce.obj);
     assert(rt->current_stack_frame == &c->base.frame);
     rt->current_stack_frame = c->base.frame.prev_frame;
     js_frame_pop(rt, &c->base);
@@ -19615,7 +19666,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
             has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
-                if (owned && (kind = js_cont_kind(call_argv[-1], JS_UNDEFINED))) {
+                if (owned && (kind = js_cont_kind(call_argv[-1], JS_UNDEFINED, call_argc, vc(call_argv)))) {
                     call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
                     goto cont_begin;
                 }
@@ -19660,7 +19711,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
-                if (owned && (kind = js_cont_kind(call_argv[-1], call_argv[-2]))) {
+                if (owned && (kind = js_cont_kind(call_argv[-1], call_argv[-2], call_argc, vc(call_argv)))) {
                     call_kind = JS_FRAME_CALL_METHOD |
                         (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
                     goto cont_begin;
@@ -45399,8 +45450,85 @@ exception:
     return JS_EXCEPTION;
 }
 
-#define special_reduce       0
-#define special_reduceRight  1
+static int js_cont_reduce_init(JSContFrame *c)
+{
+    JSContext *ctx = c->base.caller_ctx;
+    JSReduceState *r = &c->reduce;
+    int64_t k;
+    int present;
+
+    r->obj = JS_ToObject(ctx, c->base.this_obj);
+    if (js_get_length64(ctx, &r->len, r->obj))
+        return -1;
+    if (check_function(ctx, c->base.actual_argv[0]))
+        return -1;
+    if (c->base.actual_argc > 1) {
+        r->acc = js_dup(c->base.actual_argv[1]);
+        return 0;
+    }
+    for (;;) {
+        if (js_poll_interrupts(ctx))
+            return -1;
+        if (r->k >= r->len) {
+            JS_ThrowTypeError(ctx, "empty array");
+            return -1;
+        }
+        k = c->kind == JS_CONT_REDUCE_RIGHT ? r->len - r->k - 1 : r->k;
+        r->k++;
+        present = JS_TryGetPropertyInt64(ctx, r->obj, k, &r->acc);
+        if (present < 0)
+            return -1;
+        if (present)
+            return 0;
+    }
+}
+
+static no_inline int js_cont_reduce_step(JSContFrame *c, JSValue in)
+{
+    JSContext *ctx = c->base.caller_ctx;
+    JSReduceState *r = &c->reduce;
+    JSValue val;
+    int64_t k;
+    int present;
+
+    if (JS_IsUninitialized(in)) {
+        if (js_cont_reduce_init(c))
+            goto exception;
+    } else {
+        js_cont_reduce_clear_args(ctx->rt, r);
+        if (JS_IsException(in))
+            goto exception;
+        js_cont_clear_value(ctx->rt, &r->acc);
+        r->acc = in;
+    }
+    while (r->k < r->len) {
+        if (js_poll_interrupts(ctx))
+            goto exception;
+        k = c->kind == JS_CONT_REDUCE_RIGHT ? r->len - r->k - 1 : r->k;
+        r->k++;
+        present = JS_TryGetPropertyInt64(ctx, r->obj, k, &val);
+        if (present < 0)
+            goto exception;
+        if (!present)
+            continue;
+        r->args[0] = js_dup(r->acc);
+        r->args[1] = val;
+        r->args[2] = js_int64(k);
+        r->args[3] = js_dup(r->obj);
+        c->next_func = c->base.actual_argv[0];
+        c->next_this = JS_UNDEFINED;
+        c->next_argc = 4;
+        c->next_argv = vc(r->args);
+        return 1;
+    }
+    c->result = r->acc;
+    r->acc = JS_UNDEFINED;
+    return 0;
+
+ exception:
+    c->result = JS_EXCEPTION;
+    return 0;
+}
 
 static JSValue js_array_reduce(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv, int special)

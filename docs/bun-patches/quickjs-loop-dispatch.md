@@ -32,10 +32,32 @@ take the same return path and allow subsequent calls to run.
 The ordinary header stays 104 bytes on wasm32 and 168 bytes on x86_64. Record
 kind and function ownership occupy existing padding. Continuation allocation
 rounds its actual structure's tail up to value slots, with compile-time layout,
-alignment and containment assertions. This unit adds no reduce or apply state.
+alignment and containment assertions. With reduce state the continuation is
+208 bytes on wasm32 and 352 bytes on x86_64, allocated as 208 and 360 bytes.
 Budgets, backing limits and native entry reservations are unchanged.
+
+`Array.prototype.reduce` and `reduceRight` use that same return path for ordinary
+bytecode callbacks. Their step mirrors upstream `js_array_reduce`. It converts
+the receiver, reads length once, scans present indices in the chosen direction,
+and supplies the accumulator, value, index and original object with an undefined
+callback receiver. Element accessors, proxies and length coercion keep native
+dispatch. Typed-array intrinsics, bound, proxy, native, async and generator
+callbacks also keep native dispatch. The generic Array intrinsic borrowed onto
+a typed array still uses the generic algorithm.
+
+The record owns its converted object, accumulator and four writable callback
+arguments. All slots are initialized before linking. Every release clears its
+slot; successful completion moves and clears the accumulator into the result.
+The final disposer releases the remaining state on return, throw, interrupt or
+refused callback allocation. Callback parameter writes and escaping mapped
+arguments retain ordinary bytecode ownership and closure handling.
 
 Original regression adapters are `scripts/fixtures/quickjs-frame-stack.c` and
 `.ts`, driven by `scripts/check-quickjs-frame-stack.ts`, plus the engine-neutral
 native fixture `tests/fixtures/stack-loop-continuations`. The semantic snapshot
-was captured from the engine before this dispatch change.
+was captured from the engine before each dispatch change. The wasm32 contract
+also runs deep reduce calls and recovery at 32 KiB. The native fixtures run on
+all three engines, and the existing browser stack gate runs the continuation
+fixture in its browser matrix. `tests/stack-depth.js` adds an original reduce
+depth probe. Getter dispatch and apply remain separate units. Deep real Ajv and
+Angular acceptance requires the separate getter unit as well as reduce.

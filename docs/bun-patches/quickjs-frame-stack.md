@@ -288,7 +288,7 @@ constructor called without `new` qualifies, and fails in its own bytecode with
 the upstream error. Everything else keeps its C call and the native guard:
 constructors (`new`, `super`, `Reflect.construct`), `Function.prototype.apply`,
 `eval`, accessors, native functions and their callbacks
-(`Array.prototype.map`, `reduce`, `sort`), bound functions, proxies, and
+(`Array.prototype.map`, `sort`), bound functions, proxies, and
 generator and async functions, both as callers and as callees. A recursion
 that passes through any of these still costs native stack at every level and
 is still refused by the guard.
