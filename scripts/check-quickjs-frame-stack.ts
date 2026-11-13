@@ -37,7 +37,24 @@ function check(label: string, ok: boolean): boolean {
   return ok;
 }
 
+function checkNativeArgumentReaders(): void {
+  const bytecodeReaders = new Set(["get_var_ref", "JS_CallBytecode", "async_func_init", "async_func_mark", "async_func_free", "async_func_resume"]);
+  const nativeWriters = new Set(["js_call_c_function", "js_cont_push"]);
+  for (const name of readdirSync(engine).filter(file => /\.[ch]$/.test(file))) {
+    const source = readFileSync(join(engine, name), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+    for (const match of source.matchAll(/(?:->|\.)arg_buf\b/g)) {
+      const start = source.lastIndexOf("\n{", match.index);
+      const owner = /\b(\w+)\([^{};]*\)\s*$/.exec(source.slice(0, start))?.[1];
+      const line = source.slice(source.lastIndexOf("\n", match.index) + 1, source.indexOf("\n", match.index));
+      if (owner && bytecodeReaders.has(owner)) continue;
+      if (owner && nativeWriters.has(owner) && /^\s*sf->arg_buf\s*=\s*\(JSValue \*\)(?:arg_buf|argv);$/.test(line)) continue;
+      throw new Error(`Unreviewed native argument reader in ${name}, function ${owner ?? "unknown"}: ${line.trim()}`);
+    }
+  }
+}
+
 try {
+  checkNativeArgumentReaders();
   const binary = join(scratch, "quickjs-frame-stack");
   const library = producedLibrary();
   if (sanitize && library) throw new Error("Sanitizer checks must compile engine sources");

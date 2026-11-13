@@ -245,13 +245,14 @@ report("call mapped arguments and escaping closures", () => {
   return [sloppy.mapped.call(sloppy, "a", "b", "c"), read(), count(), sloppy.later.call(null, 4, 5, 6)()].join(" | ");
 });
 report("call primitive receivers", () => {
-  const strict = function (this: unknown): string { "use strict"; return `${typeof this}:${String(this)}`; };
+  // oxlint-disable-next-line no-eval -- The untyped function permits a deliberate zero-argument call.
+  const strict = (0, eval)("(function () { 'use strict'; return typeof this + ':' + String(this); })");
   return [strict.call(), strict.call(null), strict.call(7), strict.call("x"), sloppy.none.call(7), sloppy.counts.call("x", 1)].join(" | ");
 });
 report("call tail and constructor origin", () => {
   function Made(this: { result: unknown }): void {
     const local = 17;
-    this.result = (function (a, b, c, d, e, f) { return [new.target === undefined, a, b, c, d, e, f, arguments.length, local].join(); }).call(null, 1, 2, 3, 4, 5, 6);
+    this.result = (function (a: number, b: number, c: number, d: number, e: number, f: number) { return [new.target === undefined, a, b, c, d, e, f, arguments.length, local].join(); }).call(null, 1, 2, 3, 4, 5, 6);
   }
   // oxlint-disable-next-line no-eval -- Strict source is needed for the tail-call opcode.
   const tail = (0, eval)("(function f(n) { 'use strict'; return n === 0 ? 7 : f.call(null, n - 1); })");
@@ -306,7 +307,7 @@ report("call fallbacks and patched builtin", () => {
 report("call collects cyclic and escaped arguments", () => {
   const object: { self?: unknown; value: number } = { value: 41 };
   object.self = object;
-  const read = (function (value) { collectGarbage(); return () => value.self.value + 1; }).call(null, object);
+  const read = (function (value: typeof object) { collectGarbage(); return () => (value.self as typeof object).value + 1; }).call(null, object);
   collectGarbage();
   return read();
 });
