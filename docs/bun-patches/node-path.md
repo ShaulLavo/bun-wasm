@@ -20,6 +20,12 @@ little-endian UTF-16 buffers. Neither route normalizes Unicode or drops BOM/NUL
 code units. Both routes return owned data through the existing native transport.
 Windows resolution keeps its UTF-16 route. POSIX resolution scans right to left
 for an absolute path before one normalization, without per-argument parse calls.
+Well-formed `joinString` inputs instead borrow their UTF-8 bytes and instantiate
+the same unmodified generic join algorithms with `u8`. These algorithms recognize
+ASCII separators and dot segments and copy other bytes intact. The adapter checks
+the returned UTF-8 before creating an owned string. This removes each input's
+UTF-16 allocation and conversion, the outer owned-path vector, and the result's
+UTF-16 conversion. Calls containing lone surrogates keep the existing `u16` route.
 The adapter implements POSIX resolve, relative, format, namespace
 conversion, and `_makeLong` over the native lexical operations and guest
 `process.cwd()`. Bun's native resolve and relative functions read a process-wide
