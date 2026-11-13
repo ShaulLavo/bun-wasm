@@ -56,7 +56,7 @@ export interface PreviewNavigation {
   server: Server;
   frame: HTMLIFrameElement;
   url: string;
-  document: Document | null;
+  loaded: { document: Document; url: string } | null;
 }
 
 /** One Waffle runtime installs the selected project and runs its dev script. */
@@ -477,16 +477,19 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const { frame } = this;
     if (!frame) return;
     const previous = frame.contentDocument;
-    const navigation: PreviewNavigation = this.preview = { server: target, frame, url, document: null };
+    const requested = new URL(url);
+    const navigation: PreviewNavigation = this.preview = { server: target, frame, url, loaded: null };
     const loaded = (event: Event) => {
       if (this.preview !== navigation || this.server !== target || this.frame !== frame) {
         frame.removeEventListener("load", loaded);
         return;
       }
       const document = frame.contentDocument;
-      if (!event.isTrusted || !document || document === previous || document.URL !== url || document.readyState !== "complete") return;
+      if (!event.isTrusted || !document || document === previous || document.readyState !== "complete" || frame.src !== url) return;
+      const final = new URL(document.URL);
+      if (final.origin !== requested.origin || !final.pathname.startsWith(requested.pathname)) return;
       frame.removeEventListener("load", loaded);
-      navigation.document = document;
+      navigation.loaded = { document, url: final.href };
       measureStartup("preview", previewStarted);
       this.setStatus(`dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[this.engine].name} · ${mb(this.wasm?.size ?? 0)}`, "ok");
     };

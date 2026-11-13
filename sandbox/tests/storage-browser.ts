@@ -44,14 +44,15 @@ function installReadiness(): void {
     const parent = document;
     const navigation = api.preview();
     const server = api.server();
-    const preview = navigation?.document;
-    if (!navigation || !preview || !server) return false;
+    const loaded = navigation?.loaded;
+    if (!navigation || !loaded || !server) return false;
+    const preview = loaded.document;
     const current = () => {
       checkErrors();
       const status = document.querySelector<HTMLElement>("#status");
       return document === parent && sandbox === api && api.server() === server && api.preview() === navigation && navigation.server === server
         && document.querySelector("#preview") === navigation.frame && navigation.frame.contentDocument === preview
-        && navigation.frame.src === navigation.url && preview.URL === navigation.url && preview.readyState === "complete"
+        && navigation.loaded === loaded && navigation.frame.src === navigation.url && preview.URL === loaded.url && preview.readyState === "complete"
         && api.started?.() === true && api.fs.state.status === "ready" && document.querySelector("#server-dot")?.getAttribute("data-state") === "up"
         && api.status().kind === "ok" && status?.dataset.kind === "ok" && /dev server ready/.test(status.textContent ?? "")
         && preview.querySelector(selector) !== null;

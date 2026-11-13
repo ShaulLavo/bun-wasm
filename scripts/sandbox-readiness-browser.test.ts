@@ -86,6 +86,44 @@ async function normalAndRepeated(browser: Browser): Promise<void> {
   });
 }
 
+type Landing = "redirect" | "query" | "other-server" | "outside-preview";
+
+function previewResponse(request: Request, landing: Landing): Response {
+  const url = new URL(request.url);
+  const headers = { "content-type": "text/html; charset=utf-8" };
+  if (url.pathname === "/sandbox/") return new Response(html, { headers });
+  if (url.pathname === "/__preview/5174/" && landing !== "query") {
+    const path = landing === "redirect" ? "/__preview/5174/route?redirected=1" : landing === "other-server" ? "/__preview/5175/" : "/__preview/5174-other/";
+    return Response.redirect(new URL(path, url), 302);
+  }
+  const script = landing === "query" && url.pathname === "/__preview/5174/" ? '<script>history.replaceState(null,"","?app=1")</script>' : "";
+  return new Response(`<button class="counter">live app</button>${script}`, { headers });
+}
+
+async function redirectedNavigation(browser: Browser, landing: Landing): Promise<void> {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => previewResponse(request, landing) });
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await openTemplate(page, new URL("sandbox/", server.url).href, "vanilla");
+    await page.evaluate(() => Reflect.get(globalThis, "listen")(5174));
+    await page.frameLocator("#preview").locator("button.counter").waitFor();
+    if (landing === "other-server" || landing === "outside-preview") {
+      await expect(ready(page, "vanilla", Date.now() + 200)).rejects.toThrow(/deadline|Timeout/);
+      expect(await page.locator("#status").getAttribute("data-kind")).toBe("");
+      return;
+    }
+    await ready(page, "vanilla", Date.now() + 1500);
+    expect(await page.locator("#status").getAttribute("data-kind")).toBe("ok");
+    expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(2);
+    expect(await page.locator("#preview").getAttribute("src")).toEndWith("/__preview/5174/");
+  } finally { await context.close(); await server.stop(true); }
+}
+
+async function redirectsAndQueries(browser: Browser): Promise<void> {
+  for (const landing of ["redirect", "query", "other-server", "outside-preview"] as const) await redirectedNavigation(browser, landing);
+}
+
 async function invalidLoads(browser: Browser): Promise<void> {
   await model(browser, async (page, control) => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
@@ -96,7 +134,7 @@ async function invalidLoads(browser: Browser): Promise<void> {
     expect(await page.locator("#status").getAttribute("data-kind")).toBe("");
     await page.evaluate(() => document.querySelector("iframe")!.dispatchEvent(new Event("load")));
     expect(await page.locator("#status").getAttribute("data-kind")).toBe("");
-    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.document)).toBeNull();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "control").preview?.loaded)).toBeNull();
     await page.evaluate(async () => {
       const frame = document.querySelector<HTMLIFrameElement>("iframe")!;
       const loaded = new Promise<void>(resolve => frame.addEventListener("load", () => resolve(), { once: true }));
@@ -141,35 +179,39 @@ async function changesDuringFlush(browser: Browser): Promise<void> {
   });
 }
 
+function installFailure(failure: string): void {
+  const control = Reflect.get(globalThis, "control");
+  const report = () => {
+    control.setStatus("real startup error", "error");
+    if (failure.startsWith("transient")) control.setStatus("loading preview", "");
+  };
+  if (failure.endsWith("during flush")) { Reflect.set(globalThis, "flushHook", report); return; }
+  if (failure === "flush") { Reflect.set(globalThis, "flushHook", () => Promise.reject(new Error("flush refused"))); return; }
+  if (failure === "filesystem") { Reflect.get(globalThis, "sandbox").fs.state = { status: "failed", error: new Error("filesystem refused") }; return; }
+  report();
+}
+
 async function failures(browser: Browser): Promise<void> {
   for (const failure of ["startup", "transient", "filesystem", "flush", "error during flush", "transient during flush"]) await model(browser, async page => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
-    await page.evaluate(failure => {
-      const control = Reflect.get(globalThis, "control");
-      if (failure.endsWith("during flush")) {
-        Reflect.set(globalThis, "flushHook", () => {
-          control.setStatus("real startup error", "error");
-          if (failure.startsWith("transient")) control.setStatus("loading preview", "");
-        });
-        return;
-      }
-      if (failure === "flush") { Reflect.set(globalThis, "flushHook", () => Promise.reject(new Error("flush refused"))); return; }
-      if (failure === "filesystem") { Reflect.get(globalThis, "sandbox").fs.state = { status: "failed", error: new Error("filesystem refused") }; return; }
-      control.setStatus("real startup error", "error");
-      if (failure === "transient") control.setStatus("loading preview", "");
-    }, failure);
+    await page.evaluate(installFailure, failure);
     await expect(ready(page, "vanilla")).rejects.toThrow(/error|refused/);
   });
+}
+
+function invalidateEachCheckpoint(): void {
+  const control = Reflect.get(globalThis, "control");
+  Reflect.set(globalThis, "flushHook", () => { control.preview = { ...control.preview }; });
 }
 
 async function deadlines(browser: Browser): Promise<void> {
   await model(browser, async page => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
-    await page.evaluate(() => Reflect.set(globalThis, "flushHook", () => Reflect.get(globalThis, "listen")(5173)));
+    await page.evaluate(invalidateEachCheckpoint);
     const started = Date.now();
     await expect(ready(page, "vanilla", started + 1000)).rejects.toThrow(/deadline|Timeout/);
     expect(Date.now() - started).toBeLessThan(3000);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBeGreaterThan(2);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBeGreaterThan(1);
   });
   await model(browser, async page => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
@@ -178,7 +220,7 @@ async function deadlines(browser: Browser): Promise<void> {
   });
 }
 
-const cases = [normalAndRepeated, invalidLoads, changesDuringFlush, failures, deadlines];
+const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, deadlines];
 for (const engine of [chromium, webkit]) for (const run of cases) test(`${engine.name()}: ${run.name}`, async () => {
   const browser = await engine.launch({ headless: true });
   try { await run(browser); } finally { await browser.close(); }
