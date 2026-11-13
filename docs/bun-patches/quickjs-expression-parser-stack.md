@@ -10,7 +10,7 @@ The private-field `in` form retains its special lookahead and cleanup. After tha
 
 `next_token` still checks for 1,000 bytes of stack. All frame reservations, stack budgets, parser errors, and public APIs stay unchanged. Deep expressions still fail with a catchable `RangeError`, and the parser continues after unwinding.
 
-`tests/fixtures/quickjs-parser-reentry` compiles and runs 16 nested callback blocks at 32 KiB. It also compiles Babel's `uppercase.js` shape, 100 export assignments inside five nested function bodies. The fixture then forces deep-arrow overflow, checks recovery, and reloads both inputs. `checks/native-quickjs-parser-reentry.json` gives the fixture normal native discovery.
+`tests/fixtures/quickjs-parser-reentry` compiles and runs 16 nested callback blocks at QuickJS's 32 KiB budget. It also compiles Babel's `uppercase.js` shape, 100 export assignments inside five nested function bodies. The fixture then forces deep-arrow overflow, checks recovery, and reloads both inputs. Other engines use their normal fixture budget. `checks/native-quickjs-parser-reentry.json` gives the fixture normal native discovery.
 
 ## Classification
 
