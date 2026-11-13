@@ -434,7 +434,7 @@ test("old Cargo-first keys cannot use the new compatibility prefix, and fallback
   expect(oldSaved.startsWith(fixtureCacheKey(old.prefix, changedCacheFile("Cargo.lock")))).toBe(false);
   expect(oldSaved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
-  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == ''");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
 });
 
@@ -731,7 +731,7 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(14);
   expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(5);
   expect(prebuild).not.toContain("github.run_id");
-  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == ''");
   for (const key of nativeCacheExpressions()) {
     expect(key).not.toContain("github.run_id");
     expect(key).not.toContain("github.run_attempt");
@@ -1041,7 +1041,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
   ].map(name => nativeWorkflowStep("name", name))).map(step => workflowString(workflowField(step, "if")));
   const states = [
     { v2: "exact", v4: "not-run", expected: [false, false, false] },
-    { v2: "prefix", v4: "not-run", expected: [false, true, false] },
+    { v2: "prefix", v4: "not-run", expected: [false, false, false] },
     { v2: "miss", v4: "exact", expected: [true, true, false] },
     { v2: "miss", v4: "prefix", expected: [true, true, true] },
     { v2: "miss", v4: "miss", expected: [true, true, true] },
@@ -1119,7 +1119,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
 }
 
 for (const { id, saveName, condition, workflowCompatible } of [
-  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
+  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-matched-key == ''", workflowCompatible: true },
   { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
 ]) {
   test(`${id} distinguishes tools builders and producers with its own guarded save`, () => {
