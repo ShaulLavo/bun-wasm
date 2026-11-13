@@ -6,6 +6,9 @@ import type { ProcessExit } from "waffle/proc/types";
 import { copyLaunchFailure, type LaunchFailureFact } from "./launch-failure.js";
 export type TelemetryEngine = Engine;
 export interface FailedAllocation { bytes: number | null; category: string }
+export type AllocatorGrowth = { kind: "not-attempted" }
+  | { kind: "attempted"; successfulAttempts: number; failedAttempts: number;
+    lastIncrementBytes: number; firstFailedIncrementBytes: number | null };
 export interface FrozenAllocatorFailure extends FailedAllocation {
   previousUsableBytes: number | null;
   allocatorLiveBytes: number | null;
@@ -13,6 +16,7 @@ export interface FrozenAllocatorFailure extends FailedAllocation {
   wasmCapacityBeforeBytes: number | null;
   wasmCapacityAfterBytes: number | null;
   reason: "unknown";
+  growth: AllocatorGrowth;
 }
 export interface MemoryCounters {
   wasmCapacityBytes: number | null;
@@ -59,7 +63,7 @@ function failure(size: bigint | undefined, category: bigint | undefined, names: 
   return { bytes: count(size), category: names[Number(category)] ?? `unknown.${category}` };
 }
 
-function read(memory: WebAssembly.Memory, exports: WebAssembly.Exports, name: string, bytes: number): bigint[] | null {
+function read(memory: WebAssembly.Memory, exports: WebAssembly.Exports, name: string, bytes: number, version = 1n): bigint[] | null {
   const getter = exports[name];
   if (typeof getter !== "function") return null;
   const raw: unknown = getter();
@@ -67,7 +71,7 @@ function read(memory: WebAssembly.Memory, exports: WebAssembly.Exports, name: st
   const pointer = raw >>> 0;
   if (!pointer || pointer % 8 || pointer > memory.buffer.byteLength - bytes) throw new RangeError(`Invalid ${name} bounds`);
   const view = new DataView(memory.buffer, pointer, bytes);
-  if (view.getBigUint64(0, true) !== 1n || view.getBigUint64(8, true) !== BigInt(bytes)) throw new TypeError(`Invalid ${name} ABI`);
+  if (view.getBigUint64(0, true) !== version || view.getBigUint64(8, true) !== BigInt(bytes)) throw new TypeError(`Invalid ${name} ABI`);
   return Array.from({ length: bytes / 8 }, (_, index) => view.getBigUint64(index * 8, true));
 }
 
@@ -75,7 +79,16 @@ function readFrozenAllocatorFailure(data: bigint[] | null): FrozenAllocatorFailu
   if (!data) return null;
   const request = failure(data[2], data[3], allocatorCategories);
   if (!request) return null;
-  return { ...request, previousUsableBytes: count(data[4]), allocatorLiveBytes: count(data[5]),
+  const successfulAttempts = count(data[9]), failedAttempts = count(data[10]);
+  const lastIncrementBytes = count(data[11]), firstFailedIncrementBytes = count(data[12]);
+  const growth: unknown = successfulAttempts === 0 && failedAttempts === 0 ? { kind: "not-attempted" } : {
+    kind: "attempted", successfulAttempts, failedAttempts, lastIncrementBytes, firstFailedIncrementBytes,
+  };
+  if (!isAllocatorGrowth(growth) || failedAttempts === 0 && data[12] !== unknown
+    || growth.kind === "not-attempted" && data[11] !== unknown) {
+    throw new TypeError("Invalid allocator growth telemetry");
+  }
+  return { ...request, growth, previousUsableBytes: count(data[4]), allocatorLiveBytes: count(data[5]),
     allocatorPeakBytes: count(data[6]), wasmCapacityBeforeBytes: count(data[7]),
     wasmCapacityAfterBytes: count(data[8]), reason: "unknown" };
 }
@@ -126,7 +139,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       let data = engineReadout(engine, memory, side?.exports ?? {});
       const allocator = read(memory, core.exports, "bun_memory_telemetry", 80);
       const allocatorFailure = allocator ? failure(allocator[4], allocator[5], allocatorCategories) : null;
-      const frozenRecord = read(memory, core.exports, "bun_memory_failure_telemetry", 72);
+      const frozenRecord = read(memory, core.exports, "bun_memory_failure_telemetry", 104, 2n);
       const frozenAllocatorFailure = readFrozenAllocatorFailure(frozenRecord);
       failed ||= Boolean(allocatorFailure || frozenAllocatorFailure || data?.failure);
       if (refresh && !terminal && !failed && data !== null) {
@@ -278,9 +291,31 @@ function isFailure(value: unknown): value is FailedAllocation | null {
 function isFrozenAllocatorFailure(value: unknown): value is FrozenAllocatorFailure | null {
   if (value === null) return true;
   if (!isFailure(value) || typeof value !== "object") return false;
-  if (Reflect.get(value, "reason") !== "unknown") return false;
+  if (Reflect.get(value, "reason") !== "unknown" || !isAllocatorGrowth(Reflect.get(value, "growth"))) return false;
   return ["previousUsableBytes", "allocatorLiveBytes", "allocatorPeakBytes", "wasmCapacityBeforeBytes", "wasmCapacityAfterBytes"]
     .every(key => isCounter(Reflect.get(value, key)));
+}
+
+function isAllocatorGrowth(value: unknown): value is AllocatorGrowth {
+  if (!value || typeof value !== "object") return false;
+  if (!("kind" in value)) return false;
+  if (value.kind === "not-attempted") return !("successfulAttempts" in value || "failedAttempts" in value
+    || "lastIncrementBytes" in value || "firstFailedIncrementBytes" in value);
+  if (value.kind !== "attempted" || !("successfulAttempts" in value) || !("failedAttempts" in value)
+    || !("lastIncrementBytes" in value) || !("firstFailedIncrementBytes" in value)) return false;
+  const { successfulAttempts, failedAttempts, lastIncrementBytes, firstFailedIncrementBytes } = value;
+  if (typeof successfulAttempts !== "number" || !isCounter(successfulAttempts)
+    || typeof failedAttempts !== "number" || !isCounter(failedAttempts)
+    || typeof lastIncrementBytes !== "number" || !isCounter(lastIncrementBytes) || lastIncrementBytes === 0) return false;
+  if (!Number.isSafeInteger(successfulAttempts + failedAttempts) || successfulAttempts + failedAttempts === 0) return false;
+  return failedAttempts === 0 ? firstFailedIncrementBytes === null
+    : typeof firstFailedIncrementBytes === "number" && isCounter(firstFailedIncrementBytes) && firstFailedIncrementBytes > 0;
+}
+
+function projectAllocatorGrowth(value: AllocatorGrowth): AllocatorGrowth {
+  return value.kind === "not-attempted" ? { kind: value.kind } : { kind: value.kind,
+    successfulAttempts: value.successfulAttempts, failedAttempts: value.failedAttempts,
+    lastIncrementBytes: value.lastIncrementBytes, firstFailedIncrementBytes: value.firstFailedIncrementBytes };
 }
 
 export const memoryObservationLimits = { active: 128, terminal: 128, runtimes: 16, censuses: 16, workers: 128, outputBytes: 524288 } as const;
@@ -508,7 +543,8 @@ function projectFrozenFailure(value: FrozenAllocatorFailure | null): FrozenAlloc
   if (!value) return null;
   return { bytes: value.bytes, category: allocatorCategories.includes(value.category) ? value.category : "unknown",
     previousUsableBytes: value.previousUsableBytes, allocatorLiveBytes: value.allocatorLiveBytes, allocatorPeakBytes: value.allocatorPeakBytes,
-    wasmCapacityBeforeBytes: value.wasmCapacityBeforeBytes, wasmCapacityAfterBytes: value.wasmCapacityAfterBytes, reason: "unknown" };
+    wasmCapacityBeforeBytes: value.wasmCapacityBeforeBytes, wasmCapacityAfterBytes: value.wasmCapacityAfterBytes, reason: "unknown",
+    growth: projectAllocatorGrowth(value.growth) };
 }
 
 /** Synchronous cached samples plus registered service reads. Never requests a guest sample. */

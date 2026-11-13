@@ -60,6 +60,15 @@ alone is insufficient. Getter absence, unsupported schema, unavailable shared
 buffers, invalid data and output loss have explicit states. Null remains null.
 SpiderMonkey engine heap counters are unsupported.
 
+The frozen first allocator failure includes request-scoped positive `sbrk` results.
+`growth.kind` is `not-attempted` only after a supported read reports zero positive
+attempts. Otherwise `successfulAttempts`, `failedAttempts`, `lastIncrementBytes`
+and `firstFailedIncrementBytes` retain the returned growth observations, including
+a failed attempt followed by success. Missing, invalid and unreadable records remain
+unavailable. A failed `sbrk` does not identify a browser cause, and shared-group libc
+may delegate growth to its broker. This first failure need not be the terminal
+request. See [the record contract](../bun-patches/common-memory-telemetry.md).
+
 `sample.time` and `sample.terminal` retain the worker sample boundary. Launch
 and cleanup times and sequences describe host observations, not exact guest
 exit or allocation order. An adapter-cleanup census can include a physically

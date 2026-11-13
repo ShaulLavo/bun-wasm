@@ -208,12 +208,12 @@ static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
     return bunjsc_host_interrupt();
 }
 
-// Copies the core's two allocator records. False when either ABI header is not version 1 at its size.
+// Copies the core's two allocator records after checking their exact ABI headers.
 static bool sampleCoreAllocator(BunjscCoreAllocatorSample& sample)
 {
     const uint64_t* counters = bun_memory_telemetry();
     const uint64_t* failure = bun_memory_failure_telemetry();
-    if (counters[0] != 1 || counters[1] != 80 || failure[0] != 1 || failure[1] != 72)
+    if (counters[0] != 1 || counters[1] != 80 || failure[0] != 2 || failure[1] != 104)
         return false;
     sample.live = counters[2];
     sample.peak = counters[3];
