@@ -178,9 +178,8 @@ core's commit, the native wrapper's return and the interpreter's return from `po
   way out only lowers a count.
 - The detach predicates cover every rejection of the detach primitives: QuickJS and JSC have
   none, and SpiderMonkey's four are an unwrappable object, a detach key, an immutable buffer
-  and a pinned length. SpiderMonkey's predicate (`bsm_is_detachable_buffer`) does not check
-  the immutable flag yet, so an immutable buffer there still reaches the primitive, whose
-  refusal the adapter treats as a broken invariant.
+  and a pinned length, each refused by `bsm_is_detachable_buffer` first. QuickJS's primitive
+  would detach an immutable buffer, so its predicate refuses that too.
 - The return paths were read in the engine sources at their pins: the call's continuation
   and the function return raise nothing a program can catch on QuickJS, on JSC's C-loop with
   every JIT tier off, or on either SpiderMonkey tier. A build still has to show it on each

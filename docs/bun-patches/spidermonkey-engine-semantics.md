@@ -40,6 +40,11 @@ The adapter targets `mozilla-firefox/firefox` revision
   fail as well as the host transfer path. A private weak map preserves their
   identity after detachment without keeping unreachable buffers alive. Unrelated
   detached buffers are no longer accepted as host-owned memory.
+- `bsm_is_detachable_buffer` refuses everything `JS::DetachArrayBuffer` refuses:
+  an unwrappable object, a detached buffer, an immutable buffer
+  (`JS::ArrayBufferOrView::isImmutable`), a detach key, and the adapter's own
+  length-pinned external buffers. A transfer checks every buffer with it before
+  detaching any, so the primitive never fails after another buffer has moved.
 - Classic scripts preserve nonnegative first lines, including zero. The exact
   runtime CommonJS wrapper with first line -1 keeps its original named function
   expression. Removing one synthetic header newline and compiling at line zero

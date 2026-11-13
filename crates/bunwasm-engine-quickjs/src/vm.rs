@@ -1238,6 +1238,7 @@ mod tests {
             ("missing", "undefined"),
             ("view", "new Uint8Array(4)"),
             ("shared", "new SharedArrayBuffer(4)"),
+            ("immutable", "new ArrayBuffer(4).sliceToImmutable()"),
         ];
         for (name, last) in bad {
             for lane in [false, true] {

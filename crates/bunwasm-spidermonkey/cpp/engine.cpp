@@ -923,6 +923,12 @@ extern "C" bool bsm_is_detachable_buffer(bsm_handle handle) {
   JSAutoRealm realm(context, global->get());
   JS::RootedObject obj(context, object(handle));
   if (!obj || !JS::IsArrayBufferObject(obj) || JS::IsDetachedArrayBufferObject(obj)) return false;
+  // Every refusal of JS::DetachArrayBuffer is refused here first, so a caller that checks all
+  // its buffers before detaching any never meets one halfway: an unwrappable object and a
+  // detached buffer (above), an immutable buffer, a detach key, and a pinned length. This
+  // adapter pins a length only on its external buffers, and SpiderMonkey's own pins (wasm
+  // compilation) are held across no JavaScript.
+  if (JS::ArrayBufferOrView::unwrap(obj.get()).isImmutable()) return false;
   if (is_external_buffer(obj)) return false;
   bool keyed = false;
   require(JS::HasDefinedArrayBufferDetachKey(context, obj, &keyed), "buffer detach key inspection failed");
