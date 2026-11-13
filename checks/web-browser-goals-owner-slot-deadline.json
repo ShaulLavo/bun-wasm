@@ -1,1 +1,1 @@
-{ "owner": "web-browser", "path": "scripts/goals-matrix/owner-slot-deadline-browser.test.ts" }
+{ "owner": "web-browser", "path": "scripts/goals-matrix/owner-slot-deadline-browser.test.ts" , "batch": "10-interface"}

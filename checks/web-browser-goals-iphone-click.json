@@ -1,1 +1,1 @@
-{ "owner": "web-browser", "path": "scripts/goals-matrix/iphone-click-browser.test.ts" }
+{ "owner": "web-browser", "path": "scripts/goals-matrix/iphone-click-browser.test.ts" , "batch": "10-interface"}

@@ -77,7 +77,7 @@ export function parseCheck(value: unknown, file: string): Check {
   const localRuntime = "localRuntime" in value ? value.localRuntime : false;
   if (typeof localRuntime !== "boolean" || (localRuntime && owner !== "runtime" && owner !== "web")) throw new Error(`Invalid local runtime selection: ${file}`);
   const batch = "batch" in value ? value.batch : "default";
-  if (typeof batch !== "string" || (batch !== "default" && ((owner !== "web" && owner !== "browser-guest") || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
+  if (typeof batch !== "string" || (batch !== "default" && ((owner !== "web" && owner !== "browser-guest" && owner !== "web-browser") || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
   if (owner === "browser-guest") {
     const inputs = "inputs" in value ? inputFiles(value.inputs, file) : [];
     if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };

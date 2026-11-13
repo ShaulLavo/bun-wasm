@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/native-stream-dictionary.test.ts"
+  "path": "scripts/native-stream-dictionary.test.ts",
+  "batch": "20-preview"
 }

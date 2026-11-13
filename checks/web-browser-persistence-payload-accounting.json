@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/persistence-payload-accounting.test.ts"
+  "path": "scripts/persistence-payload-accounting.test.ts",
+  "batch": "20-preview"
 }

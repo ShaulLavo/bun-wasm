@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/dev-html-browser.test.ts"
+  "path": "scripts/dev-html-browser.test.ts",
+  "batch": "10-interface"
 }

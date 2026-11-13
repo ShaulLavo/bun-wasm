@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/native-stream-callbacks.test.ts"
+  "path": "scripts/native-stream-callbacks.test.ts",
+  "batch": "20-preview"
 }

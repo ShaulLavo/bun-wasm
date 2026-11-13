@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/react-router-preview-browser.test.ts"
+  "path": "scripts/react-router-preview-browser.test.ts",
+  "batch": "20-preview"
 }

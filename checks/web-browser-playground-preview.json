@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/playground-preview.test.ts"
+  "path": "scripts/playground-preview.test.ts",
+  "batch": "20-preview"
 }

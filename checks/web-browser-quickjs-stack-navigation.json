@@ -1,4 +1,5 @@
 {
   "owner": "web-browser",
-  "path": "scripts/quickjs-stack-navigation-browser.test.ts"
+  "path": "scripts/quickjs-stack-navigation-browser.test.ts",
+  "batch": "20-preview"
 }
