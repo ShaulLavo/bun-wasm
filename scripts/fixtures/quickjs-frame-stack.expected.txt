@@ -78,4 +78,6 @@ reduce cross realm empty error and alias => false,true,reduce,1,true
 reduce constructor origin and formal padding => true,true,4,2,1,0,1,,
 reduce C entry, coroutine and next callback => 20,7
 reduce native fallbacks => 6,6,6,26,NaN,patched,9
+reduce native C entry and strict callback receiver => 6,true
+reduce inherited indices and empty right => 3/3:5|5/1:3|TypeError: empty array
 async => 10,20,closed,30,3,f0,f1,f2,bottom

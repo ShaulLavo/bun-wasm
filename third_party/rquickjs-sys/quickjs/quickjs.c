@@ -19666,13 +19666,13 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
             has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
-                if (owned && (kind = js_cont_kind(call_argv[-1], JS_UNDEFINED, call_argc, vc(call_argv)))) {
-                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
-                    goto cont_begin;
-                }
                 if (owned && js_frame_inline_callee(call_argv[-1])) {
                     call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
                     goto inline_call;
+                }
+                if (owned && (kind = js_cont_kind(call_argv[-1], JS_UNDEFINED, call_argc, vc(call_argv)))) {
+                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
+                    goto cont_begin;
                 }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc,
@@ -19711,15 +19711,15 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
-                if (owned && (kind = js_cont_kind(call_argv[-1], call_argv[-2], call_argc, vc(call_argv)))) {
-                    call_kind = JS_FRAME_CALL_METHOD |
-                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
-                    goto cont_begin;
-                }
                 if (owned && js_frame_inline_callee(call_argv[-1])) {
                     call_kind = JS_FRAME_CALL_METHOD |
                         (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
                     goto inline_call;
+                }
+                if (owned && (kind = js_cont_kind(call_argv[-1], call_argv[-2], call_argc, vc(call_argv)))) {
+                    call_kind = JS_FRAME_CALL_METHOD |
+                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
+                    goto cont_begin;
                 }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc,

@@ -324,12 +324,12 @@ report("call foreign intrinsic alias", () => {
 report("reduce sparse directions and initial values", () => {
   const values = [, 2, , 4];
   const visit = (a: string, v: number | undefined, k: number): string => `${a}/${k}:${v}`;
-  return [values.reduce(visit, "start"), values.reduceRight(visit, "start"), values.reduce((a, b) => Number(a) + Number(b)), values.reduce((a, b) => `${a}:${b}`, undefined)].join(" | ");
+  return [values.reduce(visit, "start"), values.reduceRight(visit, "start"), values.reduce((a, b) => Number(a) + Number(b)), values.reduce<string | undefined>((a, b) => `${a}:${b}`, undefined)].join(" | ");
 });
 report("reduce empty and undefined receiver", () => {
   const results: string[] = [];
   for (const receiver of [[], Array(3), null, undefined]) {
-    try { results.push(String(Array.prototype.reduce.call(receiver, (a: unknown) => a))); }
+    try { results.push(String(Reflect.apply(Array.prototype.reduce, receiver, [(a: unknown) => a]))); }
     catch (error) { results.push(`${(error as Error).name}: ${(error as Error).message}`); }
   }
   return results.concat([String([].reduce((a: unknown) => a, undefined))]).join(" | ");
@@ -445,7 +445,24 @@ report("reduce native fallbacks", () => {
   const proxy = new Proxy(sum, { apply(target, receiver, args) { return Reflect.apply(target, receiver, args) + 10; } });
   const patched = Object.assign([1, 2], { reduce: () => "patched" });
   const generic = Object.assign(new Uint8Array([2, 3]), { genericReduce: Array.prototype.reduce });
-  return [new Uint8Array([2, 3]).reduce(sum, 1), generic.genericReduce(sum, 1), [2, 3].reduce(sum.bind(null), 1), [2, 3].reduce(proxy, 1), [2, 3].reduce(Math.max, 1), patched.reduce(), [1].reduce(function* () { yield 9; }, undefined).next().value].join();
+  // oxlint-disable-next-line no-eval -- This deliberately passes a native function outside the typed reduce callback signature.
+  const max = (0, eval)("Math.max");
+  return [new Uint8Array([2, 3]).reduce(sum, 1), generic.genericReduce(sum, 1), [2, 3].reduce(sum.bind(null), 1), [2, 3].reduce(proxy, 1), [2, 3].reduce(max, 1), patched.reduce(), [1].reduce(function* () { yield 9; }, undefined)?.next().value].join();
+});
+report("reduce native C entry and strict callback receiver", () => {
+  const direct = callWith(Array.prototype.reduce, [2, 3], (a: number, b: number) => a + b, 1);
+  // oxlint-disable-next-line no-eval -- Sloppy outer code and a strict callback distinguish the callback receiver.
+  const receiver = (0, eval)(`[1].reduce(function (a, v) { 'use strict'; return this === undefined && arguments.length === 4 && v === 1; }, 0)`);
+  return [direct, receiver].join();
+});
+report("reduce inherited indices and empty right", () => {
+  // oxlint-disable-next-line no-eval -- Generic inherited indices deliberately use a non-array receiver.
+  return (0, eval)(`(function () {
+    var object = Object.assign(Object.create({ 1: 3, 3: 5 }), { length: 5, reduce: Array.prototype.reduce, reduceRight: Array.prototype.reduceRight });
+    var left = object.reduce(function (a, v, k) { return a + '/' + k + ':' + v; });
+    var right = object.reduceRight(function (a, v, k) { return a + '/' + k + ':' + v; });
+    try { [].reduceRight(function () {}); } catch (e) { return [left, right, e.name + ': ' + e.message].join('|'); }
+  })()`);
 });
 
 // Asynchronous functions.
