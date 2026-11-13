@@ -48,8 +48,8 @@ function write(member: Member, wasi: Wasi, iovec: number, span: readonly [number
 }
 
 describe("the Bun group policy", () => {
-  test("keeps experimental backing below declarations with the 1 GiB member cap", () => {
-    expect(BUN_MEMORY_GROUP_POLICY).toEqual({ maximumPages: 20480, memberPages: 16384, stackBytes: 8 << 20 });
+  test("keeps default backing at the declaration with the 1 GiB member cap", () => {
+    expect(BUN_MEMORY_GROUP_POLICY).toEqual({ maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 });
     expect(declarationPolicy.maximumPages * PAGE).toBe(END);
   });
 });

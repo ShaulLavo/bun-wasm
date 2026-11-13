@@ -1,7 +1,7 @@
 import { BUN_MEMORY_GROUP_POLICY, importedMemory, wasmMemoryLimits } from "../src/engine-kind";
 import { sharedGroupMaxPages } from "./src/program-profile";
 
-type BackingPolicy = Readonly<Record<keyof typeof BUN_MEMORY_GROUP_POLICY, number>>;
+export type BackingPolicy = Readonly<Record<keyof typeof BUN_MEMORY_GROUP_POLICY, number>>;
 interface Cursor { readonly bytes: Uint8Array; at: number }
 const PAGE = 65536;
 
@@ -47,12 +47,14 @@ function customName(cursor: Cursor): string {
 /** Source declarations stay exact; supplied browser backing may have a smaller maximum. */
 export function verifySharedProgramMemory(core: Uint8Array, side: Uint8Array, policy: BackingPolicy = BUN_MEMORY_GROUP_POLICY): void {
   const declaration = sharedGroupMaxPages();
+  const minima: number[] = [];
   for (const bytes of [core, side]) {
     const memories = wasmMemoryLimits(bytes), memory = memories[0];
     if (memories.length !== 1 || memory?.origin !== "imported" || !memory.shared || importedMemory(bytes)?.maximum !== declaration || memory.maximum !== declaration)
       throw new TypeError("Shared program memory must match the current group address space");
     if (policy.maximumPages > memory.maximum || policy.maximumPages < memory.initial)
       throw new RangeError("Group backing maximum is outside a source memory import's limits");
+    minima.push(memory.initial);
   }
   const valid = Object.values(policy).every(value => Number.isSafeInteger(value) && value > 0);
   if (!valid || policy.stackBytes % 16 || policy.memberPages > policy.maximumPages)
@@ -61,6 +63,10 @@ export function verifySharedProgramMemory(core: Uint8Array, side: Uint8Array, po
   if (data.alignment > PAGE || library.alignment > 2 ** 31)
     throw new RangeError("Shared program layout alignment exceeds group limits");
   const memberBytes = Math.max(1, Math.ceil(data.bytes / PAGE)) * PAGE + Math.ceil(policy.stackBytes / PAGE) * PAGE;
+  // Waffle carves core data and stack after its initial sentinel page before instantiation.
+  const initialPages = 1 + memberBytes / PAGE;
+  if (initialPages > policy.maximumPages || minima.some(minimum => initialPages < minimum))
+    throw new RangeError("Group initialization backing is outside a source memory import's limits");
   const sideEnd = Math.ceil((PAGE + memberBytes) / library.alignment) * library.alignment + Math.max(1, library.bytes);
   if (memberBytes + Math.max(1, library.bytes) > policy.memberPages * PAGE || sideEnd > policy.maximumPages * PAGE)
     throw new RangeError("Group backing or member allowance cannot hold the program layout and stack");

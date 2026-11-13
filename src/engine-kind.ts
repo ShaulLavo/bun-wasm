@@ -28,12 +28,11 @@ export function isPairedEngine(value: unknown): value is PairedEngine {
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 
 /**
- * Experimental browser backing capacity, independent of the 2 GiB guest import declaration.
- * The 1 GiB cumulative member allowance and 8 MiB stacks stay unchanged. Staging verifies
- * source declarations against their producer authority and backing capacity against both
- * modules. A full native workflow must qualify the smaller backing before default adoption.
+ * Browser backing capacity, checked separately from the guest import declaration at staging.
+ * The default stays 2 GiB with a 1 GiB cumulative member allowance and 8 MiB stacks.
+ * Smaller supplied backing policies require their own complete workflow qualification.
  */
-export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 20480, memberPages: 16384, stackBytes: 8 << 20 } as const;
+export const BUN_MEMORY_GROUP_POLICY = { maximumPages: 32768, memberPages: 16384, stackBytes: 8 << 20 } as const;
 
 /** Initialize a shared-group (PIE) core's data before constructors. */
 export const SHARED_GROUP_CORE_INITIALIZE_MEMORY = ["core_initialize_memory", "__wasm_apply_data_relocs"] as const;

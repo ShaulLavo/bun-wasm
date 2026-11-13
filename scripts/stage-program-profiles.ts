@@ -2,8 +2,8 @@ import { mkdir } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { prepareProgram } from "../src/assets";
-import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind";
-import { verifySharedProgramMemory } from "./shared-program-memory";
+import { BUN_MEMORY_GROUP_POLICY, programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind";
+import { verifySharedProgramMemory, type BackingPolicy } from "./shared-program-memory";
 import { profileAsset, verifyMemoryProfile } from "../web/src/program-profile";
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt";
 
@@ -17,10 +17,10 @@ export async function stageSharedPrograms(out: string, builds: Record<string, st
   quickjs: process.env.SHARED_QUICKJS_PROGRAM,
   jsc: process.env.SHARED_JSC_PROGRAM,
   spidermonkey: process.env.SHARED_SPIDERMONKEY_PROGRAM,
-}): Promise<void> {
+}, policy: BackingPolicy = BUN_MEMORY_GROUP_POLICY): Promise<void> {
   for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) {
     const source = inputs[engine];
-    if (source) await stageProgram(engine, source, out, builds);
+    if (source) await stageProgram(engine, source, out, builds, policy);
   }
 }
 
@@ -72,14 +72,14 @@ async function verifiedSideReceipt(source: string, name: string, engine: "quickj
   return [file];
 }
 
-async function stageProgram(engine: PairedEngine, source: string, out: string, builds: Record<string, string>): Promise<void> {
+async function stageProgram(engine: PairedEngine, source: string, out: string, builds: Record<string, string>, policy: BackingPolicy): Promise<void> {
   const names = programProfile(engine);
   // Existing shared producers export their tagged core as bun.wasm.
   const core = await Bun.file(join(source, "bun.wasm")).bytes();
   const side = await Bun.file(join(source, names.side)).bytes();
   const module = await prepareProgram({ kind: engine, core, side });
   verifyMemoryProfile(module, "shared-group");
-  verifySharedProgramMemory(core, side);
+  verifySharedProgramMemory(core, side, policy);
   const coreFile = await receiptFile(source, "bun-core.wasm.core.json", "core");
   const untaggedCore = core.subarray(0, coreFile.receipt.artifact.artifactBytes);
   verifyProgramReceipt(untaggedCore, coreFile.receipt, coreFile.receipt.inputs);

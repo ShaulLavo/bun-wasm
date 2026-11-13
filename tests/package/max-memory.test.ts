@@ -41,10 +41,10 @@ test("the group address space has the same bounded reader and never falls below 
   expect(() => parseGroupAddressSpace("536870912\n", 1073741824)).toThrow(/at least the guest memory maximum/);
 });
 
-test("browser backing may be smaller than guest declarations with unchanged member allowance and stack", () => {
+test("browser backing keeps its default with unchanged member allowance and stack", () => {
   // src/engine-kind.ts ships in the package and cannot read the repository at run time.
   const policy: { readonly maximumPages: number; readonly memberPages: number } = BUN_MEMORY_GROUP_POLICY;
-  expect(policy.maximumPages).toBe(20480);
+  expect(policy.maximumPages).toBe(32768);
   expect(policy.maximumPages).toBeLessThanOrEqual(sharedGroupMaxPages());
   expect(policy.maximumPages).toBeGreaterThanOrEqual(policy.memberPages);
   expect(policy.memberPages).toBe(sharedGroupMemberPages());
@@ -139,8 +139,8 @@ test("no consumer keeps its own capacity number", () => {
     expect(read(path).split("\n").filter(line => capacity.test(line)))
       .toEqual(["#define THREAD_STACK ((size_t)512 << 20)"]);
   }
-  // The one packaged copy of the group policy, and the tests that state it.
-  expect(tracked("maximumPages: (16384|20480|32768)")).toEqual(["src/engine-kind.ts", "web/tests/group-address-space.test.ts", "web/tests/playground-memory-groups.test.ts"]);
+  // The packaged default and explicit host-policy tests, never a second producer authority.
+  expect(tracked("maximumPages: (16384|20480|32768)")).toEqual(["scripts/stage-program-profiles.test.ts", "src/engine-kind.ts", "web/tests/group-address-space.test.ts", "web/tests/playground-memory-groups.test.ts"]);
 });
 
 test("shell consumers read the maximum through the validating reader", () => {

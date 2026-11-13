@@ -95,10 +95,10 @@ group's members may hold together is the guest memory maximum, `crates/bunwasm-c
 (1 GiB, 16384 pages): regions are not counted against it.
 
 Waffle's `memoryGroups` options are runtime-wide. Every group in one `createRuntime()` uses the
-same policy. `BUN_MEMORY_GROUP_POLICY` currently trials a 20,480-page backing maximum, 1.25 GiB,
-with the unchanged 16,384-page member allowance and 8 MiB stacks. This is experimental pending
-a complete native workflow. It does not change either guest's 32,768-page import declaration or
-its original receipt. The backing maximum may be smaller than the imported maximum under Wasm
+same policy. `BUN_MEMORY_GROUP_POLICY` keeps its 32,768-page backing maximum, 2 GiB,
+with the unchanged 16,384-page member allowance and 8 MiB stacks. A smaller supplied backing
+policy is experimental until a complete native workflow qualifies it. It does not change either
+guest's 32,768-page import declaration or its original receipt. The backing maximum may be smaller than the imported maximum under Wasm
 import matching. Waffle's defaults, 4 GiB and 1 MiB stacks, still apply to other runtimes.
 A runtime left at those defaults cannot admit a Bun core because its supplied maximum exceeds
 the source import maximum. There is no fallback.
@@ -106,8 +106,11 @@ the source import maximum. There is no fallback.
 Host staging verifies both core and side declarations against `sharedGroupMaxPages()`, including
 sharedness, a single imported `env.memory`, and the exact producer maximum. It separately checks
 that backing capacity is no larger than either source maximum and no smaller than either initial
-minimum or the member allowance. Core data, stack, side data and alignment must also fit the
-static layout and member limits. These are admission checks, not proof that all later allocations
+minimum or the member allowance. Waffle's member-data and stack carves must also guarantee an
+initial backing prefix large enough for every import, with that prefix no larger than the
+maximum. The constructor starts at one sentinel page; these checks apply to the grown prefix
+at instantiation. Core data, stack, side data and alignment must fit the static layout and
+member limits. These are admission checks, not proof that all later allocations
 fit. Receipt, source, profile and core/side checks remain unchanged.
 
 On wasmtime, a Bun group is an `shm::MemoryGroup` created with

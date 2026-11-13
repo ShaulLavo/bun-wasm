@@ -11,13 +11,13 @@ the 1 GiB guest maximum. Split programs did not change.
 
 Safari allocates requested WebAssembly memory ahead of time, while Chrome and Firefox allocate lazily, so size memory for Safari.
 
-## Two quantities, each with one authority
+## Guest declarations and supplied backing
 
 | Quantity | Authority | Value | What derives from it |
 | --- | --- | --- | --- |
 | Guest memory maximum | `crates/bunwasm-cli/max-memory.txt` | 1 GiB | Split links, engine heap sizing, the single-memory Store limit, and the pages a group's members may hold together |
 | Group address space | `crates/bunwasm-cli/group-address-space.txt` | 2 GiB | The maximum every shared-group core and side declares, and the native host's group policy |
-| Browser backing capacity | `BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts` | Experimental 1.25 GiB | The supplied Waffle shared-group backing maximum, checked separately against both source imports and static layout |
+| Browser backing capacity | `BUN_MEMORY_GROUP_POLICY` in `src/engine-kind.ts` | 2 GiB default | The supplied Waffle shared-group backing maximum, checked separately against both source imports and static layout. Smaller policies require separate qualification. |
 
 Each file holds one line of decimal bytes and is the only copy of its number.
 

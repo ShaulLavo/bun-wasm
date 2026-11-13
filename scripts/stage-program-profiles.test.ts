@@ -11,13 +11,14 @@ import { sharedProgramReceipts, stageSharedPrograms } from "./stage-program-prof
 import { verifySharedProgramMemory } from "./shared-program-memory";
 
 const hash = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+const experimentalBacking = { ...BUN_MEMORY_GROUP_POLICY, maximumPages: 20480 };
 
 test("host backing is smaller than both unchanged source import maxima", () => {
   const pair = initializationPair("quickjs", true);
   expect(importedMemory(pair.core)?.maximum).toBe(32768);
   expect(importedMemory(pair.side)?.maximum).toBe(32768);
-  expect(BUN_MEMORY_GROUP_POLICY.maximumPages).toBe(20480);
-  expect(() => verifySharedProgramMemory(pair.core, pair.side)).not.toThrow();
+  expect(BUN_MEMORY_GROUP_POLICY.maximumPages).toBe(32768);
+  expect(() => verifySharedProgramMemory(pair.core, pair.side, experimentalBacking)).not.toThrow();
   expect(() => verifySharedProgramMemory(pair.core, pair.side, { ...BUN_MEMORY_GROUP_POLICY, maximumPages: 32769 })).toThrow("source memory import's limits");
   expect(() => verifySharedProgramMemory(pair.core, pair.side, { ...BUN_MEMORY_GROUP_POLICY, maximumPages: 16383 })).toThrow("member allowance");
   expect(() => verifySharedProgramMemory(pair.core, pair.side, { ...BUN_MEMORY_GROUP_POLICY, memberPages: 128 })).toThrow("layout and stack");
@@ -34,6 +35,17 @@ for (const component of ["core", "side"] as const) {
     expect(WebAssembly.validate(changed)).toBe(true);
     const core = component === "core" ? changed : pair.core, side = component === "side" ? changed : pair.side;
     expect(() => verifySharedProgramMemory(core, side, { maximumPages: 126, memberPages: 64, stackBytes: 65536 })).toThrow("source memory import's limits");
+  });
+  test(`a sufficient maximum does not hide insufficient initial backing for the ${component}`, () => {
+    const pair = initializationPair("quickjs", true);
+    const changed = Buffer.from(pair[component]);
+    const descriptor = Buffer.from([3, 101, 110, 118, 6, 109, 101, 109, 111, 114, 121, 2, 3, 1, 0x80, 0x80, 2]);
+    const at = changed.indexOf(descriptor);
+    expect(at).toBeGreaterThanOrEqual(0);
+    changed[at + descriptor.length - 4] = 127;
+    expect(WebAssembly.validate(changed)).toBe(true);
+    const core = component === "core" ? changed : pair.core, side = component === "side" ? changed : pair.side;
+    expect(() => verifySharedProgramMemory(core, side, { maximumPages: 20480, memberPages: 16384, stackBytes: 65536 })).toThrow("initialization backing");
   });
 }
 
@@ -153,7 +165,7 @@ async function rejectedBeforePublication(source: string): Promise<void> {
 test("shared staging preserves verified original receipts with independently sourced core and side", async () => {
   await withSharedProgram(async (source, pair) => {
     const builds: Record<string, string> = {};
-    await stageSharedPrograms(join(source, "out"), builds, { quickjs: source, jsc: undefined });
+    await stageSharedPrograms(join(source, "out"), builds, { quickjs: source, jsc: undefined }, experimentalBacking);
     expect(builds).toEqual({ "profiles/shared-group/bun.wasm": hash(pair.core), "profiles/shared-group/quickjs.wasm": hash(pair.side) });
     expect(Bun.gunzipSync(await Bun.file(join(source, "out/profiles/shared-group/bun.wasm.gz")).bytes())).toEqual(pair.core);
     for (const file of ["bun-core.wasm.core.json", "quickjs.wasm.engine.json", "source.txt"]) {
