@@ -4,11 +4,12 @@ import { requireCiSuccess } from "./ci-result";
 
 const always = ["quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
 const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
-const sharedJobs = ["shared-prebuild", "shared-sysroot"];
-const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
+const sharedJobs = ["shared-prebuild", "shared-sysroot", "shared-proof"];
+const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
+const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs);
 
 function fixture(rust = true, shared = true, sharedNative = true) {
-  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? ["shared-spidermonkey-prebuild"] : []));
+  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? sharedNativeJobs : []));
   return Object.fromEntries(jobIds.map(id => [id, { result: enabled.has(id) ? "success" : "skipped",
     outputs: id === "quality" ? { rust: String(rust), shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
 }

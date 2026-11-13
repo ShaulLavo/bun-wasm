@@ -92,12 +92,12 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
-    package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
+    package: "Browser adapter package", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC program producer", "shared-native": "Shared native (${{ matrix.engine }})", "shared-browser": "Shared Browser (${{ matrix.engine }})", "shared-proof": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "web-browser": "Web browser (${{ matrix.batch }})", "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");

@@ -14,20 +14,20 @@ const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
 const wrapper = join(root, "scripts/shared-wasm-memory-browser.test.ts");
 
 function browserStep(): string {
-  const step = workflow.split("      - name: Consume the shared SpiderMonkey Browser feature checks\n")[1]?.split("\n      - ")[0];
+  const step = workflow.split("      - name: Consume the discovered shared Browser checks sequentially\n")[1]?.split(/\n(?:      - |  [\w-]+:\n)/)[0];
   assert(step, "missing blocking SpiderMonkey Browser consumer");
   return step;
 }
 
 test("the selected native producer feeds the discovered Browser group consumer once", () => {
   const step = browserStep();
-  expect(step).toContain("if: needs.quality.outputs.shared-native == 'true'");
-  expect(step).toContain('BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"');
+  expect(workflow.split("\n  shared-browser:\n")[1]!).toContain("needs.quality.outputs.shared-native == 'true'");
+  expect(workflow).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
   expect(step).toContain("bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group");
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|native --profile|BUN_WASM_SPIDERMONKEY_TIER/);
-  expect(workflow.match(/name: Consume the shared SpiderMonkey Browser feature checks/g)).toHaveLength(1);
-  expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the shared Browser feature checks"));
-  expect(workflow.indexOf("name: Produce the shared SpiderMonkey profile once")).toBeLessThan(workflow.indexOf("name: Consume the shared JSC feature checks"));
+  expect(workflow.match(/name: Consume the discovered shared Browser checks sequentially/g)).toHaveLength(1);
+  expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared Browser checks sequentially"));
+  expect(workflow.indexOf("name: Produce the shared SpiderMonkey profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared Browser checks sequentially"));
   expect(selectChecks("browser-guest", undefined, "shared-group")).toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("browser-guest")).not.toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("quality")).toContain("scripts/spidermonkey-browser-ci.test.ts");

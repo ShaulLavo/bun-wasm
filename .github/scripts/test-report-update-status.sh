@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"quality":{"result":"success","outputs":{"rust":"true","shared":"true"}},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-sysroot":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"quality":{"result":"success","outputs":{"rust":"true","shared":"true"}},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -51,7 +51,7 @@ JSC C/C++ prebuild|jsc-prebuild|rust
 Native quality checkpoint|native-quality|rust
 Rust workspace tests (QuickJS host)|rust|rust
 Browser adapter package|package|
-Shared PIC sysroot proof|shared-sysroot|shared
+Shared PIC sysroot proof|shared-proof|shared
 Web host|web|
 Shared process browser bundles|process-bundles|
 Processes (chromium)|browser-process|
