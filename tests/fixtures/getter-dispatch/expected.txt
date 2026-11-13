@@ -96,6 +96,8 @@ ok computed throwing key skips getter
 ok computed null before key coercion
 ok computed undefined before key coercion
 ok computed nullish key not coerced
+ok computed primitive key hook
+ok computed primitive key hint
 ok computed symbol receiver
 ok computed string index receiver
 ok computed numeric index receiver
@@ -127,6 +129,7 @@ ok computedWide32 getter value and live locals
 ok computedWide32 getter failure
 ok computedWide32 recovery
 ok computed hot data and getter site
+ok computed fresh getter compilation under allocation
 ok getter running async code
 ok getter returning a promise
 continued

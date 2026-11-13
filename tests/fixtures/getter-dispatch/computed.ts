@@ -17,6 +17,10 @@ export function computedGetterSemantics(check: (name: string, actual: unknown, e
   check("computed null before key coercion", thrown(() => read(null, badKey)), "TypeError");
   check("computed undefined before key coercion", thrown(() => read(undefined, badKey)), "TypeError");
   check("computed nullish key not coerced", order.length, 0);
+  const coercing = { get before() { return "before"; }, get after() { return "after"; } };
+  const primitiveKey = { [Symbol.toPrimitive](hint: string) { order.push(hint); return "after"; } };
+  check("computed primitive key hook", read(coercing, primitiveKey), "after");
+  check("computed primitive key hint", order.join(","), "string");
   const symbol = Symbol("computed");
   const indexed = { get 0() { return this; }, get [symbol]() { return this; } };
   check("computed symbol receiver", read(indexed, symbol), indexed);
@@ -30,10 +34,12 @@ export function computedGetterSemantics(check: (name: string, actual: unknown, e
   aliasReads(check);
   widthReads(check, thrown);
   alternatingReads(check, read);
+  freshReads(check, read);
 }
 
 function typedArrayReads(check: (name: string, actual: unknown, expected: unknown) => void, read: ComputedRead): void {
-  const prototype = Object.create(Uint8Array.prototype, { 3: { get() { return "prototype"; } } });
+  const getter = () => "prototype";
+  const prototype = Object.create(Uint8Array.prototype, { 3: { get: getter } });
   const array = new Uint8Array(1);
   Object.setPrototypeOf(array, prototype);
   check("computed typed array string out of bounds", read(array, "3"), undefined);
@@ -94,12 +100,14 @@ function aliasReads(check: (name: string, actual: unknown, expected: unknown) =>
 
 function widthReads(check: (name: string, actual: unknown, expected: unknown) => void, thrown: (action: () => unknown) => string): void {
   const max = Number(process.env.GETTER_DISPATCH_WIDE_LOCALS ?? 2000);
+  const value = { get value() { return 17; } };
+  const failure = { get value(): never { throw new SyntaxError("wide"); } };
   for (const { name, count } of computedWidths) {
     const locals = Math.min(count, max);
     const read = new Function(`return (${computedReaderSource(locals, name)});`)();
-    check(`${name} getter value and live locals`, read({ get value() { return 17; } }, "value"), (locals * (locals - 1)) / 2 + 17);
-    check(`${name} getter failure`, thrown(() => read({ get value() { throw new SyntaxError("wide"); } }, "value")), "SyntaxError");
-    check(`${name} recovery`, read({ get value() { return 17; } }, "value"), (locals * (locals - 1)) / 2 + 17);
+    check(`${name} getter value and live locals`, read(value, "value"), (locals * (locals - 1)) / 2 + 17);
+    check(`${name} getter failure`, thrown(() => read(failure, "value")), "SyntaxError");
+    check(`${name} recovery`, read(value, "value"), (locals * (locals - 1)) / 2 + 17);
   }
 }
 
@@ -113,4 +121,14 @@ function alternatingReads(check: (name: string, actual: unknown, expected: unkno
     sum += value;
   }
   check("computed hot data and getter site", sum, 30000);
+}
+
+function freshReads(check: (name: string, actual: unknown, expected: unknown) => void, read: ComputedRead): void {
+  let failures = 0;
+  for (let i = 0; i < 200; i++) {
+    const object = new Function(`return { id: ${i}, get value() { return this.id + new Array(64).fill(0).length; } };`)();
+    void new Array(512).fill(String(i));
+    if (read(object, "value") !== i + 64) failures++;
+  }
+  check("computed fresh getter compilation under allocation", failures, 0);
 }

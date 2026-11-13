@@ -82,7 +82,8 @@ export function verifyGeneratedContinuations(assembly: string, list: string, byt
     mappings.push({ opcode: label, continuation: body.name });
   }
   const bound = getterReturn(assembly, "llint_bound_function_call_trampoline", "llint_set_up_bound_function_call");
-  requireMatch(bound.before.indexOf("if (t1.i() == intptr_t(-1))") < bound.before.indexOf("sp = t1.i64();"), "Bound calls test the exception before changing sp");
+  const boundException = bound.before.indexOf("if (t1.i() == intptr_t(-1))");
+  requireMatch(boundException >= 0 && boundException < bound.before.indexOf("sp = t1.i64();"), "Bound calls test the exception before changing sp");
   requireMatch(bound.after.includes("sp = cfr.i64();") && !bound.after.includes("sp = t2.i64();"), "Bound calls restore sp from their code-block-free frame");
   mappings.push({ opcode: "llint_bound_function_call_trampoline", continuation: bound.name });
   return { continuations: declarations.length, mappings };
