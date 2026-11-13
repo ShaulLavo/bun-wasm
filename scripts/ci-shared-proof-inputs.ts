@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { siteInventory, verifySite } from "./browser-guest-site";
-import { parseProgramReceipt } from "./guest-core-receipt";
+import { parseProgramInputs, parseProgramReceipt, verifyProgramReceipt } from "./guest-core-receipt";
 import { stageSharedPrograms } from "./stage-program-profiles";
 import { programProfile, type PairedEngine } from "../src/engine-kind";
 
@@ -25,10 +25,17 @@ export function verifySharedProofInputs(out: string): void {
 
 function verifyProgramSource(directory: string, engine: PairedEngine, expected: { head: string; tree: string }): void {
   assert.equal(readFileSync(join(directory, "source.txt"), "utf8").trim(), expected.head);
+  const value: unknown = JSON.parse(readFileSync(join(directory, "current-inputs.json"), "utf8"));
+  assert(Array.isArray(value), "Missing current producer input snapshots");
+  const current = value.map(parseProgramInputs);
+  assert.deepEqual(current.map(inputs => inputs.scope), engine === "spidermonkey" ? ["core"] : ["core", engine]);
   const receipts = ["bun-core.wasm.core.json"].concat(engine === "spidermonkey" ? [] : [`${programProfile(engine).side}.engine.json`]);
-  for (const name of receipts) {
+  for (const [index, name] of receipts.entries()) {
     const receipt = parseProgramReceipt(JSON.parse(readFileSync(join(directory, name), "utf8")));
-    assert.deepEqual(receipt.inputs.source, expected);
+    const inputs = current[index]!;
+    assert.deepEqual(inputs.source, expected);
+    const bytes = readFileSync(join(directory, index === 0 ? "bun.wasm" : programProfile(engine).side));
+    verifyProgramReceipt(index === 0 ? bytes.subarray(0, receipt.artifact.artifactBytes) : bytes, receipt, inputs);
   }
 }
 

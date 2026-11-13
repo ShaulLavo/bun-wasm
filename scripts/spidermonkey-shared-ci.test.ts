@@ -57,7 +57,7 @@ test('SM has one library producer and one side consumer and never builds another
   expect(sm).not.toContain('build-bun-core.sh');
   expect(sm.match(/run\(\['bash', 'scripts\/build-engine-spidermonkey-shared.sh'\]\)/g)).toHaveLength(1);
   expect(sm).toContain('verifyProgramReceipt');
-  expect(sm).toContain('assert.deepEqual(await capture(), inputs');
+  expect(sm).toContain('assert.deepEqual(await capture(), { coreInputs, ...inputs }');
 });
 
 test('SM caches exact source and native work and replays patch and library verification on a hit', () => {

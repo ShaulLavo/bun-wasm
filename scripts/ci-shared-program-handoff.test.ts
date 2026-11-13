@@ -121,7 +121,8 @@ test("successful production writes the original core, side, receipts and source 
   expect(builder).toContain("copyFileSync(join(core, 'bun-core.wasm.core.json'), join(program, 'bun-core.wasm.core.json'));");
   expect(builder).toContain("const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' });");
   expect(builder).toContain("if (head.status !== 0) throw new Error('Cannot identify native profile source');");
-  expect(builder).toContain("writeFileSync(join(program, 'source.txt'), head.stdout);\n  return program;");
+  expect(builder).toContain("writeFileSync(join(program, 'source.txt'), head.stdout);");
+  expect(builder).toContain("writeFileSync(join(program, 'current-inputs.json'), JSON.stringify(inputs, null, 2) + '\\n');\n  return program;");
   for (const fragment of [
     "await prepareProgramOutputs([",
     "{ artifact: join(core, 'bun-core.wasm'), scope: 'core', selection: { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' }, options: sourceOptions(repository, sysroot, 'browser') }",

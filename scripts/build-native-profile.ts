@@ -77,11 +77,11 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
     const expected = await captureProgramInputs(sourceOptions(repository, sysroot, 'browser'), 'core',
       { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' });
     verifyProgramReceipt(readFileSync(core), coreReceipt, expected);
-    return { source: expected.source, core: fileIdentity(core), coreReceipt,
+    return { coreInputs: expected, source: expected.source, core: fileIdentity(core), coreReceipt,
       native: spiderMonkeyNativeInputs(native, libcxx, sysroot), recipes: spiderMonkeySources(),
       environment: sharedGroupEnvironment(sysroot, 'core') };
   };
-  const inputs = await capture();
+  const { coreInputs, ...inputs } = await capture();
   const side = join(root, 'spidermonkey');
   const program = join(root, 'program-spidermonkey');
   mkdirSync(side, { recursive: true });
@@ -91,7 +91,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
   writeFileSync(join(side, 'inputs.json'), JSON.stringify(inputs, null, 2) + '\n');
   process.env.SPIDERMONKEY_ENGINE_BUILD_DIR = side;
   run(['bash', 'scripts/build-engine-spidermonkey-shared.sh']);
-  assert.deepEqual(await capture(), inputs, 'SpiderMonkey source or native inputs changed during build');
+  assert.deepEqual(await capture(), { coreInputs, ...inputs }, 'SpiderMonkey source or native inputs changed during build');
   const bytes = readFileSync(join(side, 'engine.wasm'));
   verifyProgramSide('spidermonkey', new WebAssembly.Module(bytes));
   assert(sharedGroupPair(new WebAssembly.Module(readFileSync(core)), bytes), 'Expected a shared-group SpiderMonkey pair');
@@ -102,6 +102,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
   writeFileSync(join(program, 'spidermonkey-shared.json'), JSON.stringify({ schema: 1, experimental: true, profile: 'shared-group',
     inputs, program: fileIdentity(join(program, 'bun.wasm')), side: fileIdentity(join(side, 'engine.wasm')) }, null, 2) + '\n');
   writeFileSync(join(program, 'source.txt'), inputs.source.head + '\n');
+  writeFileSync(join(program, 'current-inputs.json'), JSON.stringify([coreInputs], null, 2) + '\n');
   return program;
 }
 
@@ -123,7 +124,7 @@ export async function buildNativeProfile(profile: unknown, directory: string, se
     : { JSC_ENGINE_BUILD_DIR: side, JSC_PROFILE: 'shared-group' };
   Object.assign(process.env, sharedGroupEnvironment(sysroot, engine), { BUN_CORE_BUILD_DIR: core }, engineEnvironment);
   // The existing retirement helper validates each cached profile before replacing stale outputs.
-  await prepareProgramOutputs([
+  const inputs = await prepareProgramOutputs([
     { artifact: join(core, 'bun-core.wasm'), scope: 'core', selection: { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' }, options: sourceOptions(repository, sysroot, 'browser') },
     { artifact: join(side, 'engine.wasm'), scope: engine, profile: 'shared-group', options: sourceOptions(repository, sysroot, engine) },
   ]);
@@ -137,6 +138,7 @@ export async function buildNativeProfile(profile: unknown, directory: string, se
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' });
   if (head.status !== 0) throw new Error('Cannot identify native profile source');
   writeFileSync(join(program, 'source.txt'), head.stdout);
+  writeFileSync(join(program, 'current-inputs.json'), JSON.stringify(inputs, null, 2) + '\n');
   return program;
 }
 

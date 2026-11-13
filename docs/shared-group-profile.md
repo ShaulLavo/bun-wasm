@@ -10,6 +10,12 @@ launcher. Its command bound is 158 seconds, about 12.8% above the slowest comple
 measurement of 140.09 seconds. Other native commands keep their 120-second bound. Worker
 counts, assertions, output checks and SpiderMonkey tier/accounting checks are unchanged.
 
+Shared proof handoffs preserve component receipts and their original source labels. The producer
+also records freshly captured `current-inputs.json` snapshots for the composition. The handoff
+checks those current scope, profile and input digests against the unchanged component receipts;
+a compatible cached origin can therefore predate the current checkout. SpiderMonkey's pair
+source names its composition separately from the common core's origin.
+
 ## Profiles
 
 `split` is the default profile. Its flags and receipt shape are unchanged: no profile field is

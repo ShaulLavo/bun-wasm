@@ -144,7 +144,7 @@ async function retainedOutput(request: ProgramOutputRequest): Promise<ProgramBui
 }
 
 /** The composing caller owns retirement, only after every retained output and input is validated. */
-export async function prepareProgramOutputs(requests: readonly ProgramOutputRequest[]): Promise<void> {
+export async function prepareProgramOutputs(requests: readonly ProgramOutputRequest[]): Promise<readonly ProgramInputSnapshot[]> {
   const origins = await Promise.all(requests.map(retainedOutput));
   const capture = (request: ProgramOutputRequest) => request.scope === "core"
     ? captureProgramInputs(request.options, request.scope, request.selection)
@@ -158,6 +158,7 @@ export async function prepareProgramOutputs(requests: readonly ProgramOutputRequ
     await rm(request.artifact);
     await rm(outputReceiptPath(request));
   }
+  return inputs;
 }
 
 type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc";
