@@ -324,7 +324,8 @@ function expectNothingMoved(made: ReturnType<typeof group>, spawned: ReturnType<
   expect(made.root.receiveMessageOnPort(extra.port1)?.message).toBe("carried");
 }
 
-test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
+/** A post of a buffer and a referenced port whose transfer call the engine refused to enter. */
+function postRefusedOnEntry() {
   const failure = new RangeError("Maximum call stack size exceeded");
   let fail = true;
   const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
@@ -333,6 +334,11 @@ test("a transfer call that throws on entry has moved nothing, and the port it ca
   const buffer = new ArrayBuffer(32);
   extra.port2.ref();
   expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(failure);
+  return { made, spawned, extra, buffer };
+}
+
+test("a transfer call that throws on entry has moved nothing, and the port it carried is whole again", () => {
+  const { made, spawned, extra, buffer } = postRefusedOnEntry();
   // The call never ran, so nothing could undo the local steps taken before it. The next entry
   // into the runtime does, before it does anything else.
   expect(extra.port2.hasRef()).toBe(true);
@@ -443,14 +449,7 @@ for (const after of [false, true]) {
   test(`a rollback interrupted ${after ? "after" : "before"} any of its collection calls is finished by the next step`, () => {
     let stops = 0;
     for (let stop = 0; ; stop++) {
-      const failure = new RangeError("Maximum call stack size exceeded");
-      let fail = true;
-      const made = group({ beforeTransfer: () => { if (fail) { fail = false; throw failure; } } });
-      const spawned = made.spawn();
-      const extra = new made.root.MessageChannel();
-      const buffer = new ArrayBuffer(32);
-      extra.port2.ref();
-      expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(failure);
+      const { made, spawned, extra, buffer } = postRefusedOnEntry();
       // The first attempt at the rollback is cut short somewhere; the step after it finishes.
       const reached = interruptedAt(stop, after, () => { made.root.step(); });
       made.root.step();
