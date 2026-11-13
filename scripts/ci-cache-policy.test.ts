@@ -66,7 +66,7 @@ test.each(saves)("$name reserves heavy writes for main pushes", step => {
   expect(allows(step, { ...healthy, "github.event_name": "pull_request", "github.ref": "refs/pull/363/merge" })).toBe(false);
   expect(allows(step, { ...healthy, "github.ref": "refs/heads/feature" })).toBe(false);
   expect(allows(step, healthy, true)).toBe(false);
-  const exact = Object.fromEntries(Object.entries(healthy).map(([key, value]) => [key, key.endsWith("cache-hit") ? "true" : value]));
+  const exact = Object.fromEntries(Object.entries(healthy).map(([key, value]) => [key, key.endsWith("cache-hit") ? "true" : key.endsWith("cache-matched-key") ? "saved-exact" : value]));
   expect(allows(step, exact)).toBe(false);
   expect(allows(step, { ...healthy, "github.event_name": "pull_request", "steps.native-cargo-cache.outputs.cache-matched-key": "main-prefix", "steps.jsc-cargo-cache.outputs.cache-matched-key": "main-prefix" })).toBe(false);
 });

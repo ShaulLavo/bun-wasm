@@ -26,6 +26,23 @@ Stable dependency seeds remove the measured per-SHA churn without a deletion
 workflow or extra permissions. Existing cache entries are not deleted. Future
 quota pressure and GitHub's expiry policy can still evict any cache.
 
+The native Cargo target also keeps its first compatible snapshot. Its existing
+source-specific primary key and native compatibility prefix stay unchanged.
+A prefix restore still runs Cargo, native quality checks and fixtures, but no
+longer publishes another full target after source edits. A complete miss can
+seed the current identity after the existing blocking build steps. Learned
+compiler objects continue to use their separate bounded snapshots.
+
+On November 13, a main job restored the exact JSC generation at 04:43 UTC.
+PR 692 and PR 695 missed that same key at 07:20 and 07:30 UTC; main rebuilt and
+saved it at 07:40 UTC. The two host files are registered Browser guest inputs,
+so their native selection is deliberate. The later inventory held 10.17 GB,
+including two compatible native Cargo snapshots of about 1.78 GB each. This
+establishes cache disappearance, with quota eviction the likely cause. Avoiding
+another compatible Cargo upload reduces this pressure without changing JSC
+identity, removing selected checks or deleting existing shared caches. It cannot
+guarantee that GitHub retains a cache.
+
 ## Verification
 
 The new policy regression failed on the original source with 16 passing and 22
