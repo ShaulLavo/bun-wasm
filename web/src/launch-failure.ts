@@ -17,10 +17,31 @@ interface LedgerFact {
   sampleEndedAt: number;
   availability: "observed" | "unavailable";
   totals: Row | null;
+  holderSummary: HolderSummary;
   holders: RowsFact;
   sharedGuests: RowsFact;
   contradictions: RowsFact;
 }
+type HolderKind = "capacity-promise" | "headroom" | "fixed-buffer" | "growable-buffer" | "request-arena"
+  | "group-fixed" | "group-growable" | "shared-guest" | "guest-declaration" | "unknown";
+type HolderState = "live" | "draining" | "idle" | "awaiting-collection" | "debt" | "unknown";
+interface HolderAggregate {
+  kind: HolderKind;
+  count: number;
+  declaredBytes: number | null;
+  maximumBytes: number | null;
+  knownCurrentBytes: number | null;
+  unknownCurrentCount: number;
+  states: Record<HolderState, number>;
+}
+type HolderSummary = { availability: "unavailable" } | {
+  availability: "observed";
+  rowCount: number;
+  unknownShapeCount: number;
+  unknownStateCount: number;
+  requestArenaActivity: "unavailable";
+  kinds: HolderAggregate[];
+};
 export interface LaunchFailureFact {
   time: number;
   attempt: number;
@@ -107,20 +128,84 @@ function appendNestedRow(result: Row, key: string, value: unknown): void {
   const nested = row(value, ["kind", "initial", "maximum", "maximumPages", "pages", "bytes", "length", "directory", "pid", "reserved", "transferred", "retained", "active"]);
   for (const [name, entry] of Object.entries(nested)) if (entry !== null) result[`${key}.${name}`] = entry;
 }
+function holderKind(value: unknown): HolderKind {
+  const label = data(value, "label"), kind = data(data(value, "shape"), "kind");
+  if (label === "headroom") return "headroom";
+  if (kind === "fixed" || kind === "growable") return label === "memory-group" ? `group-${kind}` : "unknown";
+  if (kind === "growable-buffer") return label === "request-arena" ? "request-arena" : "growable-buffer";
+  if (kind === "guest") return "guest-declaration";
+  if (kind === "capacity-promise" || kind === "fixed-buffer" || kind === "shared-guest") return kind;
+  return "unknown";
+}
+function holderState(value: unknown): HolderState {
+  const state = data(value, "state");
+  return state === "live" || state === "draining" || state === "idle" || state === "awaiting-collection" || state === "debt" ? state : "unknown";
+}
+function byteCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+function addBytes(total: number | null, value: number | null): number | null {
+  return total === null || value === null ? null : byteCount(total + value);
+}
+function maximumBytes(value: unknown, kind: HolderKind): number | null {
+  const shape = data(value, "shape");
+  if (kind === "fixed-buffer") return byteCount(data(shape, "length"));
+  if (kind === "growable-buffer" || kind === "request-arena") return byteCount(data(shape, "maximum"));
+  const key = kind === "group-fixed" ? "pages" : kind === "shared-guest" ? "actualMaximumPages" : "maximumPages";
+  const pages = byteCount(data(shape, key));
+  return pages === null || pages > 65_536 ? null : pages * 65_536;
+}
+function newAggregate(kind: HolderKind): HolderAggregate {
+  return { kind, count: 0, declaredBytes: 0, maximumBytes: 0, knownCurrentBytes: 0, unknownCurrentCount: 0,
+    states: { live: 0, draining: 0, idle: 0, "awaiting-collection": 0, debt: 0, unknown: 0 } };
+}
+function appendHolder(aggregate: HolderAggregate, value: unknown, state: HolderState): void {
+  aggregate.count++;
+  aggregate.states[state]++;
+  aggregate.declaredBytes = addBytes(aggregate.declaredBytes, byteCount(data(value, "declaredBytes")));
+  const kind = aggregate.kind;
+  if (kind === "capacity-promise" || kind === "headroom" || kind === "guest-declaration" || kind === "unknown") {
+    aggregate.maximumBytes = null;
+    aggregate.knownCurrentBytes = null;
+    return;
+  }
+  aggregate.maximumBytes = addBytes(aggregate.maximumBytes, maximumBytes(value, kind));
+  const current = byteCount(data(value, "grownBytes"));
+  if (current === null) aggregate.unknownCurrentCount++;
+  else aggregate.knownCurrentBytes = addBytes(aggregate.knownCurrentBytes, current);
+}
+function holderSummary(values: unknown): HolderSummary {
+  if (!Array.isArray(values)) return { availability: "unavailable" };
+  const kinds = new Map<HolderKind, HolderAggregate>();
+  let unknownShapeCount = 0, unknownStateCount = 0;
+  for (let index = 0; index < values.length; index++) {
+    const value = data(values, String(index)), kind = holderKind(value), state = holderState(value);
+    if (kind === "unknown") unknownShapeCount++;
+    if (state === "unknown") unknownStateCount++;
+    const aggregate = kinds.get(kind) ?? newAggregate(kind);
+    kinds.set(kind, aggregate);
+    appendHolder(aggregate, value, state);
+  }
+  return { availability: "observed", rowCount: values.length, unknownShapeCount, unknownStateCount,
+    requestArenaActivity: "unavailable", kinds: Array.from(kinds.values()) };
+}
 function ledgerFact(runtime: Pick<ProcessRuntime, "sharedMemory">): LedgerFact {
   const sampleStartedAt = now();
   try {
     const value = runtime.sharedMemory.snapshot();
     const totals = row(value, ["budgetBytes", "reservedBytes", "availableBytes", "awaitingReleaseBytes", "debtBytes", "effectiveBudgetBytes"]);
     totals.platform = scalar(data(data(value, "platform"), "kind"));
-    const holders = sample(() => value.holders, ledgerRow);
+    const allHolders = data(value, "holders");
+    const summary = holderSummary(allHolders);
+    const holders = sample(() => allHolders, ledgerRow);
     const sharedGuests = sample(() => value.sharedGuests, ledgerRow);
     const contradictions = sample(() => value.contradictions, ledgerRow);
     return { sampleStartedAt, sampleEndedAt: now(), availability: "observed", totals,
-      holders, sharedGuests, contradictions };
+      holderSummary: summary, holders, sharedGuests, contradictions };
   } catch {
     const unavailable = () => sample(() => undefined, ledgerRow);
-    return { sampleStartedAt, sampleEndedAt: now(), availability: "unavailable", totals: null, holders: unavailable(), sharedGuests: unavailable(), contradictions: unavailable() };
+    return { sampleStartedAt, sampleEndedAt: now(), availability: "unavailable", totals: null,
+      holderSummary: { availability: "unavailable" }, holders: unavailable(), sharedGuests: unavailable(), contradictions: unavailable() };
   }
 }
 
@@ -159,11 +244,16 @@ export function copyLaunchFailure(value: LaunchFailureFact): LaunchFailureFact |
       groups: copyRows(value.groups), workers: copyRows(value.workers), ledger: { sampleStartedAt: value.ledger.sampleStartedAt,
         sampleEndedAt: value.ledger.sampleEndedAt, availability: value.ledger.availability,
         totals: value.ledger.totals ? row(value.ledger.totals, Object.keys(value.ledger.totals)) : null,
+        holderSummary: copyHolderSummary(value.ledger.holderSummary),
         holders: copyRows(value.ledger.holders), sharedGuests: copyRows(value.ledger.sharedGuests), contradictions: copyRows(value.ledger.contradictions) },
       cleanupError: value.cleanupError ? errorFact(value.cleanupError) : null,
     };
     return encoder.encode(JSON.stringify(copy)).byteLength <= maxLaunchFailureBytes ? copy : null;
   } catch { return null; }
+}
+function copyHolderSummary(value: HolderSummary): HolderSummary {
+  if (value.availability === "unavailable") return { availability: "unavailable" };
+  return { ...value, kinds: value.kinds.map(kind => ({ ...kind, states: { ...kind.states } })) };
 }
 function copyRows(value: RowsFact): RowsFact {
   return { sampleStartedAt: value.sampleStartedAt, sampleEndedAt: value.sampleEndedAt, availability: value.availability,
