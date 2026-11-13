@@ -48,14 +48,14 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(12 * 65_000);
 });
 
-test("ordinary invocation passes explicit inputs once and forces the interpreter", () => {
+test("ordinary invocation passes explicit inputs once and forces PBL", () => {
   const root = scratch();
   const path = join(root, "input with spaces");
   writeFileSync(path, "synthetic executable");
   chmodSync(path, 0o755);
   const env = { SPIDERMONKEY_WASM: path, BUN_WASM_LAUNCHER: path, BUN_WASM_SHELL: path, BUN_WASM_ENV_UTILITY: path };
   const command = ordinaryFixtureCommand(root, env);
-  expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", "interp"].concat(ordinaryFixtures));
+  expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", "pbl"].concat(ordinaryFixtures));
   expect(() => ordinaryFixtureCommand(root, { ...env, BUN_WASM_SHELL: "relative.wasm" })).toThrow(/absolute/);
   expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") })).toThrow();
 });

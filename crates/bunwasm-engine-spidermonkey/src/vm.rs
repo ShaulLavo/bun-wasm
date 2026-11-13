@@ -530,10 +530,11 @@ impl Engine for SpiderMonkey {
             stack_low,
             stack_high,
             max_gc_bytes: bunwasm_spidermonkey::max_memory_bytes(),
-            tier: std::env::var("BUN_WASM_SPIDERMONKEY_TIER")
-                .ok()
-                .filter(|value| value == "pbl")
-                .map_or(0, |_| 1),
+            tier: match std::env::var("BUN_WASM_SPIDERMONKEY_TIER").as_deref() {
+                Ok("interp") => 0,
+                Ok("pbl") | Err(std::env::VarError::NotPresent) => 1,
+                _ => 0,
+            },
             interruptible: u8::from(host.has_interrupt_handler()),
         };
         HOST.with(|current| *current.borrow_mut() = Some(host));

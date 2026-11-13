@@ -7,6 +7,13 @@ provide hardware JIT. Explicit native, Node, and browser host loading is separat
 from the unchanged QuickJS and JSC publication boundary. Full G3 and G4
 qualification remains outside this integration.
 
+The original Rust adapter defaults to the Portable Baseline Interpreter (PBL).
+`BUN_WASM_SPIDERMONKEY_TIER=pbl` selects it explicitly. For one release,
+`BUN_WASM_SPIDERMONKEY_TIER=interp` selects the C++ interpreter fallback.
+Other present values, including an empty or non-Unicode value, retain their
+interpreter selection. Both tiers keep the existing interrupt checks and stack
+quotas. The ordinary native fixture gate runs with PBL enabled.
+
 ## Classification
 
 | Source | Class | Origin and change |

@@ -1,5 +1,27 @@
 # Experimental SpiderMonkey native fixture invocation
 
+## Approved PBL default rollout, November 13
+
+The owner accepted the measured approximately 5% Next build improvement with
+matching production outputs. Default to PBL in the original Rust adapter and
+retain explicit `BUN_WASM_SPIDERMONKEY_TIER=interp` for one release as an owner
+exception to the no-compatibility rule. Remove this fallback after the first
+release containing the default flip completes its normal qualification without
+a PBL product regression. The next release must remove the fallback and its
+temporary selection controls together. Do not bump versions for this change.
+
+Before merge, require the full SpiderMonkey semantic and fixture suites with
+PBL enabled, a default-without-override positive entry-counter control on the
+candidate side, an explicit interpreter zero-entry control, independent review,
+and green CI. Engines owns the candidate build. Any genuine PBL suite failure
+stops this rollout: keep main on interp, retain exact evidence, and report to
+the parent. Do not change expectations or waive a failure. The report-local SWC
+controllers exited 1 in both modes despite matching saved guest outputs and
+cleanup; those intervals remain provisional and are not a PBL-only failure.
+
+The historical invocation and evidence below describe their original source.
+The ordinary CI wrapper now explicitly runs PBL rather than interp.
+
 Status: Approved source-only invocation support. No matching side/core/launcher,
 hello, G3 execution, or admission is claimed by the synthetic controls.
 

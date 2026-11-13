@@ -20,10 +20,10 @@ export function ordinaryFixtureCommand(repository: string, env: NodeJS.ProcessEn
   }
   const core = env.SPIDERMONKEY_WASM;
   assert(core);
-  return ["bash", join(repository, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", core, "--tier", "interp"].concat(ordinaryFixtures);
+  return ["bash", join(repository, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", core, "--tier", "pbl"].concat(ordinaryFixtures);
 }
 
 export function runOrdinaryFixtures(repository: string, env = process.env): void {
   const status = runCheck(ordinaryFixtureCommand(repository, env), env);
-  assert.equal(status, 0, "Ordinary SpiderMonkey interpreter fixtures failed");
+  assert.equal(status, 0, "Ordinary SpiderMonkey PBL fixtures failed");
 }
