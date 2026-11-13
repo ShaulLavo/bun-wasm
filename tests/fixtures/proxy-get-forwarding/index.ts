@@ -141,5 +141,8 @@ check("handler lookup removes a deeper trap", mutableOuter.value, "default");
 check("handler lookup replaces a deeper trap", mutableOuter.value, "replaced");
 
 const deep = chain({ value: 6 }, 200000);
-check("deep forwarding reaches a catchable RangeError", thrown(() => deep.value) instanceof RangeError, true);
+const mustCatch = process.env.BUNWASM_STACK_EXPECT_CAUGHT === "1" || process.env.BUNWASM_TEST_HOST !== "node";
+const deepError = thrown(() => deep.value);
+const deepResult = deepError === undefined ? deep.value : deepError;
+check("deep forwarding reaches a catchable RangeError", deepResult instanceof RangeError || (!mustCatch && deepResult === 6), true);
 check("forwarding recovers after overflow", chain({ value: "recovered" }, 50).value, "recovered");

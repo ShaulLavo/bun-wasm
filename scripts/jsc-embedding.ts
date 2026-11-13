@@ -70,7 +70,7 @@ export function proxyGetForwardingFixture() {
   const manifest = "native-proxy-get-forwarding.json";
   const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
   if (check.owner !== "native") throw new Error("JSC Proxy forwarding fixture needs its native check owner");
-  return { path: check.path, hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800"] };
+  return { path: check.path, hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
 /**

@@ -128,7 +128,7 @@ test("JSC stack controls use their discovered fixture with a small real host sta
 test("the JSC gate runs Proxy forwarding semantics and recovery on a small host stack", () => {
   expect(proxyGetForwardingFixture()).toEqual({
     path: "tests/fixtures/proxy-get-forwarding",
-    hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800"],
+    hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
   });
 });
 
