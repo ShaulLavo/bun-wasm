@@ -13,8 +13,7 @@ count. It is not a full dependency closure, signature, or proof of build executi
 - `sourceManifestSha256` hashes `JSON.stringify(sourceManifest)` in UTF-8.
 - `sourceManifest.schema` is `1`.
 - `sourceManifest.build` selects `browser`, `quickjs`, `quickjs-minimal`, `jsc`, or
-  `tools`, with `source-cache-browser` for CI's existing host-engine source-cache
-  producer. These map to the existing entry points and feature choices in
+  `tools`, with `source-cache-browser` for C1's distinct source-cache variant. These map to the existing entry points and feature choices in
   `scripts/guest-source-manifest.ts`. The target is `wasm32-wasip1`, release mode.
 - `sourceManifest.source.head` and `.tree` identify the committed repository.
 - `sourceManifest.groups` contains named file inventories. Each entry records the
@@ -85,8 +84,8 @@ with the receipt's repository inventory. Added, removed, or changed inputs requi
 fresh guest build. Type declarations and unrelated commit changes do not.
 
 The check honors `BUN_BROWSER_WASM`, `BUN_WASM`, `JSC_WASM`, and `BUN_TOOLS_WASM` with
-the same app-relative paths as the sandbox and playground builds. The CI-only
-source-cache browser producer is not a normal site guest. Run
+the same app-relative paths as the sandbox and playground builds. The distinct
+source-cache browser recipe is not a normal site guest. Run
 `bun scripts/site-guest-preflight.ts` to check inputs without building the site.
 Direct `sandbox/build.ts` and `web/build.ts` development builds remain unrestricted.
 
@@ -118,24 +117,23 @@ the target files. This permits Bun's committed documentation and CLI links witho
 accepting hidden retargeting or links to source outside that repository. The main
 repository group continues to reject source symlinks.
 
-## CI source-cache producer
+## Normal CI Browser producer
 
-The existing CI producer uses `source-cache-browser`, not `browser`. Both produce
-`bun-browser.wasm`, but CI keeps `--no-default-features --features engine-host,bun-build`
-without adding `bun-transpiler`. Its receipt uses the same committed-source,
-selected-tool, symlink and start/end checks. CI selects the tool environment and
-passes a temporary snapshot file to `write`, just like the four shell entry points.
-The existing source/cache metadata and artifact upload remain unchanged.
+Normal CI runs `scripts/build-bun-browser.sh` once with
+`BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2`. It uses the standard
+`browser` recipe, including `engine-host,bun-transpiler,bun-build` and the
+required optimizer. The recipe captures its own source and selected tools and
+writes the original receipt beside the final optimized Wasm.
 
-The profile table declares optimizer use. `browser`, `jsc`, and `tools` require
-`wasm-opt` resolution and receipt identity. Both QuickJS profiles keep their
-existing optional optimization and record the optimizer when available.
-`source-cache-browser` does not use or record `wasm-opt`, even if it is on PATH.
-Its native-only CI path therefore does not need Binaryen. The JSC-only Binaryen
-installation condition stays unchanged. All other tool identities and source
-checks remain required for the source-cache profile.
+Native fixtures, Web guest cases and the closed browser-guest site consume that
+one output. After the existing Web guest gates, `scripts/ci-browser-program.ts`
+checks exact `browser` and `tools` labels, artifact bytes, companions and common
+composing source, then exports their raw bytes and unchanged receipts as
+`browser-program`. Its source-cache and Wasm-transfer browser consumers use the
+same guest. The former CI source-cache-only build and artifact names are removed.
 
-This CI artifact is copied from Cargo without the browser entry point's optimizer.
-Its hash and byte count identify those actual bytes. They are not a measurement or
-size claim for the optimized final browser Wasm, and this change does not rebuild
-or relabel any historical artifact.
+C1 retains its real distinct `source-cache-browser` recipe with
+`engine-host,bun-build` and optimizer unused. Both recipes produce the filename
+`bun-browser.wasm`; their receipts retain their different build labels. A
+source-cache receipt cannot satisfy the standard site publication preflight.
+No historical receipt or artifact is relabelled.
