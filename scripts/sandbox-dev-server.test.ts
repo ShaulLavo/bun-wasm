@@ -52,10 +52,10 @@ test("a silent successful dev exit before listening is a visible startup error",
     run.done.resolve({ code: 0 });
     await turn();
     expect(f.sandbox.status.kind).toBe("error");
-    expect(f.sandbox.status.text).toContain("before it started listening");
+    expect(f.sandbox.status.text).toContain("stopped before it was ready");
     expect(f.sandbox.status.text).toContain("Restart");
     expect(f.sandbox.serverState.state).toBe("down");
-    expect(f.output()).toContain("before it started listening");
+    expect(f.output()).toContain("stopped before it was ready");
     expect(f.output()).not.toContain("[dev exited with code 0]");
     const html = await f.page.renderSandbox(f.sandbox);
     expect(html).toContain('data-kind="error"');
@@ -74,11 +74,24 @@ test("successful installation can finish without listening and proceed to dev", 
   } finally { await f.cleanup(); }
 });
 
-test("a server that listened can close and exit successfully", async () => {
+test("a listener opened during installation does not satisfy dev startup", async () => {
+  const f = await fixture();
+  try {
+    const helper = await f.listen(f.install);
+    helper.dispose();
+    const run = await f.dev();
+    run.done.resolve({ code: 0 });
+    await turn();
+    expect(f.sandbox.status.kind).toBe("error");
+    expect(f.output()).toContain("stopped before it was ready");
+  } finally { await f.cleanup(); }
+});
+
+test("a server using the installed network callbacks can close and exit successfully", async () => {
   const f = await fixture();
   try {
     const run = await f.dev();
-    const helper = await f.listen(run);
+    const helper = await f.listen(f.install);
     expect(f.sandbox.serverState.state).toBe("up");
     expect(f.sandbox.serverState.text).toBe("localhost:5173/");
     helper.dispose();
@@ -87,7 +100,7 @@ test("a server that listened can close and exit successfully", async () => {
     await turn();
     expect(f.sandbox.status.kind).not.toBe("error");
     expect(f.output()).toContain("[dev exited with code 0]");
-    expect(f.output()).not.toContain("before it started listening");
+    expect(f.output()).not.toContain("stopped before it was ready");
   } finally { await f.cleanup(); }
 });
 
@@ -103,7 +116,7 @@ for (const result of [{ code: 1 }, { code: 70, error: "Worker failed to start" }
       expect(f.sandbox.status.text).toContain("Check the terminal output");
       expect(f.output().match(/Cannot load vite.config.ts/g)).toHaveLength(1);
       expect(f.output()).toContain(`[dev exited with code ${result.code}]`);
-      expect(f.output()).not.toContain("before it started listening");
+      expect(f.output()).not.toContain("stopped before it was ready");
       if ("error" in result) expect(f.output().match(/Worker failed to start/g)).toHaveLength(1);
     } finally { await f.cleanup(); }
   });
@@ -130,7 +143,7 @@ test("listener history belongs to the dev run and resets on Restart", async () =
     next.done.resolve({ code: 0 });
     await turn();
     expect(f.sandbox.status.kind).toBe("error");
-    expect(f.output()).toContain("before it started listening");
+    expect(f.output()).toContain("stopped before it was ready");
   } finally { await f.cleanup(); }
 });
 
@@ -141,6 +154,6 @@ test("installation failures keep their exit diagnostic without a dev startup err
     await turn();
     expect(f.page.runs).toHaveLength(1);
     expect(f.output()).toContain("[install exited with code 1]");
-    expect(f.output()).not.toContain("before it started listening");
+    expect(f.output()).not.toContain("stopped before it was ready");
   } finally { await f.cleanup(); }
 });

@@ -94,9 +94,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
   private serverRevision = 0;
+  private listenerRevision = 0;
   private serverTiming = { started: 0, visibleStart: 0 };
   private readonly network: BunNetworkOptions = {
     listening: (port, helper) => {
+      this.listenerRevision++;
       this.previews.register(port, helper);
       const server = this.server = { port, helper };
       measureStartup("dev-server", this.serverTiming.started);
@@ -434,6 +436,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       term.write(text);
     }, startupRecord);
     const hooks: RunHooks = { stdout: data => output.write(data), stderr: data => output.write(data) };
+    const listenerRevision = this.listenerRevision;
     const current = startRun({ ...options, args }, hooks);
     this.run = current;
     const result = await current.done;
@@ -443,8 +446,14 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.run = null;
     if (script === "install" && (storageFailed || isStorageFull(result.error))) throw new Error("Dependency installation ran out of storage", { cause: `ENOSPC\n${result.error ?? ""}\n${diagnostic}` });
     if (script === "install" && result.code === 0 && !result.error) return result;
-    term.write(`\x1b[2m[${script} exited with code ${result.code}]\x1b[0m\r\n`);
-    this.setServerState("down", `${script} stopped (exit ${result.code}) · press Restart`);
+    const missingServer = script === "dev" && this.listenerRevision === listenerRevision;
+    if (missingServer) {
+      const text = `Dev server stopped before it was ready (exit ${result.code}). Check the terminal output, then press Restart.`;
+      this.setStatus(text, "error");
+      if (result.code === 0 && !result.error) term.write(`\x1b[31m${text}\x1b[0m\r\n`);
+    }
+    if (!missingServer || result.code !== 0 || result.error) term.write(`\x1b[2m[${script} exited with code ${result.code}]\x1b[0m\r\n`);
+    this.setServerState("down", missingServer ? "dev server failed to start · press Restart" : `${script} stopped (exit ${result.code}) · press Restart`);
     return result;
   }
 
