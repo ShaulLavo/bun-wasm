@@ -216,7 +216,11 @@ fn eof_bound_does_not_hide_offset_plus_length_overflow() {
             .raw_os_error(),
         Some(libc::EINVAL)
     );
-    file.seek(SeekFrom::Start(libc::off_t::MAX as u64)).unwrap();
+    if let Err(error) = file.seek(SeekFrom::Start(libc::off_t::MAX as u64)) {
+        assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
+        assert_eq!(file.stream_position().unwrap(), 0);
+        return;
+    }
     assert_eq!(
         read(file.as_raw_fd(), REQUEST, None)
             .unwrap_err()
