@@ -5,6 +5,9 @@ import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
+  "scripts/ci-program-delivery.ts",
+  "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
+  "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
@@ -91,6 +94,8 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  "scripts/ci-program-delivery.ts",
+  "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",

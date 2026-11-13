@@ -29,7 +29,7 @@ function fixture(run: (directory: string) => void): void {
 
 test("Web host and every Processes leg use one browser dependency cache owner", () => {
   const jobs = record(record(Bun.YAML.parse(workflow)).jobs);
-  for (const id of ["web", "browser-process"]) {
+  for (const id of ["web", "browser-process", "browser-guest"]) {
     const job = record(jobs[id]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
     expect(job["timeout-minutes"]).toBe(10);

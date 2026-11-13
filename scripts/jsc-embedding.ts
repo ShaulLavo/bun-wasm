@@ -10,6 +10,7 @@ import { parseCheck } from "./test-checks";
 const root = resolve(import.meta.dir, "..");
 const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/fixtures/parser-literal-overflow", "tests/jsc-embedding/growable-memory"];
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+export const jscEmbeddingArchives = ["build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"];
 
 function git(...args: string[]): string {
   return execFileSync("git", ["-C", root].concat(args), { encoding: "utf8" }).trim();
@@ -24,7 +25,7 @@ function inputs() {
     sourceHead: git("rev-parse", "HEAD"),
     sourceTree: git("rev-parse", "HEAD^{tree}"),
     jscInputsSha256: readFileSync(join(build, "build/jsc/.bunwasm-inputs"), "utf8").trim(),
-    archives: ["build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"]
+    archives: jscEmbeddingArchives
       .map(path => ({ path, sha256: hash(readFileSync(join(build, path))) })),
   };
 }

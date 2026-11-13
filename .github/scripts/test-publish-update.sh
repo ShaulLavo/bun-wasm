@@ -92,18 +92,21 @@ for failure in FAIL_STATUS FAIL_DISPATCH; do
   git restore --staged --worktree -- package.json
 done
 
-rejection_failures=0
-expect_record_rejection() {
+expect_rejection() {
   local label=$1 diagnostic=$2
   local before calls
   before=$(git rev-parse HEAD)
   calls=$(wc -l < "$scratch/gh-calls")
   if bash .github/scripts/publish-update.sh > "$scratch/rejected-record.log" 2>&1; then
+    cat "$scratch/rejected-record.log" >&2
     echo "FAIL: $label was published" >&2
-    rejection_failures=$((rejection_failures + 1))
-    return
+    return 1
   fi
-  grep -q "$diagnostic" "$scratch/rejected-record.log"
+  if ! grep -Fq "$diagnostic" "$scratch/rejected-record.log"; then
+    cat "$scratch/rejected-record.log" >&2
+    echo "FAIL: $label did not report the expected guard" >&2
+    return 1
+  fi
   git diff --cached --quiet
   test "$(git rev-parse HEAD)" = "$before"
   test "$(git --git-dir="$scratch/remote.git" rev-parse refs/heads/automation/test)" = "$third"
@@ -117,39 +120,32 @@ git switch -q --detach "$base"
 rm bun.lock
 git diff --binary > "$scratch/artifact/update.patch"
 git restore -- bun.lock
-expect_record_rejection 'lockfile deletion' 'must remain regular files'
+expect_rejection 'lockfile deletion' 'must remain regular files'
 
 git switch -q --detach "$base"
 rm package.json
 ln -s manifest-fixture.json package.json
 git diff --binary > "$scratch/artifact/update.patch"
 git restore -- package.json
-expect_record_rejection 'manifest symlink' 'must remain regular files'
+expect_rejection 'manifest symlink' 'must remain regular files'
 
 git switch -q --detach "$base"
 rm bun.lock
 ln -s manifest-fixture.json bun.lock
 git diff --binary > "$scratch/artifact/update.patch"
 git restore -- bun.lock
-expect_record_rejection 'lockfile symlink' 'must remain regular files'
+expect_rejection 'lockfile symlink' 'must remain regular files'
 
 git switch -q --detach "$base"
 chmod +x package.json
 git diff --binary > "$scratch/artifact/update.patch"
 git restore -- package.json
-expect_record_rejection 'record mode change' 'changed a record mode'
-
-git switch -q --detach "$base"
-if [[ "$rejection_failures" != 0 ]]; then
-  echo "$rejection_failures record-boundary regressions failed." >&2
-  exit 1
-fi
+expect_rejection 'record mode change' 'changed a record mode'
 git switch -q --detach "$base"
 printf '{"scripts":{"postinstall":"unrelated"}}\n' > package.json
 git diff > "$scratch/artifact/update.patch"
 git restore -- package.json
-if bash .github/scripts/publish-update.sh; then echo 'Manifest code change was accepted' >&2; exit 1; fi
-git restore -- package.json
+expect_rejection 'manifest code change' 'changed manifest fields beyond version pins: package.json'
 # An allowed manifest filename must still exist on the trusted base.
 git switch -q --detach "$base"
 mkdir -p packages/new-workspace
@@ -158,13 +154,13 @@ git add --intent-to-add packages/new-workspace/package.json
 git diff > "$scratch/artifact/update.patch"
 git reset -q -- packages/new-workspace/package.json
 rm packages/new-workspace/package.json
-if bash .github/scripts/publish-update.sh; then echo 'New manifest was accepted' >&2; exit 1; fi
+expect_rejection 'new manifest' 'changed a forbidden path: packages/new-workspace/package.json'
 # A patch outside the pin allowlist must stop before publication.
 git switch -q --detach "$base"
 printf 'forbidden\n' > .github/scripts/publish-update.sh
 git diff > "$scratch/artifact/update.patch"
 git restore -- .github/scripts/publish-update.sh
-if bash .github/scripts/publish-update.sh; then echo 'Forbidden patch was accepted' >&2; exit 1; fi
+expect_rejection 'forbidden patch' 'changed a forbidden path: .github/scripts/publish-update.sh'
 test "$(git --git-dir="$scratch/remote.git" rev-parse refs/heads/automation/test)" = "$third"
 echo 'Publisher fixtures passed: PR reuse, CI dispatch, pin-only edits, and regular record preservation.'
 

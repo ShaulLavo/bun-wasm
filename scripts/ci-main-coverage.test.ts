@@ -281,9 +281,10 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     web: { needs: ["quality", "web-unit"], minutes: 10 },
     "web-unit": { needs: "quality", minutes: 10 },
     "process-bundles": { needs: "quality", minutes: 10 },
-    "browser-process": { needs: ["quality", "rust", "process-bundles"], minutes: 10 },
-    "ci-result": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-process"], minutes: 5 },
-    "update-status": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-process", "ci-result"], minutes: 5 },
+    "browser-guest": { needs: ["quality", "rust"], minutes: 10 },
+    "browser-process": { needs: ["quality", "rust", "process-bundles", "browser-guest"], minutes: 10 },
+    "ci-result": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["quality", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });
