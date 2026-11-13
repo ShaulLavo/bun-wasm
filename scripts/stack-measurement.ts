@@ -18,11 +18,11 @@ export const generatorChains = chainModes.filter(mode => /^chainAssignCall/.test
 export const chainMaximum = 4096;
 const stackModes = [
   "plain", "getter", "computedgetter", "ajvnames", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
-  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring",
+  "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "boundcall", "join", "flat", "tostring",
   "async", "promise", "console",
 ].concat(chainModes);
 // Every chain is searched, so each one is also attempted at interior depths, not only far past its guard.
-const searched = new Set(["plain", "getter", "computedgetter", "proxy", "json", "parse", "promise"].concat(chainModes));
+const searched = new Set(["plain", "getter", "computedgetter", "boundcall", "proxy", "json", "parse", "promise"].concat(chainModes));
 const syntaxModes = new Set(["parse", "block", "arrow", "unary", "power", "ternary", "statement", "awaitchain", "regexpnc", "lookahead"].concat(chainModes));
 
 function deepestAttempt(mode: string): number {
