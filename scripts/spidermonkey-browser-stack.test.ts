@@ -17,8 +17,10 @@ test("SpiderMonkey Browser qualification adds direct tier, recursion and reentry
   expect(driver).toContain('tier !== "interp" && tier !== "pbl"');
   expect(driver).toContain('"selected portable baseline never executed"');
   expect(driver).toContain('assert.equal(entries, 0)');
-  expect(driver).toContain('assert.equal(register, 16)');
-  expect(driver).toContain('"core and side imports were not observed"');
+  expect(driver).toContain('verifySpiderMonkeyStackWitness(value.stderr ?? "", value.hostStacks ?? [])');
+  const witness = source("scripts/spidermonkey-native-qualification.ts");
+  expect(witness).toContain('layout.registerDepth >= 16 && layout.registerDepth <= 65_536');
+  expect(witness).toContain('pointer: layout.high, samePointer: true');
   expect(driver).toContain('assert.equal(observed.caught, "RangeError"');
   expect(driver).toContain('"the engine must recover for a second recursive call"');
   expect(driver).toContain('await readFile(join(fixtureSource, "expected-browser.txt"), "utf8")');
