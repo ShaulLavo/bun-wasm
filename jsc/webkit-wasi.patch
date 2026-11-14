@@ -3404,7 +3404,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    ALWAYS_INLINE Frame& frameAt(unsigned index)
 +    {
 +        ASSERT(index < m_frames.size());
-+        return m_frames.data()[index];
++        return m_frames.begin()[index];
 +    }
 +    static constexpr unsigned maximumFastNesting = 4096;
 +    static constexpr unsigned maximumFastRoots = 8192;
@@ -3751,7 +3751,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        m_roots.removeLast();
 +        return;
 +    }
-+    m_frames.uncheckedAppend(Frame { &object, &structure, table, 0, 0, Frame::Kind::Object, 2 });
++    m_frames.unsafeAppendWithoutCapacityCheck(Frame { &object, &structure, table, 0, 0, Frame::Kind::Object, 2 });
 +    if constexpr (testing) {
 +        publishedFrameForTest();
 +        if (collect)
@@ -3813,7 +3813,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        m_roots.removeLast();
 +        return;
 +    }
-+    m_frames.uncheckedAppend(Frame { &array, array.structure(), nullptr, 0, length, kind, 1 });
++    m_frames.unsafeAppendWithoutCapacityCheck(Frame { &array, array.structure(), nullptr, 0, length, kind, 1 });
 +    if constexpr (testing)
 +        publishedFrameForTest();
 +}
