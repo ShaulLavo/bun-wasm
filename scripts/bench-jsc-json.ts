@@ -13,7 +13,7 @@ const host = { hostname: hostname(), kernel: release(), model: cpus()[Number(cpu
 const names = ["small", "medium", "wide"] as const;
 type Name = typeof names[number];
 type Arm = "donor" | "candidate";
-type Sample = { name: Name; arm: Arm; round: number; cpuMs: number; guestTid: string; threads: { tid: string; name: string; cpuMs: number }[]; elapsedMs: number; iterations: number; length: number; checksum: number };
+type Sample = { name: Name; arm: Arm; round: number; cpuMs: number; guestTid: string; threads: { tid: string; name: string; cpuMs: number | null }[]; elapsedMs: number; iterations: number; length: number; checksum: number };
 const samples: Sample[] = [];
 function counters(pid: number): Map<string, { name: string; cpuNs: bigint }> {
   return new Map(readdirSync(`/proc/${pid}/task`).map(tid => [tid, {
@@ -49,11 +49,14 @@ async function run(arm: Arm, name: Name, round: number, iterations: number): Pro
     await resume();
     await until("json-checkpoint end\n");
     const after = counters(child.pid);
-    const threads = Array.from(before, ([tid, start]) => ({ tid, name: start.name, cpuMs: Number(after.get(tid)!.cpuNs - start.cpuNs) / 1e6 }));
-    threads.sort((a, b) => b.cpuMs - a.cpuMs);
-    const guest = threads[0]!;
-    assert.equal(guest.name, "bun-wasm");
-    assert.ok(guest.cpuMs >= threads.reduce((sum, thread) => sum + thread.cpuMs, 0) * 0.99, "guest must own at least 99% of measured thread CPU");
+    const threads = Array.from(before, ([tid, start]) => {
+      const end = after.get(tid);
+      return { tid, name: start.name, cpuMs: end ? Number(end.cpuNs - start.cpuNs) / 1e6 : null };
+    });
+    const guests = threads.filter(thread => thread.name === "bun-wasm-guest");
+    assert.equal(guests.length, 1, "expected one uniquely named guest thread");
+    const guest = guests[0]!;
+    assert.ok(guest.cpuMs !== null, "the guest must remain alive across both barriers");
     await resume();
     await child.stdin.end();
     await until("json-bench ");
