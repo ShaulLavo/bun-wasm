@@ -1,14 +1,50 @@
 # Package continuation prototype
 
 Status: Approved guest-trigger implementation after independent host, binding and root
-reviews. Installed-guest qualification is in progress; the parent owns fresh independent
-review, hosted CI, merge and later native acceptance.
+reviews. Implemented, with installed-guest acceptance blocked at the explicit boundaries
+below. The parent owns fresh independent review, hosted CI, merge and later native acceptance.
 
 The private target and binding are installed by the bounded handoff unit below. The guest
 now prepares the plan and calls the native before any lifecycle mutation or announcement.
 Only NOTSUP/NOSYS may enter the existing loop once. Successful exec never returns, and
 other errors cannot resume the loop. The remaining sections record the earlier reviewed
 units and their acceptance boundaries.
+
+## Guest-trigger qualification gates
+
+The actual maintained QuickJS guest passes the same PID/job handoff, final-only completion,
+absence of its Worker at shell launch, actual environment/cwd, lifecycle order, quoting,
+file aliases/offsets, root rights, silent diagnostics, typed signals and installer lifetime.
+The source VM tests allow only precommit NOTSUP/NOSYS fallback before side effects.
+Reports and rerunnable controls live in
+`/work/reports/goals/safari-memory/package-script-enabled/`.
+
+- A real Chromium Browser guest exposed resizable Wasm input rejected by WebIDL's
+  TextDecoder. The private binding now takes a fixed-byte copy before decoding.
+- After that correction, Browser reaches exec but reports `process image replaced` as
+  an ordinary script error and exits 1. `engine-host.js` `runEntry` routes the async
+  rejection through `uncaught`, whose special case covers only its own ExitSignal.
+  Its Promise<number>/onExit interface does not deliver the image transition to Waffle
+  bootstrap. This is the precise engine-owned integration boundary; no engine file is
+  changed and no feature flag hides it.
+- Caller-only KILL with an actual held Bun phase/descendant and an actual unrelated
+  same-job Bun sibling retains the owned Worker through a 120-second hang cap.
+  The sibling remains live. The earlier host test manually completed its held child.
+  Active-child retirement needs a bounded consumer correction that preserves sibling
+  ownership; job-wide kill or another controller is not an acceptable substitute.
+- `kill -TERM $$` in the pinned Bash shell exits 2 in both the enabled route and old-loop
+  comparison. This is Product shell's external gate, not a tagged SIGTERM or exit 143.
+- The local JSC prebuild fails its maintained input stamp. Matching ordinary JSC and any
+  ordinary-supplied SpiderMonkey programs remain required. Root/group/thread/publication
+  guards retain their existing controlled-context coverage; actual group/publication
+  acceptance is not established by the split QuickJS transition.
+- The maintained Node Browser fixture host lacks the mandatory `bun_package_scripts`
+  namespace. The minimal seam is `createNodeProcess.install`, next to `runtime_proc`,
+  using its existing cancellation guard around a no-pointer NOTSUP result. A separately
+  retained candidate patch and passing cancellation controls belong to the parent after
+  this writer releases the checkout. They are not included in this source checkpoint.
+  With that candidate applied, the existing behavior fixture advances to the Node host's
+  missing `/bin/sh` registration. Neither failure is a guest handoff qualification pass.
 
 ## Required before any guest binding
 

@@ -73,8 +73,9 @@ export async function createProgramShell(runtime: Runtime, tables: DescriptorTab
         { parent: 2, child: 2 },
       ],
       cwd = "/",
+      job = -1,
     ) {
-      const child = client.spawn(pid, { executable, argv, env, cwd, job: -1, fds });
+      const child = client.spawn(pid, { executable, argv, env, cwd, job, fds });
       await flush(service, notices, pid);
       await supervisor.start(child);
       return {
