@@ -57,7 +57,7 @@ either:
 On a throw, the trampoline reloads the VM from the bound callee, makes the bound frame the
 top call frame and jumps to the throw trampoline, which is what the native trampoline does
 when its C++ function threw. Otherwise it sets the stack pointer and calls the target with
-`cloopCallJSFunction`, which returns to the new label 44. The target's epilogue leaves the
+`cloopCallJSFunction`, which returns to its generated continuation. The target's epilogue leaves the
 bound frame in `cfr` and the stack pointer at the target's own frame, a state the native
 trampoline never has. The entry resets the stack pointer to `cfr` before its own epilogue.
 It cannot use `restoreStackPointerAfterCall`, which reads the frame's code block, null here.
@@ -103,11 +103,13 @@ realm, as before.
 A tail call to a bound function still uses frame stack per bounce, because the bound frame
 stays. It no longer uses host stack.
 
-### Return label 44
+### Generated return label
 
 `cloopCallJSFunction` returns to a label declared in `BytecodeList.rb`'s
-`CLoopReturnHelpers`. The trampoline adds one, `llint_cloop_did_return_from_js_44`,
-appended after [getter dispatch](jsc-getter-dispatch.md)'s 38 to 43.
+`CLoopReturnHelpers`. The trampoline adds one continuation. Offlineasm assigns its private
+number during full expansion, so new call sites can renumber it. The
+[getter dispatch checker](jsc-getter-dispatch.md#generated-return-labels) validates its actual
+reference and return body in each profile.
 
 ## What still enters the interpreter again
 

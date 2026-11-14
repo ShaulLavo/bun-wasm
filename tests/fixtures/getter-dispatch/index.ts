@@ -1,7 +1,9 @@
+import { computedGetterSemantics } from "./computed";
+
 // What a getter read must mean however the engine calls the getter. JavaScriptCore on wasm
 // calls `object.name` and `super.name` getters inside its running interpreter loop, and every
-// other read from C++ (docs/bun-patches/jsc-getter-dispatch.md). Each static read below has a
-// computed-key twin that takes the other path there.
+// numeric-index and non-ordinary getters from C++ (docs/bun-patches/jsc-getter-dispatch.md).
+// Each static read below also has a computed-key twin.
 // Run as a guest TypeScript entry; the eval and Function inputs deliberately build JavaScript.
 function check(name: string, actual: unknown, expected: unknown): void {
   const same = Object.is(actual, expected);
@@ -348,6 +350,8 @@ for (let level = 0; level < ajvDepth; level++) {
 }
 const counted = Object.values(root.names).reduce((sum, count) => sum + count, 0);
 check("nested Ajv names walk", counted === ajvDepth && ajvDepth >= 64, true);
+
+computedGetterSemantics(check, thrown);
 
 // Getters that return promises, read by async code.
 const later = {

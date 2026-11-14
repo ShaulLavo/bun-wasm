@@ -195,19 +195,20 @@ test("the JSC gate runs getter semantics at the smallest browser budget, past th
   });
 });
 
-test("in-loop getter calls are limited to the WASI C loop and to the two named bytecodes", () => {
-  const slowPaths = patch.split("diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp")[1]?.split("diff --git")[0] ?? "";
+test("in-loop getter calls are limited to the WASI C loop and to the three named bytecodes", () => {
+  const sections = (file: string) => patch.split(`diff --git a/Source/JavaScriptCore/llint/${file}`).slice(1).map(part => part.split("diff --git")[0]).join("");
+  const slowPaths = sections("LLIntSlowPaths.cpp");
   const assembly = ["LowLevelInterpreter.asm", "LowLevelInterpreter64.asm"]
-    .map(file => patch.split(`diff --git a/Source/JavaScriptCore/llint/${file}`)[1]?.split("diff --git")[0] ?? "").join("");
+    .map(sections).join("");
   // The same predicate on both sides: C loop and WASI.
-  expect(slowPaths.match(/^\+#if ENABLE\(C_LOOP\) && OS\(WASI\)$/gm)).toHaveLength(6);
-  expect(assembly.match(/^\+ *if C_LOOP and WASI$/gm)).toHaveLength(3);
+  expect(slowPaths.match(/^\+#if ENABLE\(C_LOOP\) && OS\(WASI\)$/gm)).toHaveLength(10);
+  expect(assembly.match(/^\+ *if C_LOOP and WASI$/gm)).toHaveLength(6);
   expect(patch).toContain("+#if OS(WASI)\n+#define OFFLINE_ASM_WASI 1\n+#else\n+#define OFFLINE_ASM_WASI 0\n+#endif\n");
-  // One caller of the shared lookup opts in, and only the two slow paths hand a getter back.
+  // One caller of the shared lookup opts in, and only the three slow paths hand a getter back.
   expect(slowPaths.match(/performLLIntGetByID<true>\(.*, &getter\);$/gm)).toHaveLength(1);
   expect(slowPaths.match(/performLLIntGetByID<true>/g)).toHaveLength(1);
-  expect(slowPaths.match(/^\+ +RELEASE_AND_RETURN\(throwScope, callGetterInLoop\(/gm)).toHaveLength(2);
-  expect(assembly.match(/callGetByIdSlowPath\(_llint_slow_path_get_by_id(?:_with_this)?, /g)).toHaveLength(2);
+  expect(slowPaths.match(/^\+ +RELEASE_AND_RETURN\(throwScope, callGetterInLoop\(/gm)).toHaveLength(3);
+  expect(assembly.match(/callGetByIdSlowPath\(_llint_slow_path_get_by_(?:id(?:_with_this)?|val), /g)).toHaveLength(3);
   // The exception signal is tested before either result word is used as a pointer.
   const outcomes = assembly.split("macro (target, calleeStackPointer)")[1] ?? "";
   expect(outcomes.trimStart().startsWith("+                bpeq calleeStackPointer, -1, _llint_throw_from_slow_path_trampoline\n")).toBe(true);
@@ -227,14 +228,14 @@ test("the JSC gate runs bound call semantics at the smallest browser budget, pas
 });
 
 test("bound calls run in the WASI C loop through their own call entry, after the getter hunks", () => {
-  const lastSection = (file: string) => patch.split(`diff --git a/Source/JavaScriptCore/${file}`).at(-1)?.split("diff --git")[0] ?? "";
+  const lastSection = (file: string) => patch.split(`diff --git a/Source/JavaScriptCore/${file}`).slice(1).map(part => part.split("diff --git")[0]).join("");
   const vm = lastSection("runtime/VM.cpp");
   expect(vm).toMatch(/^\+#if ENABLE\(C_LOOP\) && OS\(WASI\)\n(?:\+[^\n]*\n)*?\+    case BoundFunctionCallIntrinsic: \{\n(?:\+[^\n]*\n)*?\+[^\n]*llint_bound_function_call_trampoline[^\n]*\n/m);
   expect(vm.match(/^\+(?!\+\+ )/gm)).toHaveLength(12);
   // One helper entry and one return label, each appended after everything its section had.
   const list = lastSection("bytecode/BytecodeList.rb");
   expect(list).toContain(" op :wasm_ipint_call_return_location\n+op :llint_bound_function_call_trampoline\n \n end_section :NativeHelpers\n");
-  expect(list).toContain(" op :llint_cloop_did_return_from_js_43\n+op :llint_cloop_did_return_from_js_44\n \n end_section :CLoopReturnHelpers\n");
+  expect(list).toMatch(/ op :llint_cloop_did_return_from_js_43\n(?:\+op :llint_cloop_did_return_from_js_\d+\n)+ \n end_section :CLoopReturnHelpers\n/);
   expect(lastSection("llint/LowLevelInterpreter.asm")).toMatch(/^\+op\(llint_bound_function_call_trampoline, macro \(\)\n\+    if C_LOOP and WASI\n\+        boundFunctionCallTrampoline\(\)\n\+    else\n\+        crash\(\)\n/m);
   // The exception signal is tested before either word is used, and sp returns to the bound frame
   // without reading its null code block.
