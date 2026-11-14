@@ -20,11 +20,19 @@ jobs:
     timeout-minutes: 15
     outputs:
       key: ${{ steps.setup.outputs.key }}
+      cache-hit: ${{ steps.published.outputs.cache-hit }}
       sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/jsc-setup
         id: setup
+      - name: Look up the published ordinary JSC cache
+        uses: actions/cache/restore@v4
+        id: published
+        with:
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: ${{ steps.setup.outputs.key }}
+          lookup-only: true
       - name: Package this run's prepared sysroot
         id: sysroot
         shell: bash
@@ -45,7 +53,7 @@ jobs:
   jsc-prebuild:
     name: Warm verified JSC cache
     needs: identity
-    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch' }}
+    if: ${{ needs.identity.outputs.cache-hit != 'true' && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     runs-on: *pc-runner
     concurrency:
       group: ${{ needs.identity.outputs.key }}
