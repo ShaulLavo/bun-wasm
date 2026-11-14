@@ -2056,7 +2056,7 @@ jobs:
 
   web:
     needs: [selection, web-unit, web-browser]
-    if: ${{ always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !cancelled()) && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    if: ${{ always() && !cancelled() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Web host
     runs-on: *pc-runner
     timeout-minutes: 10
@@ -2386,7 +2386,7 @@ jobs:
   ci-result:
     name: Code quality
     needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
-    if: ${{ always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !cancelled()) }}
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

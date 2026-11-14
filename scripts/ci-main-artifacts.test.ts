@@ -165,14 +165,14 @@ test.each(["failure", "cancelled", "skipped"])("the final main gate rejects %s f
   expect(object(jobs["ci-result"]).if).toContain("always()");
 }));
 
-test("explicit main cancellation stops every job, including always-guarded aggregates", () => {
+test.each(["push", "pull_request", "workflow_dispatch"])("cancelled %s runs stop every job, including always-guarded aggregates", event => {
   const outputs = { ...all, "shared-native": "true" };
   for (const [id, value] of Object.entries(jobs)) {
-    expect(admitted(object(value).if, outputs, { cancelled: true }), id).toBe(false);
+    expect(admitted(object(value).if, outputs, { event, cancelled: true }), id).toBe(false);
   }
 });
 
-test("main failures still reach blocking aggregates and PR/manual cancellation guards keep their behavior", () => {
+test("failures still reach blocking aggregates while cancelled runs release their aggregates", () => {
   const outputs = { ...all, "shared-native": "true" };
   const web = object(jobs.web);
   const gate = object(jobs["ci-result"]);
@@ -184,8 +184,8 @@ test("main failures still reach blocking aggregates and PR/manual cancellation g
     expect(admitted(processes.if, outputs, { event, results: { "browser-guest": "failure" } }), event).toBe(true);
   }
   for (const event of ["pull_request", "workflow_dispatch"]) {
-    expect(admitted(web.if, outputs, { event, cancelled: true }), event).toBe(true);
-    expect(admitted(gate.if, outputs, { event, cancelled: true }), event).toBe(true);
+    expect(admitted(web.if, outputs, { event, cancelled: true }), event).toBe(false);
+    expect(admitted(gate.if, outputs, { event, cancelled: true }), event).toBe(false);
     expect(admitted(processes.if, outputs, { event, cancelled: true }), event).toBe(false);
   }
 });

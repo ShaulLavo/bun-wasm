@@ -6,9 +6,9 @@ Main pushes share `CI-push-main` and let the running run finish. GitHub retains
 only the newest pending main run. PRs still cancel earlier runs of the same PR. Manual dispatches keep
 their unique run groups. The separate native identity locks are unchanged.
 The Web host and Code quality aggregates qualify their job-level `always()` with
-a main-only cancellation guard. Processes already rejects cancellation. Failed
-prerequisites still reach the blocking aggregates; PR and manual cancellation
-behavior is unchanged. No job remains eligible to hold a cancelled main workflow.
+`!cancelled()`. Processes already rejects cancellation. Failed prerequisites
+still reach the blocking aggregates. Explicitly cancelled runs release queued
+aggregates instead of delaying a newer PR run in the same concurrency group.
 
 Every main push selects all four native families. A docs-only push can replace a
 native-source push, and its successful run still publishes the current program
