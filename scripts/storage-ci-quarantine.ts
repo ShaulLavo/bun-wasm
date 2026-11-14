@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { StoragePreservationFailure, storageReportPath } from "../sandbox/tests/storage-browser";
 import firefoxProtocol from "./fixtures/storage-ci/firefox.json";
 import webkitProtocol from "./fixtures/storage-ci/webkit.json";
+import webkitReactProtocols from "./fixtures/storage-ci/webkit-react.json";
 
 type Diagnostic = StoragePreservationFailure["report"]["pages"][number];
 type PageDiagnostic = Exclude<Diagnostic, string>;
@@ -13,8 +14,15 @@ function normalizedTerminal(terminal: string): string {
     .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:port").replace(/\/worker-[a-z0-9]+\.js:\d+:\d+/g, "/worker.js:line:column");
 }
 
-function matchesTerminal(terminal: string, expected: string | undefined): boolean {
-  return expected !== undefined && normalizedTerminal(terminal) === normalizedTerminal(expected);
+function normalizedReactTerminal(terminal: string): string {
+  return terminal.replace(/\[\d+ms\]/g, "[ms]").replace(/ready in \d+ ms/g, "ready in ms")
+    .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:port")
+    .replace(/^\d{1,2}:\d{2}:\d{2} [AP]M(?= \[vite\] \(client\) \[optimizer\] bundling dependencies\.\.\.$)/gm, "clock")
+    .replace(/^worker \(tid = \d+\)(?= sent an error! Out of bounds access$)/gm, "worker (tid = id)");
+}
+
+function matchesTerminal(terminal: string, expected: string | undefined, normalize = normalizedTerminal): boolean {
+  return expected !== undefined && normalize(terminal) === normalize(expected);
 }
 
 function isNativePage(page: Diagnostic | undefined, template: string): page is PageDiagnostic {
@@ -40,17 +48,28 @@ function knownConsoleError(browser: string, error: string): boolean {
     || /^\[JavaScript Error: "Failed to load ‘’. A ServiceWorker intercepted the request and encountered an unexpected error\." \{file: "http:\/\/127\.0\.0\.1:\d+\/sandbox\/sw\.js" line: 8\}\]$/.test(error);
 }
 
+function reactStartupQuarantine(page: PageDiagnostic, error: string, origin: string): string | undefined {
+  if (error !== "Error: Storage readiness deadline: vite-react" || page.runtime?.editorPath !== "src/App.tsx") return;
+  if (page.status !== "loading preview…" && !/^dev server ready in \d+\.\d s · Browser \(native\) · 20\.0 MB$/.test(page.status ?? "")) return;
+  if (page.frames[0]?.src !== `${origin}/sandbox/__preview/5173/` || page.frames[0].body !== "") return;
+  return "webkit-first-react-optimizer-bounds";
+}
+
 export function storageQuarantine(browser: string, failure: StoragePreservationFailure): string | undefined {
   if (browser !== "firefox" && browser !== "webkit") return;
   const { checkpoint, error, errors, pages } = failure.report;
   if (pages.length !== 2 || !errors.every(error => knownConsoleError(browser, error))) return;
   const [active, page] = pages;
-  if (!isActiveHono(active) || !isNativePage(page, browser === "firefox" ? "vite-vue" : "vanilla")) return;
+  const reactStartup = browser === "webkit" && checkpoint === "first-vite-react-startup";
+  const template = reactStartup ? "vite-react" : browser === "firefox" ? "vite-vue" : "vanilla";
+  if (!isActiveHono(active) || !isNativePage(page, template)) return;
   if (new URL(active.url).origin !== new URL(page.url).origin) return;
   const origin = new URL(active.url).origin;
   if (page.frames.length !== 1) return;
-  const original = protocols[browser].pages;
-  if (!matchesTerminal(active.terminal, original[0]?.terminal) || !matchesTerminal(page.terminal, original[1]?.terminal)) return;
+  const original = reactStartup ? webkitReactProtocols[0]?.report.pages : protocols[browser].pages;
+  const normalize = reactStartup ? normalizedReactTerminal : normalizedTerminal;
+  if (!matchesTerminal(active.terminal, original?.[0]?.terminal, normalize) || !matchesTerminal(page.terminal, original?.[1]?.terminal, normalize)) return;
+  if (reactStartup) return reactStartupQuarantine(page, error, origin);
   if (browser === "firefox") {
     if (checkpoint !== "first-vite-vue-startup" || !error.startsWith("Error: waitForFunction: Dev server stopped before it was ready (exit 254).")) return;
     if (page.status !== "Dev server stopped before it was ready (exit 254). Check the terminal output, then press Restart.") return;

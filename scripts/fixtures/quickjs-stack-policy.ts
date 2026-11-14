@@ -6,6 +6,7 @@ const budget = process.env.QUICKJS_STACK_KIB;
 const commands: string[] = [];
 const inputs: { mode: string; depth: number }[] = [];
 const fixtures = [
+  { name: "stack-loop-continuations", entry: "index.ts" },
   { name: "stack-overflow", entry: "index.js" },
   { name: "stack-overflow-console", entry: "index.js" },
   { name: "parser-error-preservation", entry: "index.ts" },

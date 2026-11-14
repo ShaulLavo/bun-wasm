@@ -315,8 +315,11 @@ bookkeeping and the stack guards are unchanged.
 
 Ordinary targets of `Function.prototype.call` now stay in the interpreter loop
 through a [native builtin continuation](bun-patches/quickjs-loop-dispatch.md).
-The native logical frame and builtin identity remain visible. `apply` and other
-target classes keep their native calls. The historical measurements below
+Ordinary callbacks of Array `reduce` and `reduceRight` use the same mechanism.
+The native logical frame and builtin identity remain visible. `apply`, other
+callback builtins and other target classes keep their native calls. Array
+element getters and length coercions also keep native calls. Deep Ajv and Angular
+acceptance needs the separate getter unit. The historical measurements below
 describe the dispatcher extraction before this continuation change.
 
 At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
@@ -461,8 +464,30 @@ with 256 and 512 KiB host stacks at the 192 KiB budget. Proxy and `toString` res
 29/31, 32/34 and 125/133 at those budgets. Linux Chrome and WebKit cold controls at 512 KiB
 host stack, 240 KiB guest budget and parser reserve 2048 complete 45 and catch at 200000,
 then continue. The original warm prefix measures 39,930 and a caught boundary. WebKit's
-Proxy forwarding and warm plain-JSON failures remain separate work. These are Linux results;
+warm plain-JSON failure remains separate work. These are Linux results;
 Safari and iPhone confirmation consumes the normal merged delivery.
+
+### Proxy forwarding without native recursion
+
+On WASI, a Proxy with no `get` trap now forwards to a Proxy target in a loop rather than through
+another native property lookup ([record](bun-patches/jsc-proxy-get-forwarding.md)). Each forward
+still reserves 512 shadow bytes and checks the existing soft guard. Actual JavaScript `get` traps
+keep their native call path.
+
+Measured on November 14, 2026 on the native launcher, with the split pair from this change and the
+same pair before the engine hunk. A number is the deepest chain that completed; one level more threw
+a catchable `RangeError`.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `proxychain` | 197 | 369 | 214 | 401 | 846 | 1,585 |
+| `proxy` | 29 | 30 | 32 | 32 | 125 | 125 |
+
+The forwarding row gains capacity because it retains only the explicit 512-byte charge per level,
+not the old recursive frames. The trap row differs by one level at 192 KiB and is identical at the
+other budgets. Both rows throw and continue at 200,000 levels. On the Node host with a 320 KiB
+worker stack and an 800 KiB diagnostic guest budget, the old engine traps in the recursive property
+lookup cycle; the iterative pair catches the error and completes a later read.
 
 ### Bound functions called in the loop
 

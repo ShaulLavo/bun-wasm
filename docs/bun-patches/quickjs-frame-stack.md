@@ -290,13 +290,14 @@ the upstream error. Everything else keeps its C call and the native guard:
 constructors (`new`, `super`, `Reflect.construct`), `Function.prototype.apply`,
 `eval`, computed ordinary property reads, setters, native accessors and getters
 reached through C APIs, native functions and their callbacks
-(`Array.prototype.map`, `reduce`, `sort`), bound functions, proxies, and
+(`Array.prototype.map`, `sort`), bound functions, proxies, and
 generator and async functions, both as callers and as callees. A recursion
 that passes through any of these still costs native stack at every level and
 is still refused by the guard.
 
-`Function.prototype.call` to an ordinary target now uses a native logical frame
-and a loop continuation. Its other targets still take native dispatch. See
+`Function.prototype.call` to an ordinary target, and Array `reduce` and
+`reduceRight` with ordinary callbacks, now use a native logical frame and a
+loop continuation. Other targets still take native dispatch. See
 [builtin loop continuations](quickjs-loop-dispatch.md).
 
 The C entry reserves 48 shadow-stack bytes, once per C activation, not per
