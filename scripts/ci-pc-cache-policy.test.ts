@@ -79,3 +79,24 @@ test("compiler cache rotations reach GitHub only on hosted runners after the ori
   expect(admitted({ if: condition }, "github-hosted", "push", "refs/heads/main")).toBe(true);
   expect(admitted({ if: condition }, "self-hosted", "push", "refs/heads/main")).toBe(false);
 });
+
+test("one PC main publisher saves the complete dependency install with its original restore key", () => {
+  const jobs = record(read("workflows/ci.yml").jobs);
+  const jobSteps = record(jobs["web-unit"]).steps;
+  if (!Array.isArray(jobSteps)) throw new Error("Missing Web unit steps");
+  const unit = jobSteps.map(record);
+  const restore = unit.find(step => step.id === "bun-dependencies");
+  const publish = unit.find(step => step.name === "Save completed PC Bun dependency cache");
+  expect(restore?.uses).toBe("./.github/actions/restore-ci-cache");
+  expect(record(restore?.with)).toEqual({ path: ".ci-bun-cache", key: "bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}" });
+  expect(publish?.uses).toBe("./.github/actions/save-ci-cache");
+  expect(record(publish?.with)).toEqual({ path: ".ci-bun-cache", key: "${{ steps.bun-dependencies.outputs.cache-primary-key }}" });
+  expect(unit.findIndex(step => step.name === publish?.name)).toBeGreaterThan(unit.findIndex(step => step.run === "bash ../scripts/test-web-host.sh --unit"));
+  const condition = String(publish?.if).replaceAll("steps.bun-dependencies.outputs.cache-hit", "'false'");
+  expect(admitted({ if: condition }, "self-hosted", "push", "refs/heads/main")).toBe(true);
+  expect(admitted({ if: condition }, "self-hosted", "pull_request", "refs/heads/main")).toBe(false);
+  expect(admitted({ if: condition }, "github-hosted", "push", "refs/heads/main")).toBe(false);
+  expect(admitted({ if: condition }, "self-hosted", "workflow_dispatch", "refs/heads/main")).toBe(false);
+  const installer = readFileSync(resolve(directory, "../scripts/test-web-host.sh"), "utf8");
+  for (const path of ["$root", "$root/web", "$root/sandbox"]) expect(installer).toContain(`(cd "${path}" && bun "$root/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts)`);
+});

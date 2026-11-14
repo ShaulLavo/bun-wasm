@@ -42,3 +42,17 @@ an npm binary, which accounts for its Knip binary exclusion.
 snapshots for existing cache keys and prefixes. It restores into job-private
 paths and publishes only for main pushes. Hosted cache behavior and all existing
 compiler, receipt, checksum and blocking-check guards remain in place.
+
+Local snapshots are limited to 32 GiB and 256 entries on the 128 GiB cache disk.
+Successful restores update the snapshot directory's last-use time without
+changing archived files. Publication removes the least recently used snapshots
+to leave room for the incoming archive, and skips an archive larger than the
+budget. A process-scoped filesystem lock serializes cache operations and permits
+reclaiming interrupted staging after cancellation. The complete Web unit install
+publishes the PC Bun dependency snapshot on main. Hosted quality retains its
+existing GitHub publisher.
+
+The cache CLI accepts absolute, separate storage and job directories so its
+behavioral tests also run on hosted machines. It rejects whole-job snapshots,
+outside job paths and cache storage aliases. The VM lifecycle fixes production
+directories under `/work`; the CLI does not change those locations.

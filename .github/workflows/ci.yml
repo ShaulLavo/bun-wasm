@@ -2099,6 +2099,7 @@ jobs:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/restore-ci-cache
+        id: bun-dependencies
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2127,6 +2128,12 @@ jobs:
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
         run: bash ../scripts/test-web-host.sh --unit
+      - name: Save completed PC Bun dependency cache
+        if: runner.environment == 'self-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-ci-cache
+        with:
+          path: .ci-bun-cache
+          key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
       - name: Retain first C1 WebKit admission failure
         if: failure()
         uses: actions/upload-artifact@v4
