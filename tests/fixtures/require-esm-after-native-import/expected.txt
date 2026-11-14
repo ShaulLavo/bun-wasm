@@ -1,0 +1,3 @@
+order d,r,p
+d runs 1
+same true

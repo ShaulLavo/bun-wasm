@@ -43,6 +43,7 @@ bool bsm_call(bsm_handle, bsm_handle, const bsm_handle*, size_t, bsm_handle*);
 bool bsm_eval_script(const char*, size_t, const char*, int32_t, bsm_handle*);
 bool bsm_eval_module(const char*, size_t, const char*, size_t, bsm_handle*);
 bool bsm_import(const char*, size_t, bsm_handle*);
+bool bsm_require(const char*, size_t, bsm_handle*);
 bool bsm_drain_jobs(bsm_handle*);
 bool bsm_terminated(void);
 void bunsm_host_free(char*);
@@ -65,6 +66,23 @@ void bsm_set_async_context(bsm_handle);
 void bsm_gc(void);
 void bsm_heap_info(double*, double*, double*);
 void bsm_tier_counts(uint32_t*, uint64_t*);
+#if defined(BUNSM_CONTROLS)
+void bsm_control_require_promises(bsm_handle*, bsm_handle*, bsm_handle*, bsm_handle*);
+bool bsm_control_mark_handled(bsm_handle);
+bool bsm_control_require_entered(void);
+bool bsm_control_module_linked(const char*, size_t);
+void bsm_control_fault(const char*, uint32_t, uint32_t);
+int bsm_control_run_one_job(void);
+bool bsm_control_run_until(const char*);
+typedef struct {
+  uint64_t gcCycles, lastDitchCycles, ooms, firstOomJobsEntered;
+  bool firstOomInJob;
+  uint64_t jobsEntered;
+} bsm_heap_report;
+void bsm_control_fill_heap(void);
+void bsm_control_heap_report(bsm_heap_report*);
+void bsm_control_release_heap(void);
+#endif
 
 bool bunsm_host_call(uint32_t, bsm_handle, const bsm_handle*, size_t, bsm_handle*);
 void bunsm_host_drop(uint32_t);

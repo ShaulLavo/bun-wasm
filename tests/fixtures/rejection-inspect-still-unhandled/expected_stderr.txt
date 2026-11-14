@@ -1,0 +1,4 @@
+error: inspected rejection
+inspected rejection
+
+Bun vVERSION (PLATFORM)

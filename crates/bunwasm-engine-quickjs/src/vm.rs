@@ -456,6 +456,23 @@ impl Engine for QuickJs {
             .map_err(|e| self.caught(e))
     }
 
+    fn require_module(&self, name: &str) -> Result<V, V> {
+        let promise = self.import_module(name)?;
+        // SAFETY: the value and context are live; the mark runs no JavaScript.
+        if !unsafe { qjs::JS_IsPromise(promise.as_raw()) } {
+            return Err(self.error_value(&NativeError::type_error(
+                "ES module require did not return a promise",
+            )));
+        }
+        // SAFETY: the promise and context are live; the mark runs no JavaScript.
+        unsafe { qjs::JS_PromiseMarkAsHandled(self.raw(), promise.as_raw()) };
+        self.0
+            .rejections
+            .borrow_mut()
+            .retain(|(current, _)| *current != promise);
+        Ok(promise)
+    }
+
     fn eval_module(&self, name: &str, source: &str) -> Result<V, V> {
         let module = self
             .declare(name, source.to_owned())

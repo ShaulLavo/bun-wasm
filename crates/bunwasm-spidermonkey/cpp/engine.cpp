@@ -21,6 +21,7 @@
 #include "js/GCAPI.h"
 #include "js/GlobalObject.h"
 #include "js/Initialization.h"
+#include "js/MemoryCallbacks.h"
 #include "js/Interrupt.h"
 #include "js/Modules.h"
 #include "js/Object.h"
@@ -47,6 +48,9 @@ struct Slot {
 JSContext* context = nullptr;
 JS::PersistentRootedObject* global = nullptr;
 JS::PersistentRootedValue* asyncContext = nullptr;
+JS::PersistentRootedValue* originalThen = nullptr;
+JS::PersistentRootedId* thenId = nullptr;
+JS::PersistentRootedId* constructorId = nullptr;
 JS::PersistentRootedValue* objectKeys = nullptr;
 JS::PersistentRootedValue* errorConstructors[4] = {};
 std::vector<Slot*> slots;
@@ -58,6 +62,58 @@ bool interruptible = false;
 bool terminating = false;
 uint32_t checks = 0;
 uint64_t pblEntries = 0;
+
+#if defined(BUNSM_CONTROLS)
+bsm_handle controlLoading = 0;
+bsm_handle controlBridge = 0;
+bsm_handle controlEvaluation = 0;
+bsm_handle controlDerived = 0;
+bool controlRequireEntered = false;
+std::string controlPhase;
+std::unordered_map<std::string, uint32_t> controlUses;
+std::string controlFaultSite;
+uint32_t controlFaultNth = 0;
+uint32_t controlFaultKind = 0;
+std::string controlObserved;
+JS::PersistentRootedObject* controlHeapRoot = nullptr;
+JS::AutoDisableGenerationalGC* controlHeapGuard = nullptr;
+std::vector<JS::GCReason> controlGcReasons;
+struct ControlOom {
+  uint64_t jobsEntered;
+  bool inJob;
+};
+std::vector<ControlOom> controlOoms;
+uint64_t controlJobsEntered = 0;
+bool controlInJob = false;
+uint32_t controlHeapParameters[3] = {};
+JS::GCSliceCallback controlPreviousSlice = nullptr;
+
+void control_reset_require() {
+  bsm_release(controlLoading);
+  bsm_release(controlBridge);
+  bsm_release(controlEvaluation);
+  bsm_release(controlDerived);
+  controlLoading = controlBridge = controlEvaluation = controlDerived = 0;
+  controlRequireEntered = false;
+  controlPhase = "requireSetup";
+  controlObserved.clear();
+}
+
+void control_phase(const char* phase) { controlPhase = phase; }
+
+bool control_fault(const char* site) {
+  std::string key = controlPhase + ":" + site;
+  uint32_t use = ++controlUses[key];
+  if (key != controlFaultSite || use != controlFaultNth) return false;
+  if (controlFaultKind == 1) JS_ReportOutOfMemory(context);
+  if (controlFaultKind == 3) terminating = true;
+  return true;
+}
+#else
+void control_reset_require() {}
+void control_phase(const char*) {}
+bool control_fault(const char*) { return false; }
+#endif
 
 [[noreturn]] void fatal(const char* message) {
   bunsm_host_fatal(message, strlen(message));
@@ -243,6 +299,7 @@ class Queue final : public JS::JobQueue {
  public:
   bool getHostDefinedData(JSContext* cx, JS::MutableHandleObject incumbent,
                           JS::MutableHandleObject optional) const override {
+    if (control_fault("host-defined")) return false;
     incumbent.set(global->get());
     JS::RootedObject frame(cx, JS_NewObject(cx, &frameClass));
     if (!frame) return false;
@@ -287,7 +344,14 @@ bool run_task(JS::Handle<mozilla::Maybe<JS::MicroTask>> task) {
   if (!task->asJS().maybeGetHostDefinedData(&incumbent, &captured)) return false;
   JS::RootedValue previous(context, asyncContext->get());
   asyncContext->set(captured ? JS::GetReservedSlot(captured, 0) : JS::UndefinedValue());
+#if defined(BUNSM_CONTROLS)
+  ++controlJobsEntered;
+  controlInJob = true;
+#endif
   bool ok = JS::RunJSMicroTask(context, task);
+#if defined(BUNSM_CONTROLS)
+  controlInJob = false;
+#endif
   asyncContext->set(previous);
   return ok;
 }
@@ -360,6 +424,7 @@ bool module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject reque
   if (!privateValue.isUndefined() && !to_utf8(privateValue, &ref)) return false;
   std::string name;
   if (!resolve(spec.data(), spec.size(), ref, &name)) return false;
+  if (control_fault("module-load")) return false;
   JS::RootedObject module(cx, load_module(name));
   if (!module) return false;
   return finish_module_load(cx, referrer, request, payload, module);
@@ -384,11 +449,23 @@ JSObject* module_handler(JS::HandleObject target, JSNative callback, const char*
   return handler;
 }
 
-bool module_fulfilled(JSContext* cx, unsigned argc, JS::Value* vp) {
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-  JS::RootedObject promise(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  args.rval().setUndefined();
-  return JS::ResolvePromise(cx, promise, JS::UndefinedHandleValue);
+void ensure_handled(JS::HandleObject promise) {
+  require(JS::SetAnyPromiseIsHandled(context, promise), "SpiderMonkey promise ownership failed");
+}
+
+bool seal(JS::HandleObject promise) {
+  constexpr unsigned attrs = JSPROP_READONLY | JSPROP_PERMANENT;
+  if (control_fault("seal")) return false;
+  if (!JS_DefinePropertyById(context, promise, *thenId, *originalThen, attrs)) return false;
+  if (control_fault("seal")) return false;
+  return JS_DefinePropertyById(context, promise, *constructorId, JS::UndefinedHandleValue, attrs);
+}
+
+JSObject* forward_internal(JS::HandleObject source) {
+  JS::RootedObject forwarded(context, JS::CallOriginalPromiseThen(context, source, nullptr, nullptr));
+  if (!forwarded) return nullptr;
+  ensure_handled(forwarded);
+  return seal(forwarded) ? forwarded.get() : nullptr;
 }
 
 bool module_rejected(JSContext* cx, unsigned argc, JS::Value* vp) {
@@ -432,25 +509,33 @@ bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObjec
   return JS::AddPromiseReactions(cx, loading, fulfilled, rejected);
 }
 
-bool reject_module_failure(JSContext* cx, JS::HandleObject promise) {
-  if (!JS_IsExceptionPending(cx)) return false;
-  JS::RootedValue exception(cx);
-  if (!JS_GetPendingException(cx, &exception)) return false;
-  JS_ClearPendingException(cx);
-  return JS::RejectPromise(cx, promise, exception);
-}
-
 bool module_evaluate_handler(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  control_phase("importEvaluate");
   JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  JS::RootedObject promise(cx, &js::GetFunctionNativeReserved(&args.callee(), 1).toObject());
-  args.rval().setUndefined();
   JS::RootedValue evaluation(cx);
-  if (!JS::ModuleLink(cx, module) || !JS::ModuleEvaluate(cx, module, &evaluation)) return reject_module_failure(cx, promise);
+  if (!JS::ModuleLink(cx, module) || !JS::ModuleEvaluate(cx, module, &evaluation)) return false;
   JS::RootedObject evaluated(cx, &evaluation.toObject());
-  JS::RootedObject fulfilled(cx, module_handler(promise, module_fulfilled, "moduleFulfilled"));
-  JS::RootedObject rejected(cx, module_handler(promise, module_rejected, "moduleRejected"));
-  if (!fulfilled || !rejected || !JS::AddPromiseReactions(cx, evaluated, fulfilled, rejected)) return reject_module_failure(cx, promise);
+  ensure_handled(evaluated);
+  control_phase("importForward");
+  JS::RootedObject forwarded(cx, forward_internal(evaluated));
+  if (!forwarded) return false;
+  control_phase("importAdoptE");
+  args.rval().setObject(*forwarded);
+  return true;
+}
+
+bool require_namespace(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  control_phase("requireNamespace");
+  JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
+  JS::RootedObject ns(cx, JS::GetModuleNamespace(cx, module));
+  if (!ns) return false;
+  control_phase("derivedNamespace");
+#if defined(BUNSM_CONTROLS)
+  controlObserved = "require-namespace-returned";
+#endif
+  args.rval().setObject(*ns);
   return true;
 }
 
@@ -463,17 +548,70 @@ bool namespace_handler(JSContext* cx, unsigned argc, JS::Value* vp) {
   return true;
 }
 
+bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  control_phase("requireLoaded");
+#if defined(BUNSM_CONTROLS)
+  controlRequireEntered = true;
+#endif
+  JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
+  if (!JS::ModuleLink(cx, module)) return false;
+  JS::RootedValue evaluation(cx);
+  if (!JS::ModuleEvaluate(cx, module, &evaluation)) return false;
+  if (control_fault("silent-return") || control_fault("terminate-return")) return false;
+  JS::RootedObject evaluated(cx, &evaluation.toObject());
+  ensure_handled(evaluated);
+#if defined(BUNSM_CONTROLS)
+  controlEvaluation = hold_object(evaluated);
+#endif
+  JS::PromiseState state = JS::GetPromiseState(evaluated);
+  if (state == JS::PromiseState::Rejected) {
+    JS::RootedValue reason(cx, JS::GetPromiseResult(evaluated));
+    JS_SetPendingException(cx, reason, JS::ExceptionStackBehavior::DoNotCapture);
+    return false;
+  }
+  if (state == JS::PromiseState::Fulfilled) {
+    control_phase("requireNamespaceGet");
+    if (control_fault("namespace-get")) return false;
+    JS::RootedObject ns(cx, JS::GetModuleNamespace(cx, module));
+    if (!ns) return false;
+    control_phase("bridgeNamespace");
+#if defined(BUNSM_CONTROLS)
+    controlObserved = "require-loaded-returned";
+#endif
+    args.rval().setObject(*ns);
+    return true;
+  }
+  control_phase("requireLoaded");
+  if (control_fault("require-namespace-handler")) return false;
+  JS::RootedObject handler(cx, module_handler(module, require_namespace, "requireNamespace"));
+  if (!handler) return false;
+  control_phase("requireDerived");
+  JS::RootedObject derived(cx, JS::CallOriginalPromiseThen(cx, evaluated, handler, nullptr));
+  if (!derived) return false;
+  ensure_handled(derived);
+  control_phase("requireLoaded");
+#if defined(BUNSM_CONTROLS)
+  controlDerived = hold_object(derived);
+#endif
+  if (!seal(derived)) return false;
+  control_phase("bridgeAdoptD");
+#if defined(BUNSM_CONTROLS)
+  controlObserved = "require-loaded-returned";
+#endif
+  args.rval().setObject(*derived);
+  return true;
+}
+
 bool evaluate_module(JS::HandleObject module, bsm_handle* out) {
+  control_phase("importSetup");
   JS::RootedValue hostDefined(context, JS::ObjectValue(*module));
   JS::RootedObject loading(context);
   if (!JS::LoadRequestedModules(context, module, hostDefined, &loading)) return failure(out);
-  JS::RootedObject evaluation(context, JS::NewPromiseObject(context, nullptr));
-  if (!evaluation) return failure(out);
   JS::RootedObject handler(context, module_handler(module, module_evaluate_handler, "moduleEvaluate"));
-  JS::RootedObject rejected(context, module_handler(evaluation, module_rejected, "moduleLoadRejected"));
-  if (!handler || !rejected) return failure(out);
-  js::SetFunctionNativeReserved(handler, 1, JS::ObjectValue(*evaluation));
-  if (!JS::AddPromiseReactions(context, loading, handler, rejected)) return failure(out);
+  if (!handler) return failure(out);
+  JS::RootedObject evaluation(context, JS::CallOriginalPromiseThen(context, loading, handler, nullptr));
+  if (!evaluation) return failure(out);
   *out = hold_object(evaluation);
   return true;
 }
@@ -588,6 +726,19 @@ extern "C" void bsm_init(const bsm_config* config) {
   global = new JS::PersistentRootedObject(context, object);
   JSAutoRealm realm(context, object);
   require(JS::InitRealmStandardClasses(context), "standard classes failed");
+  JS::RootedObject promisePrototype(context, JS::GetPromisePrototype(context));
+  require(promisePrototype != nullptr, "Promise prototype missing");
+  JS::RootedId capturedThenId(context);
+  JS::RootedId capturedConstructorId(context);
+  require(property_id("then", 4, &capturedThenId) &&
+              property_id("constructor", 11, &capturedConstructorId),
+          "Promise property atoms failed");
+  JS::RootedValue capturedThen(context);
+  require(JS_GetPropertyById(context, promisePrototype, capturedThenId, &capturedThen),
+          "Promise.prototype.then missing");
+  originalThen = new JS::PersistentRootedValue(context, capturedThen);
+  thenId = new JS::PersistentRootedId(context, capturedThenId);
+  constructorId = new JS::PersistentRootedId(context, capturedConstructorId);
   // Keep async allocation ancestry distinguishable from live frames for the runtime formatter.
   js::SetStackFormat(context, js::StackFormat::SpiderMonkey);
   require(install_error_frames(context, object), "saved-frame reader installation failed");
@@ -616,6 +767,12 @@ extern "C" void bsm_init(const bsm_config* config) {
 }
 
 extern "C" void bsm_shutdown(void) {
+#if defined(BUNSM_CONTROLS)
+  delete controlHeapRoot;
+  delete controlHeapGuard;
+  controlHeapRoot = nullptr;
+  controlHeapGuard = nullptr;
+#endif
   for (auto& entry : modules) delete entry.second;
   modules.clear();
   delete externalBuffers;
@@ -624,6 +781,9 @@ extern "C" void bsm_shutdown(void) {
   slots.clear();
   freeSlots.clear();
   delete objectKeys;
+  delete constructorId;
+  delete thenId;
+  delete originalThen;
   delete asyncContext;
   delete global;
   JS_DestroyContext(context);
@@ -841,6 +1001,156 @@ extern "C" bool bsm_import(const char* specifier, size_t length, bsm_handle* out
   JS::RootedObject module(context, load_module(name));
   return module ? namespace_promise(module, out) : failure(out);
 }
+extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* out) {
+  JSAutoRealm realm(context, global->get());
+  control_reset_require();
+  std::string name;
+  if (!resolve(specifier, length, "", &name)) return failure(out);
+  JS::RootedObject module(context, load_module(name));
+  if (!module) return failure(out);
+  JS::RootedValue hostDefined(context, JS::ObjectValue(*module));
+  JS::RootedObject loading(context);
+  if (control_fault("load-requested")) return failure(out);
+  if (!JS::LoadRequestedModules(context, module, hostDefined, &loading)) return failure(out);
+  ensure_handled(loading);
+#if defined(BUNSM_CONTROLS)
+  controlLoading = hold_object(loading);
+#endif
+  if (control_fault("require-handler")) return failure(out);
+  JS::RootedObject handler(context, module_handler(module, require_loaded, "requireLoaded"));
+  if (!handler) return failure(out);
+  JS::RootedObject bridge(context, JS::CallOriginalPromiseThen(context, loading, handler, nullptr));
+  if (!bridge) return failure(out);
+  ensure_handled(bridge);
+#if defined(BUNSM_CONTROLS)
+  controlBridge = hold_object(bridge);
+#endif
+  *out = hold_object(bridge);
+  return true;
+}
+#if defined(BUNSM_CONTROLS)
+extern "C" void bsm_control_require_promises(bsm_handle* loading, bsm_handle* bridge,
+                                              bsm_handle* evaluation, bsm_handle* derived) {
+  *loading = controlLoading ? bsm_dup(controlLoading) : 0;
+  *bridge = controlBridge ? bsm_dup(controlBridge) : 0;
+  *evaluation = controlEvaluation ? bsm_dup(controlEvaluation) : 0;
+  *derived = controlDerived ? bsm_dup(controlDerived) : 0;
+}
+extern "C" bool bsm_control_mark_handled(bsm_handle handle) {
+  JSAutoRealm realm(context, global->get());
+  JS::RootedObject promise(context, object(handle));
+  return promise && JS::SetAnyPromiseIsHandled(context, promise);
+}
+extern "C" bool bsm_control_require_entered() { return controlRequireEntered; }
+extern "C" bool bsm_control_module_linked(const char* name, size_t length) {
+  auto found = modules.find(std::string(name, length));
+  return found != modules.end() && JS::ModuleIsLinked(found->second->get());
+}
+extern "C" void bsm_control_fault(const char* site, uint32_t nth, uint32_t kind) {
+  controlUses.clear();
+  controlFaultSite = site ? site : "";
+  controlFaultNth = nth;
+  controlFaultKind = kind;
+}
+extern "C" int bsm_control_run_one_job() {
+  JSAutoRealm realm(context, global->get());
+  controlObserved.clear();
+  JS::Rooted<mozilla::Maybe<JS::MicroTask>> task(context, JS::DequeueNextRegularMicroTask(context));
+  if (task.isNothing()) return 0;
+  return run_task(task) ? 1 : -1;
+}
+extern "C" bool bsm_control_run_until(const char* point) {
+  for (uint32_t remaining = 10000; remaining; --remaining) {
+    int ran = bsm_control_run_one_job();
+    if (controlObserved == point) return true;
+    if (ran <= 0) return false;
+  }
+  return false;
+}
+void control_gc_slice(JSContext*, JS::GCProgress progress, const JS::GCDescription& description) {
+  if (progress == JS::GC_CYCLE_BEGIN) controlGcReasons.push_back(description.reason_);
+}
+
+void control_oom(JSContext*, void*) {
+  controlOoms.push_back({controlJobsEntered, controlInJob});
+}
+
+bool control_heap_native(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  args.rval().setUndefined();
+  return true;
+}
+extern "C" void bsm_control_fill_heap() {
+  if (controlHeapGuard) return;
+  JSAutoRealm realm(context, global->get());
+  require(JS::CurrentGlobalOrNull(context) == global->get(), "heap fill needs the adapter realm");
+  const JSGCParamKey keys[] = {JSGC_INCREMENTAL_GC_ENABLED, JSGC_COMPACTING_ENABLED,
+                               JSGC_MIN_LAST_DITCH_GC_PERIOD};
+  const uint32_t values[] = {0, 0, 1000000000};
+  for (size_t i = 0; i < 3; ++i) {
+    controlHeapParameters[i] = JS_GetGCParameter(context, keys[i]);
+    JS_SetGCParameter(context, keys[i], values[i]);
+  }
+  controlGcReasons.clear();
+  controlOoms.clear();
+  controlGcReasons.reserve(16);
+  controlOoms.reserve(16);
+  controlPreviousSlice = JS::SetGCSliceCallback(context, control_gc_slice);
+  JS::SetOutOfMemoryCallback(context, control_oom, nullptr);
+  controlHeapGuard = new JS::AutoDisableGenerationalGC(context);
+  JS_GC(context);
+  JS::RootedObject previous(context);
+  for (;;) {
+    JS::RootedFunction function(context,
+        js::NewFunctionWithReserved(context, control_heap_native, 1, 0, "heapFill"));
+    if (!function) {
+      JS_ClearPendingException(context);
+      break;
+    }
+    JS::RootedObject next(context, JS_GetFunctionObject(function));
+    if (previous) {
+      js::SetFunctionNativeReserved(previous, 0, JS::ObjectValue(*next));
+    } else {
+      controlHeapRoot = new JS::PersistentRootedObject(context, next);
+    }
+    previous = next;
+  }
+  require(JS::CurrentGlobalOrNull(context) == global->get(), "heap fill left the adapter realm");
+  size_t lastDitch = 0;
+  for (auto reason : controlGcReasons) {
+    if (reason == JS::GCReason::LAST_DITCH) ++lastDitch;
+  }
+  require(lastDitch == 1 && !controlOoms.empty(), "heap fill did not reach one real last-ditch OOM");
+  controlGcReasons.clear();
+  controlOoms.clear();
+  controlJobsEntered = 0;
+}
+extern "C" void bsm_control_heap_report(bsm_heap_report* report) {
+  report->gcCycles = controlGcReasons.size();
+  report->lastDitchCycles = 0;
+  for (auto reason : controlGcReasons) {
+    if (reason == JS::GCReason::LAST_DITCH) ++report->lastDitchCycles;
+  }
+  report->ooms = controlOoms.size();
+  report->firstOomJobsEntered = controlOoms.empty() ? 0 : controlOoms[0].jobsEntered;
+  report->firstOomInJob = !controlOoms.empty() && controlOoms[0].inJob;
+  report->jobsEntered = controlJobsEntered;
+}
+extern "C" void bsm_control_release_heap() {
+  JSAutoRealm realm(context, global->get());
+  delete controlHeapRoot;
+  controlHeapRoot = nullptr;
+  delete controlHeapGuard;
+  controlHeapGuard = nullptr;
+  const JSGCParamKey keys[] = {JSGC_INCREMENTAL_GC_ENABLED, JSGC_COMPACTING_ENABLED,
+                               JSGC_MIN_LAST_DITCH_GC_PERIOD};
+  for (size_t i = 0; i < 3; ++i) JS_SetGCParameter(context, keys[i], controlHeapParameters[i]);
+  JS::SetGCSliceCallback(context, controlPreviousSlice);
+  controlPreviousSlice = nullptr;
+  JS::SetOutOfMemoryCallback(context, nullptr, nullptr);
+  JS_GC(context);
+}
+#endif
 extern "C" bool bsm_drain_jobs(bsm_handle* out) {
   JSAutoRealm realm(context, global->get());
   bool ran = JS::HasRegularMicroTasks(context);
@@ -968,3 +1278,7 @@ extern "C" void bsm_heap_info(double* used, double* total, double* external) {
   *total = JS_GetGCParameter(context, JSGC_TOTAL_CHUNKS) * static_cast<double>(js::gc::ChunkSize);
   *external = std::nan("");
 }
+
+#if defined(BUNSM_CONTROLS)
+#include "../tests/engine-semantics.cpp"
+#endif
