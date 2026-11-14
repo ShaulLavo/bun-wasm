@@ -66,6 +66,17 @@ void bsm_set_async_context(bsm_handle);
 void bsm_gc(void);
 void bsm_heap_info(double*, double*, double*);
 void bsm_tier_counts(uint32_t*, uint64_t*);
+#if defined(BUNSM_CONTROLS)
+void bsm_control_require_promises(bsm_handle*, bsm_handle*, bsm_handle*, bsm_handle*);
+bool bsm_control_mark_handled(bsm_handle);
+bool bsm_control_require_entered(void);
+bool bsm_control_module_linked(const char*, size_t);
+void bsm_control_fault(const char*, uint32_t, uint32_t);
+int bsm_control_run_one_job(void);
+bool bsm_control_run_until(const char*);
+void bsm_control_fill_heap(void);
+void bsm_control_release_heap(void);
+#endif
 
 bool bunsm_host_call(uint32_t, bsm_handle, const bsm_handle*, size_t, bsm_handle*);
 void bunsm_host_drop(uint32_t);

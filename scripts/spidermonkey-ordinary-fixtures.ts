@@ -26,6 +26,8 @@ export function ordinaryFixtureCommand(repository: string, env: NodeJS.ProcessEn
 }
 
 export function runOrdinaryFixtures(repository: string, env = process.env): void {
+  const controls = runCheck(["bash", join(repository, "scripts/spidermonkey-engine-semantics.sh")], env);
+  assert.equal(controls, 0, "SpiderMonkey engine-semantic controls failed");
   const status = runCheck(ordinaryFixtureCommand(repository, env), env);
   assert.equal(status, 0, "Ordinary SpiderMonkey interpreter fixtures failed");
 }
