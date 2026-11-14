@@ -103,12 +103,26 @@ test("exports use exactly the selected engine producers and never add a receipt 
     .concat([namedStep("Produce the shared SpiderMonkey profile once")]);
   expect(allSteps.filter(step => typeof step.run === "string" && step.run.includes("scripts/build-native-profile.ts")))
     .toEqual(producers);
-  expect(producers[2]!.run).toBe('source env.sh\nbun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey\n');
+  expect(producers[2]!.run).toBe('source env.sh\nbun scripts/producer-diagnostics.ts run "$RUNNER_TEMP/shared-spidermonkey-producer" "$SHARED_PRODUCER_DEADLINE_MS" \\\n  bash scripts/with-build-cache.sh bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey\n');
   const engines: string[] = exports.map(output => output.engine);
   for (const engine of engines.concat(["spidermonkey"])) {
     expect(Object.keys(uploadFor(engine)).sort()).toEqual(["if", "name", "timeout-minutes", "uses", "with"]);
     expect(uploadFor(engine)["timeout-minutes"]).toBe(5);
   }
+});
+
+test("SpiderMonkey diagnostics leave upload time inside the existing job bound and preserve failure", () => {
+  const deadline = namedStep("Reserve time for shared producer diagnostics");
+  expect(deadline.run).toContain("27 * 60 * 1000");
+  expect(sharedSteps.indexOf(deadline)).toBe(0);
+  const producer = namedStep("Produce the shared SpiderMonkey profile once");
+  expect(producer["continue-on-error"]).toBeUndefined();
+  const upload = namedStep("Retain shared SpiderMonkey producer diagnostics");
+  expect(upload.if).toBe("${{ always() && steps.shared-spidermonkey-producer.outcome != 'skipped' }}");
+  expect(upload["timeout-minutes"]).toBe(2);
+  expect(record(upload.with).path).toBe("${{ runner.temp }}/shared-spidermonkey-producer/");
+  expect(sharedSteps.indexOf(upload)).toBe(sharedSteps.indexOf(producer) + 1);
+  expect(sharedSteps.indexOf(namedStep("Shared profile cache result"))).toBeLessThan(sharedSteps.indexOf(producer));
 });
 
 test("successful production writes the original core, side, receipts and source before returning", () => {

@@ -14,6 +14,15 @@ owner and ancestor signal authority; job leader outcomes remain independently co
 This original safe-completion fence matches Waffle's lifecycle contract without copying its
 supervisor implementation.
 
+The direct `runtime_proc.exec(ptr, len) -> i32` import follows the published Waffle
+0.0.129 contract at `557d0f2502ad2e2d2dd9042486e1b25c101cbcda`,
+`proc/abi.ts` and `docs/host-abi.md`, without copying its implementation.
+The native adapter checks cancellation, records the diagnostic for `spawn_error(0)`,
+and returns negative WASI ENOTSUP before reading or committing a replacement request.
+It preserves the process, descriptors and existing slot table. Bash's implicit tail
+replacement can then use ordinary spawn, while explicit replacement exits with 126.
+The adapter does not implement native process image replacement.
+
 The preview1 bridge intercepts process-owned `fd_read`, `fd_write`, `fd_close`, `fd_renumber`,
 `fd_fdstat_get` and `fd_filestat_get`. It keeps preview1's blocking I/O and positive errno
 contract while `runtime_proc` operations remain immediate and return negative errnos.

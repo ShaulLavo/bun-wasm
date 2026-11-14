@@ -48,6 +48,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
+  "scripts/producer-diagnostics.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
   "scripts/ci-spidermonkey-prebuild.ts", "scripts/ci-spidermonkey-prebuild.test.ts", "checks/quality-ci-spidermonkey-prebuild.json",
